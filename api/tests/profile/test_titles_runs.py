@@ -176,11 +176,55 @@ def test_no_run_without_a_model_credential(factory: sessionmaker[Session]) -> No
     assert runs_of(factory, user_id) == []
 
 
-def test_no_run_without_a_cv_or_skills_to_read(factory: sessionmaker[Session]) -> None:
+def test_no_run_with_nothing_to_read_and_a_message_alone_starts_one(
+    factory: sessionmaker[Session],
+) -> None:
     user_id = person(factory)
     give_key(factory, user_id)
     assert start(factory, user_id, T0, auto=False) == "nothing_to_read"
     assert runs_of(factory, user_id) == []
+    # An empty profile, no CV: one message is enough, and it is kept with the row.
+    with factory() as db:
+        made = titles.start(db, user_id, T0, auto=False, message="Move into product")
+        db.commit()
+    found = row(factory, user_id)
+    assert found is not None
+    assert found.messages == [{"text": "Move into product", "at": T0.isoformat()}]
+    with factory() as db:
+        key_and_request = titles.run_request(db, made)
+    assert key_and_request is not None
+    assert key_and_request[1].messages == ("Move into product",)
+    assert '"Move into product"' in titles.prompt_for(key_and_request[1])
+
+
+def test_a_message_is_kept_only_when_its_run_starts_and_the_last_five_stay(
+    factory: sessionmaker[Session],
+) -> None:
+    user_id = person(factory)
+    give_key(factory, user_id)
+    for day in range(titles.MESSAGES_MAX + 1):
+        at = T0 + timedelta(days=day)
+        with factory() as db:
+            made = titles.start(db, user_id, at, auto=False, message=f"Wish {day}")
+            db.commit()
+        end(factory, made, f"Data role {day}")
+    found = row(factory, user_id)
+    assert found is not None
+    assert [one["text"] for one in found.messages] == [
+        f"Wish {day}" for day in range(1, titles.MESSAGES_MAX + 1)
+    ]
+    # A refused ask keeps nothing: one is on its way.
+    with factory() as db:
+        titles.start(db, user_id, T0 + timedelta(days=9), auto=False)
+        db.commit()
+    with factory() as db, pytest.raises(titles.RefusedError):
+        titles.start(db, user_id, T0 + timedelta(days=9), auto=False, message="Lost")
+    assert "Lost" not in str(row(factory, user_id).messages)  # type: ignore[union-attr]
+    # The automatic refresh reads them too.
+    with factory() as db:
+        request = titles._request(db, user_id, db.get(TitleSuggestions, user_id))
+    assert request is not None
+    assert request.messages[-1] == f"Wish {titles.MESSAGES_MAX}"
 
 
 def test_one_run_at_a_time(factory: sessionmaker[Session]) -> None:
@@ -228,7 +272,7 @@ def test_an_automatic_run_is_at_most_daily_and_only_on_a_change(
 def test_finish_keeps_what_passes_and_says_why_nothing_came(factory: sessionmaker[Session]) -> None:
     user_id = ready(factory)
     made = start(factory, user_id, T0, auto=False)
-    end(factory, made, "Analytics engineer", "Data engineer", "Security engineer")
+    end(factory, made, "Analytics engineer", "Data engineer", "Data intern")
     found = row(factory, user_id)
     assert found is not None
     assert found.run_id is None
@@ -243,6 +287,91 @@ def test_finish_keeps_what_passes_and_says_why_nothing_came(factory: sessionmake
     assert found.error == "no_answer"
     # The answer before stays shown.
     assert [one["title"] for one in found.suggestions] == ["Analytics engineer"]
+
+
+def test_more_ideas_adds_to_the_ideas_shown_and_says_when_nothing_new_came(
+    factory: sessionmaker[Session],
+) -> None:
+    user_id = ready(factory)
+    made = start(factory, user_id, T0, auto=False)
+    end(factory, made, "Analytics engineer", "Data platform engineer")
+    made = start(factory, user_id, T0, auto=False)
+    end(factory, made, "analytics engineers", "BI developer", "Data platform engineer")
+    found = row(factory, user_id)
+    assert found is not None
+    assert [one["title"] for one in found.suggestions] == [
+        "Analytics engineer",
+        "Data platform engineer",
+        "BI developer",
+    ]
+    assert found.error is None
+    made = start(factory, user_id, T0, auto=False)
+    end(factory, made, "Analytics Engineer")
+    found = row(factory, user_id)
+    assert found is not None
+    assert found.error == "nothing_new"
+    assert len(found.suggestions) == 3
+    with factory() as db:
+        shown = titles.view(db, user_id, T0)
+    assert shown["status"] == "idle"
+    assert shown["error"] is None
+    assert shown["note"] == titles.NOTES["nothing_new"]
+
+
+def test_past_the_cap_the_oldest_ideas_go_and_the_newest_stay(
+    factory: sessionmaker[Session],
+) -> None:
+    user_id = ready(factory)
+    old = [{"title": f"Old role {n}", "reason": "Fits.", "language": "en"} for n in range(20)]
+    with factory() as db:
+        titles._row(db, user_id).suggestions = old
+        db.commit()
+    assert titles.LIST_MAX == 20
+    made = start(factory, user_id, T0, auto=False)
+    end(factory, made, "New role one", "New role two")
+    found = row(factory, user_id)
+    assert found is not None
+    titles_kept = [one["title"] for one in found.suggestions]
+    assert len(titles_kept) == titles.LIST_MAX
+    assert titles_kept[:2] == ["Old role 2", "Old role 3"]
+    assert titles_kept[-2:] == ["New role one", "New role two"]
+
+
+def test_a_dismissed_idea_leaves_and_never_comes_back(factory: sessionmaker[Session]) -> None:
+    user_id = ready(factory)
+    made = start(factory, user_id, T0, auto=False)
+    end(factory, made, "Analytics engineer", "BI developer")
+    with factory() as db:
+        assert titles.dismiss(db, user_id, " analytics  engineers ")
+        assert not titles.dismiss(db, user_id, "BI developer - lead")
+        assert not titles.dismiss(db, user_id, "")
+        db.commit()
+    found = row(factory, user_id)
+    assert found is not None
+    assert [one["title"] for one in found.suggestions] == ["BI developer"]
+    assert found.dismissed == ["analytics engineers"]
+    made = start(factory, user_id, T0, auto=False)
+    with factory() as db:
+        request = titles.run_request(db, made)
+    assert request is not None
+    assert request[1].dismissed == ("analytics engineers",)  # the agent is told
+    end(factory, made, "Analytics Engineer", "Data platform engineer")
+    found = row(factory, user_id)
+    assert found is not None
+    assert [one["title"] for one in found.suggestions] == ["BI developer", "Data platform engineer"]
+    # A stored idea dismissed since is not shown either.
+    with factory() as db:
+        titles._row(db, user_id).suggestions = [
+            *found.suggestions,
+            {"title": "Analytics engineer", "reason": "Fits.", "language": "en"},
+        ]
+        db.commit()
+    with factory() as db:
+        shown = titles.view(db, user_id, T0)
+    assert [one["title"] for one in shown["suggestions"]] == [
+        "BI developer",
+        "Data platform engineer",
+    ]
 
 
 def test_a_failed_run_is_said_and_a_newer_ask_is_left_alone(factory: sessionmaker[Session]) -> None:
@@ -281,11 +410,71 @@ def test_a_skills_save_makes_a_person_due_once(factory: sessionmaker[Session]) -
         titles.seen(db, user_id, T0)
         db.commit()
     assert due(factory, T0 + timedelta(minutes=1)) == []
-    # A search save is no trigger; a later skills save is.
-    save(factory, user_id, "search", SEARCH, T0 + timedelta(minutes=2))
+    # The preferences (the wizard's dates, the documents' tone) are no trigger; any section the
+    # agent reads is.
+    save(factory, user_id, "preferences", {"documents_tone": "warm"}, T0 + timedelta(minutes=2))
     assert due(factory, T0 + timedelta(minutes=3)) == []
-    save(factory, user_id, "skills", SKILLS, T0 + timedelta(minutes=4))
-    assert due(factory, T0 + timedelta(minutes=5)) == [user_id]
+    for minute, (name, data) in enumerate(
+        [
+            ("search", SEARCH),
+            ("identity", {"city": "Lille"}),
+            ("facts", {"blocks": [{"title": "Goal", "body": "Product work."}]}),
+            ("answers", {"notice_period": "One month"}),
+            ("experience", {"employers": [], "education": []}),
+        ]
+    ):
+        at = T0 + timedelta(minutes=10 * (minute + 1))
+        save(factory, user_id, name, data, at)
+        assert due(factory, at + timedelta(minutes=1)) == [user_id], name
+        with factory() as db:
+            titles.seen(db, user_id, at + timedelta(minutes=1))
+            db.commit()
+
+
+def test_an_upload_or_a_base_cv_makes_a_person_due_once_its_text_is_read(
+    factory: sessionmaker[Session],
+) -> None:
+    from app.documents import store
+    from app.documents.models import BaseSource
+    from app.ingestion.models import IngestionDocument, TextSource, TextStatus
+
+    user_id = ready(factory)
+    with factory() as db:
+        titles.seen(db, user_id, T0 + timedelta(minutes=1))
+        document = IngestionDocument(
+            user_id=user_id,
+            name="cv.pdf",
+            mime="application/pdf",
+            size=10,
+            sha256=b"c" * 32,
+            text_source=TextSource.parsed,
+            text_status=TextStatus.pending,
+            parser_version=1,
+            pending_since=T0 + timedelta(minutes=2),
+            created_at=T0 + timedelta(minutes=2),
+        )
+        db.add(document)
+        db.commit()
+        document_id = document.id
+    # Still being read: the refresh waits, so the run reads the text...
+    assert due(factory, T0 + timedelta(minutes=3)) == []
+    # ...and a document stuck past READ_WAIT holds nothing.
+    assert due(factory, T0 + timedelta(minutes=2) + titles.READ_WAIT) == [user_id]
+    with factory() as db:
+        found = db.get(IngestionDocument, document_id)
+        assert found is not None
+        found.text, found.text_status = "Data engineer CV.", TextStatus.done
+        found.pending_since = None
+        db.commit()
+    assert due(factory, T0 + timedelta(minutes=4)) == [user_id]
+    with factory() as db:
+        titles.seen(db, user_id, T0 + timedelta(minutes=5))
+        db.commit()
+    assert due(factory, T0 + timedelta(minutes=6)) == []
+    with factory() as db:
+        store.create_base(db, user_id, "Mine", BaseSource.built, at=T0 + timedelta(minutes=7))
+        db.commit()
+    assert due(factory, T0 + timedelta(minutes=8)) == [user_id]
 
 
 def test_an_accepted_fill_item_makes_a_person_due(factory: sessionmaker[Session]) -> None:
@@ -346,14 +535,21 @@ def test_the_tick_starts_and_queues_the_due_runs(factory: sessionmaker[Session])
     user_id = ready(factory)
     unreadable = person(factory, OTHER)
     give_key(factory, unreadable)
-    save(factory, unreadable, "skills", {**SKILLS, "have": []})
+    # A trigger, and nothing the agent reads: the name is left out.
+    save(factory, unreadable, "identity", {"full_name": "Sam Example"})
     redis = FakeRedis()
     started = asyncio.run(agents.tick(factory, T0 + timedelta(minutes=1), redis))
     assert started == 1
     [run] = runs_of(factory, user_id)
     assert run.agent == titles.NAME
     assert run.status is RunStatus.queued
-    assert run.input["token_budget"] == titles.TOKEN_BUDGET
+    # The budget is the ceiling of the estimate for what this run reads.
+    with factory() as db:
+        request = titles._request(db, user_id, db.get(TitleSuggestions, user_id))
+    assert request is not None
+    expected = titles.estimate(len(titles.prompt_for(request))).ceiling
+    assert run.input["token_budget"] == expected
+    assert 0 < expected < titles.TOKEN_BUDGET
     assert set(run.input) == {"request", "token_budget"}  # no text of the person
     assert redis.jobs == [
         (
@@ -551,7 +747,10 @@ def test_get_says_what_is_missing_and_never_calls_a_model(
     assert body["estimate"] is None
     give_key(factory, user_id)
     body = api.get(URL, token=token).json()
-    assert body["needs"] == "cv"
+    assert body["needs"] == "input"
+    assert body["messages"] == []
+    assert body["message_max"] == titles.MESSAGE_MAX
+    assert body["note"] is None
     save(factory, user_id, "skills", SKILLS)
     body = api.get(URL, token=token).json()
     assert body["needs"] is None
@@ -584,7 +783,9 @@ def test_more_ideas_starts_one_run_and_counts_the_click(
     give_key(factory, user_id)
     response = api.post(URL, token=token)
     assert response.status_code == 409
-    assert "CV or your skills" in response.json()["detail"]
+    assert response.json()["detail"] == (
+        "Add your CV, fill your profile or tell the assistant what you want to do first."
+    )
     save(factory, user_id, "skills", SKILLS)
     response = api.post(URL, token=token)
     assert response.status_code == 200, response.text
@@ -671,3 +872,109 @@ def test_a_run_that_never_came_back_reads_as_failed(
     body = api.get(URL, token=token).json()
     assert body["status"] == "failed"
     assert body["error"] == titles.ERRORS["lost"]
+
+
+def test_a_message_starts_a_run_counts_as_one_ask_and_can_be_cleared(
+    factory: sessionmaker[Session], api: Api, recorded: RecordingQueue
+) -> None:
+    user_id, token = signed(factory, api)
+    give_key(factory, user_id)
+    too_long = api.post(URL, token=token, json={"message": "x" * (titles.MESSAGE_MAX + 1)})
+    assert too_long.status_code == 422
+    assert too_long.json()["detail"] == "Write at most 300 characters, in one short message."
+    empty = api.post(URL, token=token, json={"message": "   "})
+    assert empty.status_code == 422
+    assert empty.json()["detail"] == "Write what you want to do first."
+    assert runs_of(factory, user_id) == []
+    # An empty profile: the message alone starts the run.
+    response = api.post(URL, token=token, json={"message": " Move into\nproduct "})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["status"] == "running"
+    assert body["asks_left"] == 2
+    assert [one["text"] for one in body["messages"]] == ["Move into product"]
+    assert len(recorded.jobs) == 1
+    end(factory, _last_run(factory, user_id), "Product analyst")
+    cleared = api.request("DELETE", f"{URL}/messages", token=token)
+    assert cleared.status_code == 200
+    assert cleared.json()["messages"] == []
+    assert row(factory, user_id).messages == []  # type: ignore[union-attr]
+    assert cleared.json()["needs"] == "input"  # nothing left to read
+    assert api.request("DELETE", f"{URL}/messages").status_code == 401
+
+
+def test_not_for_me_removes_an_idea_for_good_and_refuses_what_is_not_a_title(
+    factory: sessionmaker[Session], api: Api, recorded: RecordingQueue
+) -> None:
+    user_id, token = signed(factory, api)
+    give_key(factory, user_id)
+    save(factory, user_id, "skills", SKILLS)
+    made = start(factory, user_id, T0, auto=False)
+    end(factory, made, "Analytics engineer", "BI developer")
+    response = api.post(f"{URL}/dismiss", token=token, json={"title": "Analytics engineer"})
+    assert response.status_code == 200, response.text
+    assert [one["title"] for one in response.json()["suggestions"]] == ["BI developer"]
+    bad = api.post(f"{URL}/dismiss", token=token, json={"title": "BI developer, Paris"})
+    assert bad.status_code == 422
+    assert bad.json()["detail"] == "This is not a job title the suggestions hold."
+    # Another person's row is never touched.
+    _, other = signed(factory, api, OTHER)
+    api.post(f"{URL}/dismiss", token=other, json={"title": "BI developer"})
+    assert [one["title"] for one in api.get(URL, token=token).json()["suggestions"]] == [
+        "BI developer"
+    ]
+    assert api.post(f"{URL}/dismiss", json={"title": "BI developer"}).status_code == 401
+
+
+def test_a_whole_run_reads_the_documents_and_the_message(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    from app.ingestion import estimate_router
+    from app.ingestion.models import IngestionConsent, IngestionDocument, TextSource, TextStatus
+
+    runtime = Runtime(factory, migrated_url)
+    user_id = person(factory)
+    give_key(factory, user_id, keyring=runtime.keyring)
+    with factory() as db:
+        db.add(IngestionConsent(user_id=user_id, text_version=estimate_router.CONSENT_VERSION))
+        db.add(
+            IngestionDocument(
+                user_id=user_id,
+                name="cv.txt",
+                mime="text/plain",
+                size=40,
+                sha256=b"d" * 32,
+                text="Data engineer at Example Robotics: SQL, dbt and Python.",
+                text_source=TextSource.pasted,
+                text_status=TextStatus.done,
+                parser_version=1,
+            )
+        )
+        db.commit()
+    prompts: list[str] = []
+    original = titles.prompt_for
+
+    def spy(request: titles.Request) -> str:
+        prompts.append(original(request))
+        return prompts[-1]
+
+    titles.prompt_for = spy  # type: ignore[assignment]
+    try:
+        made = start(factory, user_id, T0, auto=False)
+        assert isinstance(made, uuid.UUID)
+        with factory() as db:
+            titles._row(db, user_id).messages = [{"text": "Stay in data", "at": T0.isoformat()}]
+            db.commit()
+        prompts.clear()
+        asyncio.run(agents.execute(runtime.context(), made))
+    finally:
+        titles.prompt_for = original  # type: ignore[assignment]
+    sent = [one for one in prompts if "Example Robotics" in one]
+    assert sent, "the backend's prompt holds the document's text"
+    assert '"Stay in data"' in sent[0]
+    found = row(factory, user_id)
+    assert found is not None
+    assert [one["title"] for one in found.suggestions][:2] == [
+        "Analytics engineer",
+        "Data platform engineer",
+    ]
