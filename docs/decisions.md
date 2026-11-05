@@ -383,3 +383,7 @@ The owner's answers during the product audit, in the session that built them.
   Facts, Skills and Answers are written as plain text or Markdown; the model interprets the
   Skills and the Answers texts. A change to a yes/no consent, an EEO answer, a work authorisation
   or a salary figure is listed on its own line and applied only by the person's Apply click.
+- 2026-11-05, the search settings (owner: "search setting should be in the settings of the
+  user"): the Search tab leaves the profile for the user's Settings, beside the Applications
+  settings (`/settings/search` and `/settings/applications`); the user menu's Settings opens
+  Search first, and `/profile?tab=search` leads there.
