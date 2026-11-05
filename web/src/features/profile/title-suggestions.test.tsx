@@ -36,29 +36,60 @@ function answer(patch: Partial<Data> = {}): Data {
     suggestions: IDEAS,
     refreshed_at: "2026-11-05T09:00:00+00:00",
     error: null,
+    note: null,
+    messages: [],
+    message_max: 300,
     asks_left: 3,
     asks_per_day: 3,
     estimate: {
-      tokens: { low: 19844, high: 38964 },
-      cost: { currency: "USD", low: "0.03", high: "0.09" },
+      tokens: { low: 18816, high: 29424 },
+      cost: { currency: "USD", low: "0.03", high: "0.07" },
     },
     cost_note: "Estimates from list prices.",
     ...patch,
   };
 }
 
-/** GET answers `first`, then whatever `next` holds; POST answers `post` and counts. */
-function fakeIdeas(first: Data, post?: () => Response) {
-  const calls = { gets: 0, posts: 0 };
+/** GET answers `first`, then whatever `next` holds; POST answers `post` and counts, with its
+ * bodies; /dismiss and /messages act on the current answer as the server does. */
+function fakeIdeas(
+  first: Data,
+  post?: (body: unknown) => Response,
+  dismissed?: () => Response,
+) {
+  const calls = {
+    gets: 0,
+    posts: 0,
+    bodies: [] as unknown[],
+    dismissed: [] as string[],
+    clears: 0,
+  };
   let current = first;
   server.use(
     http.get(URL, () => {
       calls.gets += 1;
       return HttpResponse.json(current);
     }),
-    http.post(URL, () => {
+    http.post(URL, async ({ request }) => {
       calls.posts += 1;
-      return post ? post() : HttpResponse.json(current);
+      const body: unknown = await request.json();
+      calls.bodies.push(body);
+      return post ? post(body) : HttpResponse.json(current);
+    }),
+    http.post(`${URL}/dismiss`, async ({ request }) => {
+      const { title } = (await request.json()) as { title: string };
+      calls.dismissed.push(title);
+      if (dismissed) return dismissed();
+      current = {
+        ...current,
+        suggestions: current.suggestions.filter((one) => one.title !== title),
+      };
+      return HttpResponse.json(current);
+    }),
+    http.delete(`${URL}/messages`, () => {
+      calls.clears += 1;
+      current = { ...current, messages: [] };
+      return HttpResponse.json(current);
     }),
   );
   return {
@@ -113,15 +144,78 @@ describe("TitleSuggestions: the states", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("without a CV or skills: a link to add the CV", async () => {
-    fakeIdeas(answer({ needs: "cv", suggestions: [] }));
+  it("with nothing to read: what is missing in plain words, and a message alone starts the ideas", async () => {
+    const fake = fakeIdeas(
+      answer({ needs: "input", suggestions: [], refreshed_at: null }),
+      () =>
+        HttpResponse.json(
+          answer({
+            suggestions: [],
+            refreshed_at: null,
+            status: "running",
+            messages: [
+              { text: "Move into product", at: "2026-11-05T09:00:00Z" },
+            ],
+          }),
+        ),
+    );
+    const user = userEvent.setup();
     renderWithQuery(<Harness />);
     await heading();
+    expect(
+      screen.getByText(
+        /Add your CV, fill your profile or tell the assistant what you want to do/,
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add your CV" })).toHaveAttribute(
       "href",
       "/profile/fill",
     );
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /More ideas|Suggest/ }),
+    ).toBeNull();
+    const box = screen.getByLabelText("Tell the assistant what you want to do");
+    expect(box).toHaveAttribute(
+      "placeholder",
+      "For example: move into product, stay in data, work remotely",
+    );
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(send).toBeDisabled();
+    await user.type(box, "  Move into product ");
+    await user.click(send);
+    await waitFor(() => {
+      expect(fake.calls.bodies).toEqual([{ message: "Move into product" }]);
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Finding titles that fit your profile",
+    );
+    expect(box).toHaveValue("");
+    expect(
+      screen.getByText("You told the assistant: “Move into product”"),
+    ).toBeInTheDocument();
+  });
+
+  it("in a dialog, nothing to read is said without a link", async () => {
+    fakeIdeas(answer({ needs: "input", suggestions: [] }));
+    renderWithQuery(
+      <MemoryRouter>
+        <TitleSuggestions
+          current={[]}
+          label="Job titles"
+          links={false}
+          onAdd={() => {}}
+        />
+      </MemoryRouter>,
+    );
+    expect(
+      await screen.findByText(
+        "Job title ideas show here once you add your CV, fill your profile or tell the assistant what you want to do.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(
+      screen.getByLabelText("Tell the assistant what you want to do"),
+    ).toBeEnabled();
   });
 
   it("first ideas: the cost before the click, then on its way, then the ideas", async () => {
@@ -136,7 +230,7 @@ describe("TitleSuggestions: the states", () => {
     const { client } = renderWithQuery(<Harness />);
     await screen.findByText("Get job title ideas that fit your profile.");
     expect(
-      screen.getByText("About USD 0.03 to USD 0.09 each time, at list prices."),
+      screen.getByText("About USD 0.03 to USD 0.07 each time, at list prices."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Suggest titles" }));
     expect(await screen.findByRole("status")).toHaveTextContent(
@@ -239,6 +333,11 @@ describe("TitleSuggestions: the states", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "More ideas" })).toBeNull();
     expect(screen.queryByText(/USD/)).toBeNull();
+    // A message is one ask too: the box waits for tomorrow.
+    expect(
+      screen.getByLabelText("Tell the assistant what you want to do"),
+    ).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
   it("on a subscription nothing is said about money", async () => {
@@ -280,6 +379,177 @@ describe("TitleSuggestions: the states", () => {
       screen.queryByRole("heading", { name: "Suggested for you" }),
     ).toBeNull();
     expect(screen.queryByRole("link")).toBeNull();
+  });
+});
+
+describe("TitleSuggestions: the chat and Not for me", () => {
+  it("inside the page's form, Enter sends the message and never submits the form", async () => {
+    const fake = fakeIdeas(answer(), () =>
+      HttpResponse.json(answer({ status: "running" })),
+    );
+    const submits: number[] = [];
+    const user = userEvent.setup();
+    renderWithQuery(
+      <form
+        aria-label="Search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          submits.push(1);
+        }}
+      >
+        <Harness />
+      </form>,
+    );
+    const box = await screen.findByLabelText(
+      "Tell the assistant what you want to do",
+    );
+    await user.type(box, "{Enter}");
+    expect(fake.calls.posts).toBe(0); // nothing typed: nothing sent
+    await user.type(box, "Stay in data, work remotely{Enter}");
+    await waitFor(() => {
+      expect(fake.calls.bodies).toEqual([
+        { message: "Stay in data, work remotely" },
+      ]);
+    });
+    expect(submits).toEqual([]);
+  });
+
+  it("More ideas sends no message, and the new ideas show after the ones there", async () => {
+    const fake = fakeIdeas(answer(), () =>
+      HttpResponse.json(answer({ status: "running" })),
+    );
+    const user = userEvent.setup();
+    const { client } = renderWithQuery(<Harness />);
+    await user.click(await screen.findByRole("button", { name: "More ideas" }));
+    await waitFor(() => {
+      expect(fake.calls.bodies).toEqual([{}]);
+    });
+    // Running: the ideas shown stay, the box waits.
+    expect(
+      screen.getByRole("button", {
+        name: "Add Analytics engineer to Job titles",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Tell the assistant what you want to do"),
+    ).toBeDisabled();
+    fake.set(
+      answer({
+        suggestions: [
+          ...IDEAS,
+          { title: "BI developer", reason: "Your dashboards.", language: "en" },
+        ],
+      }),
+    );
+    await client.invalidateQueries();
+    await screen.findByRole("button", {
+      name: "Add BI developer to Job titles",
+    });
+    expect(
+      screen
+        .getAllByRole("button", { name: /^Add / })
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual([
+      "Add Analytics engineer to Job titles",
+      "Add Ingénieur données to Job titles",
+      "Add BI developer to Job titles",
+    ]);
+  });
+
+  it("a run that added nothing says so, and the ideas stay", async () => {
+    fakeIdeas(
+      answer({ note: "No new idea this time. The ideas you had stay." }),
+    );
+    renderWithQuery(<Harness />);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "No new idea this time. The ideas you had stay.",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Add Analytics engineer to Job titles",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the last message with the earlier ones counted, and Clear forgets them", async () => {
+    const fake = fakeIdeas(
+      answer({
+        messages: [
+          { text: "Stay in data", at: "2026-11-04T09:00:00Z" },
+          { text: "Move into product", at: "2026-11-05T09:00:00Z" },
+        ],
+      }),
+    );
+    const user = userEvent.setup();
+    renderWithQuery(<Harness />);
+    expect(
+      await screen.findByText(
+        "You told the assistant: “Move into product” It also reads your 1 earlier message.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Stay in data/)).toBeNull();
+    await user.click(
+      screen.getByRole("button", { name: "Clear what you told the assistant" }),
+    );
+    await waitFor(() => {
+      expect(fake.calls.clears).toBe(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/You told the assistant/)).toBeNull();
+    });
+    expect(fake.calls.posts).toBe(0);
+  });
+
+  it("Not for me removes an idea at once and asks the server to keep it away", async () => {
+    const fake = fakeIdeas(answer());
+    const user = userEvent.setup();
+    renderWithQuery(<Harness />);
+    const dismiss = await screen.findByRole("button", {
+      name: "Not for me: Analytics engineer",
+    });
+    await user.hover(dismiss);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Not for me");
+    await user.click(dismiss);
+    expect(
+      screen.queryByRole("button", {
+        name: "Add Analytics engineer to Job titles",
+      }),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(fake.calls.dismissed).toEqual(["Analytics engineer"]);
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Add Ingénieur données to Job titles",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("list", { name: "The list" }),
+    ).toBeEmptyDOMElement();
+  });
+
+  it("Not for me that fails brings the idea back and says why", async () => {
+    fakeIdeas(answer(), undefined, () =>
+      HttpResponse.json(
+        { detail: "Too many clicks. Try again in a minute." },
+        { status: 429 },
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithQuery(<Harness />);
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Not for me: Analytics engineer",
+      }),
+    );
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Too many clicks. Try again in a minute.",
+    );
+    expect(
+      await screen.findByRole("button", {
+        name: "Add Analytics engineer to Job titles",
+      }),
+    ).toBeInTheDocument();
   });
 });
 

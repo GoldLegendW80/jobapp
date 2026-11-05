@@ -361,20 +361,30 @@ export const SUGGESTION_WORDS = {
   heading: "Suggested for you",
   needsKey: "Job title ideas from your profile need a model key.",
   addKey: "Add a model key",
-  needsCv:
-    "Add your CV or your skills, and job title ideas from your profile show here.",
+  needsInput:
+    "Add your CV, fill your profile or tell the assistant what you want to do, and job title ideas show here.",
   addCv: "Add your CV",
   /** In a dialog, where a link would drop the draft: the page, named. */
   needsKeyThere:
     "Job title ideas from your profile need a model key, added on the Account page.",
-  needsCvThere:
-    "Job title ideas show here once your profile holds your CV or your skills.",
+  needsInputThere:
+    "Job title ideas show here once you add your CV, fill your profile or tell the assistant what you want to do.",
   first: "Get job title ideas that fit your profile.",
   suggest: "Suggest titles",
   more: "More ideas",
   retry: "Try again",
   running: "Finding titles that fit your profile",
   none: "No new title to suggest.",
+  notForMe: "Not for me",
+  chatLabel: "Tell the assistant what you want to do",
+  chatPlaceholder:
+    "For example: move into product, stay in data, work remotely",
+  send: "Send",
+  lastMessage: (text: string) => `You told the assistant: “${text}”`,
+  earlier: (count: number) =>
+    `It also reads your ${count} earlier ${count === 1 ? "message" : "messages"}.`,
+  clear: "Clear",
+  clearName: "Clear what you told the assistant",
   askedEnough: (perDay: number) =>
     `You asked for more ideas ${perDay} times today. More tomorrow.`,
   fromProfile: "from your profile",

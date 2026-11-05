@@ -1,7 +1,9 @@
 /**
- * The job titles agent's suggestions (GET and POST /api/profile/title-suggestions,
+ * The job titles agent's suggestions (/api/profile/title-suggestions,
  * api/app/profile/titles_router.py). GET never calls a model: it answers the stored suggestions,
- * already checked by the server against the saved search; POST is "More ideas", one run.
+ * already checked by the server against the saved search; POST is "More ideas" or a message to
+ * the agent, one run; POST /dismiss is "Not for me"; DELETE /messages forgets what the person
+ * wrote.
  */
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
@@ -22,11 +24,17 @@ export type TitleSuggestion = z.infer<typeof suggestionSchema>;
 
 export const titleSuggestionsSchema = z.object({
   status: z.enum(["idle", "running", "failed"]),
-  /** What a run needs first: a model key, or a CV or skills to read. */
-  needs: z.enum(["model_key", "cv"]).nullable(),
+  /** What a run needs first: a model key, or something to read (a CV, a profile, a message). */
+  needs: z.enum(["model_key", "input"]).nullable(),
+  /** Oldest first: a run's new ideas join after the ones shown. */
   suggestions: z.array(suggestionSchema),
   refreshed_at: z.string().nullable(),
   error: z.string().nullable(),
+  /** The last ask ended well and added nothing. */
+  note: z.string().nullable(),
+  /** What the person told the assistant, oldest first (the last few are kept). */
+  messages: z.array(z.object({ text: z.string(), at: z.string() })),
+  message_max: z.number(),
   asks_left: z.number(),
   asks_per_day: z.number(),
   /** Null without a model key; `cost` on an API key only. */
@@ -55,9 +63,28 @@ export function getTitleSuggestions(
   });
 }
 
-export function askMoreTitles(): Promise<TitleSuggestions> {
+/** "More ideas", or, with `message`, what the person tells the assistant: one run each. */
+export function askMoreTitles(message?: string): Promise<TitleSuggestions> {
   return request("/profile/title-suggestions", {
     method: "POST",
+    body: message === undefined ? {} : { message },
+    validate: (data) => titleSuggestionsSchema.parse(data),
+  });
+}
+
+/** "Not for me": the idea leaves and never comes back. */
+export function dismissTitle(title: string): Promise<TitleSuggestions> {
+  return request("/profile/title-suggestions/dismiss", {
+    method: "POST",
+    body: { title },
+    validate: (data) => titleSuggestionsSchema.parse(data),
+  });
+}
+
+/** The assistant forgets what the person wrote to it. */
+export function clearTitleMessages(): Promise<TitleSuggestions> {
+  return request("/profile/title-suggestions/messages", {
+    method: "DELETE",
     validate: (data) => titleSuggestionsSchema.parse(data),
   });
 }
