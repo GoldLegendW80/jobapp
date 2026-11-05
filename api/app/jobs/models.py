@@ -13,6 +13,8 @@
   checked by the database (size = octet_length(bytes), sha256 is 32 bytes).
 - sweeps: one search of the job websites of one user; at most one `running` sweep per user
   (partial unique index), and `finished_at` is set exactly when the sweep is no longer running.
+- job_rescores: the rescore a change of the skills section asks for (app/jobs/rescore.py), one
+  row per person: the profile revision asked for, the one done, the one running and since when.
 
 Large columns (`posting_text`, `bytes`, `search`) are deferred so list queries never load them.
 Migration: alembic/versions/0004_jobs.py, which must stay in step with this file
@@ -323,3 +325,31 @@ class Sweep(Base):
         pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
     )
     error: Mapped[str | None] = mapped_column(sa.Text)
+
+
+class JobRescore(Base):
+    """The rescore asked for by a change of the person's skills section (app/jobs/rescore.py,
+    migration 0031). `outcome` holds counts only (scored, changed, up, down, threshold)."""
+
+    __tablename__ = "job_rescores"
+    __table_args__ = (
+        sa.CheckConstraint(
+            "(running_revision IS NULL) = (running_since IS NULL)", name="running_pair"
+        ),
+        sa.CheckConstraint("jsonb_typeof(outcome) = 'object'", name="outcome_is_object"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    wanted_revision: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    wanted_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    done_revision: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=0, server_default="0"
+    )
+    running_revision: Mapped[int | None] = mapped_column(sa.Integer)
+    running_since: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    outcome: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )

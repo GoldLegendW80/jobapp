@@ -671,6 +671,34 @@ class RescoreOut(BaseModel):
     next_after: uuid.UUID | None
 
 
+class RescoreOutcomeOut(BaseModel):
+    """What the last rescore after a skills change did (app/jobs/rescore.py): counts only.
+    `up` and `down`: the fits that reached `threshold` (the documents threshold) or fell under
+    it. `no_skills`: nothing to score with. `failed`: it stopped on an error."""
+
+    scored: int = 0
+    changed: int = 0
+    up: int = 0
+    down: int = 0
+    skipped_busy: int = 0
+    threshold: int | None = None
+    no_skills: bool = False
+    failed: bool = False
+
+
+class RescoreStatusOut(BaseModel):
+    """GET /api/jobs/rescore/status. `state`: idle, waiting (asked for, not started) or running.
+    `wanted_revision` is the profile revision of the last skills change (null when none was
+    ever made), `done_revision` the last one rescored: a page that saved revision N waits for
+    `done_revision` >= N, then reads `outcome`."""
+
+    state: Literal["idle", "waiting", "running"]
+    wanted_revision: int | None
+    done_revision: int
+    finished_at: datetime | None
+    outcome: RescoreOutcomeOut | None
+
+
 class DuplicateOut(BaseModel):
     detail: str
     existing_id: uuid.UUID

@@ -20,6 +20,7 @@ the lease of the fill is A5's.
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -111,9 +112,12 @@ def start(
     *,
     now: datetime,
     stub_base: str | None = None,
+    documents: Sequence[str] = (),
 ) -> Started:
     """Create the application, or raise RefusedError or PostingNotFoundError. Commits on success;
-    the caller rolls back on an error. Raises ValueError for a rehearsal in Apply myself."""
+    the caller rolls back on an error. Raises ValueError for a rehearsal in Apply myself.
+    `documents`: the kinds the Apply click asked the documents module for (likes.on_apply),
+    kept in a `documents_asked` event so the fill waits for each of them."""
     if dry_run and mode is Mode.manual:
         raise ValueError("Apply myself is never a rehearsal")
     posting = jobs_service.lock_job(db, user_id, posting_id)
@@ -190,6 +194,8 @@ def start(
         dry_run=dry_run,
         warnings=warnings,
     )
+    if documents:
+        _event(db, application, "documents_asked", now, kinds=[str(kind) for kind in documents])
     if mode is Mode.direct:
         # The person's click on Apply is the approval (owner, 2026-11-01): `created_at` is its
         # time; `direct.decide` writes its `apply_click` authorisation once the fill is done.

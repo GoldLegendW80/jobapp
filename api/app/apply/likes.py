@@ -36,6 +36,16 @@ plans. A Like is the application itself:
 Raises `service.PostingNotFoundError` (404), `service.RefusedError` (409, the code and
 `sentence(code)`), `jobs_service.JobBusyError` and `store.DocumentBusyError` (409 busy). The
 caller rolls back on an error. Logs carry ids and codes only.
+
+`on_apply` is the Apply button's start (owner, 2026-11-05: "Apply with no documents writes them
+and then sends"): under the same locks it asks the documents the posting lacks exactly as step
+2 does (the same writers, fact check, consent and credential waits; a click is never held by the
+threshold or the daily ceiling), then `service.start` with the mode of the click and the kinds
+asked, which the application keeps (`documents_asked`), in the same transaction. The fill waits
+for them as for a Like; an asked document that ends without a version (its writer failed, or the
+person stopped it) ends the application `blocked` with `documents_not_written` before anything is
+filled (apply/run.py, `prepare`). The click stays the approval of a `direct` item (CLAUDE.md rule
+4), and a Review first item still waits for the person's Approve once filled.
 """
 
 import logging
@@ -206,3 +216,25 @@ def on_like(
         extra={"application_id": str(application.id), "documents": [k.value for k in asked]},
     )
     return Liked(application, asked)
+
+
+def on_apply(
+    db: Session,
+    user_id: uuid.UUID,
+    posting_id: uuid.UUID,
+    mode: Mode,
+    dry_run: bool,
+    *,
+    now: datetime,
+    stub_base: str | None = None,
+) -> service.Started:
+    """The Apply button on one of the person's postings (module docstring). Commits on success
+    (`service.start`); the caller rolls back on an error."""
+    posting = jobs_service.lock_job(db, user_id, posting_id)
+    if posting is None:
+        raise service.PostingNotFoundError(str(posting_id))
+    service._lock_person(db, user_id)
+    asked = ask_documents(db, user_id, posting.id, now)
+    return service.start(
+        db, user_id, posting.id, mode, dry_run, now=now, stub_base=stub_base, documents=asked
+    )
