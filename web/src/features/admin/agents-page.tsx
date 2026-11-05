@@ -206,7 +206,11 @@ function AgentsTable({
                 : "The code's"}
               {agent.code_changed.length ? (
                 <span className="mt-1 flex">
-                  <Badge variant="outline">
+                  {/* Wraps on a phone's card line instead of widening it. */}
+                  <Badge
+                    variant="outline"
+                    className="w-auto justify-start whitespace-normal"
+                  >
                     {agent.code_changed.includes("system_prompt")
                       ? "The code's prompt changed since it was saved"
                       : "The code changed since it was saved"}

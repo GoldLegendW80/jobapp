@@ -307,9 +307,11 @@ describe("the list", () => {
     });
     const row = within(table).getByRole("row", { name: /browser_discovery/ });
     expect(within(row).getByText("Version 2")).toBeInTheDocument();
-    expect(
-      within(row).getByText("The code's prompt changed since it was saved"),
-    ).toBeInTheDocument();
+    const notice = within(row).getByText(
+      "The code's prompt changed since it was saved",
+    );
+    // It wraps on a phone's card line instead of widening the page.
+    expect(notice.className).toContain("whitespace-normal");
     noDashes(table.textContent);
   });
 
