@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 
 import { createQueryClient } from "@/lib/query";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { routes } from "@/routes";
 
 /** Render with a fresh QueryClient using the app's own defaults, so no cache leaks between tests. */
@@ -11,7 +12,11 @@ export function renderWithQuery(ui: ReactElement) {
   const client = createQueryClient();
   return {
     client,
-    ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>),
+    ...render(
+      <QueryClientProvider client={client}>
+        <TooltipProvider>{ui}</TooltipProvider>
+      </QueryClientProvider>,
+    ),
   };
 }
 

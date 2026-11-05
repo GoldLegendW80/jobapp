@@ -3,6 +3,7 @@ import { SiteProfileRunPage } from "@/features/apply/site-profile/run-page";
 import { Outlet, ScrollRestoration, type RouteObject } from "react-router";
 
 import { Toaster } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { AccountPage } from "@/features/account/account-page";
 import { AdminUsersPage } from "@/features/admin/users-page";
 import { RunPage, RunsPage } from "@/features/agents/runs-page";
@@ -44,15 +45,18 @@ export const routes: RouteObject[] = [
   {
     element: (
       <AuthProvider>
-        <Outlet />
-        {/* On a phone, above the shell's bottom tab bar (shell/bottom-nav.tsx). */}
-        <Toaster
-          position="bottom-center"
-          mobileOffset={{
-            bottom: "calc(4.5rem + env(safe-area-inset-bottom))",
-          }}
-        />
-        <ScrollRestoration getKey={(location) => location.pathname} />
+        {/* One provider for every shadcn Tooltip of the app. */}
+        <TooltipProvider>
+          <Outlet />
+          {/* On a phone, above the shell's bottom tab bar (shell/bottom-nav.tsx). */}
+          <Toaster
+            position="bottom-center"
+            mobileOffset={{
+              bottom: "calc(4.5rem + env(safe-area-inset-bottom))",
+            }}
+          />
+          <ScrollRestoration getKey={(location) => location.pathname} />
+        </TooltipProvider>
       </AuthProvider>
     ),
     children: [
