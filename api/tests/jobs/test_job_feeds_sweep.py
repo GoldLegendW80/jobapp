@@ -162,6 +162,57 @@ def test_a_sweep_of_feeds_alone_stores_dedupes_and_records(
     assert len(jobs_of(factory, alice)) == 3
 
 
+OWNERS_RULE = "No cybersecurity roles: cyber, security, pentest, threat"
+
+
+def security_api() -> FakeApi:
+    """The fake Arbeitnow of `fake_api` with its security posting titled "Security Engineer"."""
+    first = fixture("arbeitnow_page1")
+    for posting in first["data"]:
+        if posting["title"] == "Security AI Engineer":
+            posting["title"] = "Security Engineer"
+    return FakeApi(
+        {
+            ("www.arbeitnow.com", "1"): first,
+            ("www.arbeitnow.com", "2"): fixture("arbeitnow_page2"),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("rules", "status", "note", "skipped"),
+    [
+        # No rule of the person's: kept, the app has no rule of its own (owner, 2026-11-05).
+        ([], JobStatus.found, "", 0),
+        ([OWNERS_RULE], JobStatus.skipped, OWNERS_RULE, 1),
+    ],
+)
+def test_a_feeds_security_role_is_skipped_only_by_the_persons_own_rule(
+    factory: sessionmaker[Session],
+    alice: uuid.UUID,
+    rules: list[str],
+    status: JobStatus,
+    note: str,
+    skipped: int,
+) -> None:
+    section = search(
+        interactive_sites=[],
+        title_include={"terms": ["security engineer", "ai engineer"], "advanced_regex": False},
+        location={"terms": ["paris", "lyon", "bordeaux"], "advanced_regex": False},
+        job_feeds=["arbeitnow"],
+        never_apply=rules,
+    )
+    set_profile(factory, alice, section)
+    sweep_id = new_sweep(factory, alice)
+    run_feeds(factory, sweep_id, security_api(), KEYRING)
+    row = read_sweep(factory, sweep_id)
+    assert row.status is SweepStatus.done
+    [arbeitnow] = row.stats["sources"]
+    assert (arbeitnow["kind"], arbeitnow["skipped_by_rule"]) == ("arbeitnow", skipped)
+    job = next(job for job in jobs_of(factory, alice) if job.title == "Security Engineer")
+    assert (job.source, job.status, job.notes) == ("arbeitnow", status, note)
+
+
 def test_adzuna_reads_the_stored_key(factory: sessionmaker[Session], alice: uuid.UUID) -> None:
     set_profile(factory, alice, feeds_search(job_feeds=["adzuna"]))
     with factory() as db, db.begin():

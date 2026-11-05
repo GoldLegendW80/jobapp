@@ -126,6 +126,24 @@ def test_never_apply_codes() -> None:
     assert guardrails.never_apply(plain, [], swept=False, mode=Mode.review) is None
 
 
+@pytest.mark.parametrize("mode", list(Mode))
+def test_a_security_role_is_refused_only_under_the_persons_own_rule(mode: Mode) -> None:
+    """The app has no rule of its own about a kind of role (owner, 2026-11-05): with no rule of
+    the person's, or rules that name something else, a security role passes in every mode, its
+    text read in Full auto included; the owner's rule refuses it in every mode."""
+    security = Job(
+        company="Example Shield",
+        title="Security Engineer",
+        posting_text="Build threat detection for our cybersecurity team.",
+    )
+    sales = NeverApplyRule.parse("No sales roles: sales, account executive")
+    for rules in ([], [sales]):
+        assert guardrails.never_apply(security, rules, swept=False, mode=mode) is None
+    assert guardrails.never_apply(security, [sales, OWNER], swept=False, mode=mode) == (
+        "never_apply_role"
+    )
+
+
 def test_full_auto_reads_the_first_1500_characters_of_the_text() -> None:
     near = _posting("Applied AI Engineer", "x " * 700 + "threat models")  # starts at 1400
     far = _posting("Applied AI Engineer", "x " * 760 + "threat models")  # starts at 1520

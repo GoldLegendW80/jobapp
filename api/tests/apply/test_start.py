@@ -161,6 +161,22 @@ def test_the_owners_rule_refuses_a_glued_title(db: Session, a: uuid.UUID) -> Non
     assert start(db, a, posting(db, a, "Applied AI Engineer")).warnings == ()
 
 
+@pytest.mark.parametrize("mode", [Mode.manual, Mode.review])
+def test_a_security_role_starts_for_a_person_whose_rules_do_not_exclude_it(
+    db: Session, a: uuid.UUID, b: uuid.UUID, mode: Mode
+) -> None:
+    """The app has no rule of its own about a kind of role (owner, 2026-11-05): A has no rule,
+    B the owner's; the same posting starts for A with no warning and is refused for B."""
+    rules(db, a)
+    rules(db, b, OWNER_RULE)
+    text = "Build threat detection for our cybersecurity team."
+    started = start(db, a, posting(db, a, "Security Engineer", text=text), mode)
+    assert (started.warnings, started.application.state) == ((), State.queued)
+    assert refused(db, b, posting(db, b, "Security Engineer", text=text), Mode.review) == (
+        "never_apply_role"
+    )
+
+
 def test_the_sweeps_never_apply_event(db: Session, a: uuid.UUID) -> None:
     rules(db, a)  # the rule was removed since the sweep
     job = posting(db, a, "Applied AI Engineer", status="skipped")

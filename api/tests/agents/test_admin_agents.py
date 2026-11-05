@@ -129,6 +129,10 @@ def test_the_list_and_the_page_render_for_every_registered_agent(api: Api, admin
         assert body["first_message"]
         assert body["starter"]
         assert body["guards"]
+        # The person's own never apply rules, and no rule of the app's own about a kind of role
+        # (owner, 2026-11-05).
+        assert "the person's own never apply rules" in body["guards"]
+        assert "cyber" not in body["guards"].lower()
         assert {field["name"] for field in body["input_fields"]} == set(
             agent.input_model.model_fields
         )

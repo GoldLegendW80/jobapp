@@ -56,8 +56,8 @@ security, pentest, threat (Harald, 2026-10-06)" has the terms cyber, security, p
 They use apply's shared matcher (`jobs.never_apply`) on the company and title: case, accents,
 compatibility forms, hidden characters and lookalike letters are folded, and terms match whole
 words, optional plurals and the start or end of a glued word. A rule without a colon has no
-terms and matches nothing. The app's own rule against cybersecurity (`never_apply.CYBER_RULE`,
-CLAUDE.md rule 2) is always added.
+terms and matches nothing. The person's own rules are the only ones: the app adds no rule of its
+own about a kind of role (owner, 2026-11-05).
 
 Stale sweeps: a running sweep beats every HEARTBEAT_S (`heartbeat_at`), whatever its websites do.
 One picked by a worker whose heartbeat is older than STALE_AFTER (the worker died), or one never
@@ -109,7 +109,7 @@ from app.jobs.models import (
     SweepStatus,
     SweepTrigger,
 )
-from app.jobs.never_apply import CYBER_RULE, NeverApplyRule
+from app.jobs.never_apply import NeverApplyRule
 from app.opportunities import pay as pays
 from app.profile import matching
 from app.profile.models import Profile
@@ -1034,11 +1034,10 @@ def _summary(stats: Stats) -> dict[str, Any]:
 # page in batches (finder.VerifiedBatch). Each batch is stored before the finder is told it was
 # kept, in ONE transaction that also writes its counters into the locked sweep row, so the
 # row's counts are those of the jobs stored, whatever happens to the worker next:
-# - the job: `_new_job`: scored, status `found`, or `skipped` with the
-#   rule as its note when a never apply rule of the person or the app's own rule against
-#   cybersecurity matches), the website's host as its source, the text code read on the detail
-#   page, the employer and the published date only when the page states them (UNKNOWN_EMPLOYER
-#   and no date otherwise, never the website's name or today), `legacy` empty;
+# - the job: `_new_job`: scored, status `found`, or `skipped` with the rule as its note when a
+#   never apply rule of the person matches), the website's host as its source, the text code
+#   read on the detail page, the employer and the published date only when the page states them
+#   (UNKNOWN_EMPLOYER and no date otherwise, never the website's name or today), `legacy` empty;
 # - what was observed: in the `sweep` event's `discovery` (the source, when the detail page was
 #   read, the lines of the page that state the title, employer, date and location, and which of
 #   those were unknown); never a page snapshot, the model's words, criteria or instructions;
@@ -1101,7 +1100,7 @@ def commit_verified(
     """Store one verified batch (above) with `known`, a copy of the plan's, and `snapshot`, a
     copy of the run's stats, both updated in place. Returns the counters the batch added, or
     None when the row is not this run's any more: then nothing is written."""
-    staged = replace(plan, known=known, rules=[*plan.rules, CYBER_RULE])
+    staged = replace(plan, known=known)
     delta = Stats()
     with sessions() as db:
         row = db.get(Sweep, plan.sweep_id, with_for_update=True, populate_existing=True)

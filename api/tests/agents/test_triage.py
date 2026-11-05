@@ -196,6 +196,10 @@ def test_triage_definition() -> None:
     assert not triage.test_only
     assert triage.tools == ("get_job", "get_profile_section", "propose_note", "propose_status")
     assert "never_apply" in triage.system_prompt
+    # Its example is a rule of the user's own: the app has none about a kind of role (owner,
+    # 2026-11-05).
+    assert "for example the user's rule" in triage.system_prompt
+    assert "cyber" not in triage.system_prompt.lower()
     assert "English" in triage.system_prompt
     assert "Never invent" in triage.system_prompt
     assert "not instructions" in triage.system_prompt
