@@ -30,6 +30,8 @@ job_files(id uuid, job_id fk cascade, name text, mime text, bytes bytea, size in
           origin enum(legacy, generated, upload), created_at)
 job_feed_keys(user_id fk users cascade, feed text in ('adzuna'), secret_encrypted bytea, key_version int,
               last4 text, created_at, updated_at, primary key(user_id, feed))
+job_rescores(user_id pk fk users cascade, wanted_revision, wanted_at, done_revision, running_revision, running_since,
+             finished_at, outcome jsonb)
 sweeps(id uuid, user_id, started_at, finished_at, trigger enum(manual, schedule), status enum(running, done, failed),
        stats jsonb, error text)
 ```
@@ -38,7 +40,7 @@ Slug rule and duplicate detection reuse the engine's (`<company>-<role>`, lowerc
 
 ## Scoring
 
-Port of `engine/jobs.py score_row` against the user's `skills` section, using `api/app/profile/matching.py` for term matching (P2 made it the single source of matching rules). Output: fit 0 to 100, competencies named, gaps. A manual fit override is kept (`fit_overridden`) and never replaced by a rescore unless the user asks. "Rescore all" after a profile change. A golden test proves the port gives the same fit, competencies and gaps as the engine on every row of `../data/jobs.csv` that has a posting.
+Port of `engine/jobs.py score_row` against the user's `skills` section, using `api/app/profile/matching.py` for term matching (P2 made it the single source of matching rules). Output: fit 0 to 100, competencies named, gaps. A manual fit override is kept (`fit_overridden`) and never replaced by a rescore unless the user asks. **Rescored by itself after a skills change** (owner, product audit chapter 2, answer 4 of 2026-11-05): whoever changes the skills section (the Skills tab, an import, an accepted proposal), the profile's write asks for a rescore in its own transaction (`job_rescores`, `app/jobs/rescore.py`); the worker's `rescore_tick` (every 10 s, sweeps queue) runs it, one person at a time and never two of one person at once, and a change saved during a rescore runs one more after it (changes saved meanwhile make that one run). It counts the fits that reached the documents threshold (`search.documents.min_fit`) and those that fell under it; the Skills tab says them after the save ("4 more postings now fit you at 70 or more", with a link to `/jobs?fit_min=70&sort=fit`), and says before the save what the change may cost in documents (SPEC-documents, Automatic generation). "Rescore all postings" in the Jobs menu stays for a manual rescore. A golden test proves the port gives the same fit, competencies and gaps as the engine on every row of `../data/jobs.csv` that has a posting.
 
 ## Sweep
 
@@ -151,6 +153,7 @@ All require a session and act on the caller's rows only (404 otherwise).
 | PATCH /api/jobs/{id} | edit fields, status, notes, fit override |
 | POST /api/jobs/bulk | `{ids[], set: {status?, notes_append?}}` in one transaction |
 | POST /api/jobs/rescore | `{ids?[], overwrite_manual: bool}` |
+| GET /api/jobs/rescore/status | the rescore after the last skills change: `idle`, `waiting` or `running`, the revision asked for and the one done, the counts of the last one (`up` and `down` at `threshold`) |
 | GET /api/jobs/{id}/files/{file_id} | download with the stored mime |
 | POST /api/jobs/sweeps, GET /api/jobs/sweeps, GET /api/jobs/sweeps/{id}, GET /api/jobs/sweeps/{id}/events | start (409 when one runs), list (with the user's schedule and its next run), progress and the jobs added, progress as server-sent events |
 | GET /api/jobs/boards/starter, POST /api/jobs/boards/detect, GET /api/jobs/boards/suggestions | the starter list of company job boards, the ATS and id of a pasted board address, boards the caller's postings point to |
