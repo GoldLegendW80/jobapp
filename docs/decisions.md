@@ -10,7 +10,9 @@ choice made by the build that stands until the owner says otherwise.
 
 - No dashes as separators in any outward text: no em dash, no en dash, no " - ". Hyphenated
   words are fine.
-- Never apply to a cybersecurity role, whatever the fit score.
+- Roles a person never wants are that person's own never apply rules, in their profile. The
+  app has no rule of its own about a kind of role (owner, 2026-11-05: the rule against
+  cybersecurity roles was the owner's alone, kept in his profile).
 - Never send mail by itself: the person clicks Send (Full auto, when built, is the one opt in
   exception for forms and mails, with its guardrails, decided 2026-10-10).
 - Nothing is submitted without the person's approval: in Full auto, the Like the person gives
@@ -358,3 +360,17 @@ The owner's answers during the product audit, in the session that built them.
      and "Remember this answer for next forms".
   7. The CV editor's fixed facts save to the profile, and the base CV's own fixed block goes
      after a one time merge.
+- 2026-11-05, the job title ideas (X2), the owner's answers:
+  1. A run of about 20,000 to 39,000 tokens: "yes".
+  2. What the agent reads: "uploaded cv, the profile based on the computer or just a chat with
+     the agent to tell what we want to do is enough. ... he can read everything to help the user
+     find best jobs". The agent reads the whole profile, the documents the person uploaded and
+     what the person writes to it; any one of them is enough to start.
+  3. "security was only for me, for my profile, remove these from permanent memory bc its just
+     for me". The rule against cybersecurity roles is the owner's own never apply rule, in his
+     profile; it is not a rule of the app. CLAUDE.md's hard rule against it and the app's own
+     rule in code (`never_apply.CYBER_RULE`) are removed; every person's own never apply rules
+     still hold everywhere they did. This replaces the standing rule of 2026-10-06 and the
+     cybersecurity lines of the module sections below it.
+  4. "More ideas" adds to the ideas shown: "add to them".
+  5. In Find jobs, the line that names the Account page without a link: "yes".

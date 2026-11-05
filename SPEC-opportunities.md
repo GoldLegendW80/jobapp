@@ -20,7 +20,7 @@ User stories:
 3. **A Like in Full auto is the click** (2026-10-10, refined 2026-10-19): for a person who turned Full auto on, the Like given while Full auto is on is the approval for forms and e-mails alike, within the guardrails (CLAUDE.md rule 4, SPEC-apply "Modes"). It stays valid at most 7 days and only while Full auto stays on (planner default of 2026-10-19 that the owner may change).
 4. **Review first is the default.** Full auto is off until the person turns it on (SPEC-apply decision 1).
 5. **Freelance sources are a configurable list per person**, declared like the job boards, not a fixed short list (2026-10-10). Since 2026-10-28 (owner) that list is the job websites ticked in Find jobs; the feeds and the boards were deleted.
-6. **Everything stays free** (CLAUDE.md rule 11): no paid source, no paid alert subscription, no paid scraping service.
+6. **Everything stays free** (CLAUDE.md rule 2): no paid source, no paid alert subscription, no paid scraping service.
 7. **Never a cybersecurity role** (CLAUDE.md rule 2): the deck never shows one, a Like on one is refused (apply's `never_apply` guardrail), and no source is added for security work.
 8. **Mail sending is paused by the owner** (2026-10-14): outreach by e-mail to a freelance client is planned here but waits on the mail lane (#357) and apply A14.
 9. **Onboarding step 1 reuses ingestion**; the new profile fields are the ones the intent names: seniority, industries, company types, compensation, tone and language, application behaviour.
