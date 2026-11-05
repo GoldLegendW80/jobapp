@@ -66,9 +66,9 @@ export function SkillsCostLine({
   if (!answer || !answer.writes || answer.newly === 0) return null;
   return (
     <p data-testid="skills-cost-line">
-      This change brings {postings(answer.newly)} to a fit of{" "}
-      {answer.min_fit} or more: their CV and letter are written
-      automatically, {estimateSentence(answer.newly_estimate)}.
+      This change brings {postings(answer.newly)} to a fit of {answer.min_fit}{" "}
+      or more: their CV and letter are written automatically,{" "}
+      {estimateSentence(answer.newly_estimate)}.
     </p>
   );
 }
@@ -82,7 +82,8 @@ export function RescoreLine({ revision }: { revision: number }) {
     refetchInterval: (current) => {
       const data = current.state.data;
       if (!data) return RESCORE_POLL_MS;
-      const asked = data.wanted_revision !== null && data.wanted_revision >= revision;
+      const asked =
+        data.wanted_revision !== null && data.wanted_revision >= revision;
       return asked && data.done_revision < revision ? RESCORE_POLL_MS : false;
     },
   });

@@ -896,7 +896,9 @@ describe("a failing refresh", () => {
       ),
     ).toBeVisible();
     // Apply is offered again once the documents are written.
-    expect(within(section).getByRole("button", { name: "Apply" })).toBeVisible();
+    expect(
+      within(section).getByRole("button", { name: "Apply" }),
+    ).toBeVisible();
   });
 });
 

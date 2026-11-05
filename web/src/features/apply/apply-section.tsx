@@ -37,6 +37,7 @@ import {
   reviewReason,
   statusLine,
 } from "./apply-state";
+import { applyDoes, LINKEDIN_OFF, linkedInOf } from "./apply-offer";
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog } from "./confirm-dialog";
 import { DECISIONS, type DecisionKind } from "./decisions";
@@ -80,12 +81,6 @@ const DOCUMENTS_WAIT_LINKS: Partial<
   "documents:credential": { to: "/account", label: "Open your account" },
 };
 
-/** What Apply does, by the person's "Let me review each filled form before it is sent" box. */
-const APPLY_SENDS =
-  "The assistant fills the form and sends it. You can watch it live here.";
-const APPLY_REVIEWS =
-  "The assistant fills the form, then you check it and send it.";
-
 /**
  * The "Apply" section of the job page (SPEC-apply.md, "Frontend"; issue #738): one Apply button.
  * With the person's review box unticked (the default) the assistant fills the form and the app
@@ -104,24 +99,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const [asking, setAsking] = useState<DecisionKind | null>(null);
   // A posting on LinkedIn starts nothing until the person has turned LinkedIn on and accepted its
   // current sentence (SPEC-browser decision 2); until then only the external link is offered.
-  let onLinkedIn = false;
-  let linkedinPosting: string | null = null;
-  try {
-    const posting = new URL(job.url ?? "");
-    const host = posting.hostname.toLowerCase().replace(/\.$/, "");
-    onLinkedIn = host === "linkedin.com" || host.endsWith(".linkedin.com");
-    if (
-      posting.protocol === "https:" &&
-      !posting.username &&
-      !posting.password &&
-      ["linkedin.com", "www.linkedin.com"].includes(host) &&
-      /^\/jobs\/view\/\d{1,24}\/?$/.test(posting.pathname) &&
-      !posting.hash
-    )
-      linkedinPosting = posting.href;
-  } catch {
-    /* A posting without an address already has its normal refusal. */
-  }
+  const { onLinkedIn, posting: linkedinPosting } = linkedInOf(job.url);
   const linkedin = useQuery({
     queryKey: linkedinKey,
     queryFn: ({ signal }) => getLinkedIn(signal),
@@ -509,9 +487,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
               <>
                 {linkedinBlocked ? (
                   <p className="text-sm text-muted-foreground">
-                    To use Easy Apply, add LinkedIn to your list in Find jobs
-                    and save: that gives LinkedIn&apos;s permission. You can
-                    also apply yourself.
+                    {LINKEDIN_OFF}
                   </p>
                 ) : (
                   <Button
@@ -626,9 +602,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
             <div className="flex flex-col gap-1 text-sm text-muted-foreground">
               {settings.data ? (
                 <p data-testid="apply-mode-line">
-                  {settings.data.review_before_send
-                    ? APPLY_REVIEWS
-                    : APPLY_SENDS}{" "}
+                  {applyDoes(settings.data)}{" "}
                   <Link
                     to="/settings/applications"
                     className="font-medium text-foreground underline underline-offset-4"
