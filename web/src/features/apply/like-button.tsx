@@ -1,10 +1,11 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Heart, LoaderCircle } from "lucide-react";
+import { Heart } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { plural } from "@/features/jobs/selection";
 import { describeError } from "@/lib/api";
 
@@ -85,7 +86,7 @@ export function LikeButton({
       }}
     >
       {busy ? (
-        <LoaderCircle aria-hidden="true" className="animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
       ) : (
         <Heart aria-hidden="true" />
       )}

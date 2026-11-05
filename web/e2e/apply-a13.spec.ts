@@ -225,8 +225,10 @@ test("Full auto is turned on in Settings after it says what a Like then does, an
   const full = page.getByRole("radio", { name: "Full auto" });
   await expect(full).toBeEnabled();
   await review.focus();
-  await page.keyboard.press("ArrowDown");
+  // The radio group selects the radio the arrow reaches while the key is still down.
+  await page.keyboard.down("ArrowDown");
   await expect(full).toBeChecked();
+  await page.keyboard.up("ArrowDown");
   const panel = page.getByRole("region", { name: "Turn on Full auto" });
   await expect(panel).toContainText(
     `The app will submit applications for you when a posting's fit is at least ${min_fit}, at least 1 minute after each Like unless you cancel, and never more than one application per company in 30 days.`,

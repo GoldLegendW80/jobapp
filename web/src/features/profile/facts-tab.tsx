@@ -9,7 +9,13 @@ import { useEffect, useRef, useState } from "react";
 import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Form } from "@/components/ui/form";
+import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 
 import type { Profile } from "./api";
@@ -187,27 +193,24 @@ function SizeMeter({ form }: { form: UseFormReturn<FactsForm> }) {
           {sizeText(size, FACTS_MAX_BYTES)}
         </span>
       </div>
-      <div
+      {/* A meter, not a progress: the bar's value is the share filled, what is read the bytes. */}
+      <Progress
+        value={percent}
         role="meter"
         aria-labelledby="facts-size-label"
         aria-valuemin={0}
         aria-valuemax={FACTS_MAX_BYTES}
         aria-valuenow={Math.min(size, FACTS_MAX_BYTES)}
         aria-valuetext={sizeText(size, FACTS_MAX_BYTES)}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-      >
-        <div
-          className={cn(
-            "h-full rounded-full transition-[width]",
-            over
-              ? "bg-destructive"
-              : percent >= 90
-                ? "bg-amber-500"
-                : "bg-primary",
-          )}
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+        className={cn(
+          "h-1.5 bg-muted *:data-[slot=progress-indicator]:motion-reduce:transition-none",
+          over
+            ? "*:data-[slot=progress-indicator]:bg-destructive"
+            : percent >= 90
+              ? "*:data-[slot=progress-indicator]:bg-amber-500"
+              : undefined,
+        )}
+      />
     </div>
   );
 }
@@ -239,31 +242,34 @@ function BlockEditor({
     name: `blocks.${index}.body`,
   });
   const [view, setView] = useState<"write" | "preview">("write");
-  const panelId = `fact-block-${n}`;
   return (
-    <div className="flex flex-col">
+    <Collapsible
+      open={open}
+      onOpenChange={() => {
+        onToggle();
+      }}
+      className="flex flex-col"
+    >
       <div className="flex items-center justify-between gap-2 p-2 pl-3">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={panelId}
-          aria-label={`${title.trim() || `Block ${n}`}, block ${n}`}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-sm text-left text-sm font-medium focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-          onClick={() => {
-            onToggle();
-          }}
-        >
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "size-4 shrink-0 transition-transform",
-              open && "rotate-90",
-            )}
-          />
-          <span className="min-w-0 truncate">
-            {title.trim() || `Block ${n}`}
-          </span>
-        </button>
+        <CollapsibleTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            aria-label={`${title.trim() || `Block ${n}`}, block ${n}`}
+            className="h-auto min-w-0 flex-1 shrink justify-start rounded-sm p-0 text-left hover:bg-transparent has-[>svg]:px-0 dark:hover:bg-transparent"
+          >
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "size-4 shrink-0 transition-transform",
+                open && "rotate-90",
+              )}
+            />
+            <span className="min-w-0 truncate">
+              {title.trim() || `Block ${n}`}
+            </span>
+          </Button>
+        </CollapsibleTrigger>
         <ItemControls
           index={index}
           count={count}
@@ -272,63 +278,61 @@ function BlockEditor({
           onRemove={onRemove}
         />
       </div>
-      {open ? (
-        <div id={panelId} className="flex flex-col gap-3 border-t p-3 sm:p-4">
-          <TextField
-            control={form.control}
-            name={`blocks.${index}.title`}
-            label="Title"
-            srSuffix={`of block ${n}`}
-          />
-          <div
-            role="group"
-            aria-label={`Editor view of block ${n}`}
-            className="flex gap-1 md:hidden"
-          >
-            {(["write", "preview"] as const).map((mode) => (
-              <Button
-                key={mode}
-                type="button"
-                size="sm"
-                variant={view === mode ? "secondary" : "ghost"}
-                aria-pressed={view === mode}
-                onClick={() => {
-                  setView(mode);
-                }}
-              >
-                {mode === "write" ? "Write" : "Preview"}
-              </Button>
-            ))}
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <AreaField
-              control={form.control}
-              name={`blocks.${index}.body`}
-              label="Text"
-              srSuffix={`of block ${n}`}
-              rows={12}
-              className={cn("min-w-0", view === "preview" && "max-md:hidden")}
-              textareaClassName="font-mono text-xs leading-relaxed"
-            />
-            <section
-              aria-label={`Preview of block ${n}`}
-              className={cn(
-                "min-w-0 rounded-md border bg-muted/30 p-3 md:max-h-96 md:overflow-y-auto",
-                view === "write" && "max-md:hidden",
-              )}
+      <CollapsibleContent className="flex flex-col gap-3 border-t p-3 sm:p-4">
+        <TextField
+          control={form.control}
+          name={`blocks.${index}.title`}
+          label="Title"
+          srSuffix={`of block ${n}`}
+        />
+        <div
+          role="group"
+          aria-label={`Editor view of block ${n}`}
+          className="flex gap-1 md:hidden"
+        >
+          {(["write", "preview"] as const).map((mode) => (
+            <Button
+              key={mode}
+              type="button"
+              size="sm"
+              variant={view === mode ? "secondary" : "ghost"}
+              aria-pressed={view === mode}
+              onClick={() => {
+                setView(mode);
+              }}
             >
-              <p className="mb-2 text-xs font-medium text-muted-foreground">
-                Preview
-              </p>
-              {body.trim() === "" ? (
-                <p className="text-sm text-muted-foreground">Nothing yet.</p>
-              ) : (
-                <Markdown source={body} />
-              )}
-            </section>
-          </div>
+              {mode === "write" ? "Write" : "Preview"}
+            </Button>
+          ))}
         </div>
-      ) : null}
-    </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <AreaField
+            control={form.control}
+            name={`blocks.${index}.body`}
+            label="Text"
+            srSuffix={`of block ${n}`}
+            rows={12}
+            className={cn("min-w-0", view === "preview" && "max-md:hidden")}
+            textareaClassName="font-mono text-xs leading-relaxed"
+          />
+          <section
+            aria-label={`Preview of block ${n}`}
+            className={cn(
+              "min-w-0 rounded-md border bg-muted/30 p-3 md:max-h-96 md:overflow-y-auto",
+              view === "write" && "max-md:hidden",
+            )}
+          >
+            <p className="mb-2 text-xs font-medium text-muted-foreground">
+              Preview
+            </p>
+            {body.trim() === "" ? (
+              <p className="text-sm text-muted-foreground">Nothing yet.</p>
+            ) : (
+              <Markdown source={body} />
+            )}
+          </section>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

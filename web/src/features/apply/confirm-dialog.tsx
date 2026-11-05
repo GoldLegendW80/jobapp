@@ -1,5 +1,3 @@
-import { LoaderCircle } from "lucide-react";
-
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -10,6 +8,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 
 /** What a destructive click says before it does anything: one sentence per action. */
 export type Confirmation = {
@@ -49,9 +48,7 @@ export function ConfirmDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Not yet</AlertDialogCancel>
           <Button onClick={onConfirm} disabled={pending}>
-            {pending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
             {ask?.confirm}
           </Button>
         </AlertDialogFooter>

@@ -78,7 +78,7 @@ const submitPassword = (user: ReturnType<typeof userEvent.setup>) =>
   );
 
 describe("account page", () => {
-  it("opens from the user menu and shows the five cards", async () => {
+  it("opens from the user menu and shows the model key first, then the other cards", async () => {
     account();
     const { location, user } = await (async () => {
       const utils = renderApp("/");
@@ -96,12 +96,21 @@ describe("account page", () => {
     expect(document.title).toBe("Account · jobapp");
     const headings = screen.getAllByRole("heading", { level: 2 });
     expect(headings.map((h) => h.textContent)).toEqual([
+      "Model access",
       "Profile name",
       "Change password",
-      "Model access",
       "Gmail",
-      "Your browser",
+      "Websites you are signed in to",
     ]);
+    // No LinkedIn switch, search words or session of its own on the page any more.
+    expect(screen.queryByRole("region", { name: "LinkedIn" })).toBeNull();
+    expect(screen.queryByLabelText("Search words")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Look at my browser" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Sign in to a site" }),
+    ).toBeNull();
   });
 
   it("has no dashes in its copy", async () => {

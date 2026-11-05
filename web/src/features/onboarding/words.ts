@@ -39,6 +39,7 @@ export function summaryRows(
   const pays = [payLine(draft.salary), payLine(draft.daily)];
   const fullAuto =
     settings?.mode_after_like === "full_auto" && draft.mode === null;
+  const review = draft.review ?? settings?.review_before_send ?? false;
   return {
     profile: "Your documents and proposals are on the Fill my profile page.",
     looking: [
@@ -68,9 +69,14 @@ export function summaryRows(
           ].filter(Boolean),
           "Not given",
         ),
-    apply: `${fullAuto ? WORDING.fullAuto : WORDING.reviewFirst}; documents in ${LANGUAGE_WORDS[
-      draft.language
-    ].toLowerCase()}, ${TONE_WORDS[draft.tone].toLowerCase()} tone`,
+    // Both choices of the step: the mode after a Like, and what the job page's Apply does.
+    apply: `${fullAuto ? WORDING.fullAuto : WORDING.reviewFirst} after a Like; ${
+      review
+        ? "Apply waits for you to review each filled form"
+        : "Apply sends each filled form for you"
+    }; documents in ${LANGUAGE_WORDS[draft.language].toLowerCase()}, ${TONE_WORDS[
+      draft.tone
+    ].toLowerCase()} tone`,
   };
 }
 

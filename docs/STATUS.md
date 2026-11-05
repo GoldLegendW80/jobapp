@@ -21,10 +21,10 @@ and the live pages show on 2026-11-04:
 - Search sources: the company job boards came back on 2026-10-30, beside three job feeds
   (Arbeitnow, Himalayas, Adzuna). "The board and feed engine deleted" below is superseded on those
   points (decisions.md, Interactive job search).
-- The chapter 1 changes of the audit (not deployed yet): Find jobs shows every source as one list
-  of addresses and no longer offers the job alert e-mails, the first login wizard has a step
-  "Websites to search", the Gmail card hides itself on a server without Gmail, and Discover's
-  empty deck names its cause.
+- The chapter 1 changes of the audit (#746, deployed on 2026-11-04 by deploy run 130): Find jobs
+  shows every source as one list of addresses and no longer offers the job alert e-mails, the
+  first login wizard has a step "Websites to search", the Gmail card hides itself on a server
+  without Gmail, and Discover's empty deck names its cause.
 - Apply: one click Apply (#738, 2026-11-01) is built: the Apply button of a posting fills and sends
   the form, unless the person ticks the review box in Application settings.
 - Browser: on 2026-11-04 the Account page of a test account offered "Look at my browser", so the

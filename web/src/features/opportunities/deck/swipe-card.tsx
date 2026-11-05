@@ -156,7 +156,15 @@ export function SwipeCard({
       <div className="flex flex-wrap items-center gap-2 text-sm">
         {placeLine(card) ? <span>{placeLine(card)}</span> : null}
         <Badge variant="secondary">{contractLine(card)}</Badge>
-        {card.pay ? <span className="font-medium">{card.pay}</span> : null}
+        {card.pay ? (
+          <span data-pay="stated" className="font-medium tabular-nums">
+            {card.pay}
+          </span>
+        ) : (
+          <span data-pay="none" className="text-muted-foreground">
+            {WORDING.payNotGiven}
+          </span>
+        )}
       </div>
       {reason ? (
         <p id={reasonId} className="text-sm">

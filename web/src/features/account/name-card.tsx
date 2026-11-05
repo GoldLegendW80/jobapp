@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -25,6 +25,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { message } from "@/features/admin/errors";
 import { renameMe, type User } from "@/features/auth/api";
 import { meQueryKey } from "@/features/auth/auth-context";
@@ -131,7 +132,7 @@ export function NameCard({ user }: { user: User }) {
             >
               {mutation.isPending ? (
                 <>
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                   Saving
                 </>
               ) : (

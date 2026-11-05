@@ -13,7 +13,7 @@
  * character drawn (only blanks or zero width characters) is not sent, as the api refuses it.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, SendHorizontal } from "lucide-react";
+import { SendHorizontal } from "lucide-react";
 import {
   useEffect,
   useId,
@@ -27,6 +27,9 @@ import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Kbd } from "@/components/ui/kbd";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { useStickToBottom } from "@/features/agents/use-stick-to-bottom";
 import { cn } from "@/lib/utils";
@@ -74,6 +77,13 @@ function pendingGeneration(messages: Message[]): string | null {
   );
   return answered ? null : last.generation_id;
 }
+
+/** The hint of the composer when a message can be sent: its keys, as keys. */
+const KEYS = (
+  <>
+    <Kbd>Enter</Kbd> sends, <Kbd>Shift</Kbd> and <Kbd>Enter</Kbd> adds a line.
+  </>
+);
 
 function MessageItem({ message }: { message: Message }) {
   const mine = message.role === "user";
@@ -243,7 +253,7 @@ export function ChatPanel({ document, generation }: PanelProps) {
     ? "This document is being written. You can ask for a change once it is done."
     : busy
       ? "One message at a time: you can send the next one once this one is answered."
-      : "Enter sends, Shift and Enter adds a line.";
+      : KEYS;
 
   return (
     <div className="flex flex-col gap-3" data-testid="document-chat">
@@ -257,7 +267,7 @@ export function ChatPanel({ document, generation }: PanelProps) {
       >
         {messages.isPending ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading the conversation
           </p>
         ) : messages.isError ? (
@@ -305,9 +315,10 @@ export function ChatPanel({ document, generation }: PanelProps) {
                 className="flex items-center gap-2 text-sm text-muted-foreground"
                 data-testid="document-chat-writing"
               >
-                <LoaderCircle
+                <Spinner
                   aria-hidden="true"
-                  className="size-4 animate-spin motion-reduce:animate-none"
+                  role={undefined}
+                  className="motion-reduce:animate-none"
                 />
                 {followed.data?.status === "queued"
                   ? "Waiting for a free assistant"
@@ -363,54 +374,52 @@ export function ChatPanel({ document, generation }: PanelProps) {
         </Alert>
       ) : null}
 
-      <form
-        onSubmit={submit}
-        className="flex flex-col gap-2"
-        aria-label="Send a message"
-      >
-        <label htmlFor={ids.composer} className="sr-only">
-          Message
-        </label>
-        <div className="flex items-end gap-2">
-          <Textarea
-            id={ids.composer}
-            ref={composer}
-            value={draft}
-            maxLength={CHAT_MAX_CHARS}
-            rows={2}
-            placeholder="Ask for a change"
-            className="max-h-40 min-h-11 resize-none"
-            aria-describedby={ids.hint}
-            disabled={noConsent || noCredential}
-            onChange={(event) => {
-              setDraft(event.target.value);
-            }}
-            onKeyDown={onKeyDown}
-          />
-          <Button
-            type="submit"
-            size="icon"
-            className="size-11 shrink-0"
-            disabled={!canSend}
-            aria-busy={send.isPending}
+      <form onSubmit={submit} aria-label="Send a message">
+        <Field className="gap-2">
+          <FieldLabel htmlFor={ids.composer} className="sr-only">
+            Message
+          </FieldLabel>
+          <div className="flex items-end gap-2">
+            <Textarea
+              id={ids.composer}
+              ref={composer}
+              value={draft}
+              maxLength={CHAT_MAX_CHARS}
+              rows={2}
+              placeholder="Ask for a change"
+              className="max-h-40 min-h-11 resize-none"
+              aria-describedby={ids.hint}
+              disabled={noConsent || noCredential}
+              onChange={(event) => {
+                setDraft(event.target.value);
+              }}
+              onKeyDown={onKeyDown}
+            />
+            <Button
+              type="submit"
+              size="icon"
+              className="size-11 shrink-0"
+              disabled={!canSend}
+              aria-busy={send.isPending}
+            >
+              {send.isPending ? (
+                <Spinner aria-hidden="true" role={undefined} />
+              ) : (
+                <SendHorizontal aria-hidden="true" />
+              )}
+              <span className="sr-only">Send</span>
+            </Button>
+          </div>
+          <FieldDescription
+            id={ids.hint}
+            className="flex justify-between gap-2 text-xs"
           >
-            {send.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : (
-              <SendHorizontal aria-hidden="true" />
-            )}
-            <span className="sr-only">Send</span>
-          </Button>
-        </div>
-        <p
-          id={ids.hint}
-          className="flex justify-between gap-2 text-xs text-muted-foreground"
-        >
-          <span>{hint}</span>
-          <span>
-            {draft.length} of {CHAT_MAX_CHARS}
-          </span>
-        </p>
+            <span>{hint}</span>
+            <span>
+              {draft.length} of {CHAT_MAX_CHARS}
+            </span>
+          </FieldDescription>
+        </Field>
       </form>
 
       {consent.data !== undefined ? (

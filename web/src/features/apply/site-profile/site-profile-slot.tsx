@@ -2,8 +2,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { Button } from "@/components/ui/button";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { errorDetail, describeError } from "@/lib/api";
 import { startRun } from "./api";
 
@@ -35,27 +35,29 @@ export function SiteProfileSlot({ initialUrl = "" }: { initialUrl?: string }) {
         each section before saving. Existing values are kept until you choose
         Replace.
       </p>
-      <Label htmlFor="site-profile-address">Site address</Label>
-      <Input
-        id="site-profile-address"
-        type="url"
-        required
-        value={url}
-        onChange={(event) => {
-          setUrl(event.target.value);
-        }}
-        placeholder="https://portal.example/profile"
-        autoComplete="url"
-        disabled={start.isPending}
-      />
-      {start.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {errorDetail(start.error) ?? describeError(start.error)}
-        </p>
-      )}
+      <Field className="gap-3">
+        <FieldLabel htmlFor="site-profile-address">Site address</FieldLabel>
+        <Input
+          id="site-profile-address"
+          type="url"
+          required
+          value={url}
+          onChange={(event) => {
+            setUrl(event.target.value);
+          }}
+          placeholder="https://portal.example/profile"
+          autoComplete="url"
+          disabled={start.isPending}
+        />
+        {start.error && (
+          <FieldError>
+            {errorDetail(start.error) ?? describeError(start.error)}
+          </FieldError>
+        )}
+      </Field>
       <Button type="submit" disabled={start.isPending || !url.trim()}>
         {start.isPending
-          ? "Starting profile run"
+          ? "Starting to complete your profile on this site"
           : "Complete my profile on this site"}
       </Button>
     </form>

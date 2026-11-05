@@ -15,6 +15,8 @@ import { renderApp } from "@/test/render";
 import { onboardingDone, server } from "@/test/server";
 import { routes } from "@/routes";
 
+import type { ModelCredential } from "@/features/agents/api";
+
 import type { OnboardingState } from "./onboarding-api";
 
 const fresh: OnboardingState = {
@@ -77,6 +79,7 @@ function fakeOnboarding(
     steps: [] as string[],
   };
   let state = { ...initial };
+  let kept: Record<string, unknown> = { ...settings };
   const current = () =>
     profile ? { ...state, done: [...state.done, ...doneOf(profile)] } : state;
   server.use(
@@ -123,10 +126,12 @@ function fakeOnboarding(
         sweep_id: null,
       });
     }),
-    http.get("*/api/apply/settings", () => HttpResponse.json(settings)),
+    http.get("*/api/apply/settings", () => HttpResponse.json(kept)),
     http.put("*/api/apply/settings", async ({ request }) => {
-      calls.settings.push(await request.json());
-      return HttpResponse.json(settings);
+      const body = (await request.json()) as Record<string, unknown>;
+      calls.settings.push(body);
+      kept = { ...kept, ...body };
+      return HttpResponse.json(kept);
     }),
   );
   return calls;
@@ -136,6 +141,44 @@ afterEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
 });
+
+// An invented key of the accepted shape; its last four characters are WXyz.
+const KEY = `sk-ant-api03-${"Ab1_".repeat(20)}WXyz`;
+
+/** GET, PUT and POST verify of /api/me/model-credential: none saved unless `initial`. */
+function fakeKey(initial: ModelCredential | null = null) {
+  const calls = { puts: [] as Array<Record<string, unknown>>, verifies: 0 };
+  let saved = initial;
+  server.use(
+    http.get("*/api/me/model-credential", () =>
+      saved
+        ? HttpResponse.json(saved)
+        : HttpResponse.json({ detail: "none" }, { status: 404 }),
+    ),
+    http.put("*/api/me/model-credential", async ({ request }) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      calls.puts.push(body);
+      saved = {
+        kind: "anthropic_api_key",
+        last4: String(body.secret).slice(-4),
+        verified_at: null,
+        updated_at: "2026-11-05T08:00:00Z",
+      };
+      return HttpResponse.json(saved);
+    }),
+    http.post("*/api/me/model-credential/verify", () => {
+      calls.verifies += 1;
+      if (!saved) return HttpResponse.json({}, { status: 404 });
+      saved = { ...saved, verified_at: "2026-11-05T08:01:00Z" };
+      return HttpResponse.json({
+        result: "verified",
+        message: "Anthropic accepted this key.",
+        credential: saved,
+      });
+    }),
+  );
+  return calls;
+}
 
 /** The roles are saved: every step can open. */
 const withRoles: OnboardingState = { ...fresh, done: ["looking"] };
@@ -204,6 +247,35 @@ describe("the first login redirect", () => {
     await screen.findByRole("heading", { level: 1, name: "Jobs" });
     expect(again.location()).toBe("/jobs");
     expect(document.documentElement.dataset.onboarding).toBe("stay");
+  });
+
+  it("shows the shell around a skeleton while it checks, never the page asked for", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    let release: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/api/opportunities/onboarding", async () => {
+        await answered;
+        return HttpResponse.json({ ...fresh, open_wizard: false });
+      }),
+    );
+    renderApp("/jobs");
+    const skeleton = await screen.findByTestId("page-skeleton");
+    expect(skeleton).toHaveAttribute("role", "status");
+    expect(skeleton).toHaveTextContent("Loading");
+    // The frame is there: the main navigation and the footer, around the skeleton.
+    expect(screen.getByRole("navigation", { name: "Main" })).toBeVisible();
+    expect(screen.getByRole("contentinfo")).toBeInTheDocument();
+    expect(screen.getByRole("main")).toContainElement(skeleton);
+    expect(
+      screen.queryByRole("heading", { level: 1, name: "Jobs" }),
+    ).toBeNull();
+    release();
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
+    expect(screen.queryByTestId("page-skeleton")).toBeNull();
   });
 
   it("never sends a person the api does not send", async () => {
@@ -740,6 +812,204 @@ describe("the wizard", () => {
     // the wizard stays on its step, the next steps can be answered meanwhile
     expect(stepHeading()).toHaveTextContent("Step 1 of 8");
     expect(next()).toBeEnabled();
+  });
+
+  it("explains a Like, and keeps the Apply click's review box in apply's settings", async () => {
+    fakeSession(member);
+    const profile = fakeProfile(null);
+    const calls = fakeOnboarding(withRoles);
+    const user = userEvent.setup();
+    renderApp("/welcome?step=apply");
+    await screen.findByText(/Step 7 of 8/);
+    const like = screen.getByRole("group", { name: "After a Like" });
+    expect(like).toHaveAccessibleDescription(
+      "A Like on a posting in Discover asks the app to write your CV and letter for it and to prepare the application.",
+    );
+    expect(like).not.toHaveTextContent("You approve every application");
+    expect(
+      within(like).getByRole("radio", { name: /Review first/ }),
+    ).toHaveAccessibleName(/a Like prepares/);
+    const click = screen.getByRole("group", {
+      name: "When you click Apply on a posting",
+    });
+    const box = within(click).getByRole("checkbox", {
+      name: "Let me review each filled form before it is sent",
+    });
+    // Off by default (decisions, 2026-11-01): Apply sends the filled form.
+    expect(box).not.toBeChecked();
+    expect(box).toHaveAccessibleDescription(
+      "When it is off, Apply fills the form and sends it for you. When it is on, you check each filled form and send it yourself.",
+    );
+    await user.click(box);
+    await user.click(next());
+    await screen.findByText(/Step 8 of 8/);
+    // Only what changed, through apply's own route; the Like's mode is left as it was.
+    expect(calls.settings).toEqual([{ review_before_send: true }]);
+    expect(profile.saves.at(-1)?.section).toBe("preferences");
+    const summary = screen.getByRole("region", { name: /Summary/ });
+    expect(summary).toHaveTextContent(
+      "Review first after a Like; Apply waits for you to review each filled form; documents in",
+    );
+
+    // Back on the step, the box reads the saved setting; Next with nothing changed sends nothing.
+    await user.click(screen.getByRole("button", { name: /Back/ }));
+    await screen.findByText(/Step 7 of 8/);
+    await user.click(screen.getByRole("button", { name: /Back/ }));
+    await screen.findByText(/Step 6 of 8/);
+    await user.click(screen.getByRole("button", { name: "Skip this step" }));
+    await screen.findByText(/Step 7 of 8/);
+    expect(
+      screen.getByRole("checkbox", {
+        name: "Let me review each filled form before it is sent",
+      }),
+    ).toBeChecked();
+  });
+
+  it("says both choices of step 7 in the summary, as saved", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding(withRoles, {
+      ...SETTINGS,
+      mode_after_like: "full_auto",
+    });
+    renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 8 of 8/);
+    expect(screen.getByRole("region", { name: /Summary/ })).toHaveTextContent(
+      "Full auto after a Like; Apply sends each filled form for you; documents in",
+    );
+  });
+
+  it("asks for no model key on step 1, and says what an upload does without one", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeCvDocuments();
+    fakeOnboarding();
+    fakeKey();
+    renderApp("/welcome?step=profile");
+    await screen.findByText(/Step 1 of 8/);
+    expect(
+      await screen.findByText(
+        /Turning it into a CV you can edit uses your Anthropic API key: until one is saved, that part waits/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/model of your credential/)).toBeNull();
+    expect(screen.queryByText(/No key is saved yet/)).toBeNull();
+    expect(screen.queryByLabelText("API key")).toBeNull();
+  });
+
+  it("offers the model key on the summary while none is saved, saves it masked, and shows its last four", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding(withRoles);
+    const key = fakeKey();
+    const user = userEvent.setup();
+    renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 8 of 8/);
+    const form = await screen.findByRole("form", {
+      name: "Your Anthropic API key (optional)",
+    });
+    const field = within(form).getByLabelText("API key");
+    expect(field).toHaveAttribute("type", "password");
+    expect(field).toHaveAttribute("autocomplete", "off");
+    expect(
+      screen.getByRole("link", { name: "Anthropic Console" }),
+    ).toHaveAttribute("href", "https://console.anthropic.com/settings/keys");
+    // Empty: nothing is sent.
+    await user.click(within(form).getByRole("button", { name: "Save key" }));
+    expect(within(form).getByRole("alert")).toHaveTextContent("Paste the key");
+    expect(key.puts).toEqual([]);
+
+    await user.type(field, KEY);
+    await user.click(within(form).getByRole("button", { name: "Save key" }));
+    const done = await screen.findByTestId("welcome-key-saved");
+    expect(done).toHaveTextContent("Your key is saved. It ends with WXyz.");
+    expect(key.puts).toEqual([{ kind: "anthropic_api_key", secret: KEY }]);
+    // The key is never shown back: no field holds it, no text says it.
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(document.body.innerHTML).not.toContain(KEY);
+    expect(document.body.innerHTML).not.toContain(KEY.slice(0, 20));
+
+    await user.click(screen.getByRole("button", { name: "Verify" }));
+    expect(
+      await screen.findByText("Anthropic accepted this key."),
+    ).toBeVisible();
+    expect(key.verifies).toBe(1);
+    expect(screen.getByTestId("welcome-key-saved")).toHaveTextContent(
+      "It is verified.",
+    );
+  });
+
+  it("shows no key form when a key is saved, and Start works without one", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeKey({
+      kind: "anthropic_api_key",
+      last4: "WXyz",
+      verified_at: null,
+      updated_at: "2026-11-01T08:00:00Z",
+    });
+    fakeOnboarding(withRoles);
+    const first = renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 8 of 8/);
+    await waitFor(() => {
+      expect(first.client.getQueryData(["model-credential"])).toMatchObject({
+        last4: "WXyz",
+      });
+    });
+    expect(screen.queryByLabelText("API key")).toBeNull();
+    expect(screen.queryByText("Your Anthropic API key (optional)")).toBeNull();
+    first.unmount();
+
+    // No key: the form shows, nothing typed, and Start ends the wizard all the same.
+    fakeKey();
+    const calls = fakeOnboarding(withRoles);
+    fakeDeck([]);
+    const user = userEvent.setup();
+    const end = renderApp("/welcome?step=summary");
+    await screen.findByText(/Step 8 of 8/);
+    expect(await screen.findByLabelText("API key")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start" }));
+    await waitFor(() => {
+      expect(end.location()).toBe("/jobs");
+    });
+    expect(calls.complete).toBe(1);
+  });
+
+  it("shows only the bar and the heading below sm, every name in one box from sm up", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding({ ...withRoles, passed: ["profile", "looking"] });
+    renderApp("/welcome?step=where");
+    await screen.findByText(/Step 3 of 8/);
+    expect(stepHeading()).toHaveTextContent("Step 3 of 8: Where");
+    const bar = screen.getByRole("progressbar", { name: "Wizard progress" });
+    expect(bar).toHaveAttribute("aria-valuetext", "Step 3 of 8: Where");
+    // The step is the value, 1 to 8, not the share of the bar that is filled.
+    expect(bar).toHaveAttribute("aria-valuenow", "3");
+    expect(bar).toHaveAttribute("aria-valuemin", "1");
+    expect(bar).toHaveAttribute("aria-valuemax", "8");
+    // The names are display none below sm (Tailwind's hidden) and a row from sm up.
+    const names = screen.getByTestId("welcome-step-names");
+    expect(names).toHaveClass("hidden", "sm:flex");
+    const labels = within(names)
+      .getAllByRole("listitem")
+      .map((item) => item.firstElementChild as HTMLElement);
+    expect(labels).toHaveLength(8);
+    for (const label of labels)
+      expect(label).toHaveClass(
+        "inline-flex",
+        "min-h-6",
+        "items-center",
+        "leading-5",
+        "whitespace-nowrap",
+      );
+    // The current one is marked; the steps passed open, from sm up.
+    const current = within(names).getByText("Where");
+    expect(current).toHaveAttribute("aria-current", "step");
+    expect(current.tagName).toBe("SPAN");
+    expect(
+      within(names).getByRole("button", { name: "What you are looking for" }),
+    ).toBeInTheDocument();
   });
 
   it("uses no dash as a separator in what it shows", async () => {

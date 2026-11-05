@@ -17,7 +17,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   CircleAlert,
-  LoaderCircle,
   MessagesSquare,
   SendHorizontal,
   Trash2,
@@ -36,6 +35,15 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Kbd } from "@/components/ui/kbd";
+import { Label } from "@/components/ui/label";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -43,6 +51,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import type { JobDetail } from "@/features/jobs/api";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
@@ -196,9 +205,10 @@ function LiveReply({
       {/* Out of the flow, in the space the list keeps free below its last item: the bubble
           does not move when this line goes. */}
       <span className="absolute top-full mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <LoaderCircle
+        <Spinner
           aria-hidden="true"
-          className="size-3 animate-spin motion-reduce:animate-none"
+          role={undefined}
+          className="size-3 motion-reduce:animate-none"
         />
         {writing ? "Writing" : text ? activity(steps, false) : "Answering"}
       </span>
@@ -256,34 +266,42 @@ function MessageItem({
   );
 }
 
+/** Left aligned, as the conversation that takes its place. */
 function EmptyState({ onPick }: { onPick: (text: string) => void }) {
   return (
-    <div className="flex flex-col gap-4 py-6" data-testid="chat-empty">
-      <div className="flex flex-col gap-1">
-        <p className="text-sm font-medium">Ask anything about this posting.</p>
-        <p className="text-sm text-muted-foreground">
+    <Empty
+      data-testid="chat-empty"
+      className="items-stretch gap-4 px-0 py-6 text-left text-wrap md:px-0 md:py-6"
+    >
+      <EmptyHeader className="max-w-none items-start gap-1 text-left">
+        <EmptyTitle className="text-sm font-medium tracking-normal">
+          Ask anything about this posting.
+        </EmptyTitle>
+        <EmptyDescription className="text-sm">
           The agent reads the posting and your profile to answer. It changes
           nothing, and it only knows what they say.
-        </p>
-      </div>
-      <ul aria-label="Example questions" className="flex flex-col gap-2">
-        {EXAMPLE_PROMPTS.map((prompt) => (
-          <li key={prompt}>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-auto w-full justify-start py-2 text-left whitespace-normal"
-              onClick={() => {
-                onPick(prompt);
-              }}
-            >
-              {prompt}
-            </Button>
-          </li>
-        ))}
-      </ul>
-    </div>
+        </EmptyDescription>
+      </EmptyHeader>
+      <EmptyContent className="max-w-none items-stretch text-wrap">
+        <ul aria-label="Example questions" className="flex flex-col gap-2">
+          {EXAMPLE_PROMPTS.map((prompt) => (
+            <li key={prompt}>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-auto w-full justify-start py-2 text-left whitespace-normal"
+                onClick={() => {
+                  onPick(prompt);
+                }}
+              >
+                {prompt}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      </EmptyContent>
+    </Empty>
   );
 }
 
@@ -556,7 +574,7 @@ function ChatBody({ job }: { job: JobDetail }) {
       >
         {loading ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading the conversation
           </p>
         ) : failedToLoad ? (
@@ -645,9 +663,9 @@ function ChatBody({ job }: { job: JobDetail }) {
             .
           </p>
         ) : null}
-        <label htmlFor={ids.composer} className="sr-only">
+        <Label htmlFor={ids.composer} className="sr-only">
           Message
-        </label>
+        </Label>
         <div className="flex items-end gap-2">
           <Textarea
             id={ids.composer}
@@ -675,7 +693,7 @@ function ChatBody({ job }: { job: JobDetail }) {
             aria-busy={send.isPending}
           >
             {send.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : (
               <SendHorizontal aria-hidden="true" />
             )}
@@ -688,13 +706,20 @@ function ChatBody({ job }: { job: JobDetail }) {
           aria-live="polite"
           aria-atomic="true"
         >
-          {holding
-            ? `Your message will be sent when ${
-                busy ? "the answer is complete" : "the conversation has loaded"
-              }. Edit or clear it to cancel.`
-            : busy
-              ? "Enter sends your message once the answer is complete."
-              : "Enter sends, Shift and Enter adds a line."}
+          {holding ? (
+            `Your message will be sent when ${
+              busy ? "the answer is complete" : "the conversation has loaded"
+            }. Edit or clear it to cancel.`
+          ) : busy ? (
+            <>
+              <Kbd>Enter</Kbd> sends your message once the answer is complete.
+            </>
+          ) : (
+            <>
+              <Kbd>Enter</Kbd> sends, <Kbd>Shift</Kbd> and <Kbd>Enter</Kbd> adds
+              a line.
+            </>
+          )}
         </p>
       </form>
     </div>

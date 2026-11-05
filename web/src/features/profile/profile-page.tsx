@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { LoaderCircle, RotateCw, Sparkles } from "lucide-react";
+import { RotateCw, Sparkles } from "lucide-react";
 import {
   Fragment,
   useCallback,
@@ -26,6 +26,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Spinner } from "@/components/ui/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
@@ -127,7 +129,7 @@ export function ProfilePage() {
         role="status"
         className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" />
         Loading your profile
       </div>
     );
@@ -324,19 +326,16 @@ function Header({
           </span>
           <span className="tabular-nums text-muted-foreground">{overall}%</span>
         </div>
-        <div
-          role="progressbar"
+        {/* shadcn's Progress fills the bar from value but does not hand it to Radix: the
+            aria values are given here. */}
+        <Progress
+          value={overall}
           aria-labelledby="completeness-label"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={overall}
-          className="h-2 w-full overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className="h-full rounded-full bg-primary transition-[width]"
-            style={{ width: `${overall}%` }}
-          />
-        </div>
+          className="bg-muted *:data-[slot=progress-indicator]:motion-reduce:transition-none"
+        />
       </div>
     </header>
   );

@@ -7,6 +7,9 @@
  * lines joined), blockquotes, fenced code, horizontal rules; inline code, bold, italic and links.
  */
 import type { ReactNode } from "react";
+
+import { Separator } from "@/components/ui/separator";
+
 import { parseBlocks } from "./markdown-parse";
 
 const INLINE =
@@ -116,7 +119,8 @@ export function Markdown({ source }: { source: string }) {
               </pre>
             );
           case "rule":
-            return <hr key={key} />;
+            // A thematic break, read as one by a screen reader.
+            return <Separator key={key} decorative={false} />;
         }
       })}
     </div>

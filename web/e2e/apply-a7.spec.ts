@@ -190,9 +190,9 @@ for (const ats of ["greenhouse", "ashby"] as const) {
       "The assistant fills the form again with your approved answers, then submits it.",
       { timeout: 90_000 },
     );
-    await expect(live.getByRole("button", { name: "Take over" })).toHaveCount(
-      0,
-    );
+    await expect(
+      live.getByRole("button", { name: "Use the browser myself" }),
+    ).toHaveCount(0);
     await expect(live.getByLabel("Type into your browser")).toHaveCount(0);
 
     // The wait is derived, not fixed: a fixed 180 s failed on loaded gate stacks, where the

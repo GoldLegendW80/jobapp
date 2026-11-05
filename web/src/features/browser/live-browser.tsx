@@ -1,11 +1,4 @@
-import {
-  Expand,
-  Hand,
-  Keyboard,
-  LoaderCircle,
-  RotateCw,
-  Undo2,
-} from "lucide-react";
+import { Expand, Hand, Keyboard, RotateCw, Undo2 } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -15,7 +8,10 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import { describeError, errorDetail } from "@/lib/api";
+import { WORDING } from "@/lib/wording";
 
 import {
   giveBack,
@@ -37,8 +33,9 @@ type Phase = "connecting" | "connected" | "closed";
 const TOO_MANY = "Too many open views of your browser. Close one.";
 
 const STATUS: Record<InputHolder, string> = {
-  assistant: "You are watching your browser. Take over to use it yourself.",
-  you: "You have the keyboard and the mouse. Give back when you are done.",
+  assistant:
+    "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
+  you: "You have the keyboard and the mouse. Choose Let the assistant continue when you are done.",
 };
 const OWN_SESSION =
   "This is your own session: you have the keyboard and the mouse.";
@@ -50,8 +47,9 @@ function sentence(error: unknown): string {
 
 /**
  * The live view of the person's own browser (SPEC-browser.md, The live view): the screen drawn by
- * noVNC over /vnc/websockify with a one use ticket, view only until "Take over", which gives this
- * tab the keyboard and the mouse (the agent's next action waits) until "Give back". `status` is the
+ * noVNC over /vnc/websockify with a one use ticket, view only until "Use the browser myself" (the
+ * spec's Take over), which gives this tab the keyboard and the mouse (the agent's next action
+ * waits) until "Let the assistant continue" (Give back). `status` is the
  * caller's sentence for the status line while the assistant has the browser ("The assistant is
  * filling the form"), or while the person has it (a sign in hand off). `person`: the person's own session (no assistant, browser B7), where this
  * view has the keyboard and the mouse from the start and there is nothing to take over or give
@@ -209,7 +207,7 @@ export function LiveBrowser({
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
         {phase === "connecting" && (
-          <LoaderCircle aria-hidden className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
         )}
         {line}
       </p>
@@ -226,7 +224,7 @@ export function LiveBrowser({
             onClick={() => void switchInput("assistant")}
           >
             <Undo2 aria-hidden />
-            Give back
+            {WORDING.letAssistantContinue}
           </Button>
         ) : (
           <Button
@@ -235,7 +233,7 @@ export function LiveBrowser({
             onClick={() => void switchInput("you")}
           >
             <Hand aria-hidden />
-            Take over
+            {WORDING.useBrowserMyself}
           </Button>
         )}
         {input === "you" && (
@@ -268,19 +266,22 @@ export function LiveBrowser({
           </Button>
         )}
       </div>
-      {/* The on screen keyboard of a phone: what is typed here goes to the browser, key by key. */}
+      {/* The on screen keyboard of a phone: what is typed here goes to the browser, key by key.
+          Hidden by its box: the Textarea's own width and padding would win over `sr-only`. */}
       {watchOnly ? null : (
-        <textarea
-          ref={keyboard}
-          aria-label="Type into your browser"
-          autoCapitalize="off"
-          autoComplete="off"
-          autoCorrect="off"
-          spellCheck={false}
-          onInput={typed}
-          onKeyDown={special}
-          className="sr-only"
-        />
+        <div className="sr-only">
+          <Textarea
+            ref={keyboard}
+            aria-label="Type into your browser"
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onInput={typed}
+            onKeyDown={special}
+            className="min-h-0"
+          />
+        </div>
       )}
     </section>
   );

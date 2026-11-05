@@ -4,16 +4,24 @@ import {
   ChevronRight,
   CircleAlert,
   ExternalLink,
-  LoaderCircle,
   RotateCw,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link, useLocation, useParams } from "react-router";
 
+import { AdvancedSection } from "@/components/advanced-section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Spinner } from "@/components/ui/spinner";
+import { applicationsKey, latestApplication } from "@/features/apply/apply-api";
 import { ApplySection } from "@/features/apply/apply-section";
+import { phaseOf } from "@/features/apply/apply-state";
 import { PostingDocumentsSection } from "@/features/documents/posting-documents";
 import { JobAssessment } from "@/features/agents/job-assessment";
 import { JobChat } from "@/features/agents/job-chat";
@@ -21,11 +29,12 @@ import { viaFeed } from "@/features/opportunities/sources/source-words";
 import { NotFoundPage } from "@/features/shell/not-found-page";
 import { describeError, isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
-import { WORDING, WORK_MODE_WORDS } from "@/lib/wording";
+import { cn } from "@/lib/utils";
+import { WORDING, WORK_MODE_WORDS, contractWord } from "@/lib/wording";
 
 import { sourceLabel } from "./labels";
 import { getJob, jobKey, type JobDetail } from "./api";
-import { FitBadge, StatusBadge } from "./badges";
+import { BadgeHint, FitBadge, PayText, StatusBadge } from "./badges";
 import { FilesSection } from "./files-section";
 import {
   EditDetailsButton,
@@ -86,7 +95,7 @@ export function JobDetailPage() {
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading the posting
           </span>
         </p>
@@ -182,6 +191,19 @@ function SourceFact({ source, link }: { source: string; link: string | null }) {
   );
 }
 
+/**
+ * The open state of "More about this posting" is kept in local storage under this key (the
+ * AdvancedSection's), so a person who works in the notes finds them open on the next posting.
+ */
+const POSTING_MORE_KEY = "posting-more";
+
+/**
+ * The posting in the order a person applies (owner, 2026-11-01: "It must be way more easy"): the
+ * header with the pay, then "Your application" (Apply and the CV and letter, side by side from
+ * desktop width while nothing is under way), then the posting's text, and the rest folded under
+ * "More about this posting". The folded part stays mounted, so unsaved notes or an opened panel
+ * survive a fold.
+ */
 function JobDetailView({ job }: { job: JobDetail }) {
   const save = useJobEditor(job.id);
   const link = safeHttpUrl(job.url);
@@ -190,6 +212,14 @@ function JobDetailView({ job }: { job: JobDetail }) {
   const workMode = job.work_mode
     ? (WORK_MODE_WORDS[job.work_mode] ?? job.work_mode)
     : null;
+  // The Apply section reads the application; this only follows its cache. Once an application is
+  // under way its live view, form and report need the full width, so the row stacks.
+  const latest = useQuery({
+    queryKey: applicationsKey(job.id),
+    queryFn: ({ signal }) => latestApplication(job.id, signal),
+    enabled: false,
+  });
+  const sideBySide = phaseOf(latest.data) === "idle";
   return (
     <article aria-labelledby="job-title" className="flex flex-col gap-8">
       <header className="flex flex-col gap-4">
@@ -215,10 +245,22 @@ function JobDetailView({ job }: { job: JobDetail }) {
             </p>
           ) : null}
         </div>
+        <p
+          data-testid="posting-pay"
+          className={pay ? "text-lg font-semibold tracking-tight" : "text-sm"}
+        >
+          {pay ? <span className="sr-only">{WORDING.pay}: </span> : null}
+          <PayText job={job} />
+        </p>
         <div className="flex flex-wrap items-center gap-2">
           <StatusBadge status={job.status} />
           <FitBadge fit={job.fit} overridden={job.fit_overridden} />
-          <Badge variant="outline">{job.contract_type}</Badge>
+          <Badge variant="outline">{contractWord(job.contract_type)}</Badge>
+          {workMode ? (
+            <BadgeHint hint={WORDING.workMode}>
+              <Badge variant="outline">{workMode}</Badge>
+            </BadgeHint>
+          ) : null}
         </div>
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
           <Fact label="Found">{formatDate(job.found_on)}</Fact>
@@ -228,8 +270,6 @@ function JobDetailView({ job }: { job: JobDetail }) {
           {job.applied_on ? (
             <Fact label="Applied">{formatDate(job.applied_on)}</Fact>
           ) : null}
-          {pay ? <Fact label={WORDING.pay}>{pay}</Fact> : null}
-          {workMode ? <Fact label={WORDING.workMode}>{workMode}</Fact> : null}
           {job.source ? (
             <Fact label="Source">
               <SourceFact source={job.source} link={link} />
@@ -261,20 +301,32 @@ function JobDetailView({ job }: { job: JobDetail }) {
       </header>
 
       <section
-        aria-label="Edit status and fit"
-        className="flex flex-col gap-4 rounded-lg border p-4 sm:flex-row sm:items-start sm:gap-8"
+        aria-labelledby="application-title"
+        className="flex flex-col gap-4"
       >
-        <StatusControl job={job} save={save} />
-        <FitControl key={job.id} job={job} save={save} />
+        <h2
+          id="application-title"
+          className="text-xl font-semibold tracking-tight"
+        >
+          {WORDING.yourApplication}
+        </h2>
+        <div
+          data-testid="application-row"
+          data-layout={sideBySide ? "side" : "stacked"}
+          className={cn(
+            "grid gap-6",
+            sideBySide &&
+              "lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start",
+          )}
+        >
+          <div className="min-w-0 rounded-lg border bg-card p-4 text-card-foreground">
+            <ApplySection job={job} />
+          </div>
+          <div className="min-w-0">
+            <PostingDocumentsSection job={job} />
+          </div>
+        </div>
       </section>
-
-      <JobAssessment job={job} />
-
-      <NotesEditor key={job.id} job={job} save={save} />
-
-      <PostingDocumentsSection job={job} />
-
-      <ApplySection job={job} />
 
       <section aria-labelledby="posting-title" className="flex flex-col gap-3">
         <h2 id="posting-title" className="text-lg font-semibold tracking-tight">
@@ -299,68 +351,108 @@ function JobDetailView({ job }: { job: JobDetail }) {
         )}
       </section>
 
-      <FilesSection jobId={job.id} files={job.files} />
-
-      <section aria-labelledby="history-title" className="flex flex-col gap-3">
-        <h2 id="history-title" className="text-lg font-semibold tracking-tight">
-          History
-        </h2>
-        {job.events.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No events yet.</p>
-        ) : (
-          <ol
-            aria-label="History, newest first"
-            className="flex flex-col gap-3 border-l pl-4"
+      <AdvancedSection
+        title={WORDING.moreAboutPosting}
+        pageKey={POSTING_MORE_KEY}
+        keepMounted
+        className="border-t pt-6"
+      >
+        <div className="flex flex-col gap-8">
+          <section
+            aria-label="Edit status and fit"
+            className="flex flex-col gap-4 rounded-lg border p-4 sm:flex-row sm:items-start sm:gap-8"
           >
-            {job.events.map((event) => (
-              <li key={event.id} className="relative flex flex-col gap-0.5">
-                <span
-                  aria-hidden="true"
-                  className="absolute top-1.5 -left-[1.3rem] size-2 rounded-full bg-muted-foreground"
-                />
-                <span className="text-sm">
-                  {describeEvent(event.kind, event.data)}
-                </span>
-                <time
-                  dateTime={event.at}
-                  className="text-xs text-muted-foreground"
-                >
-                  {formatDateTime(event.at)}
-                </time>
-              </li>
-            ))}
-          </ol>
-        )}
-        {job.events_total > job.events.length ? (
-          <p className="text-xs text-muted-foreground">
-            Showing the newest {job.events.length} of {job.events_total} events.
-          </p>
-        ) : null}
-      </section>
+            <StatusControl job={job} save={save} />
+            <FitControl key={job.id} job={job} save={save} />
+          </section>
 
-      {legacy.length > 0 ? (
-        <details className="group rounded-lg border">
-          <summary className="flex cursor-pointer items-center gap-1 px-3 py-2 text-sm font-medium select-none">
-            <ChevronRight
-              aria-hidden="true"
-              className="size-4 transition-transform group-open:rotate-90"
-            />
-            Imported fields
-          </summary>
-          <dl className="flex flex-col gap-3 border-t px-3 py-3">
-            {legacy.map(([key, value]) => (
-              <div key={key} className="flex flex-col gap-0.5">
-                <dt className="text-xs font-medium text-muted-foreground">
-                  {key}
-                </dt>
-                <dd className="text-sm break-words whitespace-pre-wrap">
-                  {typeof value === "string" ? value : prettyJson(value)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      ) : null}
+          <JobAssessment job={job} />
+
+          <NotesEditor key={job.id} job={job} save={save} />
+
+          <FilesSection jobId={job.id} files={job.files} />
+
+          <PostingHistory job={job} />
+
+          {legacy.length > 0 ? <ImportedFields fields={legacy} /> : null}
+        </div>
+      </AdvancedSection>
     </article>
+  );
+}
+
+/** The posting's events, newest first. */
+function PostingHistory({ job }: { job: JobDetail }) {
+  return (
+    <section aria-labelledby="history-title" className="flex flex-col gap-3">
+      <h2 id="history-title" className="text-lg font-semibold tracking-tight">
+        History
+      </h2>
+      {job.events.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No events yet.</p>
+      ) : (
+        <ol
+          aria-label="History, newest first"
+          className="flex flex-col gap-3 border-l pl-4"
+        >
+          {job.events.map((event) => (
+            <li key={event.id} className="relative flex flex-col gap-0.5">
+              <span
+                aria-hidden="true"
+                className="absolute top-1.5 -left-[1.3rem] size-2 rounded-full bg-muted-foreground"
+              />
+              <span className="text-sm">
+                {describeEvent(event.kind, event.data)}
+              </span>
+              <time
+                dateTime={event.at}
+                className="text-xs text-muted-foreground"
+              >
+                {formatDateTime(event.at)}
+              </time>
+            </li>
+          ))}
+        </ol>
+      )}
+      {job.events_total > job.events.length ? (
+        <p className="text-xs text-muted-foreground">
+          Showing the newest {job.events.length} of {job.events_total} events.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+/** The fields an import brought that the app has no place for, folded. */
+function ImportedFields({ fields }: { fields: [string, unknown][] }) {
+  return (
+    <Collapsible className="rounded-lg border">
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="group h-auto w-full justify-start gap-1 rounded-lg px-3 py-2 has-[>svg]:px-3 data-[state=open]:rounded-b-none"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+          />
+          Imported fields
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent asChild>
+        <dl className="flex flex-col gap-3 border-t px-3 py-3">
+          {fields.map(([key, value]) => (
+            <div key={key} className="flex flex-col gap-0.5">
+              <dt className="text-xs font-medium text-muted-foreground">
+                {key}
+              </dt>
+              <dd className="text-sm break-words whitespace-pre-wrap">
+                {typeof value === "string" ? value : prettyJson(value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

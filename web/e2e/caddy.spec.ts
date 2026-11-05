@@ -55,7 +55,7 @@ function compose(...args: string[]) {
 const status = (page: Page) =>
   page.getByRole("contentinfo").getByRole("status");
 const retry = (page: Page) =>
-  page.getByRole("button", { name: "Check the API again" });
+  page.getByRole("button", { name: "Check the server again" });
 
 /** Console errors and uncaught page errors, for the whole test. */
 function watchErrors(page: Page) {
@@ -114,7 +114,9 @@ test.afterAll(() => {
   compose("start", "db", "api");
 });
 
-test('the app loads through Caddy and shows "API ok"', async ({ page }) => {
+test('the app loads through Caddy and shows "Server reachable"', async ({
+  page,
+}) => {
   const errors = watchErrors(page);
   const health = page.waitForResponse("**/api/health");
   const response = await page.goto("/");
@@ -123,7 +125,7 @@ test('the app loads through Caddy and shows "API ok"', async ({ page }) => {
   expect((await health).status()).toBe(200);
   expect((await health).headers()["via"]).toContain("Caddy");
   await expect(page.getByRole("link", { name: "jobapp" })).toBeVisible();
-  await expect(status(page)).toContainText("API ok");
+  await expect(status(page)).toContainText("Server reachable");
   await shot(page, "1-api-ok");
   expect(errors).toEqual([]);
 });
@@ -133,23 +135,24 @@ test("database stopped, Retry shows the 503, database started, Retry recovers", 
 }) => {
   const errors = watchErrors(page);
   await page.goto("/");
-  await expect(status(page)).toContainText("API ok");
+  await expect(status(page)).toContainText("Server reachable");
 
   compose("stop", "db");
   const down = page.waitForResponse("**/api/health");
-  await retry(page).click();
+  // While the server answers the footer shows nothing and offers no button: load the page again.
+  await page.reload();
   expect((await down).status()).toBe(503);
-  await expect(status(page)).toContainText("API unavailable");
-  await expect(status(page)).toContainText(
-    "The API answered 503: database unavailable.",
-  );
+  await expect(status(page)).toContainText("Server unreachable");
+  await expect(status(page)).toContainText("database unavailable.");
   await shot(page, "2-db-down");
 
   compose("start", "db");
   // The database takes a few seconds to accept connections again: retry like a user would.
   await expect(async () => {
     await retry(page).click();
-    await expect(status(page)).toContainText("API ok", { timeout: 2_000 });
+    await expect(status(page)).toContainText("Server reachable", {
+      timeout: 2_000,
+    });
   }).toPass({ timeout: 60_000, intervals: [1_000, 2_000] });
   await shot(page, "3-db-back");
 
@@ -169,15 +172,21 @@ test("api stopped: the shell still loads and the footer shows Caddy's 502", asyn
     const response = await page.goto("/");
     expect(response?.status()).toBe(200);
     expect((await health).status()).toBe(502);
-    await expect(status(page)).toContainText("API unavailable");
-    await expect(status(page)).toContainText("502");
+    await expect(status(page)).toContainText("Server unreachable");
+    // Caddy's 502 reads as the plain server sentence, never its code.
+    await expect(status(page)).toContainText(
+      "Something went wrong on the server. Try again in a moment.",
+    );
+    await expect(status(page)).not.toContainText("502");
     await shot(page, "5-api-stopped-502");
   } finally {
     compose("start", "api");
   }
   await expect(async () => {
     await retry(page).click();
-    await expect(status(page)).toContainText("API ok", { timeout: 2_000 });
+    await expect(status(page)).toContainText("Server reachable", {
+      timeout: 2_000,
+    });
   }).toPass({ timeout: 60_000, intervals: [1_000, 2_000] });
 });
 
@@ -210,7 +219,7 @@ test("hashed assets are immutable and a missing one is a real 404", async ({
     if (r.url().includes("/assets/")) scripts.push(r.url());
   });
   await page.goto("/");
-  await expect(status(page)).toContainText("API ok");
+  await expect(status(page)).toContainText("Server reachable");
   expect(scripts.length).toBeGreaterThan(0);
   for (const url of scripts) {
     const r = await request.get(url);

@@ -156,19 +156,21 @@ describe("the run on the page", () => {
     expect(screen.queryByRole("button", { name: "Cancel the run" })).toBeNull();
     // A new run can be started again, above the summary.
     expect(
-      await screen.findByRole("heading", { name: "Start another run" }),
+      await screen.findByRole("heading", { name: "Start another reading" }),
     ).toBeVisible();
     expect(panel()).not.toHaveTextContent(RAW);
   });
 
   it("paused on its ceiling: shows what was spent and what Continue adds, and sends that figure", async () => {
     const { runs, state, user } = await show(ceiling(176_220));
-    expect(state).toHaveTextContent("The run has paused at its token ceiling.");
+    expect(state).toHaveTextContent(
+      "The reading paused at the limit you agreed to.",
+    );
     expect(screen.getByTestId("ceiling-spent")).toHaveTextContent(
-      "It has used 380,000 tokens, and its ceiling is 352,440 tokens.",
+      "It has used 380,000 tokens, and its limit is 352,440 tokens.",
     );
     expect(screen.getByTestId("continue-adds")).toHaveTextContent(
-      "Continue raises the ceiling by 176,220 tokens, to 528,660 tokens, and the run goes on. Cancel ends it here. Left paused for 24 hours, the run ends with what it has read.",
+      "Continue raises the limit by 176,220 tokens, to 528,660 tokens, and the run goes on. Cancel ends it here. Left paused for 24 hours, the run ends with what it has read.",
     );
     expect(screen.queryByRole("button", { name: /Resume/ })).toBeNull();
     expect(
@@ -202,7 +204,9 @@ describe("the run on the page", () => {
       "Nothing was added: the figure has changed. Continue now adds 352,440 tokens. Click it again if you agree.",
     );
     // Never a success: still paused, the ceiling as it was.
-    expect(state).toHaveTextContent("The run has paused at its token ceiling.");
+    expect(state).toHaveTextContent(
+      "The reading paused at the limit you agreed to.",
+    );
     expect(runs.runs[0]?.status).toBe("paused");
     expect(screen.getByTestId("continue-adds")).toHaveTextContent(
       "by 352,440 tokens, to 704,880 tokens,",
@@ -449,7 +453,7 @@ describe("the run on the page", () => {
   });
 
   it("lists every step with the tokens of its last attempt, and an amount only when the server gave one", async () => {
-    await show(
+    const { user } = await show(
       fakeRun({
         steps: [
           fakeStep({
@@ -468,9 +472,12 @@ describe("the run on the page", () => {
         ],
       }),
     );
-    const steps = screen
-      .getByText("Every step of this run")
-      .closest("details") as HTMLElement;
+    // Folded at first: its button opens it.
+    const fold = screen.getByRole("button", { name: "Every step of this run" });
+    expect(fold).toHaveAttribute("aria-expanded", "false");
+    await user.click(fold);
+    expect(fold).toHaveAttribute("aria-expanded", "true");
+    const steps = fold.closest("[data-slot=collapsible]") as HTMLElement;
     const [first, second] = within(steps).getAllByRole("listitem");
     expect(first).toHaveTextContent(
       "dossier.txt. Reading its text. Read, 3 items, 3,760 tokens in its last attempt, about 0.0123 USD for that attempt.",
@@ -672,6 +679,8 @@ describe("the run on the page", () => {
       ),
     );
     const { user } = await show(fakeRun({ current_agent_run_id: agentRun }));
+    // Nothing connects to the agent's run while its fold is shut.
+    expect(screen.queryByTestId("run-panel")).toBeNull();
     await user.click(screen.getByText("What the agent is doing now"));
     const agent = await screen.findByTestId("run-panel");
     expect(agent).toHaveAttribute("data-status", "running");
@@ -681,6 +690,11 @@ describe("the run on the page", () => {
         .getAllByRole("button", { name: /Cancel/ })
         .map((one) => one.textContent),
     ).toEqual(["Cancel the run"]);
+    // Folded again, the panel goes with it.
+    await user.click(
+      screen.getByRole("button", { name: "What the agent is doing now" }),
+    );
+    expect(screen.queryByTestId("run-panel")).toBeNull();
   });
 
   it("keeps the run on screen when the server cannot be reached, says it keeps trying, then recovers", async () => {
@@ -796,7 +810,7 @@ describe("the run on the page", () => {
       expect(state).toHaveAttribute("data-state", "ceiling");
     });
     expect(screen.getByTestId("ceiling-spent")).toHaveTextContent(
-      "It has used 540,000 tokens, and its ceiling is 528,660 tokens.",
+      "It has used 540,000 tokens, and its limit is 528,660 tokens.",
     );
     expect(screen.getByTestId("continue-adds")).toHaveTextContent(
       "by 352,440 tokens, to 881,100 tokens,",

@@ -236,7 +236,7 @@ describe("the steps built by later tasks", () => {
     await open("/profile/fill?step=review");
     // No run yet and nothing proposed: only the start takes room.
     expect(
-      await screen.findByRole("heading", { level: 3, name: "Start a run" }),
+      await screen.findByRole("heading", { level: 3, name: "Start reading" }),
     ).toBeVisible();
     const panel = document.querySelector('[data-step="review"] > div');
     expect(panel?.childElementCount).toBe(1);

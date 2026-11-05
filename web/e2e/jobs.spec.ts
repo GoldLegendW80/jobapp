@@ -11,6 +11,7 @@ import {
   cliLink,
   makeShots,
   newContext,
+  openPostingMore,
   root,
   setPassword,
   signIn,
@@ -293,7 +294,7 @@ test("a new account starts empty, then holds the 433 rows with the CSV counts", 
     page.getByRole("navigation", { name: "Main" }).getByRole("link").first(),
   ).toHaveText("Jobs");
   await expect(page.getByRole("contentinfo").getByRole("status")).toContainText(
-    "API ok",
+    "Server reachable",
   );
   await shots(page, "empty");
 
@@ -476,6 +477,8 @@ test("a detail with its posting, files, PDF preview and history; back keeps the 
   await expect(
     page.getByTestId("posting-text").locator("p").first(),
   ).toBeVisible();
+  // The files and the history are folded under "More about this posting".
+  await openPostingMore(page);
   const files = page.getByRole("list", { name: "Files" });
   await expect(files).toContainText("cv.pdf");
   await expect(
@@ -549,9 +552,9 @@ test("on a phone the rows are cards and nothing overflows", async () => {
   const header = postings(page).getByRole("rowgroup").first();
   await expect(header).toContainText("Company");
   expect((await header.boundingBox())?.width ?? 0).toBeLessThanOrEqual(1);
-  const inner = card.locator(":scope > div");
-  await expect(inner).toHaveCSS("border-top-style", "solid");
-  const box = await inner.boundingBox();
+  // The row itself is the card (a table row holds its cells only).
+  await expect(card).toHaveCSS("border-top-style", "solid");
+  const box = await card.boundingBox();
   expect(box?.width ?? 999).toBeLessThanOrEqual(375 - 32);
   expect(
     await page.evaluate(

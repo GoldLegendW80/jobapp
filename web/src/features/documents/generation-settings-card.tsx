@@ -14,6 +14,7 @@ import { useWatch, type UseFormReturn } from "react-hook-form";
 
 import { AdvancedSection } from "@/components/advanced-section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Slider } from "@/components/ui/slider";
 import {
   FormControl,
   FormDescription,
@@ -22,6 +23,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { Switch } from "@/components/ui/switch";
 import type { SearchForm } from "@/features/profile/editor-forms";
 import { Group, TextField } from "@/features/profile/section-ui";
 
@@ -106,22 +108,17 @@ export function GenerationSettingsCard({ form }: { form: Form }) {
           control={control}
           name="documents.auto"
           render={({ field }) => (
-            <label className="flex w-fit items-center gap-2 text-sm font-medium">
-              <input
-                type="checkbox"
-                role="switch"
-                aria-checked={field.value}
-                className="size-4 accent-primary"
-                name={field.name}
-                ref={field.ref}
-                checked={field.value}
-                onBlur={field.onBlur}
-                onChange={(event) => {
-                  field.onChange(event.target.checked);
-                }}
-              />
-              Write documents automatically
-            </label>
+            <FormItem className="flex w-fit items-center gap-2">
+              <FormControl>
+                <Switch
+                  name={field.name}
+                  checked={field.value}
+                  onBlur={field.onBlur}
+                  onCheckedChange={field.onChange}
+                />
+              </FormControl>
+              <FormLabel>Write documents automatically</FormLabel>
+            </FormItem>
           )}
         />
         <p className="text-sm" aria-live="polite">
@@ -267,18 +264,16 @@ function Threshold({
             </output>
           </div>
           <FormControl>
-            <input
-              type="range"
+            <Slider
               min={0}
               max={100}
               step={1}
-              className="w-full accent-primary"
               name={field.name}
-              ref={field.ref}
-              value={field.value}
+              aria-label="Fit score threshold"
+              value={[field.value]}
               onBlur={field.onBlur}
-              onChange={(event) => {
-                field.onChange(Number(event.target.value));
+              onValueChange={([value]) => {
+                if (value !== undefined) field.onChange(value);
               }}
             />
           </FormControl>

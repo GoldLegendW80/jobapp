@@ -64,7 +64,7 @@ export function cardLabel(card: Card): string {
     `${card.title} at ${card.company}`,
     placeLine(card),
     contractLine(card),
-    card.pay ?? "",
+    card.pay || WORDING.payNotGiven,
     card.fit === null ? "Not scored yet" : `Fit ${card.fit}`,
   ]
     .filter(Boolean)

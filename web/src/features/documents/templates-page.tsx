@@ -1,15 +1,31 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Check, LoaderCircle, RotateCw } from "lucide-react";
+import { ArrowLeft, Check, RotateCw, SearchX } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Empty,
+  EmptyContent,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
+import { formatCount } from "@/lib/format";
 import { useTitle } from "@/lib/use-title";
+import { WORDING, templateTagWord } from "@/lib/wording";
 
 import {
   documentKey,
@@ -42,7 +58,7 @@ import {
 
 /**
  * /documents/templates: every template the api serves, the person's own under "From your CV"
- * first, with names, descriptions and tags, filters (photo, columns, ats friendly), and the letter
+ * first, with names, descriptions and tags, filters (photo, columns, easy for hiring software to read), and the letter
  * on hover or tap. Opened from a document (`?document=<id>`), each offers "Use for this document",
  * which switches that document (a base CV's template is what the CVs written from it afterwards
  * take).
@@ -96,7 +112,7 @@ export function TemplatesPage() {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the templates
         </p>
       ) : templates.isError ? (
@@ -147,10 +163,10 @@ function FilterBar({
   const columnsId = useId();
   const atsId = useId();
   return (
-    <fieldset className="flex flex-wrap items-end gap-4">
-      <legend className="sr-only">Filters</legend>
-      <div className="flex w-40 flex-col gap-1">
-        <Label htmlFor={photoId}>Photo</Label>
+    <FieldSet className="flex-row flex-wrap items-end gap-4">
+      <FieldLegend className="sr-only">Filters</FieldLegend>
+      <Field className="w-40 gap-1">
+        <FieldLabel htmlFor={photoId}>Photo</FieldLabel>
         <NativeSelect
           id={photoId}
           value={filters.photo}
@@ -167,9 +183,9 @@ function FilterBar({
             </option>
           ))}
         </NativeSelect>
-      </div>
-      <div className="flex w-40 flex-col gap-1">
-        <Label htmlFor={columnsId}>Columns</Label>
+      </Field>
+      <Field className="w-40 gap-1">
+        <FieldLabel htmlFor={columnsId}>Columns</FieldLabel>
         <NativeSelect
           id={columnsId}
           value={filters.columns}
@@ -186,20 +202,18 @@ function FilterBar({
             </option>
           ))}
         </NativeSelect>
-      </div>
-      <div className="flex h-9 items-center gap-2">
-        <input
+      </Field>
+      <Field orientation="horizontal" className="h-9 w-auto gap-2">
+        <Checkbox
           id={atsId}
-          type="checkbox"
-          className="size-4 accent-primary"
           checked={filters.ats}
-          onChange={(event) => {
-            onChange({ ...filters, ats: event.target.checked });
+          onCheckedChange={(checked) => {
+            onChange({ ...filters, ats: checked === true });
           }}
         />
-        <Label htmlFor={atsId}>ATS friendly only</Label>
-      </div>
-    </fieldset>
+        <FieldLabel htmlFor={atsId}>{WORDING.easyForHiringSoftware}</FieldLabel>
+      </Field>
+    </FieldSet>
   );
 }
 
@@ -241,8 +255,8 @@ function Gallery({
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground" aria-live="polite">
         {isFiltered(filters)
-          ? `${String(shown.length)} of ${String(templates.length)} templates match.`
-          : `${String(templates.length)} templates.`}
+          ? `${formatCount(shown.length)} of ${formatCount(templates.length)} templates match.`
+          : `${formatCount(templates.length)} templates.`}
       </p>
       {used ? (
         <p role="status" className="text-sm font-medium">
@@ -258,12 +272,21 @@ function Gallery({
         </Alert>
       ) : null}
       {shown.length === 0 ? (
-        <div className="flex flex-col items-start gap-2">
-          <p className="text-sm">No template matches these filters.</p>
-          <Button variant="outline" size="sm" onClick={onClear}>
-            Clear the filters
-          </Button>
-        </div>
+        <Empty className="border md:p-8">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <SearchX aria-hidden="true" />
+            </EmptyMedia>
+            <EmptyTitle className="text-base">
+              No template matches these filters.
+            </EmptyTitle>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={onClear}>
+              Clear the filters
+            </Button>
+          </EmptyContent>
+        </Empty>
       ) : null}
       {own.length > 0 ? (
         <section
@@ -362,10 +385,15 @@ function TemplateCard({
         <p className="text-sm text-muted-foreground">{description}</p>
       ) : null}
       {template.tags.length > 0 ? (
-        <ul aria-label={`Tags of ${name}`} className="flex flex-wrap gap-1">
+        <ul
+          aria-label={`Tags of ${name}`}
+          className="flex min-w-0 flex-wrap gap-1"
+        >
           {template.tags.map((tag) => (
-            <li key={tag}>
-              <Badge variant="outline">{tag}</Badge>
+            <li key={tag} className="max-w-full min-w-0">
+              <Badge variant="outline" className="max-w-full whitespace-normal">
+                {templateTagWord(tag)}
+              </Badge>
             </li>
           ))}
         </ul>

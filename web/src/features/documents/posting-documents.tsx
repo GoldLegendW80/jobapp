@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { getProfile, profileKey } from "@/features/profile/api";
 import { jobKey, type JobDetail } from "@/features/jobs/api";
 import { describeError } from "@/lib/api";
@@ -134,7 +135,7 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the documents
         </p>
       ) : documents.isError ? (

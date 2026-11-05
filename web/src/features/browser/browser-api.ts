@@ -89,8 +89,8 @@ export function getBrowser(signal?: AbortSignal): Promise<Browser> {
 }
 
 /**
- * A session of the person, or their place in the queue: "Look at my browser", or "Sign in to a
- * site" at the `address` the person typed (the api answers 422 `bad_address` when it is not an
+ * A session of the person, or their place in the queue: a website's Sign in (Find jobs, and
+ * Account's list of websites) at its `address` (the api answers 422 `bad_address` when it is not an
  * http or https address with a host, and starts nothing).
  */
 export function startSession(

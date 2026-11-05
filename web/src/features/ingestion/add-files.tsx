@@ -2,6 +2,16 @@ import { Upload, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type DragEvent } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 
 import { megabytes, type Limits } from "./documents-api";
@@ -91,7 +101,8 @@ export function AddFiles({
 
   return (
     <section aria-labelledby={titleId} className="flex flex-col gap-3">
-      <div
+      {/* The drop zone: an empty state's box, with its own spacing. */}
+      <Empty
         data-over={over}
         onDragOver={(event) => {
           event.preventDefault();
@@ -103,46 +114,55 @@ export function AddFiles({
         }}
         onDrop={onDrop}
         className={cn(
-          "flex flex-col items-center gap-3 rounded-lg border border-dashed px-4 py-8 text-center transition-colors",
+          "gap-3 border px-4 py-8 text-wrap transition-colors md:px-4 md:py-8",
           over && "border-primary bg-accent",
         )}
       >
-        <Upload aria-hidden="true" className="size-6 text-muted-foreground" />
-        <h3 id={titleId} className="text-sm font-medium">
-          Drop files here, or choose them
-        </h3>
-        <p id={hintId} className="max-w-prose text-sm text-muted-foreground">
-          A CV, a cover letter, notes on your projects, your LinkedIn export
-          (the ZIP). PDF, Word, text, Markdown, JSON, CSV, PNG or JPEG, up to{" "}
-          {megabytes(limits.file_bytes)} MB each. From a LinkedIn export, your
-          own profile files are the only ones read: connections, messages,
-          contacts and invitations are ignored.
-        </p>
-        <input
-          ref={input}
-          type="file"
-          multiple
-          hidden
-          data-testid="document-files"
-          onChange={(event) => {
-            uploads.add(
-              Array.from(event.target.files ?? []),
-              limits.file_bytes,
-            );
-            // The same file can be chosen again after a refusal.
-            event.target.value = "";
-          }}
-        />
-        <Button
-          ref={choose}
-          type="button"
-          variant="outline"
-          aria-describedby={hintId}
-          onClick={() => input.current?.click()}
-        >
-          Choose files
-        </Button>
-      </div>
+        <EmptyHeader className="max-w-prose gap-3">
+          <EmptyMedia className="mb-0">
+            <Upload
+              aria-hidden="true"
+              className="size-6 text-muted-foreground"
+            />
+          </EmptyMedia>
+          <EmptyTitle className="text-sm tracking-normal">
+            <h3 id={titleId}>Drop files here, or choose them</h3>
+          </EmptyTitle>
+          <EmptyDescription id={hintId} className="text-sm">
+            A CV, a cover letter, notes on your projects, your LinkedIn export
+            (the ZIP). PDF, Word, text, Markdown, JSON, CSV, PNG or JPEG, up to{" "}
+            {megabytes(limits.file_bytes)} MB each. From a LinkedIn export, your
+            own profile files are the only ones read: connections, messages,
+            contacts and invitations are ignored.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent>
+          <Input
+            ref={input}
+            type="file"
+            multiple
+            hidden
+            data-testid="document-files"
+            onChange={(event) => {
+              uploads.add(
+                Array.from(event.target.files ?? []),
+                limits.file_bytes,
+              );
+              // The same file can be chosen again after a refusal.
+              event.target.value = "";
+            }}
+          />
+          <Button
+            ref={choose}
+            type="button"
+            variant="outline"
+            aria-describedby={hintId}
+            onClick={() => input.current?.click()}
+          >
+            Choose files
+          </Button>
+        </EmptyContent>
+      </Empty>
       {items.length > 0 ? (
         <ul
           ref={list}
@@ -218,19 +238,12 @@ function UploadRow({
         </Button>
       </div>
       {moving ? (
-        <div
-          role="progressbar"
-          aria-label={`Sending ${item.name}`}
-          aria-valuemin={0}
-          aria-valuemax={100}
+        <Progress
+          value={percent}
           aria-valuenow={percent}
-          className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-        >
-          <div
-            className="h-full rounded-full bg-primary transition-[width]"
-            style={{ width: `${percent}%` }}
-          />
-        </div>
+          aria-label={`Sending ${item.name}`}
+          className="h-1.5"
+        />
       ) : item.state === "failed" ? (
         // No role="alert": the live region below already says it, once.
         <p className="text-destructive">{item.message}</p>

@@ -1,6 +1,12 @@
 import { useId } from "react";
 
-import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
 import { CONTRACT_WORDS, WORDING } from "@/lib/wording";
 
@@ -32,31 +38,31 @@ export function DeckFilterRow({
   };
   return (
     <div className="flex flex-col gap-4">
-      <fieldset className="flex flex-col gap-2">
-        <legend className="mb-2 text-sm font-medium">
+      <FieldSet className="gap-2">
+        <FieldLegend variant="label" className="mb-2">
           {WORDING.contractTypes}
-        </legend>
+        </FieldLegend>
         <div className="flex flex-wrap gap-2">
           {Object.entries(CONTRACT_WORDS).map(([code, word]) => (
-            <label
+            // The whole chip is the label, so a tap anywhere on it ticks the box.
+            <FieldLabel
               key={code}
-              className="flex min-h-11 items-center gap-2 rounded-md border px-3 text-sm sm:min-h-9"
+              className="min-h-11 w-auto items-center rounded-md border px-3 font-normal sm:min-h-9"
             >
-              <input
-                type="checkbox"
+              <Checkbox
                 checked={filters.types.includes(code)}
-                onChange={() => {
+                onCheckedChange={() => {
                   toggle(code);
                 }}
               />
               {word}
-            </label>
+            </FieldLabel>
           ))}
         </div>
-      </fieldset>
+      </FieldSet>
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={remoteId}>{WORDING.remoteOrOnSite}</Label>
+        <Field className="gap-2">
+          <FieldLabel htmlFor={remoteId}>{WORDING.remoteOrOnSite}</FieldLabel>
           <NativeSelect
             id={remoteId}
             value={filters.remote ?? ANY}
@@ -71,9 +77,9 @@ export function DeckFilterRow({
             <option value="remote">{WORDING.remote}</option>
             <option value="on_site">{WORDING.onSite}</option>
           </NativeSelect>
-        </div>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={sourceId}>{WORDING.source}</Label>
+        </Field>
+        <Field className="gap-2">
+          <FieldLabel htmlFor={sourceId}>{WORDING.source}</FieldLabel>
           <NativeSelect
             id={sourceId}
             value={filters.source ?? ANY}
@@ -88,7 +94,7 @@ export function DeckFilterRow({
               </option>
             ))}
           </NativeSelect>
-        </div>
+        </Field>
       </div>
     </div>
   );

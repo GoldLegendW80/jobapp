@@ -326,7 +326,12 @@ describe("Full auto in the review queue", () => {
     expect(
       screen.queryByRole("region", { name: "Full auto today" }),
     ).toBeNull();
-    await screen.findByText(/Nothing is sent until you approve it/);
+    await screen.findByText(
+      "Your applications. Anything that needs your answer or approval waits here.",
+    );
+    expect(
+      screen.queryByText(/In Full auto your Like is your approval/),
+    ).toBeNull();
   });
 
   it("follows a Full auto item ready for the app's decision as under way, with nothing to approve", async () => {

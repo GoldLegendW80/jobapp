@@ -205,7 +205,7 @@ async function activeRun(): Promise<Run> {
 test("a new user with a subscription adds documents and opens the review step", async () => {
   await signUp(page, EMAIL, "claude_subscription", TOKEN, ALL);
   await expect(
-    page.getByRole("heading", { name: "Start a run" }),
+    page.getByRole("heading", { name: "Start reading" }),
   ).toBeVisible();
   // Nothing is chosen for the user, and nothing can be asked for without a choice.
   await expect(
@@ -300,7 +300,7 @@ test("the run survives a reload, moves through both documents and ends on its su
     page.getByRole("heading", { name: "Your last run" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Start another run" }),
+    page.getByRole("heading", { name: "Start another reading" }),
   ).toBeVisible();
   await expect(page.locator("main")).not.toContainText(DASH);
   await expect(page.locator("main")).not.toContainText(
@@ -333,13 +333,13 @@ test("a run that reaches its ceiling shows what was spent, and goes on after a C
   if (adds === null || adds <= 0)
     throw new Error("the paused run names no figure for a Continue");
   await expect(state()).toContainText(
-    "The run has paused at its token ceiling.",
+    "The reading paused at the limit you agreed to.",
   );
   await expect(page.getByTestId("ceiling-spent")).toHaveText(
-    `It has used ${figure(paused.tokens.spent)} tokens, and its ceiling is ${figure(paused.tokens.ceiling)} tokens.`,
+    `It has used ${figure(paused.tokens.spent)} tokens, and its limit is ${figure(paused.tokens.ceiling)} tokens.`,
   );
   await expect(page.getByTestId("continue-adds")).toContainText(
-    `Continue raises the ceiling by ${figure(adds)} tokens`,
+    `Continue raises the limit by ${figure(adds)} tokens`,
   );
   const button = `Continue with ${figure(adds)} more tokens`;
   await expect(page.getByRole("button", { name: button })).toBeEnabled();
@@ -421,7 +421,7 @@ test("a second user with an API key sees the amounts as estimates and the other 
     await signUp(mine, KEY_EMAIL, "anthropic_api_key", KEY, [FIRST]);
     // Another user's runs are not hers: the page opens on a first start.
     await expect(
-      mine.getByRole("heading", { name: "Start a run" }),
+      mine.getByRole("heading", { name: "Start reading" }),
     ).toBeVisible();
     const estimate = await openDialog(mine, [FIRST], [FIRST]);
     const dialog = dialogOf(mine);

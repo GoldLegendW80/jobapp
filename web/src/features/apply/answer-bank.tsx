@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle } from "lucide-react";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { CircleAlert } from "lucide-react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -12,8 +19,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { message } from "@/features/admin/errors";
 import { errorDetail, isApiError } from "@/lib/api";
@@ -169,71 +186,79 @@ export function AnswerBank() {
         ) : query.data.items.length === 0 ? (
           <p className="text-sm text-muted-foreground">No saved answer yet.</p>
         ) : (
-          <ul
-            aria-label="Your saved answers"
-            className="flex flex-col divide-y"
-          >
-            {query.data.items.map((entry) => (
-              <li key={entry.question_key} className="flex flex-col gap-2 py-3">
-                <span className="text-sm font-medium break-words">
-                  {entry.question}
-                </span>
-                {editing === entry.question_key ? (
-                  <AnswerForm
-                    entry={entry}
-                    pending={save.isPending}
-                    onCancel={() => {
-                      setEditing(null);
-                    }}
-                    onSave={(answer) => {
-                      save.mutate({
-                        key: entry.question_key,
-                        answer,
-                        done: "Answer saved.",
-                      });
-                    }}
-                  />
-                ) : (
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div className="flex min-w-0 flex-col gap-0.5">
-                      <span className="text-sm break-words whitespace-pre-wrap">
-                        {answerText(entry.answer)}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {entry.used_count === 1
-                          ? "Used once"
-                          : `Used ${entry.used_count} times`}
-                      </span>
+          <ItemGroup aria-label="Your saved answers">
+            {query.data.items.map((entry, index) => (
+              <Fragment key={entry.question_key}>
+                {index > 0 ? <ItemSeparator /> : null}
+                <Item
+                  role="listitem"
+                  size="sm"
+                  className="flex-col items-stretch gap-2 rounded-none border-0 px-0"
+                >
+                  <ItemTitle className="w-auto break-words">
+                    {entry.question}
+                  </ItemTitle>
+                  {editing === entry.question_key ? (
+                    <AnswerForm
+                      entry={entry}
+                      pending={save.isPending}
+                      onCancel={() => {
+                        setEditing(null);
+                      }}
+                      onSave={(answer) => {
+                        save.mutate({
+                          key: entry.question_key,
+                          answer,
+                          done: "Answer saved.",
+                        });
+                      }}
+                    />
+                  ) : (
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <ItemContent className="min-w-0 gap-0.5">
+                        <span className="text-sm break-words whitespace-pre-wrap">
+                          {answerText(entry.answer)}
+                        </span>
+                        <ItemDescription className="text-xs">
+                          {entry.used_count === 1
+                            ? "Used once"
+                            : `Used ${entry.used_count} times`}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions className="shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`Edit the answer to ${entry.question}`}
+                          disabled={
+                            save.isPending || create.isPending || adding
+                          }
+                          onClick={() => {
+                            setEditing(entry.question_key);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`Forget the answer to ${entry.question}`}
+                          disabled={
+                            save.isPending || create.isPending || adding
+                          }
+                          onClick={() => {
+                            setForgetting(entry);
+                          }}
+                        >
+                          Forget
+                        </Button>
+                      </ItemActions>
                     </div>
-                    <div className="flex shrink-0 gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        aria-label={`Edit the answer to ${entry.question}`}
-                        disabled={save.isPending || create.isPending || adding}
-                        onClick={() => {
-                          setEditing(entry.question_key);
-                        }}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        aria-label={`Forget the answer to ${entry.question}`}
-                        disabled={save.isPending || create.isPending || adding}
-                        onClick={() => {
-                          setForgetting(entry);
-                        }}
-                      >
-                        Forget
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </li>
+                  )}
+                </Item>
+              </Fragment>
             ))}
-          </ul>
+          </ItemGroup>
         )}
       </CardContent>
       <ConfirmDialog
@@ -301,24 +326,24 @@ function AnswerForm({
       className="flex flex-col gap-2"
       onSubmit={onSubmit}
     >
-      <Label htmlFor={id}>Your answer</Label>
-      <Textarea
-        ref={box}
-        id={id}
-        value={text}
-        maxLength={ANSWER_MAX}
-        readOnly={pending}
-        aria-invalid={problem ? true : undefined}
-        aria-describedby={problem ? `${id}-problem` : undefined}
-        onChange={(event) => {
-          setText(event.target.value);
-        }}
-      />
-      {problem ? (
-        <p id={`${id}-problem`} className="text-sm text-destructive">
-          {problem}
-        </p>
-      ) : null}
+      <Field className="gap-2">
+        <FieldLabel htmlFor={id}>Your answer</FieldLabel>
+        <Textarea
+          ref={box}
+          id={id}
+          value={text}
+          maxLength={ANSWER_MAX}
+          readOnly={pending}
+          aria-invalid={problem ? true : undefined}
+          aria-describedby={problem ? `${id}-problem` : undefined}
+          onChange={(event) => {
+            setText(event.target.value);
+          }}
+        />
+        {problem ? (
+          <FieldError id={`${id}-problem`}>{problem}</FieldError>
+        ) : null}
+      </Field>
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button
           type="button"
@@ -329,9 +354,7 @@ function AnswerForm({
           Cancel
         </Button>
         <Button type="submit" disabled={pending} aria-busy={pending}>
-          {pending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
-          ) : null}
+          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
           Save answer
         </Button>
       </div>
@@ -381,38 +404,44 @@ function AddAnswerForm({
         onSave(question.trim(), answer.trim());
       }}
     >
-      <Label htmlFor={`${id}-question`}>Question</Label>
-      <Input
-        ref={questionBox}
-        id={`${id}-question`}
-        value={question}
-        maxLength={QUESTION_MAX}
-        readOnly={pending}
-        aria-invalid={problem === "question" || undefined}
-        aria-describedby={problem === "question" ? `${id}-problem` : undefined}
-        onChange={(event) => {
-          setQuestion(event.target.value);
-        }}
-      />
-      <Label htmlFor={`${id}-answer`}>Reusable answer</Label>
-      <Textarea
-        ref={answerBox}
-        id={`${id}-answer`}
-        value={answer}
-        maxLength={ANSWER_MAX}
-        readOnly={pending}
-        aria-invalid={problem === "answer" || undefined}
-        aria-describedby={problem === "answer" ? `${id}-problem` : undefined}
-        onChange={(event) => {
-          setAnswer(event.target.value);
-        }}
-      />
+      <Field className="gap-2">
+        <FieldLabel htmlFor={`${id}-question`}>Question</FieldLabel>
+        <Input
+          ref={questionBox}
+          id={`${id}-question`}
+          value={question}
+          maxLength={QUESTION_MAX}
+          readOnly={pending}
+          aria-invalid={problem === "question" || undefined}
+          aria-describedby={
+            problem === "question" ? `${id}-problem` : undefined
+          }
+          onChange={(event) => {
+            setQuestion(event.target.value);
+          }}
+        />
+      </Field>
+      <Field className="gap-2">
+        <FieldLabel htmlFor={`${id}-answer`}>Reusable answer</FieldLabel>
+        <Textarea
+          ref={answerBox}
+          id={`${id}-answer`}
+          value={answer}
+          maxLength={ANSWER_MAX}
+          readOnly={pending}
+          aria-invalid={problem === "answer" || undefined}
+          aria-describedby={problem === "answer" ? `${id}-problem` : undefined}
+          onChange={(event) => {
+            setAnswer(event.target.value);
+          }}
+        />
+      </Field>
       {problem ? (
-        <p id={`${id}-problem`} className="text-sm text-destructive">
+        <FieldError id={`${id}-problem`}>
           {problem === "question"
             ? "Type the question as it appears on the form."
             : "Type an answer to reuse on other forms."}
-        </p>
+        </FieldError>
       ) : null}
       <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         <Button
@@ -424,9 +453,7 @@ function AddAnswerForm({
           Cancel
         </Button>
         <Button type="submit" disabled={pending} aria-busy={pending}>
-          {pending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
-          ) : null}
+          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
           Save new answer
         </Button>
       </div>

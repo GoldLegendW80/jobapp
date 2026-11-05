@@ -257,7 +257,7 @@ describe("site profile section review", () => {
       try {
         // Assert at the native event boundary, before observer timers or the PUT.
         fireEvent.click(box);
-        expect(box).toHaveProperty("checked", !initial);
+        expect(box).toHaveAttribute("aria-checked", String(!initial));
         expect(box).toBeDisabled();
         expect(approve).toBeDisabled();
         expect(skip).toBeDisabled();
@@ -280,20 +280,20 @@ describe("site profile section review", () => {
         const poll = editedRun(run, "team", { value: "Unrelated update" });
         poll.sections[0]!.values_hash = "c".repeat(64);
         replaceRun(poll);
-        expect(box).toHaveProperty("checked", !initial);
+        expect(box).toHaveAttribute("aria-checked", String(!initial));
         expect(approve).toBeDisabled();
         response.resolve();
         await waitFor(() => {
           expect(adopting).toHaveBeenCalledWith(acknowledged);
         });
-        expect(box).toHaveProperty("checked", !initial);
+        expect(box).toHaveAttribute("aria-checked", String(!initial));
         expect(box).toBeDisabled();
         expect(approve).toBeDisabled();
         adoption.resolve();
         await waitFor(() => {
           expect(box).toBeEnabled();
         });
-        expect(box).toHaveProperty("checked", !initial);
+        expect(box).toHaveAttribute("aria-checked", String(!initial));
         const user = userEvent.setup();
         await user.click(approve);
         await user.click(
@@ -716,14 +716,14 @@ describe("site profile section review", () => {
       const box = screen.getByRole("checkbox", { name: "Replace Job title" });
       try {
         fireEvent.click(box);
-        expect(box).toHaveProperty("checked", !initial);
+        expect(box).toHaveAttribute("aria-checked", String(!initial));
         expect(box).toBeDisabled();
         response.resolve();
         expect(await screen.findByRole("alert")).toHaveTextContent(
           "Please review the field.",
         );
         expect(refresh).toHaveBeenCalledOnce();
-        expect(box).toHaveProperty("checked", initial);
+        expect(box).toHaveAttribute("aria-checked", String(initial));
         expect(box).toBeEnabled();
         expect(
           screen.getByRole("button", { name: "Approve section" }),

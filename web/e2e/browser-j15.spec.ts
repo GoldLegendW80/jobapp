@@ -294,11 +294,11 @@ test("A adds websites to the list beside their risk sentences, sets criteria and
   });
   await expect(
     live.getByText(
-      "You are watching your browser. Take over to use it yourself.",
+      "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
     ),
   ).toBeVisible();
   await expect(
-    live.getByRole("button", { name: "Take over", exact: true }),
+    live.getByRole("button", { name: "Use the browser myself", exact: true }),
   ).toBeEnabled();
   await expect(runPage.getByText("Your browser is starting.")).toHaveCount(0);
   // The canvas holds a frame of the browser (more than one colour), as b4 and b12 wait for it.
@@ -329,7 +329,7 @@ test("A adds websites to the list beside their risk sentences, sets criteria and
 
   // The progress names the website being read, never an internal id. Her website comes after
   // the four ticked job websites, one agent each (J17, J18).
-  const progress = page.getByRole("region", { name: "Sweep in progress" });
+  const progress = page.getByRole("region", { name: "Search in progress" });
   await expect(progress).toContainText(`Reading ${SITE_HOST}`, {
     timeout: 300_000,
   });

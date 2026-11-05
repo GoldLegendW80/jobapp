@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
@@ -87,9 +88,9 @@ export function JobsMapPage() {
               from={from}
             />
           ) : (
-            <div
+            <Skeleton
               aria-hidden="true"
-              className="h-64 animate-pulse rounded-lg border bg-muted/50"
+              className="h-64 rounded-lg border bg-muted/50"
             />
           )}
         </div>

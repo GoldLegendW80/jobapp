@@ -85,7 +85,7 @@ describe("protected routes", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "The API answered 500: boom.",
+      "Something went wrong on the server. Try again in a moment.",
     );
     expect(location()).toBe("/jobs");
     await userEvent
@@ -171,7 +171,7 @@ describe("user menu and sign out", () => {
       }),
     );
     const { client, location } = renderApp("/");
-    await screen.findByText("API ok");
+    await screen.findByText("Server reachable");
     expect(client.getQueryData(["health"])).toEqual({ status: "ok" });
     const user = userEvent.setup();
     const menu = await openMenu(user, admin.name);
@@ -180,6 +180,8 @@ describe("user menu and sign out", () => {
       await screen.findByRole("heading", { name: "Sign in" }),
     ).toBeInTheDocument();
     expect(location()).toBe("/login");
+    // An explicit sign out lost nothing: no word of an ended session.
+    expect(screen.queryByTestId("session-ended")).toBeNull();
     expect(state.logouts).toBe(1);
     expect(csrf).toBe("jobapp");
     expect(client.getQueryData(["me"])).toBeNull();
@@ -227,7 +229,7 @@ describe("user menu and sign out", () => {
     await user.click(within(menu).getByRole("menuitem", { name: "Sign out" }));
     expect(
       await screen.findByText(
-        /Sign out failed\. The API could not be reached\./,
+        /Sign out failed\. The app cannot reach the server\. Check your connection, then try again\./,
       ),
     ).toBeInTheDocument();
     expect(location()).toBe("/jobs");
@@ -241,21 +243,38 @@ describe("global 401", () => {
     const { client, location } = renderApp("/");
     // "/" redirects to /jobs in a router transition: the router's location is /jobs at once, but
     // the rendered tree (and useLocation in RequireAuth, which builds `next`) can still be "/"
-    // when the health dot already says "API ok". Wait for the jobs page itself to be on screen.
+    // when the health dot already says "Server reachable". Wait for the jobs page itself to be on screen.
     await screen.findByRole("heading", { level: 1, name: "Jobs" });
-    await screen.findByText("API ok");
+    await screen.findByText("Server reachable");
     // The session ends elsewhere (expired, disabled, signed out on another device).
     state.user = null;
     server.use(http.get("*/api/health", () => unauthorized()));
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "Check the API again" }));
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["health"] });
+    });
     expect(
       await screen.findByRole("heading", { name: "Sign in" }),
     ).toBeInTheDocument();
     expect(location()).toBe("/login?next=/jobs");
     expect(client.getQueryData(["me"])).toBeNull();
     expect(client.getQueryData(["health"])).toBeUndefined();
+    // The page says why the person is here, and that they go back once signed in.
+    expect(screen.getByTestId("session-ended")).toHaveTextContent(
+      "Your session ended. Sign in again to go back where you were.",
+    );
+  });
+
+  it("says the session ended whichever call lost it", async () => {
+    const state = fakeSession(admin);
+    renderApp("/discover");
+    await screen.findByRole("heading", { level: 1, name: "Discover" });
+    state.user = null;
+    server.use(http.get("*/api/anything", () => unauthorized()));
+    await act(async () => {
+      await request("/anything").catch(() => undefined);
+    });
+    await screen.findByRole("heading", { name: "Sign in" });
+    expect(screen.getByTestId("session-ended")).toBeVisible();
   });
 
   it("keeps a deep page, its query and hash in next", async () => {
@@ -301,15 +320,15 @@ describe("global 401", () => {
         return HttpResponse.json(member);
       }),
     );
-    const { location } = renderApp("/");
+    const { client, location } = renderApp("/");
     await screen.findByRole("heading", { level: 1, name: "Jobs" });
-    await screen.findByText("API ok");
+    await screen.findByText("Server reachable");
     state.user = null;
     server.use(http.get("*/api/health", () => unauthorized()));
     const user = userEvent.setup();
-    await user.click(
-      screen.getByRole("button", { name: "Check the API again" }),
-    );
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["health"] });
+    });
     await screen.findByRole("heading", { name: "Sign in" });
     server.use(
       http.get("*/api/health", () => HttpResponse.json({ status: "ok" })),
@@ -317,7 +336,7 @@ describe("global 401", () => {
     await user.type(screen.getByLabelText("Email"), member.email);
     await user.type(screen.getByLabelText("Password"), "correct horse");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
-    expect(await screen.findByText("API ok")).toBeInTheDocument();
+    expect(await screen.findByText("Server reachable")).toBeInTheDocument();
     expect(location()).toBe("/jobs");
   });
 });

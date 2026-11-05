@@ -235,7 +235,9 @@ it("reads a pasted board through its api, keeps a careers page as a website, and
       enabled: true,
     },
   ]);
-});
+  // Much typing through user-event: about 4 to 5 s alone on the dev machine (4.7 s before
+  // chapter 2 too), past the 5 s default when the whole suite runs in parallel.
+}, 15_000);
 
 it("refuses what is not an address before asking the api", async () => {
   const { user, dialog, detected } = await open([]);

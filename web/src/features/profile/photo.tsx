@@ -1,15 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  CircleAlert,
-  ImageUp,
-  LoaderCircle,
-  Trash2,
-  UserRound,
-} from "lucide-react";
+import { CircleAlert, ImageUp, Trash2, UserRound } from "lucide-react";
 import { useId, useRef, useState, type PointerEvent } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,7 +14,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import {
@@ -102,20 +100,19 @@ export function PhotoField({ profile }: { profile: Profile }) {
   return (
     <section aria-label="Photo" className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-4">
-        <div className="grid size-24 shrink-0 place-items-center overflow-hidden rounded-full border bg-muted">
+        {/* The person icon shows until the photo has loaded, and when there is none. */}
+        <Avatar className="size-24 border">
           {etag ? (
-            <img
+            <AvatarImage
               src={photoUrl(etag)}
               alt="Your profile photo"
-              className="size-full object-cover"
+              className="object-cover"
             />
-          ) : (
-            <UserRound
-              aria-hidden="true"
-              className="size-10 text-muted-foreground"
-            />
-          )}
-        </div>
+          ) : null}
+          <AvatarFallback>
+            <UserRound aria-hidden="true" className="size-10" />
+          </AvatarFallback>
+        </Avatar>
         <div className="flex flex-wrap gap-2">
           <Button
             type="button"
@@ -139,13 +136,13 @@ export function PhotoField({ profile }: { profile: Profile }) {
             </Button>
           ) : null}
         </div>
-        <input
+        {/* Opened by the buttons above, never shown itself. */}
+        <Input
           ref={input}
           type="file"
           accept="image/png,image/jpeg"
           aria-label="Photo file"
-          className="sr-only"
-          tabIndex={-1}
+          hidden
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";
@@ -256,7 +253,8 @@ function CropDialog({
         <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
           <div
             ref={frame}
-            className="relative w-full max-w-64 touch-none select-none"
+            // The square dims the rest of the picture with a wide shadow: the frame clips it.
+            className="relative w-full max-w-64 touch-none overflow-hidden rounded-md select-none"
             onPointerDown={(event) => {
               drag.current = { x: event.clientX, y: event.clientY };
               try {
@@ -311,7 +309,7 @@ function CropDialog({
           </div>
         </div>
         <div className="grid gap-3">
-          <Slider
+          <CropSlider
             id={`${ids}-size`}
             label="Size"
             value={crop.size}
@@ -320,7 +318,7 @@ function CropDialog({
               setCrop((c) => ({ ...c, size }));
             }}
           />
-          <Slider
+          <CropSlider
             id={`${ids}-x`}
             label="Horizontal position"
             value={crop.x}
@@ -329,7 +327,7 @@ function CropDialog({
               setCrop((c) => ({ ...c, x }));
             }}
           />
-          <Slider
+          <CropSlider
             id={`${ids}-y`}
             label="Vertical position"
             value={crop.y}
@@ -362,9 +360,7 @@ function CropDialog({
               upload.mutate();
             }}
           >
-            {upload.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {upload.isPending ? <Spinner aria-hidden="true" /> : null}
             {upload.isPending ? "Uploading" : "Use this photo"}
           </Button>
         </DialogFooter>
@@ -373,7 +369,7 @@ function CropDialog({
   );
 }
 
-function Slider({
+function CropSlider({
   id,
   label,
   value,
@@ -389,20 +385,19 @@ function Slider({
   onChange: (value: number) => void;
 }) {
   return (
-    <div className="grid gap-1">
-      <Label htmlFor={id}>{label}</Label>
-      <input
+    <div className="grid gap-2">
+      <Label id={`${id}-label`}>{label}</Label>
+      <Slider
         id={id}
-        type="range"
+        aria-labelledby={`${id}-label`}
         min={min}
         max={1}
         step={0.01}
-        value={value}
+        value={[value]}
         disabled={disabled}
-        onChange={(event) => {
-          onChange(Number(event.target.value));
+        onValueChange={([next]) => {
+          if (next !== undefined) onChange(next);
         }}
-        className="w-full accent-primary disabled:opacity-50"
       />
     </div>
   );

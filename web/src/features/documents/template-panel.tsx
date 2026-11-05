@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, LayoutGrid, LoaderCircle, Wand2 } from "lucide-react";
+import { FileText, LayoutGrid, Wand2 } from "lucide-react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -101,7 +102,7 @@ export function TemplatePanel({ document, generation }: PanelProps) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Drawing the page
         </p>
       ) : null}
@@ -130,7 +131,7 @@ export function TemplatePanel({ document, generation }: PanelProps) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the templates
         </p>
       ) : templates.isError ? (
@@ -225,16 +226,19 @@ function Strip({
         const chosen = template.slug === current;
         return (
           <li key={template.slug} className="shrink-0 snap-start">
-            <button
+            <Button
               type="button"
+              variant="outline"
               aria-pressed={chosen}
               disabled={busy}
               onClick={() => {
                 if (!chosen) onChoose(template.slug);
               }}
               className={cn(
-                "flex w-32 flex-col gap-1 rounded-md border p-1 text-left text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-60",
-                chosen ? "border-primary ring-2 ring-primary" : "border-border",
+                "h-auto w-32 flex-col items-stretch justify-start gap-1 p-1 text-left font-normal whitespace-normal disabled:opacity-60",
+                chosen
+                  ? "border-primary ring-2 ring-primary dark:border-primary"
+                  : "border-border",
               )}
             >
               <Thumbnail template={template} kind={kind} />
@@ -249,7 +253,7 @@ function Strip({
                   In use
                 </Badge>
               ) : null}
-            </button>
+            </Button>
           </li>
         );
       })}

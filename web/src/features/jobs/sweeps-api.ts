@@ -250,7 +250,7 @@ export function watchSweep(
   source.addEventListener("gone", () => {
     if (stopped) return;
     stop();
-    handlers.onError(new Error("The sweep no longer exists."));
+    handlers.onError(new Error("This search no longer exists."));
   });
   source.onerror = () => {
     // The stream broke (or a proxy refused it): poll from now on.

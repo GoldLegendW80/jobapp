@@ -111,7 +111,11 @@ describe("profile page", () => {
     expect(
       await screen.findByText("Your profile could not be loaded"),
     ).toBeVisible();
-    expect(screen.getByText("The API answered 500: Boom..")).toBeVisible();
+    expect(
+      screen.getByText(
+        "Something went wrong on the server. Try again in a moment.",
+      ),
+    ).toBeVisible();
     fakeProfile();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("progressbar")).toBeVisible();
@@ -288,7 +292,7 @@ describe("identity tab", () => {
     await user.click(saveButton("identity"));
     expect(
       await screen.findByText(
-        "Identity was not saved. The API could not be reached.",
+        "Identity was not saved. The app cannot reach the server. Check your connection, then try again.",
       ),
     ).toBeVisible();
     expect(screen.getByLabelText("Headline")).toHaveValue("GenAI Engineer II");

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -15,7 +15,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { jobsKey } from "@/features/jobs/api";
 import { describeError, errorDetail } from "@/lib/api";
 import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
@@ -35,13 +42,16 @@ import {
 import { blockingFields, statusLine } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
 import { ConfirmDialog } from "./confirm-dialog";
+import { DECISIONS } from "./decisions";
 import { FieldsList } from "./fields-list";
 import { HeldCountdown } from "./held-countdown";
 import { FillHandoff } from "./live-view-slot";
 import { queueKey, rejectQueued, type QueueItem } from "./queue-api";
 import {
   canCancel,
+  canConfirmSubmitted,
   canReject,
+  canRetry,
   checkLine,
   isHeld,
   isReviewable,
@@ -52,6 +62,9 @@ import {
 } from "./queue-state";
 import { RehearsalQuestion } from "./rehearsal-question";
 import { ShotView } from "./shot-view";
+
+/** The decisions of an item after the click, as the posting's Apply section offers them. */
+type AfterClick = "submitted" | "retry";
 
 const CANCEL = {
   title: "Cancel this application?",
@@ -66,8 +79,10 @@ const CANCEL = {
  * gate route and confirmation as the posting's Apply section, with the hash of the form shown
  * here; Reject asks first and can also skip the posting. A Full auto item in its hold shows the
  * countdown with Cancel (`offset`: the server's clock minus the page's), and a rehearsal asks
- * "Does this look right?" over its answers, read only. `onLeave` is called when the card is
- * gone after a Reject or a Cancel of its own.
+ * "Does this look right?" over its answers, read only. After the click, an item the app could
+ * not confirm or the site refused offers "It was submitted" and "Try again" with the posting
+ * page's confirmations and calls. `onLeave` is called when the card is gone after a Reject, a
+ * Cancel or an "It was submitted" of its own.
  */
 export function QueueCard({
   item,
@@ -93,6 +108,7 @@ export function QueueCard({
   const [confirming, setConfirming] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [asking, setAsking] = useState<AfterClick | null>(null);
   const reviewable = isReviewable(item);
   const rehearsal = item.rehearsal === true;
   // Behind a sign in wall the answers wait for the fill after the sign in, which replaces them.
@@ -255,8 +271,36 @@ export function QueueCard({
     },
   });
 
+  // After the click: "It was submitted" ends the application (the card leaves), "Try again"
+  // brings it back for a new approval (the card stays, with the form to approve).
+  const decision = useMutation({
+    mutationFn: (kind: AfterClick) => DECISIONS[kind].call(item.id),
+    onMutate: () => {
+      setNotice(null);
+    },
+    onSuccess: (_changed, kind) => {
+      setAsking(null);
+      if (kind === "submitted") {
+        toast.success(
+          `Recorded ${item.title} at ${item.company} as submitted.`,
+        );
+        leaving.current = true;
+      }
+      void queryClient.invalidateQueries({ queryKey: jobsKey });
+      refresh();
+    },
+    onError: (error) => {
+      setAsking(null);
+      failed(error);
+    },
+  });
+
   const busy =
-    save.isPending || approve.isPending || reject.isPending || cancel.isPending;
+    save.isPending ||
+    approve.isPending ||
+    reject.isPending ||
+    cancel.isPending ||
+    decision.isPending;
   const blocking = approval ? blockingFields(approval.answers) : [];
   const reason = reasonLine(item.reason);
   const left = leftLine(item);
@@ -375,25 +419,24 @@ export function QueueCard({
           <ShotView
             applicationId={item.id}
             shotId={item.shot_id}
-            title="The form before the click"
+            caption="The form before the click"
           />
         </div>
       ) : null}
 
       {withAnswers ? (
-        <div className="flex flex-col gap-3">
-          <Button
-            variant="outline"
-            className="w-full sm:w-fit"
-            aria-expanded={open}
-            aria-controls={panelId}
-            onClick={() => {
-              setToggled(!open);
-            }}
-          >
-            {open ? "Hide the answers" : "Review the answers"}
-          </Button>
-          <div id={panelId} hidden={!open}>
+        <Collapsible
+          open={open}
+          onOpenChange={setToggled}
+          className="flex flex-col gap-3"
+        >
+          {/* The answers stay mounted while folded: an unsaved edit keeps Approve waiting. */}
+          <CollapsibleTrigger asChild aria-controls={panelId}>
+            <Button variant="outline" className="w-full sm:w-fit">
+              {open ? "Hide the answers" : "Review the answers"}
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent forceMount id={panelId} hidden={!open}>
             {approval ? (
               <FieldsList
                 answers={approval.answers}
@@ -428,15 +471,12 @@ export function QueueCard({
                 role="status"
                 className="flex items-center gap-2 text-sm text-muted-foreground"
               >
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-4 animate-spin"
-                />
+                <Spinner aria-hidden="true" role={undefined} />
                 Loading the answers
               </p>
             )}
-          </div>
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start">
@@ -492,6 +532,29 @@ export function QueueCard({
             Cancel application
           </Button>
         ) : null}
+        {canConfirmSubmitted(item) ? (
+          <Button
+            className="w-full sm:w-fit"
+            disabled={busy}
+            onClick={() => {
+              setAsking("submitted");
+            }}
+          >
+            It was submitted
+          </Button>
+        ) : null}
+        {canRetry(item) ? (
+          <Button
+            variant={canConfirmSubmitted(item) ? "outline" : "default"}
+            className="w-full sm:w-fit"
+            disabled={busy}
+            onClick={() => {
+              setAsking("retry");
+            }}
+          >
+            Try again
+          </Button>
+        ) : null}
         {needsPostingPage(item) ? (
           <Button asChild variant="outline" className="w-full sm:w-fit">
             <Link to={`/jobs/${item.posting_id}`}>Open the posting</Link>
@@ -534,6 +597,16 @@ export function QueueCard({
           }}
         />
       ) : null}
+      <ConfirmDialog
+        ask={asking ? DECISIONS[asking] : null}
+        pending={decision.isPending}
+        onCancel={() => {
+          setAsking(null);
+        }}
+        onConfirm={() => {
+          if (asking) decision.mutate(asking);
+        }}
+      />
       <ConfirmDialog
         ask={cancelling ? CANCEL : null}
         pending={cancel.isPending}
@@ -582,14 +655,13 @@ function RejectDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="flex items-start gap-2">
-          <input
+          <Checkbox
             id={boxId}
-            type="checkbox"
-            className="mt-0.5 size-4 shrink-0 accent-primary"
+            className="mt-0.5"
             checked={skip}
             disabled={pending}
-            onChange={(event) => {
-              setSkip(event.target.checked);
+            onCheckedChange={(checked) => {
+              setSkip(checked === true);
             }}
           />
           <Label htmlFor={boxId} className="leading-snug font-normal">
@@ -604,9 +676,7 @@ function RejectDialog({
             }}
             disabled={pending}
           >
-            {pending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
             Reject
           </Button>
         </AlertDialogFooter>

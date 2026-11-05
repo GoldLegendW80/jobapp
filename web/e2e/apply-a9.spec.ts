@@ -140,7 +140,9 @@ test("the person applies in the live view, submits on the form and records it", 
       "This is your own session: you have the keyboard and the mouse.",
     ),
   ).toBeVisible({ timeout: 120_000 });
-  await expect(panel.getByRole("button", { name: /Take over/ })).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: /Use the browser myself/ }),
+  ).toHaveCount(0);
 
   // The panel: the identity fields by the app, then the CV on the form's Resume input.
   await panel.getByRole("button", { name: "Fill my details" }).click();

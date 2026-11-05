@@ -1,13 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Check,
-  FileText,
-  LoaderCircle,
-  Pencil,
-  RotateCw,
-  Undo2,
-  X,
-} from "lucide-react";
+import { Check, FileText, Pencil, RotateCw, Undo2, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +11,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Spinner } from "@/components/ui/spinner";
 
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -418,34 +414,34 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
                 ? " If these are two different entries, keep one here and add the other in your profile."
                 : ""}
           </p>
-          <div
-            role="radiogroup"
+          <RadioGroup
+            name={group}
             aria-label={`Values for ${title}`}
+            // Nothing is picked until the user picks: no value is checked at first.
+            value={chosen === undefined ? "" : String(chosen)}
+            onValueChange={(value) => {
+              setChosen(Number(value));
+            }}
+            disabled={!pending || busy}
             className="flex flex-col gap-2"
           >
             {choices.map((choice, index) => (
               // The values of a conflict have no identity but their place in it.
               <div
                 key={index}
-                className="flex flex-col gap-1 rounded-sm border p-2 has-checked:border-primary"
+                className="flex flex-col gap-1 rounded-sm border p-2 has-data-[state=checked]:border-primary"
               >
-                <label className="flex items-start gap-2">
-                  <input
-                    type="radio"
-                    name={group}
-                    className="mt-1 size-4 shrink-0"
+                <Label className="items-start leading-[inherit] font-normal select-text">
+                  <RadioGroupItem
+                    value={String(index)}
+                    className="mt-0.5"
                     aria-label={`Value ${String(index + 1)}: ${scalar(choice.value)}`}
-                    checked={chosen === index}
-                    disabled={!pending || busy}
-                    onChange={() => {
-                      setChosen(index);
-                    }}
                   />
                   <Value
                     value={choice.value}
                     label={`Value ${String(index + 1)}`}
                   />
-                </label>
+                </Label>
                 <Sources
                   citations={choice.citations}
                   label={`Sources of value ${String(index + 1)}`}
@@ -453,7 +449,7 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
                 />
               </div>
             ))}
-          </div>
+          </RadioGroup>
         </div>
       ) : (
         <>
@@ -532,7 +528,7 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
               }}
             >
               {accept.isPending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
               ) : (
                 <Check aria-hidden="true" />
               )}
@@ -582,7 +578,7 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
             }}
           >
             {takeBack.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : (
               <Undo2 aria-hidden="true" />
             )}
@@ -801,7 +797,7 @@ function QuotePreview({ citation }: { citation: Citation }) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the text
         </p>
       ) : query.isError ? (
@@ -859,19 +855,12 @@ function Completeness() {
         </span>
         <span className="text-muted-foreground tabular-nums">{overall}%</span>
       </div>
-      <div
-        role="progressbar"
-        aria-labelledby={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
+      {/* The value is passed to the bar's root too: shadcn's Progress keeps it for its fill. */}
+      <Progress
+        value={overall}
         aria-valuenow={overall}
-        className="h-2 w-full overflow-hidden rounded-full bg-muted"
-      >
-        <div
-          className="h-full rounded-full bg-primary transition-[width]"
-          style={{ width: `${String(overall)}%` }}
-        />
-      </div>
+        aria-labelledby={label}
+      />
     </div>
   );
 }
@@ -985,7 +974,7 @@ export function ProposalList({ runId }: { runId?: string } = {}) {
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
         Loading the proposals
       </p>
     );

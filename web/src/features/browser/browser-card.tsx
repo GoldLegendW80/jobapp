@@ -1,8 +1,11 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, LoaderCircle, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { RotateCw } from "lucide-react";
+import { Fragment, useState } from "react";
+import { Link, useSearchParams } from "react-router";
 
+import { AdvancedSection } from "@/components/advanced-section";
 import { SiteProfileSlot } from "@/features/apply/site-profile/site-profile-slot";
+import { formatDate } from "@/features/jobs/format";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,196 +16,198 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail } from "@/lib/api";
 
 import {
   browserQueryKey,
-  endSession,
   getBrowser,
   personOwnsInput,
-  startSession,
   type Browser,
-  type QueuePlace,
-  type Session,
-  waitText,
 } from "./browser-api";
 import { ForgetDialog } from "./forget-dialog";
 import { HandoffBanner } from "./handoff-banner";
-import { LinkedInCard } from "./linkedin-card";
 import { LiveBrowser } from "./live-browser";
-import { SignInButton } from "./signin-button";
+import { SiteSignIn } from "./site-signin";
+import { getSiteLogins, siteLoginsQueryKey } from "./site-logins-api";
 import { handoffOf } from "./use-handoff";
 
-// A place in the queue is kept by asking again within 60 s (browser B3); the card asks every 20 s.
-const KEEP_PLACE_MS = 20_000;
-// While the browser starts, or someone else holds it, the card reads the state again this often.
+// While an assistant's lease starts, the card reads the state again this often.
 const WAIT_POLL_MS = 3_000;
 
-function mine(browser: Browser | undefined) {
-  return browser?.holder === "you" ? browser.lease : null;
-}
-
-// What the person asked for, asked again with the same words to keep their place in the queue.
-type Ask = { purpose: "look" } | { purpose: "signin"; address: string };
-type Queued = { place: QueuePlace; ask: Ask };
-
-const LOOK: Ask = { purpose: "look" };
+export const TITLE = "Websites you are signed in to";
 const FORGOTTEN =
   "Your logins are forgotten. Your browser starts empty next time.";
+export const PROFILE_TITLE = "Complete my profile on a website";
 
-/** Account, "Your browser": the person's own browser on the server, and a session to look at it. */
+/** An assistant's lease of this person: what the card watches. The person's own sessions (a
+ * sign in) show their live view where they were started. */
+function assistant(browser: Browser | undefined) {
+  const lease = browser?.holder === "you" ? browser.lease : null;
+  return lease?.automation ? lease : null;
+}
+
+/**
+ * Account, "Websites you are signed in to" (owner, audit chapter 2: "Only websites we are
+ * signin"): the websites the person's own browser on the server keeps a login of (browser B17,
+ * GET /api/browser/sites), each with its Sign in again (the Find jobs line's action), and
+ * "Forget all logins" (B7) with its confirmation. "Complete my profile on a website" (apply A18)
+ * is folded under it, open when a page sent the person here with `?profile_site=`. While an
+ * assistant uses the browser, its live view (B4) and a hand off waiting for the person (B12b)
+ * show here too, so a wait can be answered from this page.
+ */
 export function BrowserCard() {
-  const client = useQueryClient();
-  const [queued, setQueued] = useState<Queued | null>(null);
+  const [params] = useSearchParams();
   const [forgotten, setForgotten] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(() =>
+    params.has("profile_site"),
+  );
   const query = useQuery({
     queryKey: browserQueryKey,
     queryFn: ({ signal }) => getBrowser(signal),
-    refetchInterval: (current) => {
-      const lease = mine(current.state.data);
-      return (queued && !lease) || lease?.state === "starting"
+    refetchInterval: (current) =>
+      assistant(current.state.data)?.state === "starting"
         ? WAIT_POLL_MS
-        : false;
-    },
+        : false,
   });
-  const lease = mine(query.data);
+  const logins = useQuery({
+    queryKey: siteLoginsQueryKey,
+    queryFn: ({ signal }) => getSiteLogins(signal),
+  });
+  const lease = assistant(query.data);
   // A sign in hand off shows its own live view, with the person at the keyboard, in the banner.
   const handoff = handoffOf(query.data);
-  // Once the browser is ours the place in the queue is spent.
-  const waiting = lease ? null : queued;
-  const place = waiting?.place ?? null;
+  const sites = logins.data ?? [];
 
-  const took = (session: Session, ask: Ask) => {
-    setQueued(
-      session.lease || !session.queue ? null : { place: session.queue, ask },
-    );
-    setForgotten(false);
-    void client.invalidateQueries({ queryKey: browserQueryKey });
-  };
-  const start = useMutation({
-    mutationFn: (ask: Ask) =>
-      ask.purpose === "signin"
-        ? startSession("signin", ask.address)
-        : startSession("look"),
-    onSuccess: took,
-  });
-  const end = useMutation({
-    mutationFn: endSession,
-    onSuccess: () => {
-      setQueued(null);
-      void client.invalidateQueries({ queryKey: browserQueryKey });
-    },
-  });
-
-  // Waiting in the queue: ask again before the place lapses, until the browser is ours.
-  const { mutate } = start;
-  useEffect(() => {
-    if (!waiting) return;
-    const timer = window.setInterval(() => {
-      mutate(waiting.ask);
-    }, KEEP_PLACE_MS);
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [waiting, mutate]);
-
-  const failure = start.error ?? end.error ?? query.error;
   return (
     <Card aria-labelledby="browser-card-title">
       <CardHeader>
         <CardTitle>
           <h2 id="browser-card-title" className="text-lg">
-            Your browser
+            {TITLE}
           </h2>
         </CardTitle>
         <CardDescription>
-          A browser of your own on the server, which keeps the sites you signed
-          in to. The assistant uses it to apply for you, and you can watch it or
-          take over at any moment.
+          Your own browser on the server keeps these logins: the searches read
+          the websites signed in, for you only. The app saves no password.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <HandoffBanner liveOpen />
-        {query.isPending ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <LoaderCircle aria-hidden className="size-4 animate-spin" />
-            Loading your browser.
-          </p>
-        ) : lease?.state === "starting" ? (
+        {lease?.state === "starting" ? (
           <p role="status" className="text-sm text-muted-foreground">
             Your browser is starting.
           </p>
-        ) : handoff ? null : lease ? (
+        ) : lease && !handoff ? (
           <LiveBrowser
             key={`${lease.id}:${personOwnsInput(lease)}`}
             person={personOwnsInput(lease)}
           />
-        ) : place ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            {waitText(place)}
-          </p>
         ) : query.data && !query.data.available ? (
           <p className="text-sm text-muted-foreground">
             The browser is not available right now.
           </p>
         ) : null}
+        {logins.isPending ? (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner aria-hidden="true" role={undefined} />
+            Loading your websites.
+          </p>
+        ) : logins.isError && !logins.data ? (
+          <div className="flex flex-col items-start gap-2">
+            <p role="alert" className="text-sm text-destructive">
+              Your websites could not be read.{" "}
+              {errorDetail(logins.error) ?? describeError(logins.error)}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={logins.isFetching}
+              onClick={() => {
+                void logins.refetch();
+              }}
+            >
+              <RotateCw aria-hidden />
+              Try again
+            </Button>
+          </div>
+        ) : sites.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="no-sites">
+            None yet. You sign in to a website from its line in{" "}
+            <Link
+              className="font-medium text-foreground underline underline-offset-4"
+              to="/jobs?find=1"
+            >
+              Find jobs
+            </Link>
+            .
+          </p>
+        ) : (
+          <ItemGroup
+            aria-labelledby="browser-card-title"
+            className="rounded-md border"
+          >
+            {sites.map((site, index) => (
+              <Fragment key={site.host}>
+                {index > 0 ? <ItemSeparator /> : null}
+                <Item
+                  role="listitem"
+                  className="min-w-0 flex-col items-stretch gap-2 rounded-none p-3 sm:flex-row sm:flex-nowrap sm:items-start sm:justify-between"
+                >
+                  <ItemContent className="min-w-0 flex-initial gap-0">
+                    <ItemTitle className="w-auto break-all">
+                      {site.host}
+                    </ItemTitle>
+                    {site.state === "signed_in" ? (
+                      <ItemDescription className="text-xs">
+                        Since {formatDate(site.signed_in_at)}
+                      </ItemDescription>
+                    ) : null}
+                  </ItemContent>
+                  <ItemActions className="min-w-0 sm:max-w-[60%] sm:justify-end">
+                    <SiteSignIn url={`https://${site.host}/`} forget={false} />
+                  </ItemActions>
+                </Item>
+              </Fragment>
+            ))}
+          </ItemGroup>
+        )}
         {forgotten && (
           <p role="status" className="text-sm text-muted-foreground">
             {FORGOTTEN}
           </p>
         )}
-        {failure && (
+        {query.error ? (
           <p role="alert" className="text-sm text-destructive">
-            {errorDetail(failure) ?? describeError(failure)}
+            {errorDetail(query.error) ?? describeError(query.error)}
           </p>
-        )}
-        <LinkedInCard />
-        <SiteProfileSlot />
+        ) : null}
       </CardContent>
-      <CardFooter className="flex flex-wrap gap-2">
-        {lease ? (
-          <Button
-            type="button"
-            variant="outline"
-            disabled={end.isPending}
-            onClick={() => {
-              end.mutate();
-            }}
-          >
-            <X aria-hidden />
-            Close my browser
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            disabled={
-              start.isPending || !!place || query.data?.available === false
-            }
-            onClick={() => {
-              start.mutate(LOOK);
-            }}
-          >
-            <Eye aria-hidden />
-            Look at my browser
-          </Button>
-        )}
-        {lease ? null : (
-          <SignInButton
-            disabled={
-              start.isPending || !!place || query.data?.available === false
-            }
-            onStarted={(session, address) => {
-              took(session, { purpose: "signin", address });
-            }}
-          />
-        )}
-        {/* apply A18c: the "Complete my profile on a site" slot goes here. */}
+      <CardFooter className="flex flex-col items-start gap-4">
         <ForgetDialog
           profile={query.data?.profile}
           onForgotten={() => {
             setForgotten(true);
           }}
         />
+        <AdvancedSection
+          title={PROFILE_TITLE}
+          open={profileOpen}
+          onOpenChange={setProfileOpen}
+          className="w-full"
+        >
+          <SiteProfileSlot />
+        </AdvancedSection>
       </CardFooter>
     </Card>
   );

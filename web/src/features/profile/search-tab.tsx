@@ -13,6 +13,7 @@ import { useFieldArray, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import {
   Form,
   FormControl,
@@ -26,6 +27,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { JobWebsitesSignIn } from "@/features/browser/site-signin";
 import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
 import { cn } from "@/lib/utils";
+import { REMOTE_WORDS, contractWord } from "@/lib/wording";
 
 import {
   CONTRACT_TYPES,
@@ -54,21 +56,9 @@ import {
 } from "./section-ui";
 import { useSectionForm } from "./use-section-form";
 
-const CONTRACT_LABELS: Record<(typeof CONTRACT_TYPES)[number], string> = {
-  CDI: "CDI (permanent)",
-  CDD: "CDD (fixed term)",
-  VIE: "VIE",
-  Stage: "Stage (internship)",
-  Alternance: "Alternance (apprenticeship)",
-  Freelance: "Freelance",
-};
-
-const STANCE_LABELS: Record<(typeof REMOTE_STANCES)[number], string> = {
-  remote: "Remote only",
-  hybrid: "Hybrid",
-  office: "Office",
-  any: "Any",
-};
+// The same words as the wizard and the postings (lib/wording.ts): one name for one thing.
+const STANCE_LABELS: Record<(typeof REMOTE_STANCES)[number], string> =
+  REMOTE_WORDS;
 
 export function SearchTab({
   profile,
@@ -164,18 +154,16 @@ function SearchForms({
                     </output>
                   </div>
                   <FormControl>
-                    <input
-                      type="range"
+                    <Slider
                       min={0}
                       max={100}
                       step={1}
-                      className="w-full accent-primary"
                       name={field.name}
-                      ref={field.ref}
-                      value={field.value}
+                      aria-label="Minimum fit"
+                      value={[field.value]}
                       onBlur={field.onBlur}
-                      onChange={(event) => {
-                        field.onChange(Number(event.target.value));
+                      onValueChange={([value]) => {
+                        if (value !== undefined) field.onChange(value);
                       }}
                     />
                   </FormControl>
@@ -266,7 +254,7 @@ function ContractTypes({ form }: { form: UseFormReturn<SearchForm> }) {
                       );
                     }}
                   >
-                    {CONTRACT_LABELS[type]}
+                    {contractWord(type)}
                   </Button>
                 );
               })}

@@ -7,7 +7,6 @@ import {
 import {
   ArrowLeft,
   History,
-  LoaderCircle,
   Minus,
   Plus,
   RotateCcw,
@@ -27,6 +26,8 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Sheet,
   SheetContent,
@@ -35,6 +36,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -179,7 +181,7 @@ function HistoryBody({
             role="status"
             className="flex items-center gap-2 p-2 text-sm text-muted-foreground"
           >
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" />
             Loading versions
           </p>
         ) : versions.isError ? (
@@ -206,8 +208,9 @@ function HistoryBody({
             <ol className="flex flex-col gap-1">
               {items.map((item) => (
                 <li key={item.revision}>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     aria-current={
                       selected === item.revision ? "true" : undefined
                     }
@@ -216,7 +219,7 @@ function HistoryBody({
                       setSelected(item.revision);
                     }}
                     className={cn(
-                      "flex w-full flex-col items-start gap-0.5 rounded-md px-3 py-2 text-left text-sm hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                      "h-auto w-full flex-col items-start gap-0.5 px-3 py-2 text-left font-normal whitespace-normal",
                       selected === item.revision && "bg-accent",
                     )}
                   >
@@ -227,17 +230,14 @@ function HistoryBody({
                       ) : null}
                     </span>
                     <span className="text-xs text-muted-foreground">
-                      <time
-                        dateTime={item.created_at}
-                        title={absoluteTime(item.created_at)}
-                      >
+                      <time dateTime={item.created_at}>
                         {relativeTime(item.created_at)}
                       </time>
                       <span aria-hidden="true">, </span>
                       <span className="sr-only">, </span>
                       {absoluteTime(item.created_at)}
                     </span>
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ol>
@@ -250,7 +250,7 @@ function HistoryBody({
                 onClick={() => void versions.fetchNextPage()}
               >
                 {versions.isFetchingNextPage ? (
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" />
                 ) : null}
                 {versions.isFetchingNextPage ? "Loading" : "Load more"}
               </Button>
@@ -386,7 +386,7 @@ function Compare({
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" />
           Loading revision {revision}
         </p>
       ) : version.isError ? (
@@ -416,7 +416,7 @@ function Compare({
               }}
             >
               {restore.isPending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" />
               ) : (
                 <RotateCcw aria-hidden="true" />
               )}
@@ -622,18 +622,16 @@ function FieldDifferences({
             ? "No difference with the current version."
             : `${String(changed)} ${changed === 1 ? "field differs" : "fields differ"} from the current version.`}
         </p>
-        <label htmlFor={id} className="flex items-center gap-2 text-sm">
-          <input
+        <Label htmlFor={id} className="font-normal">
+          <Checkbox
             id={id}
-            type="checkbox"
-            className="size-4 accent-primary"
             checked={onlyChanges}
-            onChange={(event) => {
-              setOnlyChanges(event.target.checked);
+            onCheckedChange={(checked) => {
+              setOnlyChanges(checked === true);
             }}
           />
           Only differences
-        </label>
+        </Label>
       </div>
       <Table
         stacked={false}

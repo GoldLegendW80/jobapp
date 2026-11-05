@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  ChevronRight,
   CircleAlert,
-  LoaderCircle,
   Minus,
   Plus,
   RotateCw,
@@ -24,9 +24,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -36,6 +43,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { diffLines } from "@/features/profile/diff";
 import { isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
@@ -57,7 +69,8 @@ import {
   type NewVersion,
 } from "./agents-api";
 import { message } from "./errors";
-import { exactTime, relativeTime } from "./relative-time";
+import { Moment } from "./moment";
+import { exactTime } from "./relative-time";
 
 const KIND_LABEL: Record<string, string> = {
   anthropic_api_key: "With an API key",
@@ -119,7 +132,7 @@ export function AdminAgentPage() {
           className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading the agent
           </span>
         </p>
@@ -374,13 +387,11 @@ function AgentView({ page }: { page: AgentPage }) {
         >
           {page.tools.map((tool) => (
             <li key={tool.name} className="min-w-0 space-y-1 p-3 text-sm">
-              <label className="flex min-w-0 items-center gap-2 font-medium">
-                <input
-                  type="checkbox"
-                  className="size-4 shrink-0 accent-primary"
+              <Label className="flex min-w-0 items-center gap-2">
+                <Checkbox
                   checked={draft.tools.includes(tool.name)}
-                  onChange={(event) => {
-                    const on = event.target.checked;
+                  onCheckedChange={(checked) => {
+                    const on = checked === true;
                     set({
                       tools: page.code.tools.filter((name) =>
                         name === tool.name ? on : draft.tools.includes(name),
@@ -392,7 +403,7 @@ function AgentView({ page }: { page: AgentPage }) {
                 {tool.on !== draft.tools.includes(tool.name) ? (
                   <Badge variant="outline">Not saved</Badge>
                 ) : null}
-              </label>
+              </Label>
               <p className="text-muted-foreground [overflow-wrap:anywhere]">
                 {tool.description ??
                   "Not described yet: the worker describes the tools it has loaded, a minute after it starts at most."}
@@ -617,7 +628,7 @@ function AgentView({ page }: { page: AgentPage }) {
             }}
           >
             {mutation.isPending && !reverting ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : null}
             Save as a new version
           </Button>
@@ -692,9 +703,14 @@ function AgentView({ page }: { page: AgentPage }) {
                         {started(run.started_at)}
                       </Link>
                     ) : (
-                      <span title="Another person's run: its page is theirs">
-                        {started(run.started_at)}
-                      </span>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span>{started(run.started_at)}</span>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Another person's run: its page is theirs
+                        </TooltipContent>
+                      </Tooltip>
                     )}
                   </TableHead>
                   <TableCell label="Person">
@@ -759,13 +775,7 @@ function AgentView({ page }: { page: AgentPage }) {
                     ? `Changes ${version.fields.join(", ")}.`
                     : "No change: the code's definition."}{" "}
                   Saved by {version.saved_by ?? "an account that is gone"}{" "}
-                  <time
-                    dateTime={version.saved_at}
-                    title={exactTime(version.saved_at)}
-                  >
-                    {relativeTime(version.saved_at)}
-                  </time>
-                  .
+                  <Moment at={version.saved_at} />.
                 </p>
                 {version.note ? (
                   <p className="[overflow-wrap:anywhere]">{version.note}</p>
@@ -820,7 +830,7 @@ function AgentView({ page }: { page: AgentPage }) {
               }}
             >
               {mutation.isPending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
               ) : null}
               Revert
             </Button>
@@ -896,14 +906,25 @@ function Json({
   text?: boolean;
 }) {
   return (
-    <details className="rounded-md border text-sm">
-      <summary className="cursor-pointer px-3 py-2 text-muted-foreground">
-        {label}
-      </summary>
-      <pre className="max-h-96 overflow-auto border-t bg-muted p-3 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
-        {text ? String(value) : JSON.stringify(value, null, 2)}
-      </pre>
-    </details>
+    <Collapsible className="rounded-md border text-sm">
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="group/fold h-auto w-full justify-start gap-1.5 rounded-md px-3 py-2 text-left font-normal whitespace-normal text-muted-foreground has-[>svg]:px-3"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="transition-transform group-data-[state=open]/fold:rotate-90 motion-reduce:transition-none"
+          />
+          {label}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <pre className="max-h-96 overflow-auto border-t bg-muted p-3 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {text ? String(value) : JSON.stringify(value, null, 2)}
+        </pre>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

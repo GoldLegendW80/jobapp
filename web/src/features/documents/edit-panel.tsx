@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, LoaderCircle, RotateCw } from "lucide-react";
+import { Check, RotateCw } from "lucide-react";
 import { useId, useMemo } from "react";
 import { toast } from "sonner";
 
@@ -13,8 +13,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Spinner } from "@/components/ui/spinner";
 import { getProfile, profileKey } from "@/features/profile/api";
 
 import type { PanelProps } from "./document-view";
@@ -161,8 +162,10 @@ function EditForm({ document, generation }: PanelProps) {
           document={document}
           saver={saver}
         />
-        <div className="flex w-full flex-col gap-1.5 sm:w-48">
-          <Label htmlFor={`${id}-language`}>Language of the page</Label>
+        <Field className="gap-1.5 sm:w-48">
+          <FieldLabel htmlFor={`${id}-language`}>
+            Language of the page
+          </FieldLabel>
           <NativeSelect
             id={`${id}-language`}
             value={document.language}
@@ -177,7 +180,7 @@ function EditForm({ document, generation }: PanelProps) {
               </option>
             ))}
           </NativeSelect>
-        </div>
+        </Field>
       </div>
       {document.language === "fr" ? (
         <p className="text-sm text-muted-foreground">
@@ -289,7 +292,7 @@ function SaveLine({
       className="flex items-center gap-2 text-sm text-muted-foreground"
     >
       {status.state === "saving" || (status.state === "saved" && drawing) ? (
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
       ) : status.state === "saved" ? (
         <Check aria-hidden="true" className="size-4" />
       ) : null}
