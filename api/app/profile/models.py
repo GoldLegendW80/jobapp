@@ -94,12 +94,15 @@ class TitleSuggestions(Base):
         sa.CheckConstraint("asks >= 0", name="asks_not_negative"),
         sa.CheckConstraint("error IS NULL OR char_length(error) <= 40", name="error_length"),
         sa.CheckConstraint("basis IS NULL OR char_length(basis) = 64", name="basis_length"),
+        sa.CheckConstraint("jsonb_typeof(dismissed) = 'array'", name="dismissed_is_array"),
+        sa.CheckConstraint("jsonb_typeof(messages) = 'array'", name="messages_is_array"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
     )
-    # `[{title, reason, language}]`, as the checks kept them when they were stored.
+    # `[{title, reason, language}]`, as the checks kept them when they were stored, oldest first
+    # (at most titles.LIST_MAX).
     suggestions: Mapped[list[dict[str, Any]]] = mapped_column(
         pg.JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
     )
@@ -118,5 +121,14 @@ class TitleSuggestions(Base):
     # "More ideas" clicks on the UTC day `asks_on`.
     asks_on: Mapped[date | None] = mapped_column(sa.Date)
     asks: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
-    # Why the last ask gave nothing (a code of titles.ERRORS); null after a stored answer.
+    # Why the last ask gave nothing (a code of titles.ERRORS, or `nothing_new` of titles.NOTES);
+    # null after an answer that added ideas.
     error: Mapped[str | None] = mapped_column(sa.Text)
+    # The titles the person said are not for them ("Not for me"), the last titles.DISMISSED_MAX.
+    dismissed: Mapped[list[str]] = mapped_column(
+        pg.JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
+    )
+    # What the person wrote to the agent, `[{text, at}]`, the last titles.MESSAGES_MAX.
+    messages: Mapped[list[dict[str, Any]]] = mapped_column(
+        pg.JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
+    )

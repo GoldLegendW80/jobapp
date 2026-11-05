@@ -1,18 +1,17 @@
 """Job title suggestions (owner, 2026-11-05: "I want an agent to find the best job titles
 according to the profile"; question 3: "The job titles agent refreshes by itself after a profile
-fill or a skills change, at most once a day"). SPEC-profile, "Job title suggestions".
+fill or a skills change, at most once a day"; the answers on the ideas: the agent "can read
+everything to help the user find best jobs", and "More ideas" adds to the ideas shown, "add to
+them"). SPEC-profile, "Job title suggestions".
 
-The agent, `profile_titles` (app/profile/agents.py), reads a `Request` built here from the stored
-profile: the fit summary (app/profile/fit_summary.py: skills, years, recent titles, languages,
-seniority, industries, company types; never a name, a contact detail or an employer), the wanted
-and unwanted titles, the places (so it answers in their language) and the never apply rules. It
-submits at most SUGGESTIONS_MAX `{title, reason, language}`.
+The agent, `profile_titles` (app/profile/agents.py), reads a `Request` built here: the whole
+profile and the documents' text (titles_input.py says what is read and what is left out), the
+person's last MESSAGES_MAX messages to it, the wanted and unwanted titles, the places (so it
+answers in their language), the never apply rules, the ideas shown now and the ones the person
+said are not for them. It submits at most SUGGESTIONS_MAX `{title, reason, language}`.
 
 **The checks** (`check`), by code, before any title is stored, and again on every read against
 the search as it is saved then (`view`), first failing reason wins:
-- `cybersecurity`: the app's own rule (`jobs.never_apply.CYBER_RULE`, the matcher the sweeps and
-  apply refuse cybersecurity roles with) on the title or its reason (hard rule 2; a reason that
-  names security refuses its title too: the side the rule errs on);
 - `dash`: a dash used as a separator in the title (`documents.rules.separators`, hard rule 1);
 - `shape`: not plain words as a website search types them (`plain_terms.PLAIN`), longer than
   TITLE_MAX characters or TITLE_WORDS_MAX words;
@@ -21,22 +20,27 @@ the search as it is saved then (`view`), first failing reason wins:
   than REASON_MAX, or not plain (a line break, a control character, markdown, an address);
 - `listed`: already a wanted title, case, accents and a plural ending aside (`never_apply.fold`);
 - `unwanted`: an unwanted title catches it (`profile.matching`, as the search filters titles);
-- `never_apply`: one of the person's never apply rules catches it (`jobs.never_apply`, as the
-  sweeps and apply read them);
-- `repeated`: the same title earlier in the answer;
-- `full`: the wanted list holds TERMS_MAX terms, or SUGGESTIONS_MAX are kept already.
+- `never_apply`: one of the person's own never apply rules catches it (`jobs.never_apply`, as
+  the sweeps and apply read them); the app has no rule of its own about a kind of role (owner,
+  2026-11-05);
+- `dismissed`: the person said it is not for them ("Not for me");
+- `repeated`: the same title earlier in the answer, or among the ideas shown;
+- `full`: the wanted list holds TERMS_MAX terms, or the answer gave SUGGESTIONS_MAX already.
 A search section that no longer validates cannot be checked against: nothing is suggested.
 
-**Runs and their bounds** (`start`). A run needs a model credential and something to read (skills
-or the titles of past roles: a CV read by Fill my profile gives both). Automatic runs (`tick`, a
-worker cron) follow a skills save or an accepted Fill my profile item, at most one per person in
-AUTO_EVERY, and only when what the agent would read changed since the stored answer (`basis`); a
-trigger inside the day waits for the day to pass. "More ideas" asks again on a click, at most
-ASKS_PER_DAY times a UTC day. One run at a time per person. A run's token budget is the ceiling of
-`estimate()`.
+**Runs and their bounds** (`start`). A run needs a model credential and something to read: a
+profile with anything in it, a document's text, or a message. Automatic runs (`tick`, a worker
+cron) follow a save of a section the agent reads, an accepted Fill my profile item, an upload or
+a base CV saved (`due`), at most one per person in AUTO_EVERY, never while an upload is still
+being read (READ_WAIT), and only when what the agent would read changed since the stored answer
+(`basis`); a trigger inside the day waits for the day to pass. "More ideas", and a message sent
+to the agent, ask again on a click, at most ASKS_PER_DAY times a UTC day together. One run at a
+time per person. A run's token budget is the ceiling of `estimate()` for its first message.
 
-**The store** (`profile_title_suggestions`, one row per person): the last kept suggestions with
-their time, so a page that shows them costs no model call.
+**The store** (`profile_title_suggestions`, one row per person): the ideas kept, oldest first,
+at most LIST_MAX (a run's new ideas join after them, the oldest go past the cap), with their
+time, so a page that shows them costs no model call; the titles the person dismissed (the last
+DISMISSED_MAX); the person's last messages.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ import json
 import re
 import uuid
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from fractions import Fraction
 from pathlib import Path
@@ -62,8 +66,8 @@ from app.agents.models import AgentRun, ModelCredential, Proposal, ProposalStatu
 from app.documents import rules as doc_rules
 from app.ingestion import pricing
 from app.ingestion.estimate import F, RunEstimate, text_tokens
-from app.jobs.never_apply import CYBER_RULE, NeverApplyRule, fold, matching_rule
-from app.profile import fit_summary, matching, plain_terms
+from app.jobs.never_apply import NeverApplyRule, fold, matching_rule
+from app.profile import matching, plain_terms, titles_input
 from app.profile.models import Profile, ProfileRevision, TitleSuggestions
 from app.profile.schemas import TERMS_MAX, SearchSection
 
@@ -73,19 +77,28 @@ MODEL_API_KEY = "claude-sonnet-5-5"  # on an API key, as the documents writers
 PROMPT_PATH = Path(__file__).parent / "prompts" / "titles.md"
 MAX_TURNS = 3  # one submit, one more if the tool refused its shape, one closing line
 WALL_TIME_S = 60.0
-SUGGESTIONS_MAX = 8
+SUGGESTIONS_MAX = 8  # titles kept from one answer
+LIST_MAX = 20  # ideas kept on the row; past it the oldest go, the newest stay
+DISMISSED_MAX = 30  # the last titles the person said are not for them
+MESSAGES_MAX = 5  # the person's last messages to the agent
+MESSAGE_MAX = 300  # characters of one message
 TITLE_MAX = 80  # characters of a suggested title (a plain term of the list may hold 200)
 TITLE_WORDS_MAX = 6
 REASON_MAX = 120  # characters of its one line reason
 AUTO_EVERY = timedelta(days=1)
-# "More ideas" clicks a person may make in one UTC day: each is one run, about 3 cents on an API
-# key at the low estimate.
+# "More ideas" clicks and messages sent to the agent, together, that a person may make in one UTC
+# day: each is one run. The owner has not decided this number yet (2026-11-05).
 ASKS_PER_DAY = 3
 # A run asked longer ago than this and still not recorded reads as failed (the queue may have
 # lost it; the agents reaper fails it later).
 STALE_AFTER = timedelta(minutes=30)
+# An upload still waiting for its text, stored or claimed less than this ago, holds the automatic
+# refresh so the run reads it; one stuck longer holds nothing.
+READ_WAIT = timedelta(minutes=30)
 TICK_MAX = 20  # people the tick starts a run for at once
-REQUEST_MAX = 12_000  # characters of the first message's data
+REQUEST_MAX = 30_000  # characters of the first message
+LISTS_MAX = 40  # terms of each search list, and never apply rules, the first message names
+RULE_MAX = 300  # characters of one never apply rule there
 
 # What the person reads when the last ask gave nothing.
 ERRORS = {
@@ -95,10 +108,13 @@ ERRORS = {
     "lost": "The suggestions did not come back. Try again.",
     "queue_down": runs.QUEUE_DOWN,
 }
+# What the person reads when the last ask ended well but added nothing (`error` holds its code).
+NOTES = {"nothing_new": "No new idea this time. The ideas you had stay."}
 
 LANGUAGE = re.compile(r"[a-z]{2}")
 _DASHES = frozenset("\u2010\u2012\u2013\u2014\u2015\u2212")
 _NOT_PLAIN = re.compile(r"[\x00-\x1f\x7f-\x9f*_#`<>\[\]{}|\\~]|https?:|www\.", re.IGNORECASE)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 
 
 # --- what the agent reads -------------------------------------------------------------------------
@@ -106,25 +122,31 @@ _NOT_PLAIN = re.compile(r"[\x00-\x1f\x7f-\x9f*_#`<>\[\]{}|\\~]|https?:|www\.", r
 
 @dataclass(frozen=True)
 class Request:
-    """What one run reads, built from the stored profile in code. Held in the worker's memory
-    while the run lasts (agents.py), never stored, never logged."""
+    """What one run reads, built from the stored profile, documents and row in code. Held in the
+    worker's memory while the run lasts (agents.py), never stored, never logged."""
 
-    summary: Mapping[str, Any]
+    profile: Mapping[str, Any]
+    documents: tuple[titles_input.DocumentText, ...]
+    messages: tuple[str, ...]
     wanted: tuple[str, ...]
     unwanted: tuple[str, ...]
     places: tuple[str, ...]
     never_apply: tuple[str, ...]
-    earlier: tuple[str, ...] = ()
+    shown: tuple[str, ...] = ()
+    dismissed: tuple[str, ...] = ()
     search: SearchSection = field(default_factory=SearchSection, compare=False)
 
     def data(self) -> dict[str, Any]:
         return {
-            "profile_summary": dict(self.summary),
+            "profile": dict(self.profile),
+            "documents": [one.data() for one in self.documents],
+            "messages": list(self.messages),
             "wanted_titles": list(self.wanted),
             "unwanted_titles": list(self.unwanted),
             "places": list(self.places),
             "never_apply_rules": list(self.never_apply),
-            "earlier_suggestions": list(self.earlier),
+            "shown_suggestions": list(self.shown),
+            "not_for_me": list(self.dismissed),
         }
 
 
@@ -140,35 +162,57 @@ def search_of(sections: Mapping[str, Any]) -> SearchSection | None:
         return None
 
 
-def readable(summary: Mapping[str, Any]) -> bool:
-    """Whether the profile holds something the agent can suggest from."""
-    return any(summary.get(key) for key in ("skills", "adjacent_skills", "recent_roles"))
+def readable(request: Request) -> bool:
+    """Whether there is something to suggest from: anything in the profile, a document's text or
+    a message (owner, 2026-11-05: any one of them is enough)."""
+    return bool(
+        request.profile
+        or request.documents
+        or request.messages
+        or request.wanted
+        or request.unwanted
+        or request.places
+        or request.never_apply
+    )
 
 
-def request_of(sections: Mapping[str, Any], earlier: Iterable[str] = ()) -> Request | None:
+# What is cut, last entry first, while the first message is longer than REQUEST_MAX: the
+# documents first (each is capped already), the lists of the search after them.
+_CUT = ("documents", "wanted", "unwanted", "places", "never_apply", "dismissed", "shown")
+
+
+def request_of(
+    sections: Mapping[str, Any],
+    documents: Iterable[titles_input.DocumentText] = (),
+    messages: Iterable[str] = (),
+    shown: Iterable[str] = (),
+    dismissed: Iterable[str] = (),
+) -> Request | None:
     search = search_of(sections)
     if search is None:
         return None
-    words = lambda terms: tuple(plain_terms.typed_words(terms)[0])  # noqa: E731
-    summary = fit_summary.summary(sections)
+    words = lambda terms: tuple(plain_terms.typed_words(terms)[0][:LISTS_MAX])  # noqa: E731
     found = Request(
-        summary=summary,
+        profile=titles_input.profile(sections),
+        documents=tuple(documents),
+        messages=tuple(messages)[-MESSAGES_MAX:],
         wanted=words(search.title_include),
         unwanted=words(search.title_exclude),
         places=words(search.location),
-        never_apply=tuple(search.never_apply),
-        earlier=tuple(earlier)[:SUGGESTIONS_MAX],
+        never_apply=tuple(rule[:RULE_MAX] for rule in search.never_apply[:LISTS_MAX]),
+        shown=tuple(shown)[-LIST_MAX:],
+        dismissed=tuple(dismissed)[-DISMISSED_MAX:],
         search=search,
     )
-    # A list cut from its end until the whole fits, as the summary itself is bounded.
-    while len(json.dumps(found.data(), ensure_ascii=False)) > REQUEST_MAX and found.wanted:
-        found = Request(**{**found.__dict__, "wanted": found.wanted[:-1]})
+    for name in _CUT:
+        while len(prompt_for(found)) > REQUEST_MAX and getattr(found, name):
+            found = replace(found, **{name: getattr(found, name)[:-1]})
     return found
 
 
 def basis(request: Request) -> str:
-    """What the run read, as a SHA-256: the earlier suggestions aside."""
-    data = {**request.data(), "earlier_suggestions": []}
+    """What the run read, as a SHA-256: the ideas shown and the dismissed ones aside."""
+    data = {**request.data(), "shown_suggestions": [], "not_for_me": []}
     text = json.dumps(data, ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -182,9 +226,16 @@ def prompt_for(request: Request) -> str:
     every angle bracket escaped so nothing inside can close it."""
     text = json.dumps(request.data(), ensure_ascii=False, indent=1).translate(_BRACKETS)
     return (
-        f"Suggest at most {SUGGESTIONS_MAX} job titles for this person, then call submit_titles "
-        f"once.\n\n<person>\n{text}\n</person>"
+        f"Suggest at most {SUGGESTIONS_MAX} new job titles for this person, then call "
+        f"submit_titles once.\n\n<person>\n{text}\n</person>"
     )
+
+
+def clean_message(text: str) -> str | None:
+    """A message to the agent as it is kept: one line, its control characters and runs of
+    spaces made one space; None when that leaves nothing or more than MESSAGE_MAX characters."""
+    line = " ".join(_CONTROL.sub(" ", text).split())
+    return line if 0 < len(line) <= MESSAGE_MAX else None
 
 
 # --- the checks -------------------------------------------------------------------------------
@@ -237,21 +288,39 @@ def _reason(text: str) -> str | None:
     return line
 
 
+def _dashed(title: str) -> bool:
+    return bool(doc_rules.separators(title)) or any(ch in _DASHES for ch in title)
+
+
+def plain_title(text: str) -> str | None:
+    """The title as plain words a website search types, its spaces made single; None when it
+    is not one (a dash between words, a sign, over TITLE_MAX characters or TITLE_WORDS_MAX
+    words)."""
+    title = _clean(text)
+    if (
+        _dashed(title)
+        or len(title) > TITLE_MAX
+        or len(title.split(" ")) > TITLE_WORDS_MAX
+        or plain_terms.PLAIN.fullmatch(title) is None
+    ):
+        return None
+    return title
+
+
 def refusal(
-    entry: Submitted, search: SearchSection, kept: list[Suggestion], wanted: tuple[str, ...]
+    entry: Submitted,
+    search: SearchSection,
+    kept: list[Suggestion],
+    wanted: tuple[str, ...],
+    before: tuple[str, ...] = (),
+    dismissed: tuple[str, ...] = (),
+    cap: int = SUGGESTIONS_MAX,
 ) -> str | None:
     """Why this entry is not shown (module docstring), None when it passes."""
     title = _clean(entry.title)
-    if matching_rule([CYBER_RULE], title, entry.reason) is not None:
-        return "cybersecurity"
-    if doc_rules.separators(title) or any(ch in _DASHES for ch in title):
+    if _dashed(title):
         return "dash"
-    words = title.split(" ")
-    if (
-        len(title) > TITLE_MAX
-        or len(words) > TITLE_WORDS_MAX
-        or plain_terms.PLAIN.fullmatch(title) is None
-    ):
+    if plain_title(title) is None:
         return "shape"
     if LANGUAGE.fullmatch(entry.language) is None:
         return "language"
@@ -266,22 +335,32 @@ def refusal(
     rules = [NeverApplyRule.parse(text) for text in search.never_apply]
     if matching_rule(rules, title) is not None:
         return "never_apply"
-    if any(_same(title, one.title) for one in kept):
+    if any(_same(title, one) for one in dismissed):
+        return "dismissed"
+    if any(_same(title, one.title) for one in kept) or any(_same(title, one) for one in before):
         return "repeated"
-    if len(kept) >= SUGGESTIONS_MAX or len(search.title_include.terms) >= TERMS_MAX:
+    if len(kept) >= cap or len(search.title_include.terms) >= TERMS_MAX:
         return "full"
     return None
 
 
 def check(
-    entries: Iterable[Submitted], search: SearchSection
+    entries: Iterable[Submitted],
+    search: SearchSection,
+    *,
+    before: Iterable[str] = (),
+    dismissed: Iterable[str] = (),
+    cap: int = SUGGESTIONS_MAX,
 ) -> tuple[list[Suggestion], list[tuple[str, str]]]:
-    """The entries kept, in order, and the ones refused with their reason code."""
+    """The entries kept, in order, and the ones refused with their reason code. `before`: the
+    ideas already shown, which an entry would repeat; `dismissed`: the person's "Not for me";
+    `cap`: how many are kept at most (an answer's SUGGESTIONS_MAX, the row's LIST_MAX)."""
     wanted = tuple(plain_terms.typed_words(search.title_include)[0])
+    shown, gone = tuple(before), tuple(dismissed)
     kept: list[Suggestion] = []
     refused: list[tuple[str, str]] = []
     for entry in entries:
-        why = refusal(entry, search, kept, wanted)
+        why = refusal(entry, search, kept, wanted, shown, gone, cap)
         if why is not None:
             refused.append((entry.title, why))
             continue
@@ -305,19 +384,20 @@ def _stored(raw: object) -> list[Submitted]:
 SUBMIT_TOKENS = 600  # one submit of eight titles with their reasons
 TEXT_OUTPUT = 100  # the closing line of a turn
 TURNS_LOW = 2
+TYPICAL_CHARS = 6_000  # a first message without documents, for an estimate with no input read
 
 
-def estimate(request_chars: int = REQUEST_MAX // 3) -> RunEstimate:
-    """One run, counted turn by turn as the documents writers are (documents/estimate.py):
-    every turn sends the fixed context `F`, the prompt and the first message again, and the
-    submit stays in the context of the turns after it. Low: a submit and a closing line; high:
-    MAX_TURNS turns, two submits, the largest first message."""
+def estimate(request_chars: int = TYPICAL_CHARS) -> RunEstimate:
+    """One run on a first message of `request_chars` characters (REQUEST_MAX at most), counted
+    turn by turn as the documents writers are (documents/estimate.py): every turn sends the
+    fixed context `F`, the prompt and the first message again, and the submit stays in the
+    context of the turns after it. Low: a submit and a closing line; high: MAX_TURNS turns and
+    two submits. The ceiling, twice the high, is the run's token budget."""
     prompt = text_tokens(len(PROMPT_PATH.read_text(encoding="utf-8")))
-    low_fixed = F + prompt + text_tokens(request_chars)
-    high_fixed = F + prompt + text_tokens(REQUEST_MAX)
-    low_input = TURNS_LOW * low_fixed + SUBMIT_TOKENS
+    fixed = F + prompt + text_tokens(min(request_chars, REQUEST_MAX))
+    low_input = TURNS_LOW * fixed + SUBMIT_TOKENS
     low_output = SUBMIT_TOKENS + TURNS_LOW * TEXT_OUTPUT
-    high_input = MAX_TURNS * high_fixed + 3 * SUBMIT_TOKENS
+    high_input = MAX_TURNS * fixed + 3 * SUBMIT_TOKENS
     high_output = 2 * SUBMIT_TOKENS + MAX_TURNS * TEXT_OUTPUT
     high = high_input + high_output
     return RunEstimate(
@@ -327,19 +407,20 @@ def estimate(request_chars: int = REQUEST_MAX // 3) -> RunEstimate:
         high=high,
         ceiling=2 * high,
         low_input=Fraction(low_input),
-        low_fresh=low_fixed,
+        low_fresh=fixed,
         low_output=low_output,
         high_input=Fraction(high_input),
         high_output=high_output,
     )
 
 
-TOKEN_BUDGET = estimate().ceiling
+# The largest budget a run can get: the ceiling at REQUEST_MAX.
+TOKEN_BUDGET = estimate(REQUEST_MAX).ceiling
 
 
-def estimate_out(kind: object) -> dict[str, Any]:
+def estimate_out(kind: object, request_chars: int = TYPICAL_CHARS) -> dict[str, Any]:
     """The figures shown before "More ideas": tokens, and money on an API key only."""
-    found = estimate()
+    found = estimate(request_chars)
     out: dict[str, Any] = {"tokens": {"low": found.low, "high": found.high}, "cost": None}
     if pricing.priced(kind):  # type: ignore[arg-type]
         costs = pricing.costs(found, MODEL_API_KEY)
@@ -366,6 +447,40 @@ def _sections(db: Session, user_id: uuid.UUID) -> Mapping[str, Any]:
     return found if isinstance(found, Mapping) else {}
 
 
+def _messages(row: TitleSuggestions | None) -> list[dict[str, str]]:
+    """The stored messages, oldest first; a malformed one is left out."""
+    raw = row.messages if row is not None else []
+    out = [
+        {"text": one["text"], "at": str(one.get("at", ""))}
+        for one in (raw if isinstance(raw, list) else [])
+        if isinstance(one, dict) and isinstance(one.get("text"), str) and one["text"]
+    ]
+    return out[-MESSAGES_MAX:]
+
+
+def _dismissed(row: TitleSuggestions | None) -> list[str]:
+    raw = row.dismissed if row is not None else []
+    return [one for one in raw if isinstance(one, str)] if isinstance(raw, list) else []
+
+
+def _request(
+    db: Session,
+    user_id: uuid.UUID,
+    row: TitleSuggestions | None,
+    messages: list[dict[str, str]] | None = None,
+) -> Request | None:
+    """What a run of the person would read now (`messages`: these instead of the stored ones)."""
+    shown = [one.title for one in _stored(row.suggestions if row is not None else [])]
+    said = _messages(row) if messages is None else messages
+    return request_of(
+        _sections(db, user_id),
+        titles_input.documents(db, user_id),
+        [one["text"] for one in said],
+        shown,
+        _dismissed(row),
+    )
+
+
 def _in_flight(db: Session, row: TitleSuggestions, now: datetime) -> bool:
     if row.run_id is None or row.asked_at is None or row.asked_at <= now - STALE_AFTER:
         return False
@@ -389,21 +504,28 @@ class RefusedError(Exception):
         self.code = code
 
 
-def start(db: Session, user_id: uuid.UUID, now: datetime, *, auto: bool) -> uuid.UUID:
+def start(
+    db: Session, user_id: uuid.UUID, now: datetime, *, auto: bool, message: str | None = None
+) -> uuid.UUID:
     """Create the person's next run, queued, under the lock of their row; the caller commits,
-    then queues `agents.JOB`. Raises RefusedError: `running`, `no_credential`, `nothing_to_read`,
-    `search_invalid`, `asked_enough` (a click past ASKS_PER_DAY), `not_due` (automatic: within
-    AUTO_EVERY of the last one), `unchanged` (automatic: the same input as the stored answer),
-    `busy` (the person's active runs, runs.ACTIVE_PER_USER)."""
+    then queues `agents.JOB`. `message` (a click only, cleaned by `clean_message`) joins the
+    person's kept messages when the run starts. Raises RefusedError: `running`,
+    `no_credential`, `nothing_to_read`, `search_invalid`, `asked_enough` (a click past
+    ASKS_PER_DAY), `not_due` (automatic: within AUTO_EVERY of the last one), `unchanged`
+    (automatic: the same input as the stored answer), `busy` (the person's active runs,
+    runs.ACTIVE_PER_USER)."""
     row = _row(db, user_id, lock=True)
     if _in_flight(db, row, now):
         raise RefusedError("running")
     if credentials.get(db, user_id) is None:
         raise RefusedError("no_credential")
-    request = request_of(_sections(db, user_id))
+    messages = _messages(row)
+    if message is not None and not auto:
+        messages = [*messages, {"text": message, "at": now.isoformat()}][-MESSAGES_MAX:]
+    request = _request(db, user_id, row, messages)
     if request is None:
         raise RefusedError("search_invalid")
-    if not readable(request.summary):
+    if not readable(request):
         raise RefusedError("nothing_to_read")
     if auto:
         if row.auto_at is not None and row.auto_at > now - AUTO_EVERY:
@@ -412,12 +534,14 @@ def start(db: Session, user_id: uuid.UUID, now: datetime, *, auto: bool) -> uuid
             raise RefusedError("unchanged")
     elif _asks_today(row, now) >= ASKS_PER_DAY:
         raise RefusedError("asked_enough")
-    data = {"request": uuid.uuid4().hex, "token_budget": TOKEN_BUDGET}
+    budget = estimate(len(prompt_for(request))).ceiling
+    data = {"request": uuid.uuid4().hex, "token_budget": budget}
     try:
         made = runs.create_run(db, user_id, NAME, None, data, MODEL, now)
     except runs.ActiveRunsError:
         raise RefusedError("busy") from None
     row.run_id, row.asked_at, row.error = made.id, now, None
+    row.messages = messages
     if auto:
         row.auto_at = now
     else:
@@ -450,8 +574,7 @@ def run_request(db: Session, run_id: uuid.UUID) -> tuple[str, Request] | None:
     row = db.get(TitleSuggestions, run.user_id)
     if row is None or row.run_id != run_id:
         return None
-    earlier = [str(one.get("title", "")) for one in row.suggestions or [] if isinstance(one, dict)]
-    request = request_of(_sections(db, run.user_id), earlier)
+    request = _request(db, run.user_id, row)
     if request is None:
         return None
     return str((run.input or {}).get("request", "")), request
@@ -464,8 +587,9 @@ def finish(
     submitted: Iterable[Submitted],
     now: datetime,
 ) -> None:
-    """Record the end of a run on its person's row: the kept suggestions of a run that ended
-    done, or why it gave nothing. A row that asks for another run since is left alone."""
+    """Record the end of a run on its person's row: the ideas of a run that ended done join
+    after the kept ones that still pass, the oldest going past LIST_MAX; or why it gave nothing.
+    A row that asks for another run since is left alone."""
     run = db.get(AgentRun, run_id)
     if run is None:
         return
@@ -475,9 +599,13 @@ def finish(
     row.run_id = None
     entries = list(submitted)
     if run.status is RunStatus.done and request is not None and entries:
-        kept, _ = check(entries, request.search)
-        row.suggestions = [one.stored() for one in kept]
-        row.refreshed_at, row.basis, row.error = now, basis(request), None
+        gone = _dismissed(row)
+        current, _ = check(_stored(row.suggestions), request.search, dismissed=gone, cap=LIST_MAX)
+        before = [one.title for one in current]
+        new, _ = check(entries, request.search, before=before, dismissed=gone)
+        row.suggestions = [one.stored() for one in [*current, *new][-LIST_MAX:]]
+        row.refreshed_at, row.basis = now, basis(request)
+        row.error = None if new else "nothing_new"
     elif run.status is RunStatus.done:
         row.error = "no_answer"
     elif run.error == runs.QUEUE_DOWN:
@@ -489,41 +617,73 @@ def finish(
     db.flush()
 
 
+def dismiss(db: Session, user_id: uuid.UUID, title: str) -> bool:
+    """ "Not for me": the title leaves the ideas and joins the person's dismissed titles (the
+    last DISMISSED_MAX), so no later run shows it again. False, and nothing done, when the title
+    is not plain words (`plain_title`). The caller commits."""
+    clean = plain_title(title)
+    if clean is None:
+        return False
+    row = _row(db, user_id, lock=True)
+    row.suggestions = [
+        one
+        for one in row.suggestions or []
+        if not (isinstance(one, dict) and _same(str(one.get("title", "")), clean))
+    ]
+    kept = [one for one in _dismissed(row) if not _same(one, clean)]
+    row.dismissed = [*kept, clean][-DISMISSED_MAX:]
+    db.flush()
+    return True
+
+
+def clear_messages(db: Session, user_id: uuid.UUID) -> None:
+    """Forget what the person wrote to the agent: no later run reads it. The caller commits."""
+    _row(db, user_id, lock=True).messages = []
+    db.flush()
+
+
 def view(db: Session, user_id: uuid.UUID, now: datetime) -> dict[str, Any]:
     """What a page shows: the stored suggestions checked again against the search as saved now,
-    whether a run is on its way or why the last one gave nothing, what is missing for a run,
-    the clicks left today and the estimate."""
+    whether a run is on its way or why the last one gave nothing, what is missing for a run, the
+    person's kept messages, the clicks left today and the estimate of what a run would read."""
     row = db.get(TitleSuggestions, user_id)
     credential: ModelCredential | None = credentials.get(db, user_id)
-    sections = _sections(db, user_id)
-    search = search_of(sections)
+    request = _request(db, user_id, row) if credential is not None else None
     needs = None
     if credential is None:
         needs = "model_key"
-    elif not readable(fit_summary.summary(sections)):
-        needs = "cv"
+    elif request is not None and not readable(request):
+        needs = "input"
+    search = search_of(_sections(db, user_id)) if request is None else request.search
     suggestions: list[dict[str, str]] = []
-    status, error = "idle", None
+    status, error, note = "idle", None, None
     if row is not None:
         if search is not None:
-            kept, _ = check(_stored(row.suggestions), search)
+            stored = _stored(row.suggestions)
+            kept, _ = check(stored, search, dismissed=_dismissed(row), cap=LIST_MAX)
             suggestions = [one.stored() for one in kept]
         if row.run_id is not None:
             if _in_flight(db, row, now):
                 status = "running"
             else:
                 status, error = "failed", ERRORS["lost"]
+        elif row.error in NOTES:
+            note = NOTES[row.error]
         elif row.error is not None:
             status, error = "failed", ERRORS.get(row.error, ERRORS["failed"])
+    size = len(prompt_for(request)) if request is not None else TYPICAL_CHARS
     return {
         "status": status,
         "needs": needs,
         "suggestions": suggestions,
         "refreshed_at": row.refreshed_at if row is not None else None,
         "error": error,
+        "note": note,
+        "messages": _messages(row),
+        "message_max": MESSAGE_MAX,
         "asks_left": max(0, ASKS_PER_DAY - (_asks_today(row, now) if row else 0)),
         "asks_per_day": ASKS_PER_DAY,
-        "estimate": estimate_out(credential.kind) if credential is not None else None,
+        "estimate": estimate_out(credential.kind, size) if credential is not None else None,
         "cost_note": (
             pricing.ESTIMATE_NOTE
             if credential is not None and pricing.priced(credential.kind)
@@ -536,39 +696,52 @@ def view(db: Session, user_id: uuid.UUID, now: datetime) -> dict[str, Any]:
 
 
 def due(db: Session, now: datetime, limit: int = TICK_MAX) -> list[uuid.UUID]:
-    """The people whose skills were saved, or who accepted a Fill my profile item, since the
-    tick last read their triggers, who hold a model credential and whose last automatic run is
-    older than AUTO_EVERY (module docstring). Read only."""
+    """The people with a trigger since the tick last read theirs (a save of a section the agent
+    reads, an accepted Fill my profile item, an upload, a base CV saved), who hold a model
+    credential, whose last automatic run is older than AUTO_EVERY and none of whose uploads still
+    waits for its text (READ_WAIT) (module docstring). Read only."""
+    from app.documents.models import Document, Scope
     from app.ingestion import items as ingestion_items
+    from app.ingestion.models import IngestionDocument, TextStatus
 
     row = TitleSuggestions
     since = sa.func.coalesce(row.seen_at, sa.cast("-infinity", sa.DateTime(timezone=True)))
-    skills_saved = (
-        sa.exists()
-        .where(
-            ProfileRevision.user_id == Profile.user_id,
-            ProfileRevision.section == "skills",
-            ProfileRevision.created_at > since,
-        )
-        .correlate(Profile, row)
+
+    def exists(*where: Any) -> Any:
+        return sa.exists().where(*where).correlate(Profile, row)
+
+    section_saved = exists(
+        ProfileRevision.user_id == Profile.user_id,
+        ProfileRevision.section.in_(titles_input.SECTIONS),
+        ProfileRevision.created_at > since,
     )
-    fill_accepted = (
-        sa.exists()
-        .where(
-            Proposal.user_id == Profile.user_id,
-            Proposal.target == ingestion_items.TARGET,
-            Proposal.kind == ingestion_items.KIND,
-            Proposal.status == ProposalStatus.accepted,
-            Proposal.decided_at > since,
-        )
-        .correlate(Profile, row)
+    fill_accepted = exists(
+        Proposal.user_id == Profile.user_id,
+        Proposal.target == ingestion_items.TARGET,
+        Proposal.kind == ingestion_items.KIND,
+        Proposal.status == ProposalStatus.accepted,
+        Proposal.decided_at > since,
+    )
+    uploaded = exists(
+        IngestionDocument.user_id == Profile.user_id, IngestionDocument.created_at > since
+    )
+    base_saved = exists(
+        Document.user_id == Profile.user_id,
+        Document.scope == Scope.base,
+        Document.updated_at > since,
+    )
+    reading = exists(
+        IngestionDocument.user_id == Profile.user_id,
+        IngestionDocument.text_status == TextStatus.pending,
+        IngestionDocument.pending_since > now - READ_WAIT,
     )
     query = (
         sa.select(Profile.user_id)
         .join(ModelCredential, ModelCredential.user_id == Profile.user_id)
         .outerjoin(row, row.user_id == Profile.user_id)
         .where(sa.or_(row.auto_at.is_(None), row.auto_at <= now - AUTO_EVERY))
-        .where(sa.or_(skills_saved, fill_accepted))
+        .where(sa.or_(section_saved, fill_accepted, uploaded, base_saved))
+        .where(sa.not_(reading))
         .order_by(Profile.user_id)
         .limit(limit)
     )

@@ -36,7 +36,7 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - profile_titles(run_id): one run of the job titles agent (profile, app/profile/agents.py), in
   this process like apply_decide, so it takes one of the MAX_AGENT_RUNS slots. Tried once.
 - profile_titles_tick: cron every minute: starts the automatic job title suggestions due after
-  a skills save or an accepted Fill my profile item (app/profile/titles.py `due`).
+  a profile save, an accepted Fill my profile item, an upload or a base CV (titles.py `due`).
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
