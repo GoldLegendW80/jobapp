@@ -178,7 +178,7 @@ describe("search tab: terms and preferences", () => {
     // kind of role the app would exclude for everybody (owner, 2026-11-05).
     expect(screen.getByLabelText("Rule 2")).toHaveAttribute(
       "placeholder",
-      "No gambling companies: casino, betting",
+      "No gambling: casino",
     );
     await user.click(save());
     expect(await screen.findByText("Enter a rule.")).toBeVisible();
