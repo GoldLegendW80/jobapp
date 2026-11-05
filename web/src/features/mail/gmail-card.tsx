@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, CircleCheck, Info, LoaderCircle } from "lucide-react";
+import { CircleAlert, CircleCheck, Info } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +33,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { message } from "@/features/admin/errors";
 import { useMe } from "@/features/auth/auth-context";
 
@@ -218,6 +226,8 @@ export function GmailCard() {
   const textChanged =
     account !== undefined &&
     account.consent.current_version !== CONSENT_VERSION;
+  const consentLocked =
+    consent.isPending || textChanged || status === "disconnecting";
 
   // A server without Gmail shows no Gmail card at all (owner, 2026-11-04: "hide"), unless the
   // person is still connected and may want to disconnect.
@@ -310,40 +320,33 @@ export function GmailCard() {
                 ticked.
               </p>
             ) : null}
-            <div className="flex flex-col gap-1">
-              <div className="flex items-start gap-2">
-                <input
-                  id={consentId}
-                  type="checkbox"
-                  className="mt-0.5 size-4 shrink-0 accent-primary"
-                  checked={account.consent.granted}
-                  disabled={
-                    consent.isPending ||
-                    textChanged ||
-                    status === "disconnecting"
-                  }
-                  aria-describedby={`${consentId}-text`}
-                  onChange={(event) => {
-                    consent.mutate(event.target.checked, {
-                      onError: (error) => {
-                        setNotice({ tone: "bad", text: message(error) });
-                      },
-                    });
-                  }}
-                />
-                <label htmlFor={consentId} className="text-sm font-medium">
-                  {CONSENT_LABEL}
-                </label>
-              </div>
-              <p
-                id={`${consentId}-text`}
-                className="text-sm text-muted-foreground"
-              >
-                {textChanged
-                  ? "This text has changed. Reload the page to read it."
-                  : `${CONSENT_TEXT} (text version ${String(CONSENT_VERSION)})`}
-              </p>
-            </div>
+            <Field
+              orientation="horizontal"
+              className="gap-2"
+              data-disabled={consentLocked || undefined}
+            >
+              <Checkbox
+                id={consentId}
+                checked={account.consent.granted}
+                disabled={consentLocked}
+                aria-describedby={`${consentId}-text`}
+                onCheckedChange={(checked) => {
+                  consent.mutate(checked === true, {
+                    onError: (error) => {
+                      setNotice({ tone: "bad", text: message(error) });
+                    },
+                  });
+                }}
+              />
+              <FieldContent className="gap-1">
+                <FieldLabel htmlFor={consentId}>{CONSENT_LABEL}</FieldLabel>
+                <FieldDescription id={`${consentId}-text`}>
+                  {textChanged
+                    ? "This text has changed. Reload the page to read it."
+                    : `${CONSENT_TEXT} (text version ${String(CONSENT_VERSION)})`}
+                </FieldDescription>
+              </FieldContent>
+            </Field>
             <CardSuggestions />
           </>
         )}
@@ -409,32 +412,27 @@ export function GmailCard() {
                 Read the privacy page
               </Link>
             </p>
-            <div className="flex flex-col gap-1 rounded-md border p-3">
-              <div className="flex items-start gap-2">
-                <input
-                  id={dialogConsentId}
-                  type="checkbox"
-                  className="mt-0.5 size-4 shrink-0 accent-primary"
-                  checked={ticked}
-                  aria-describedby={`${dialogConsentId}-text`}
-                  onChange={(event) => {
-                    setTicked(event.target.checked);
-                  }}
-                />
-                <label
-                  htmlFor={dialogConsentId}
-                  className="text-sm font-medium"
-                >
+            <Field
+              orientation="horizontal"
+              className="gap-2 rounded-md border p-3"
+            >
+              <Checkbox
+                id={dialogConsentId}
+                checked={ticked}
+                aria-describedby={`${dialogConsentId}-text`}
+                onCheckedChange={(checked) => {
+                  setTicked(checked === true);
+                }}
+              />
+              <FieldContent className="gap-1">
+                <FieldLabel htmlFor={dialogConsentId}>
                   {CONSENT_LABEL}
-                </label>
-              </div>
-              <p
-                id={`${dialogConsentId}-text`}
-                className="text-muted-foreground"
-              >
-                {CONSENT_TEXT} (text version {String(CONSENT_VERSION)})
-              </p>
-            </div>
+                </FieldLabel>
+                <FieldDescription id={`${dialogConsentId}-text`}>
+                  {CONSENT_TEXT} (text version {String(CONSENT_VERSION)})
+                </FieldDescription>
+              </FieldContent>
+            </Field>
           </div>
           <DialogFooter>
             <Button
@@ -446,7 +444,7 @@ export function GmailCard() {
             >
               {leaving ? (
                 <>
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                   Going to Google
                 </>
               ) : (
@@ -485,7 +483,7 @@ export function GmailCard() {
             >
               {disconnect.isPending ? (
                 <>
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                   Disconnecting
                 </>
               ) : (

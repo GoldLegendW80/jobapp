@@ -1,5 +1,13 @@
 import { RotateCw } from "lucide-react";
+import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { describeError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { WORDING } from "@/lib/wording";
@@ -14,6 +22,8 @@ import { useHealth } from "./use-health";
 export function HealthDot() {
   const health = useHealth();
   const checking = health.isFetching;
+  // The reason's tooltip opens on hover only while there is a reason to show.
+  const [hover, setHover] = useState(false);
   // A retry after a failure puts the query back to pending (no data yet): the failure count
   // tells it from the first check, so the footer keeps saying the server is unreachable.
   const failedBefore = health.errorUpdateCount > 0;
@@ -28,56 +38,73 @@ export function HealthDot() {
   const shown = state === "down" || state === "checking";
   return (
     <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-      <p
-        role="status"
-        aria-live="polite"
-        title={reason}
-        className={cn("flex min-w-0 items-center gap-1.5", !shown && "sr-only")}
-      >
-        {shown ? (
-          <span
-            aria-hidden="true"
+      {/* Always the same live region (a tooltip that came and went would remount it), its
+          tooltip held shut while there is no reason. */}
+      <Tooltip open={hover && reason !== undefined} onOpenChange={setHover}>
+        <TooltipTrigger asChild>
+          <p
+            role="status"
+            aria-live="polite"
             className={cn(
-              "size-2 shrink-0 rounded-full",
-              state === "down" && "bg-destructive",
-              state === "checking" &&
-                "animate-pulse bg-muted-foreground motion-reduce:animate-none",
+              "flex min-w-0 items-center gap-1.5",
+              !shown && "sr-only",
             )}
-          />
-        ) : null}
-        {state === "first" ? (
-          "Checking the server"
-        ) : state === "checking" ? (
-          "Checking"
-        ) : state === "down" ? (
-          <>
-            <span className="shrink-0 text-destructive">
-              {WORDING.serverUnreachable}
-            </span>
-            <span className="sr-only">{reason}</span>
-          </>
-        ) : (
-          "Server reachable"
-        )}
-      </p>
+          >
+            {shown ? (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "size-2 shrink-0 rounded-full",
+                  state === "down" && "bg-destructive",
+                  state === "checking" &&
+                    "animate-pulse bg-muted-foreground motion-reduce:animate-none",
+                )}
+              />
+            ) : null}
+            {state === "first" ? (
+              "Checking the server"
+            ) : state === "checking" ? (
+              "Checking"
+            ) : state === "down" ? (
+              <>
+                <span className="shrink-0 text-destructive">
+                  {WORDING.serverUnreachable}
+                </span>
+                <span className="sr-only">{reason}</span>
+              </>
+            ) : (
+              "Server reachable"
+            )}
+          </p>
+        </TooltipTrigger>
+        <TooltipContent>{reason}</TooltipContent>
+      </Tooltip>
       {shown ? (
-        <button
-          type="button"
-          aria-label={WORDING.checkServerAgain}
-          title={WORDING.checkServerAgain}
-          onClick={() => void health.refetch()}
-          disabled={checking}
-          aria-busy={checking}
-          className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-accent hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:opacity-50"
-        >
-          <RotateCw
-            aria-hidden="true"
-            className={cn(
-              "size-3",
-              checking && "animate-spin motion-reduce:animate-none",
-            )}
-          />
-        </button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label={WORDING.checkServerAgain}
+              onClick={() => void health.refetch()}
+              disabled={checking}
+              aria-busy={checking}
+              className="hover:text-foreground"
+            >
+              {checking ? (
+                <Spinner
+                  aria-hidden="true"
+                  role={undefined}
+                  className="size-3 motion-reduce:animate-none"
+                />
+              ) : (
+                <RotateCw aria-hidden="true" className="size-3" />
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{WORDING.checkServerAgain}</TooltipContent>
+        </Tooltip>
       ) : null}
     </div>
   );
