@@ -45,6 +45,7 @@ def session(draws: list[float], took: float = 1.0) -> tuple[applier.ApplySession
         tools=tools, capability="cap", stop=no, arm=no, monotonic=lambda: clock[0],
         sleep=sleep, draw=draw,
     )  # fmt: skip
+    made.drawn = drawn  # type: ignore[attr-defined]
     return made, tools, clock
 
 
@@ -68,6 +69,8 @@ def test_every_pair_of_acts_is_a_draw_apart_from_the_end_of_the_first() -> None:
     starts = [at for _, at in tools.started]
     # Both ends of the range and one inside, each counted from the previous act's snapshot.
     assert [round(starts[i + 1] - ends[i], 6) for i in range(3)] == [3.0, 8.0, 5.5]
+    # Each pause is drawn from the owner's range, one draw per act after the first.
+    assert made.drawn == [(3.0, 8.0)] * 3  # type: ignore[attr-defined]
     assert applier.PACE_S == (3.0, 8.0)
 
 

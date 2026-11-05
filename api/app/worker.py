@@ -749,8 +749,13 @@ async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
             )
             db.commit()
             return
-        # One click Apply (A19): the apply agent fills and clicks Submit itself.
-        agent_run = application is not None and application.mode is Mode.direct
+        # One click Apply (A19): the apply agent fills and clicks Submit itself. A rehearsal
+        # (never one today: `_mode_of` makes it Review first) keeps the fill, which stops at ready.
+        agent_run = (
+            application is not None
+            and application.mode is Mode.direct
+            and not application.dry_run
+        )
     if agent_run:
         await apply_applier.apply(applier_services(ctx), uuid.UUID(application_id))
         return

@@ -206,9 +206,9 @@ def test_the_agent_fills_uploads_and_clicks_submit_itself(
     assert site.submissions[0]["files"] == ["cv.pdf", "letter.pdf"]
     assert site.submissions[0]["values"]["e8"] == "Two months"
     assert services_.fill.leases.acquired == [{"purpose": "apply_agent", "hosts": []}]
-    # The emergency stop was read before the run and before each of the two submit acts, and
-    # `submitting` was committed before the first one.
-    assert stop.reads == 3
+    # The emergency stop was read before the run, before each of the nine acts and again before
+    # each of the two submit acts, and `submitting` was committed before the first one.
+    assert stop.reads == 1 + 9 + 2
     assert kinds(db, app_id).index("agent_submit") < kinds(db, app_id).index("submitted")
     assert ("browser_click", True) in site.calls
     assert ("browser_type", True) not in site.calls
@@ -303,13 +303,29 @@ def test_the_emergency_stop_before_the_run_and_on_the_submit(
         )
     )  # fmt: skip
     db.commit()
+    # Off before the run and the first eight acts (the first submit act's own read), then on
+    # at the read just before that act is sent with the capability.
     site = Site()
-    assert apply(svc(factory, site, agent(), Stop(None, "paused")), app_id) == "failed"
+    assert apply(svc(factory, site, agent(), Stop(*[None] * 8, "paused")), app_id) == "failed"
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.failed, "paused")
     assert site.submissions == []
+    assert ("browser_click", False) in site.calls  # the submit act was tried, refused
     assert ("browser_click", True) not in site.calls
     assert "agent_submit" not in kinds(db, app_id)
+
+
+def test_the_emergency_stop_is_read_before_every_act_and_withdraws_the_capability(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    site, script = Site(), agent()
+    # Off before the run and the navigation, on before the click on Apply: nothing more acts.
+    session_ = svc(factory, site, script, Stop(None, None, "submit_disabled"))
+    assert apply(session_, app_id) == "failed"
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.failed, "submit_disabled")
+    assert [name for name, _ in site.calls if name != "browser_snapshot"] == ["browser_navigate"]
 
 
 def test_after_a_submit_act_a_crash_is_submit_unknown_and_never_runs_again(
@@ -360,3 +376,160 @@ def test_an_email_application_never_reaches_the_agent(
     site = Site()
     assert apply(svc(factory, site, agent()), app_id) == "not_queued"
     assert site.calls == []
+
+
+# --- round 1 of the review: a question after a control that may have sent the form ------------
+
+COOKIES = "c1"  # an untyped <button> (a submit in HTML), as most cookie banners' Accept
+
+
+class WizardSite(Site):
+    """A site as most are: a cookie banner whose Accept is an untyped button (browserd marks it
+    a submit, so the run is `submitting` from there), and the required question the profile
+    does not answer on step 2, behind Next."""
+
+    def act(self, name: str, args: dict[str, Any], capability: Any) -> dict[str, Any]:
+        ref = args.get("ref")
+        if name == "browser_click" and ref == COOKIES:
+            self.calls.append((name, capability is not None))
+            if capability is None:
+                return {"ok": False, "error": "submit_permit", "message": "Refused."}
+            return {"ok": True, "url": self.page, "submit_clicked": True}
+        if name == "browser_click" and ref == "e6":
+            self.calls.append((name, capability is not None))
+            if capability is None:
+                return {"ok": False, "error": "submit_permit", "message": "Refused."}
+            self.page = STEP_2
+            return {"ok": True, "url": self.page, "submit_clicked": True}
+        if name == "browser_click" and ref == "e9" and capability is not None:
+            self.calls.append((name, True))
+            if self.values.get("e7") and self.values.get("e8"):
+                self.submissions.append({"values": dict(self.values), "files": self.uploaded})
+                self.page = THANKS
+            return {"ok": True, "url": self.page, "submit_clicked": True}
+        return super().act(name, args, capability)
+
+    def text(self) -> str:
+        return {
+            POSTING: '- button "Accept all cookies" [ref=c1]\n- link "Apply" [ref=e1]',
+            STEP_1: '- textbox "Full name" [ref=e2]\n- textbox "Email" [ref=e3]\n'
+            '- button "Resume" [ref=e5]\n- button "Next" [ref=e6]',
+            STEP_2: '- textbox "Notice period *" [ref=e8]\n- textbox "Why this company?" [ref=e7]'
+            '\n- button "Submit application" [ref=e9]',
+            THANKS: "Thank you, your application was received.",
+        }.get(self.page, "")
+
+
+def wizard_agent() -> Any:
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        brief = json.loads(message)
+        go.brief = brief  # type: ignore[attr-defined]
+        await session.navigate(brief["posting"]["url"])
+        await session.interact("browser_click", {"ref": COOKIES})
+        await session.interact("browser_click", {"ref": "e1"})
+        await session.interact("browser_type", {"ref": "e2", "text": "Alex Example"})
+        await session.interact("browser_type", {"ref": "e3", "text": "e2e-alex@example.org"})
+        await session.upload({"ref": "e5", "paths": brief["documents_to_upload"]})
+        await session.interact("browser_click", {"ref": "e6"})
+        answers = {a["field"]: a["answer"] for a in brief["answers_to_your_questions"]}
+        if "Notice period *" not in answers:
+            await session.ask_person("I need the notice period.", "Notice period *", "fact")
+            return applier.Ran(10, 2)
+        await session.interact("browser_type", {"ref": "e8", "text": answers["Notice period *"]})
+        await session.interact("browser_type", {"ref": "e7", "text": "Your robots, my letter."})
+        await session.interact("browser_click", {"ref": "e9"})
+        await session.snapshot()
+        session.finish("submitted", "Filled both steps and sent it.", session.url)
+        return applier.Ran(1000, 200)
+
+    return go
+
+
+def test_a_question_after_a_possible_send_is_shown_and_the_answer_is_the_person_s_try_again(
+    db: Session, factory: sessionmaker[Session], person_a: Person, person_b: Person
+) -> None:
+    from app.apply import run
+    from app.apply.router import _question
+
+    app_id = started(db, person_a, Mode.direct)
+    site = WizardSite()
+    assert apply(svc(factory, site, wizard_agent()), app_id) == "submit_unknown"
+    found = application(db, app_id)
+    assert found.state is State.submit_unknown
+    # Shown on the job page with the warning, and answerable.
+    shown = _question(db, found)
+    assert shown is not None
+    assert (shown.label, shown.kind, shown.after_send) == ("Notice period *", "fact", True)
+    assert site.submissions == []
+    # Nobody runs it again without the person: neither the tick nor a stray job.
+    assert app_id not in run.due(db)
+    assert apply(svc(factory, site, wizard_agent()), app_id) == "not_queued"
+    with pytest.raises(applier.QuestionError) as raised:
+        applier.answer_question(db, person_b.user_id, app_id, "Two months", False, AT)
+    assert raised.value.status == 404
+    db.rollback()
+    # The answer is the person's Try again.
+    applier.answer_question(db, person_a.user_id, app_id, "Two months", False, AT)
+    db.commit()
+    found = application(db, app_id)
+    assert found.state is State.queued
+    retry = [e for e in events(db, app_id) if e.kind == "retry"]
+    assert [e.data.get("previous") for e in retry] == ["submit_unknown"]
+    assert app_id in run.due(db)
+    script = wizard_agent()
+    assert apply(svc(factory, site, script), app_id) == "submitted"
+    assert script.brief["earlier_send"] is True
+    assert script.brief["answers_to_your_questions"][-1]["answer"] == "Two months"
+    assert len(site.submissions) == 1
+    assert application(db, app_id).state is State.submitted
+    assert apply(svc(factory, site, wizard_agent()), app_id) == "not_queued"
+    assert len(site.submissions) == 1
+
+
+def test_try_again_on_an_a19_application_queues_one_run_of_the_agent(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    from app.apply import gate
+
+    app_id = started(db, person_a, Mode.direct)
+    db.add(
+        ApplicationAnswer(
+            application_id=app_id, user_id=person_a.user_id, field_key="agent:question:001",
+            label="Notice period *", kind="question:fact", value="Two months",
+            options=["jobs.example.org"], source="person",
+        )
+    )  # fmt: skip
+    db.commit()
+    assert apply(svc(factory, Site(), agent(fail_after_submit=True)), app_id) == "submit_unknown"
+    retried = gate.retry(db, person_a.user_id, app_id, AT)
+    db.commit()
+    # Never an empty Review first item: the same mode, queued for one more run of the agent.
+    assert (retried.state, retried.mode) == (State.queued, Mode.direct)
+    site, script = Site(), agent()
+    assert apply(svc(factory, site, script), app_id) == "submitted"
+    assert script.brief["earlier_send"] is True
+    assert len(site.submissions) == 1
+    assert apply(svc(factory, Site(), agent()), app_id) == "not_queued"
+
+
+def test_a_confirmation_read_before_the_last_submit_act_is_refused(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        brief = json.loads(message)
+        await session.navigate(brief["posting"]["url"])
+        before = session.url
+        await session.interact("browser_click", {"ref": "e1"})
+        await session.interact("browser_type", {"ref": "e8", "text": "Two months"})
+        await session.interact("browser_click", {"ref": "e6"})  # a submit act
+        go.refused = session.finish("submitted", "Sent.", before)  # type: ignore[attr-defined]
+        return applier.Ran(1, 1)
+
+    assert apply(svc(factory, Site(), go), app_id) == "submit_unknown"
+    text, error = go.refused  # type: ignore[attr-defined]
+    assert error
+    assert text.startswith("Refused: read the confirmation page")
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.submit_unknown, "no_confirmation")

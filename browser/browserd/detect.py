@@ -418,23 +418,43 @@ def agent_verdict(facts: Any, *, action: str = "click") -> str | None:
     (the element submits a form: allowed only with the lease's capability, which the api sends
     while the emergency stop is off) or `unreadable` (facts that cannot be read: judged as a
     submit, fail closed). Danger words, card fields and the line's words are not read here: the
-    owner's "no guardrails" (2026-11-05). The click point is judged as in `verdict`."""
+    owner's "no guardrails" (2026-11-05). The click point is judged as in `verdict`.
+
+    A typing never needs the capability, so whatever of it cannot be read (its facts, its
+    point, a box's `secret`) answers `credential`, refused with the capability too: a page
+    script that breaks the facts never opens a password box to the agent (round 1 of the
+    review). A typing whose click lands outside the field is judged as a click there."""
+    typing = action == "type"
     if not isinstance(facts, dict) or not isinstance(facts.get("names"), list):
-        return "unreadable"
-    if action == "type" and facts.get("secret") is not False:
+        return "credential" if typing else "unreadable"
+    if typing and facts.get("secret") is not False:
         return "credential"
     targets = [facts]
     if action in POINTED and "point" in facts:
         point = facts["point"]
         if not isinstance(point, dict) or not isinstance(point.get("names"), list):
-            return "unreadable"
-        if action == "type" and point.get("inside") is True:
-            return "credential" if point.get("secret") is not False else None
-        if action != "type":
-            targets.append(point)
-    if action == "type":
-        return None
+            return "credential" if typing else "unreadable"
+        if typing and point.get("secret") is not False:
+            return "credential"
+        if typing and point.get("inside") is True:
+            return None
+        targets.append(point)
+    if typing:
+        return "submit" if _submits(targets[-1], "click") and len(targets) > 1 else None
     return "submit" if any(_submits(f, action) for f in targets) else None
+
+
+# A19: what else marks a send on the agent's lease, read on a button (never a link): German
+# stems ("Bewerbung absenden", "Abschicken", "Einreichen"; "Senden" is SUBMIT_STEMS' "send"), and
+# the one word a wizard's last step says alone ("Finish", "Done", "Terminer", "Fertig"), as a
+# whole word. A step's "Next" or "Weiter" stays unmarked (the owner's question, declared).
+AGENT_SEND_STEMS = ("absend", "abschick", "einreich", "abschliess")
+FINISH_WORDS = frozenset({"finish", "done", "terminer", "terminez", "fertig"})
+
+
+def says_agent_send(names: list[str]) -> bool:
+    tokens = _glued(names)
+    return _starts(tokens, AGENT_SEND_STEMS) or any(t in FINISH_WORDS for t in tokens)
 
 
 def _submits(facts: dict[str, Any], action: str) -> bool:
@@ -450,7 +470,12 @@ def _submits(facts: dict[str, Any], action: str) -> bool:
     if action == "key" and tag == "input" and not button and facts.get("in_form"):
         return True
     # A link opens a page (a posting's "Apply now"): its words do not mark it, its form does.
-    return action in ("click", "key") and button and tag != "a" and says_submit(names)
+    return (
+        action in ("click", "key")
+        and button
+        and tag != "a"
+        and (says_submit(names) or says_agent_send(names))
+    )
 
 
 def _own(facts: Any, action: str, profile_edit: bool) -> str | None:

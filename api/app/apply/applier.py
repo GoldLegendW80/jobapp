@@ -16,13 +16,16 @@ Kept (the orchestrator, said in the reply; the owner gave no preference):
 - hard rule 2: never apply (`guardrails.never_apply`) is read before the lease, and a match ends
   the application `blocked` with its code, as today; so is LinkedIn's sentence (browser B10);
 - the emergency stop (`APPLY_SUBMIT_ENABLED`, the administrator's pause): read before the run
-  (a stop ends it `blocked`) and again before each act on a submit element (`stop`): browserd
-  lets such an act through only with the capability, which this session sends only once the
-  stop read off; a refused submit ends the run with the stop's code;
+  (a stop ends it `blocked`), before every act of the agent (a control browserd does not mark
+  may send too: a stop on withdraws the capability and ends the run with its code) and again
+  before each act on a submit element (`stop`): browserd lets such an act through only with
+  the capability, which this session sends only once the stop read off;
 - no second sending: `submitting` is committed before the first act browserd marks as a submit
   (`states.AGENT_MOVES`), so a crash, a cancel or an end without a confirmation after it is
-  `submit_unknown`, never sent again; one Apply click gives one run (no retry,
-  `run.interrupt`); a later run of the same application is refused (`already_run`);
+  `submit_unknown`, never sent again by the app itself; one Apply click gives one run (no
+  retry, `run.interrupt`); a later run of the same application is refused (`already_run`)
+  unless the person's Try again came after the last act that may have sent it (`retry`);
+- the person's Cancel: read before every tool call, so the agent stops at its next one;
 - hard rule 3: an application by e-mail never reaches this module (`service.start` makes it
   Review first, `worker.apply_fill` sends it to `email.prepare`).
 
@@ -32,7 +35,12 @@ it (`interactive.await_person`); with nobody watching, before any submit, the ru
 the field's label as the page shows it, the page's host, fact or action), which the person
 answers on the application's page (`answer_question`); the application is then queued again and
 the next run gets the answer. After a submit act an ask with nobody watching ends
-`submit_unknown` (the app never sends it again by itself).
+`submit_unknown` (the app never sends it again by itself), with the question still shown on the
+job page beside a warning that the form may have been sent already: the person's answer there
+is their Try again (`answer_question`), and the next run's first message says an earlier run
+may have sent it (`earlier_send`), so the agent looks on the site before it sends again. The
+question's label must be one the last snapshot shows (`shown`), and a label that reads as a
+password, a code or a payment is always an action on the page, never a text box (`secret_label`).
 
 Pacing (the owner, 2026-11-05: "you can add a random pacing to feel more like human like between
 3 to 8 seconds."): between two of the agent's acts on the page, a pause drawn in PACE_S each time,
@@ -162,6 +170,12 @@ the form whenever you can. If the person is watching, they answer in the browser
 if not, stop: the application waits for them, and you get their answer in a later run. Never
 type a password or a code, and never click a captcha yourself.
 
+When your first message says earlier_send, an earlier run stopped after a control that may have
+sent this application: before you fill anything, look on the site whether it was received
+already (an "already applied" notice, a confirmation, the applications of the person's account
+there). If it was, call apply_done submitted with the address of the page that shows it, and
+send nothing again.
+
 browser_evaluate counts for the app as a submit of the form: use it only when no other tool
 does. When you are done, call apply_done once: outcome submitted only after the site showed you
 its confirmation (`confirmation_url` the address of that page, read with browser_snapshot), or
@@ -204,6 +218,50 @@ def host_of(url: str) -> str:
         return ""
 
 
+def _folded(text: str) -> str:
+    text = unicodedata.normalize("NFKD", unicodedata.normalize("NFKC", text))
+    return " ".join("".join(c for c in text if not unicodedata.combining(c)).casefold().split())
+
+
+def shown(label: str, page: str) -> bool:
+    """The label is on the page the agent read last (case, accents and spacing folded)."""
+    return bool(label) and _folded(label) in _folded(page)
+
+
+def _tokens(label: str) -> list[str]:
+    return [t for t in "".join(c if c.isalnum() else " " for c in _folded(label)).split() if t]
+
+
+# What the person types into the app's box goes into the model's context: a label that reads as
+# a password, a one time code or a payment is an action on the page instead (the person does it
+# in the live view), fail closed: a code that is not a postal or a dialling one, a card with a
+# payment word. Whole words after folding; a glued German compound ending in "code" counts.
+SECRET_WORDS = frozenset(
+    {"password", "passwords", "passwort", "kennwort", "passcode", "passphrase", "pin", "mdp",
+     "motdepasse", "otp", "totp", "2fa", "mfa", "tan", "captcha", "recaptcha", "hcaptcha", "cvc",
+     "cvv", "cvc2", "csc", "iban", "payment", "payments", "paiement", "paiements", "zahlung",
+     "kreditkarte", "creditcard", "billing", "checkout", "token"}
+)  # fmt: skip
+PLACE_CODES = frozenset({"postal", "zip", "post", "area", "country", "dialing", "dialling", "pays"})
+CODE_WORDS = frozenset({"postcode", "zipcode", "barcode"})
+CARD_WORDS = frozenset({"card", "carte", "karte"})
+CARD_KINDS = frozenset(
+    {"credit", "debit", "bank", "bancaire", "kredit", "number", "numero", "nummer", "expiry",
+     "expiration", "payment"}
+)  # fmt: skip
+
+
+def secret_label(label: str) -> bool:
+    tokens = _tokens(label)
+    found = set(tokens)
+    if found & SECRET_WORDS or ("mot" in found and "passe" in found):
+        return True
+    codes = [t for t in tokens if t.endswith("code") and t not in CODE_WORDS]
+    if codes and not (found & PLACE_CODES):
+        return True
+    return bool(found & CARD_WORDS and found & CARD_KINDS)
+
+
 @dataclass
 class ApplySession:
     """One run's view of the lease, as the agent's tools see it (`tool_sessions`)."""
@@ -217,11 +275,15 @@ class ApplySession:
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     draw: Callable[[float, float], float] = random.uniform
     await_person: Callable[[Any, int], Awaitable[str]] | None = None
+    # Whether the application still runs (`filling` or `submitting`): False once the person
+    # cancelled it, read before every tool call.
+    alive: Callable[[], Awaitable[bool]] | None = None
     armed: bool = False
     stopped: str = ""
     done: tuple[str, str, str] | None = None  # outcome, summary, confirmation address
     question: dict[str, str] | None = None
     url: str = ""
+    page: str = field(default="", repr=False)  # the last snapshot's text, as the agent read it
     read: set[str] = field(default_factory=set)  # the addresses of pages read in this run
     # Those read since the last act on a submit element: a confirmation is one of them.
     read_since_submit: set[str] = field(default_factory=set)
@@ -247,12 +309,27 @@ class ApplySession:
         self.url = str(shot.get("url") or "")[:2000]
         self.read.add(self.url)
         self.read_since_submit.add(self.url)
-        view = {"url": self.url, "title": plain(shot.get("title"), 300), "snapshot": text}
-        view["snapshot"] = text[:SNAPSHOT_MAX]
+        self.page = text[:SNAPSHOT_MAX]
+        view = {"url": self.url, "title": plain(shot.get("title"), 300), "snapshot": self.page}
         return json.dumps(view, ensure_ascii=False), False
 
+    async def _gone(self) -> bool:
+        """The person cancelled the application (or it moved): the run ends at this call."""
+        if self.alive is not None and not await self.alive():
+            self.stopped = "superseded"
+        return bool(self.stopped)
+
+    async def _halt(self) -> str | None:
+        """The emergency stop, read before every act: a control browserd does not mark as a
+        submit may send the form too. On, the capability is withdrawn for the rest of the run."""
+        code = await self.stop()
+        if code is None:
+            return None
+        self.capability = None
+        return code if code in STOP_CODES else "paused"
+
     async def _guarded(self, work: Callable[[], Awaitable[tuple[str, bool]]]) -> tuple[str, bool]:
-        if self.stopped:
+        if await self._gone():
             return self._ended()
         try:
             return await work()
@@ -276,7 +353,7 @@ class ApplySession:
     async def screenshot(self) -> tuple[dict[str, Any] | str, bool]:
         from app.browser.finder import SHOT_MAX
 
-        if self.stopped:
+        if await self._gone():
             return self._ended()
         try:
             shot = await self.tools.call("browser_take_screenshot", {"type": "png"})
@@ -306,6 +383,9 @@ class ApplySession:
             )
             if paced:
                 await self._pace()
+            if (halted := await self._halt()) is not None:
+                self.stopped = halted
+                return self._ended()
             try:
                 result = await self.tools.call(name, args)
                 if result.get("error") == "submit_permit":
@@ -365,6 +445,14 @@ class ApplySession:
         label = plain(field_name, FIELD_MAX) or plain(reason, FIELD_MAX)
         if not label:
             return "Refused: name the field you need the person for.", True
+        if not shown(label, self.page):
+            # The question the person reads names only what the page shows (a steered agent
+            # cannot write its own question into the app).
+            return (
+                "Refused: `field` is the field's label exactly as your last browser_snapshot "
+                "shows it.",
+                True,
+            )
 
         async def work() -> tuple[str, bool]:
             answer = await self.tools.call("browser_ask_person", {"reason": ASK_SENTENCE})
@@ -381,7 +469,7 @@ class ApplySession:
             self.question = {
                 "label": label,
                 "host": host_of(self.url),
-                "kind": "action" if kind == "action" else "fact",
+                "kind": "action" if kind == "action" or secret_label(label) else "fact",
             }
             self.stopped = QUESTION
             return self._ended()
@@ -438,19 +526,49 @@ def _questions(db: Session, application: Application) -> list[ApplicationAnswer]
     )
 
 
-def _clicked_before(db: Session, application: Application) -> bool:
+def _last(db: Session, application: Application, kind: str, **data: str) -> int | None:
+    """The id of the application's last event of `kind` (with `data`): ids are its order."""
     from app.apply.models import ApplicationEvent
 
-    found = db.scalar(
-        sa.select(ApplicationEvent.id)
-        .where(
-            ApplicationEvent.application_id == application.id,
-            ApplicationEvent.user_id == application.user_id,
-            ApplicationEvent.kind == "agent_submit",
-        )
-        .limit(1)
+    query = sa.select(sa.func.max(ApplicationEvent.id)).where(
+        ApplicationEvent.application_id == application.id,
+        ApplicationEvent.user_id == application.user_id,
+        ApplicationEvent.kind == kind,
     )
-    return found is not None
+    for key, value in data.items():
+        query = query.where(ApplicationEvent.data[key].astext == value)
+    return db.scalar(query)
+
+
+def _clicked_before(db: Session, application: Application) -> bool:
+    """An act that may have sent the form came after the person's last Try again (or there was
+    no Try again): no run sends it again."""
+    sent = _last(db, application, "agent_submit")
+    if sent is None:
+        return False
+    retried = _last(db, application, "retry", previous=State.submit_unknown.value)
+    return retried is None or retried < sent
+
+
+def ran_agent(db: Session, application: Application) -> bool:
+    """One click Apply's agent acted on a control that may have sent this application (A19)."""
+    return application.mode is Mode.direct and _last(db, application, "agent_submit") is not None
+
+
+def retry(db: Session, application: Application, now: datetime) -> None:
+    """The person's Try again of an application the agent may have sent (`gate.retry`, or the
+    answer to the question it asked after that act): `submit_unknown` to `queued` for one more
+    run, whose first message says so (`earlier_send`). An unanswered question is dropped (the
+    next run asks again if it must). The caller holds the locks and commits."""
+    from app.apply import run
+
+    previous = application.state.value
+    states.move(application, State.queued, now, retried_by_person=True)
+    application.needs = application.error_code = None
+    for row in _questions(db, application):
+        if row.source is AnswerSource.left and row.left_reason == QUESTION:
+            row.left_reason = "retried"
+    run._event(db, application, "retry", now, previous=previous)
 
 
 def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Brief | str:
@@ -468,6 +586,8 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Brief | st
         or application.ats == "email"
     ):
         return "not_queued"
+    if application.dry_run:
+        return "dry_run"  # a rehearsal never runs an agent that clicks Submit (worker.apply_fill)
     if _clicked_before(db, application):
         return "already_run"  # never by construction: one click gives one run
     user_id = application.user_id
@@ -507,6 +627,8 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Brief | st
         "letter_text": letter_text,
         "documents_to_upload": sorted(pdfs),
     }
+    if _last(db, application, "agent_submit") is not None:
+        message["earlier_send"] = True  # the person's Try again after a possible send
     return Brief(
         user_id, application.id, json.dumps(message, ensure_ascii=False, default=str), pdfs
     )
@@ -615,8 +737,29 @@ def finish(
         run._event(db, application, "needs_person", now, needs=QUESTION)
         return State.needs_person.value
     code = session.stopped or ran.stopped or "agent_failed"
+    if code == "busy" and (queued := _requeue(db, application, now)) is not None:
+        return queued
     run._end(db, application, State.failed, code, now)
     return State.failed.value
+
+
+def _requeue(db: Session, application: Application, now: datetime) -> str | None:
+    """`busy` (the person's agents runs are all taken, or the browser): `queued` again after
+    the retry delays' wait, as a fill's retry (A10a); None once they ran out."""
+    from app.apply import failures, run
+
+    to, waited = failures.after_failure(application, "unavailable", now, failures.retry_delays())
+    if to is State.failed:
+        return None
+    states.move(application, State.queued, now)
+    application.needs, application.error_code = failures.RETRY, "busy"
+    run._event(db, application, "retry", now, needs=failures.RETRY, code="busy", **waited)
+    return State.queued.value
+
+
+def still_runs(db: Session, application_id: uuid.UUID) -> bool:
+    state = db.scalar(sa.select(Application.state).where(Application.id == application_id))
+    return state in (State.filling, State.submitting)
 
 
 def interrupted(db: Session, application_id: uuid.UUID, now: datetime) -> str:
@@ -647,10 +790,20 @@ class QuestionError(Exception):
 
 
 def open_question(db: Session, application: Application) -> ApplicationAnswer | None:
-    if application.state is not State.needs_person or application.needs != QUESTION:
+    """The question the person may answer: the one a run left `needs_person` with, or the one
+    it asked after an act that may have sent the form (`submit_unknown`, `after_send`)."""
+    waits = application.state is State.needs_person and application.needs == QUESTION
+    if not waits and not after_send(application):
         return None
-    rows = [r for r in _questions(db, application) if r.source is AnswerSource.left]
-    return rows[-1] if rows else None
+    rows = _questions(db, application)
+    last = rows[-1] if rows else None
+    if last is None or last.source is not AnswerSource.left or last.left_reason != QUESTION:
+        return None
+    return last
+
+
+def after_send(application: Application) -> bool:
+    return application.state is State.submit_unknown and application.mode is Mode.direct
 
 
 def sentence(row: ApplicationAnswer) -> str:
@@ -686,11 +839,15 @@ def answer_question(
             text = bank.saved_text(answer[: bank.VALUE_MAX])
         except ValueError as exc:
             raise QuestionError(422, str(exc)) from None
+    sent = after_send(application)
     row.value, row.source, row.left_reason = text or "done", AnswerSource.person, None
     if remember and text and row.kind == "question:fact":
         _remember(db, user_id, row.label, text, now)
-    states.move(application, State.queued, now)
-    application.needs = None
+    if sent:
+        retry(db, application, now)  # the answer is the person's Try again
+    else:
+        states.move(application, State.queued, now)
+        application.needs = None
     run._event(db, application, "person_answered", now, remembered=bool(remember and text))
     return application
 
@@ -777,6 +934,9 @@ async def apply(services: Services, application_id: uuid.UUID) -> str:
         async def armed() -> bool:
             return await db(lambda s: arm(s, application_id, fill.clock()))
 
+        async def alive() -> bool:
+            return await db(lambda s: still_runs(s, application_id))
+
         session = ApplySession(
             tools=tools,
             capability=getattr(acquired, "capability", None),
@@ -787,6 +947,7 @@ async def apply(services: Services, application_id: uuid.UUID) -> str:
             sleep=fill.sleep,
             draw=services.draw,
             await_person=services.await_person,
+            alive=alive,
         )
         ran = Ran(stopped="no_agent")
         if services.agent is not None:

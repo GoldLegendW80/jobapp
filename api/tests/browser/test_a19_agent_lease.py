@@ -39,11 +39,92 @@ DELETE = {"names": ["Delete my account"], "tag": "button", "type": "button"}
         ({"names": ["Apply now"], "tag": "a", "type": ""}, "click", None),
         (None, "click", "unreadable"),
         ({**DELETE, "point": SUBMIT}, "click", "submit"),  # the click lands on a submit
-        ({**FIELD, "point": None}, "type", "unreadable"),
+        # A typing is refused `credential` whenever its facts or its click point cannot be
+        # read (hard rule 7 fails closed: a typing never needs the capability), and a click
+        # point outside the field is judged as a click there (round 1 of the review).
+        (None, "type", "credential"),
+        ({"names": "Email", "tag": "input"}, "type", "credential"),
+        ({**FIELD, "point": None}, "type", "credential"),
+        ({**FIELD, "point": {"names": None}}, "type", "credential"),
+        ({**FIELD, "point": {**FIELD, "inside": True}}, "type", None),
+        ({**FIELD, "point": {**FIELD, "secret": True, "inside": True}}, "type", "credential"),
+        ({**FIELD, "point": {**FIELD, "inside": False}}, "type", None),
+        ({**FIELD, "point": {**SUBMIT, "secret": False, "inside": False}}, "type", "submit"),
+        ({**FIELD, "point": {**NEXT, "secret": False}}, "type", "submit"),  # no `inside`: outside
+        ({**FIELD, "point": {**FIELD, "secret": None, "inside": False}}, "type", "credential"),
     ],
 )
 def test_the_agent_verdict(facts: Any, action: str, code: str | None) -> None:
     assert detect.agent_verdict(facts, action=action) == code
+
+
+def button(name: str, tag: str = "button", kind: str = "button") -> dict[str, Any]:
+    return {"names": [name], "tag": tag, "type": kind, "role": "", "in_form": False}
+
+
+@pytest.mark.parametrize(
+    ("name", "marked"),
+    [
+        # Sends in German and French, and a wizard's last word alone (a type=button the page's
+        # script sends with): marked, so the emergency stop is read and `submitting` committed.
+        ("Bewerbung absenden", True),
+        ("Absenden", True),
+        ("Jetzt absenden", True),
+        ("Abschicken", True),
+        ("Bewerbung einreichen", True),
+        ("Einreichen", True),
+        ("Bewerbung abschließen", True),
+        ("Senden", True),
+        ("Envoyer ma candidature", True),
+        ("Envoyer", True),
+        ("Valider ma candidature", True),
+        ("Terminer ma candidature", True),
+        ("Finish", True),
+        ("Finish application", True),
+        ("Done", True),
+        ("DONE", True),
+        ("Terminer", True),
+        ("Terminez", True),
+        ("Fertig", True),
+        ("Submit", True),
+        ("Postuler", True),
+        ("Apply", True),
+        ("Jetzt bewerben", False),  # an opener in German: declared open
+        # A step, a page or a control that sends nothing: unmarked.
+        ("Next", False),
+        ("Weiter", False),
+        ("Suivant", False),
+        ("Continue", False),
+        ("Zurück", False),
+        ("Abbrechen", False),
+        ("Abschnitt anzeigen", False),
+        ("Einreise", False),
+        ("Undone changes", False),
+        ("Termine", False),
+        ("Show more", False),
+        ("Upload", False),
+        ("Fertigkeiten", False),
+        ("", False),
+    ],
+)
+def test_the_words_that_mark_a_send_on_the_agent_lease(name: str, marked: bool) -> None:
+    code = detect.agent_verdict(button(name), action="click")
+    assert code == ("submit" if marked else None)
+    # A link opens a page: its words never mark it.
+    assert detect.agent_verdict(button(name, tag="a", kind=""), action="click") is None
+
+
+def test_the_send_words_of_the_agent_lease_change_no_other_lease() -> None:
+    for name in ("Bewerbung absenden", "Done", "Fertig"):
+        assert not detect.says_submit([name])
+
+
+@pytest.mark.parametrize("facts", [None, {**FIELD, "point": None}, {**FIELD, "secret": None}])
+def test_an_unreadable_typing_is_refused_with_the_capability_too(facts: Any) -> None:
+    for gate in (False, True):
+        refused = tab("apply_agent", gate=gate).judge(facts, "type", "browser_type")
+        assert refused is not None
+        assert refused["error"] == "credential"
 
 
 def tab(purpose: str, gate: bool) -> actions.Tab:
