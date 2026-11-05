@@ -309,3 +309,49 @@ them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../
 - Likes keep today's Full auto exactly as it is; only the Apply button of the job page changes.
 - Free text the assistant writes is sent without the person seeing it, after the check by model; it stays readable in the run report.
 - Built as the mode `direct` with the authorisation `apply_click` (the click is the approval, used once, 7 days at most) and the setting `apply_settings.review_before_send` (off by default). The global guards stay; the hold, the rehearsals, the fit threshold and the one per company rule do not apply to an explicit Apply click. The mode is fixed at the click (SPEC-apply, "Owner decision (taken on 2026-11-01)").
+
+## Product audit: chapters 1 and 2 (2026-11-04 and 2026-11-05)
+
+The owner's answers during the product audit, in the session that built them.
+
+- 2026-11-04, Find jobs: "an url is an url, simplify a lot the modal. remove alert emails. company
+  job board is exactly like a website so it should be in url. you must precise that the website can
+  be generic or a compnay job board with examples". Built as one list of addresses: a known job
+  website keeps its permission and risk sentence in its line (jobs J17 unchanged), a job feed or a
+  company job board is read through its own API, any other address is a website of the person's
+  own. The starter boards are ideas folded under "More company job boards", never saved by
+  themselves. Stored alert e-mail settings are left out of the save (kept by the server).
+- 2026-11-04, the first login wizard gets a step "Websites to search" with the same list; Start
+  with an empty list opens Find jobs. The step is never sent to the onboarding api.
+- 2026-11-04, Gmail: "hide" while the server cannot connect it.
+- 2026-11-04, deploy: "Use gha to deploy, no gate" for the chapter 1 batch (#746, run 130).
+- 2026-11-05, chapter 2: yes to a bottom tab bar on phones (Jobs, Discover, Applications,
+  Profile; Runs moves to the user menu as Activity); yes to honest Apply wording (the wizard shows
+  the Apply review box; the Applications page no longer promises approval for everything); the
+  model key: "Yes but at last possible step" (an optional inline field on the wizard's last step);
+  the posting page: "Yes. Also want the salary easily accessible" (Your application right under
+  the title, the pay in the header, the Jobs list and the Discover card); the Account page: "Only
+  websites we are signin" (only the websites the person is signed in to); Find jobs: "should be a
+  sheet from bottom on mobile. All the text an inputs must be fully aligned".
+- 2026-11-05, clicks (owner: "count all the Numbers of click ... find the best flow to reduce must
+  as possible these clicks") and the profile (owner: "except for the general infos, just put
+  informations on a .md should be well rendered and editable. I want an agent to find the best
+  job titles according to the profile. When I change something in the cv it should change in the
+  profile and vice versa. Everything in profile can be done manually or with a chat"). The
+  owner's answers to the seven questions:
+  1. The profile's information other than the general infos (identity) is a markdown document
+     that a model interprets: "No, I want a markdown that a model interpret, not just a view over
+     today's field". The markdown is the person's source; the structured fields the code needs
+     (skills terms for the fit, employers and dates, answers) are derived from it by a model.
+  2. Fill my profile: locked facts that fill an empty slot join "Accept all additions", and the
+     run starts from one button that shows the token range (replaces the 2026-10-10 start dialog
+     and SPEC-ingestion's rule that locked facts never join Accept all, for empty slots only).
+  3. The job titles agent refreshes by itself after a profile fill or a skills change, at most
+     once a day.
+  4. Postings are rescored by themselves after a skills change, with the possible document cost
+     said before saving.
+  5. Apply with no documents writes them and then sends; Apply also appears on Jobs list rows.
+  6. Applications: "Approve all ready" with one confirmation naming every company and document,
+     and "Remember this answer for next forms".
+  7. The CV editor's fixed facts save to the profile, and the base CV's own fixed block goes
+     after a one time merge.
