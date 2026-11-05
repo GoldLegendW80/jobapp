@@ -298,7 +298,7 @@ function NeverApply({ form }: { form: UseFormReturn<SearchForm> }) {
                 control={form.control}
                 name={`never_apply.${index}.value`}
                 label={`Rule ${index + 1}`}
-                placeholder="No cybersecurity roles."
+                placeholder="No gambling companies: casino, betting"
                 className="min-w-0 flex-1"
               />
               <ItemControls

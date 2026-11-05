@@ -174,6 +174,12 @@ describe("search tab: terms and preferences", () => {
   it("adds, edits and removes never-apply rules", async () => {
     const { user, state } = await openSearch();
     await user.click(screen.getByRole("button", { name: "Add rule" }));
+    // The example is a rule of the form the sweeps read (its terms after the colon), and no
+    // kind of role the app would exclude for everybody (owner, 2026-11-05).
+    expect(screen.getByLabelText("Rule 2")).toHaveAttribute(
+      "placeholder",
+      "No gambling companies: casino, betting",
+    );
     await user.click(save());
     expect(await screen.findByText("Enter a rule.")).toBeVisible();
     await user.type(screen.getByLabelText("Rule 2"), "  No defence roles. ");

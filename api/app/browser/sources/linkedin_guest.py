@@ -26,9 +26,9 @@ gives its one permission (linkedin_guard), which this source checks too.
   search ends at a short or a stale page. The entry counts the searches that ran (`searches`)
   against the ones planned (`planned`): a time cap that stops it shows as "11 of 21".
 - Filter before any detail request: the saved titles to include (a card whose title matches
-  none is left out: LinkedIn's relevance is loose), the unwanted titles and places, the never
-  apply rules with the app's own rule against cybersecurity, and the person's postings (same
-  LinkedIn id or address: counted found and duplicate, never fetched again).
+  none is left out: LinkedIn's relevance is loose), the unwanted titles and places, the person's
+  own never apply rules (the app has none of its own), and the person's postings (same LinkedIn
+  id or address: counted found and duplicate, never fetched again).
 - Detail: `GET <base>/jobs-guest/jobs/api/jobPosting/<id>`, only for a new card that passed the
   filter, at most DETAILS_PER_ROUND after each round, taken in turn from each search (its
   first card, then its second ...), so one search's full page never takes the round's details
@@ -101,7 +101,6 @@ from app.browser.sources import PACE_POLL_S, linkedin
 from app.jobs import sweep
 from app.jobs.importer import kind
 from app.jobs.models import ContractType
-from app.jobs.never_apply import CYBER_RULE
 from app.jobs.schemas import SEARCHES_LISTED
 from app.profile import matching
 from app.profile.plain_terms import typed_words
@@ -1025,8 +1024,8 @@ def _duplicate(stats: sweep.Stats, entry: dict[str, Any], done: _Run) -> None:
 
 
 class _Wanted:
-    """The saved titles to include, the unwanted titles and places, and the never apply rules
-    (the app's own rule against cybersecurity added), read on a card before any detail."""
+    """The saved titles to include, the unwanted titles and places, and the person's never apply
+    rules, read on a card before any detail."""
 
     def __init__(self, search: SearchSection, rules: Any) -> None:
         def pattern(terms: Any) -> re.Pattern[str] | None:
@@ -1035,8 +1034,7 @@ class _Wanted:
         self.include = pattern(search.title_include)
         self.titles = pattern(search.title_exclude)
         self.places = pattern(search.location_exclude)
-        rules = list(rules) if rules is not None else sweep.never_apply_rules(search)
-        self.rules = [*rules, CYBER_RULE]
+        self.rules = list(rules) if rules is not None else sweep.never_apply_rules(search)
 
     def keep(self, card: Card) -> bool:
         if self.include is not None and not self.include.search(card.title):

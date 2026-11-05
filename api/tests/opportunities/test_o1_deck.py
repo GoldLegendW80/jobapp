@@ -198,6 +198,19 @@ def test_a_never_apply_company_never_shows(
     assert deck_ids(api, person_a) == []
 
 
+def test_a_security_role_shows_for_a_person_whose_rules_do_not_exclude_it(
+    api: Api, person_a: Person, person_b: Person, factory: sessionmaker[Session]
+) -> None:
+    """The app has no rule of its own about a kind of role (owner, 2026-11-05): B has no never
+    apply rule and sees the card, A carries the owner's rule and does not."""
+    set_profile(factory, person_b.user_id, deck_search(never_apply=[]))
+    text = "Build threat detection for our cybersecurity team."
+    add_posting(factory, person_a, title="Security Engineer", posting_text=text)
+    shown = add_posting(factory, person_b, title="Security Engineer", posting_text=text)
+    assert deck_ids(api, person_b) == [str(shown)]
+    assert deck_ids(api, person_a) == []
+
+
 def test_rules_that_cannot_be_read_empty_the_deck(
     api: Api, person_a: Person, factory: sessionmaker[Session]
 ) -> None:

@@ -82,8 +82,9 @@ def matching_rule(rules: Iterable[NeverApplyRule], *texts: str) -> NeverApplyRul
     return None
 
 
-# The app's own rule against cybersecurity (CLAUDE.md rule 2): added to the person's rules for
-# every posting a sweep stores.
+# The app has no rule of its own about a kind of role (owner, 2026-11-05): a sweep, a source and
+# apply read the person's own never apply rules alone. This one is left only for the job title
+# ideas' check (profile/titles.py), whose own change removes that check and then this constant.
 CYBER_RULE = NeverApplyRule.parse(
     "Never cybersecurity: cyber, cybersecurity, security, pentest, pentesting, threat"
 )
