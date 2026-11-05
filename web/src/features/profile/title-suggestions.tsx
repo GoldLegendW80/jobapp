@@ -31,10 +31,10 @@ import { useId, useState } from "react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
   TooltipContent,
@@ -297,21 +297,23 @@ export function TitleSuggestions({
         <Label htmlFor={`${id}-message`} className="text-xs">
           {W.chatLabel}
         </Label>
-        <div className="flex items-center gap-2">
-          <Input
+        <div className="flex items-end gap-2">
+          <Textarea
             id={`${id}-message`}
             value={draft}
+            rows={1}
             maxLength={data.message_max}
             placeholder={W.chatPlaceholder}
             autoComplete="off"
             disabled={!canAsk}
-            className="h-8"
+            className="min-h-9 resize-none py-1.5"
             onChange={(event) => {
               setDraft(event.target.value);
             }}
             onKeyDown={(event) => {
-              // Inside the page's form: Enter sends the message, never the form.
-              if (event.key === "Enter") {
+              // One line: Enter sends the message (never the page's form, never a new line),
+              // except while an input method composes a word.
+              if (event.key === "Enter" && !event.nativeEvent.isComposing) {
                 event.preventDefault();
                 send();
               }
@@ -321,7 +323,7 @@ export function TitleSuggestions({
             type="button"
             size="sm"
             variant="outline"
-            className="h-8"
+            className="h-9"
             disabled={!canAsk || !message}
             onClick={send}
           >
