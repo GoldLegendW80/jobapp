@@ -127,7 +127,7 @@ describe("status", () => {
     await openDetail();
     await user.selectOptions(statusSelect(), "skipped");
     expect(badge()).toHaveTextContent("Skipped");
-    await screen.findByText(/Not saved\. The API answered 500/);
+    await screen.findByText(/Not saved\. Something went wrong on the server\./);
     expect(statusSelect()).toHaveValue("found");
     expect(badge()).toHaveTextContent("Found");
     expect(api.patches).toHaveLength(1);
@@ -222,9 +222,7 @@ describe("notes", () => {
     const notes = screen.getByRole("textbox", { name: "Notes" });
     await user.type(notes, "keep me");
     await user.tab();
-    expect(
-      await screen.findByText(/Not saved\. The API answered 503/),
-    ).toBeVisible();
+    expect(await screen.findByText(/Not saved\. boom\./)).toBeVisible();
     expect(notes).toHaveValue("keep me");
     expect(notes).toHaveAttribute("aria-invalid", "true");
     failing = false;
@@ -388,10 +386,17 @@ describe("edit details", () => {
     const company = within(dialog).getByLabelText("Company");
     await user.clear(company);
     await user.type(company, "Mistral AI");
-    await user.selectOptions(
-      within(dialog).getByLabelText("Contract type"),
-      "VIE",
+    // Each contract reads as words; the code is what is sent.
+    const contract = within(dialog).getByLabelText("Contract type");
+    expect(
+      within(contract)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(
+      expect.arrayContaining(["Permanent", "Fixed term", "Internship"]),
     );
+    expect(contract).not.toHaveTextContent(/\b(CDI|CDD|Stage|Alternance)\b/);
+    await user.selectOptions(contract, "VIE");
     await user.type(
       within(dialog).getByLabelText("Link to the posting"),
       "https://jobs.example.org/42",

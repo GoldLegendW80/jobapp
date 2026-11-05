@@ -57,6 +57,9 @@ describe("login page", () => {
     ).toBeInTheDocument();
     expect(location()).toBe("/login?next=/jobs");
     expect(document.title).toBe("Sign in · jobapp");
+    // A first visit lost no session: no word of one.
+    expect(screen.queryByTestId("session-ended")).toBeNull();
+    expect(screen.queryByText(/Your session ended/)).toBeNull();
     // The way back in without a password is said where people look for it.
     expect(
       screen.getByText("Forgot your password? Ask the admin for a reset link."),
@@ -83,6 +86,10 @@ describe("login page", () => {
   it("lands on / without next", async () => {
     loginAnswers(() => HttpResponse.json(member));
     const { location } = renderApp("/login");
+    expect(
+      await screen.findByRole("heading", { name: "Sign in" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("session-ended")).toBeNull();
     await fillAndSubmit();
     expect(
       await screen.findByRole("heading", { level: 1, name: "Jobs" }),

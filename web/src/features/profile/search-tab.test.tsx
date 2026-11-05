@@ -50,9 +50,10 @@ describe("search tab: terms and preferences", () => {
     expect(
       screen.getByRole("list", { name: "Terms of Unwanted places" }),
     ).toHaveTextContent("United States");
-    expect(
-      screen.getByRole("button", { name: "CDI (permanent)" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Permanent" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.getByRole("button", { name: "VIE" })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -83,8 +84,8 @@ describe("search tab: terms and preferences", () => {
     );
     await user.click(screen.getByRole("button", { name: "Remove Remote" }));
     await user.click(screen.getByRole("button", { name: "VIE" }));
-    await user.click(screen.getByRole("button", { name: "Freelance" }));
-    await user.click(screen.getByRole("button", { name: "CDD (fixed term)" }));
+    await user.click(screen.getByRole("button", { name: "Freelance mission" }));
+    await user.click(screen.getByRole("button", { name: "Fixed term" }));
     expect(screen.getByRole("button", { name: "VIE" })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -283,7 +284,7 @@ describe("search tab: automatic search", () => {
     expect(saved(state).sweep_schedule).toEqual(ON);
     expect(saved(state).days).toBe(14);
     // And again after the form was reset from the saved version.
-    await user.click(screen.getByRole("button", { name: "CDD (fixed term)" }));
+    await user.click(screen.getByRole("button", { name: "Fixed term" }));
     await user.click(save());
     await waitFor(() => {
       expect(state.saves).toHaveLength(2);

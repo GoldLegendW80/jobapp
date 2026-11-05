@@ -26,11 +26,14 @@ function resetSession(client: QueryClient, user: User | null) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const client = useQueryClient();
   const signedOut = useRef(false);
+  const sessionEnded = useRef(false);
 
   useEffect(
     () =>
       onUnauthorized(() => {
         signedOut.current = false;
+        // Only a browser that had a user lost a session; a first visit has nothing to lose.
+        if (client.getQueryData(meQueryKey)) sessionEnded.current = true;
         resetSession(client, null);
       }),
     [client],
@@ -40,6 +43,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     mutationFn: logout,
     onSuccess: () => {
       signedOut.current = true;
+      sessionEnded.current = false;
       resetSession(client, null);
     },
     onError: (error) => {
@@ -51,6 +55,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = useCallback(
     (user: User) => {
       signedOut.current = false;
+      sessionEnded.current = false;
       resetSession(client, user);
     },
     [client],
@@ -59,13 +64,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     runLogout();
   }, [runLogout]);
   const wasSignedOut = useCallback(() => signedOut.current, []);
+  const wasSessionEnded = useCallback(() => sessionEnded.current, []);
   const clearSignedOut = useCallback(() => {
     signedOut.current = false;
   }, []);
 
   const value = useMemo<AuthActions>(
-    () => ({ signIn, signOut, signingOut, wasSignedOut, clearSignedOut }),
-    [signIn, signOut, signingOut, wasSignedOut, clearSignedOut],
+    () => ({
+      signIn,
+      signOut,
+      signingOut,
+      wasSignedOut,
+      wasSessionEnded,
+      clearSignedOut,
+    }),
+    [
+      signIn,
+      signOut,
+      signingOut,
+      wasSignedOut,
+      wasSessionEnded,
+      clearSignedOut,
+    ],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

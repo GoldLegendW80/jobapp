@@ -1,5 +1,6 @@
 /**
- * /runs: the user's agent runs, newest first, with status, agent, job, tokens, cost and
+ * /runs, "Assistant activity": the user's agent runs, newest first, each named in words
+ * (lib/wording.ts, agentWord), with status, agent, job, tokens, cost and
  * duration; each opens /runs/:id, the live RunPanel. Outside production the server also offers
  * test agents (GET /api/agents, `test_only`): then a "Test run" card starts one, which is how the
  * run panel is exercised before a real agent exists (A3 adds the first).
@@ -31,6 +32,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { formatDateTime } from "@/features/jobs/format";
 import { describeError, errorDetail } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
+import { WORDING, agentWord, runErrorWords } from "@/lib/wording";
 
 import {
   costQualifier,
@@ -202,12 +204,12 @@ function RunRow({ run, now }: { run: Run; now: number }) {
       >
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">{run.agent}</span>
+            <span className="font-medium">{agentWord(run.agent)}</span>
             <StatusBadge status={run.status} />
           </span>
           <span className="truncate text-sm text-muted-foreground">
             {formatDateTime(run.created_at)}
-            {run.error ? `: ${run.error}` : ""}
+            {run.error ? `: ${runErrorWords(run.error)}` : ""}
           </span>
         </span>
         <span className="grid grid-cols-3 gap-3 text-sm tabular-nums sm:w-96">
@@ -233,7 +235,7 @@ function RunRow({ run, now }: { run: Run; now: number }) {
 }
 
 export function RunsPage() {
-  useTitle("Agent runs");
+  useTitle(WORDING.assistantActivity);
   const runs = useQuery({
     queryKey: runsKey,
     queryFn: ({ signal }) => listRuns(signal),
@@ -253,12 +255,14 @@ export function RunsPage() {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-8">
       <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Agent runs</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {WORDING.assistantActivity}
+        </h1>
         <p className="text-muted-foreground">
-          Every run of your agents, with its tokens, its cost and how long it
-          took. On a Claude subscription the amount is an estimate at API
-          prices, not a bill: each run counts toward your plan&apos;s usage
-          limits, and what you pay is set by your plan.
+          Everything the assistant did for you, with its tokens, its cost and
+          how long it took. On a Claude subscription the amount is an estimate
+          at API prices, not a bill: each run counts toward your plan&apos;s
+          usage limits, and what you pay is set by your plan.
         </p>
       </header>
       {testAgents.length ? <TestRunCard agents={testAgents} /> : null}
@@ -269,17 +273,31 @@ export function RunsPage() {
         {runs.isPending ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
-            Loading runs
+            Loading the activity
           </p>
         ) : runs.isError ? (
           <Alert variant="destructive">
-            <AlertDescription>
-              The runs could not be loaded. {describeError(runs.error)}
+            <AlertDescription className="flex flex-col items-start gap-3">
+              <span>
+                The activity could not be loaded. {describeError(runs.error)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={runs.isFetching}
+                aria-busy={runs.isFetching}
+                onClick={() => void runs.refetch()}
+              >
+                {runs.isFetching ? (
+                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                ) : null}
+                {WORDING.tryAgain}
+              </Button>
             </AlertDescription>
           </Alert>
         ) : runs.data.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No run yet. Agents you start on a job appear here.
+            No activity yet. What the assistant does for you appears here.
           </p>
         ) : (
           <ul aria-label="Runs" className="flex flex-col gap-2">
@@ -295,13 +313,15 @@ export function RunsPage() {
 
 /** /runs/:id: one run, live; a website search's also shows the browser it reads (browser B18). */
 export function RunPage() {
-  useTitle("Agent run");
   const { id = "" } = useParams();
   // The same query as the panel's (shared cache): only read here for the job link.
   const detail = useQuery({
     queryKey: runKey(id),
     queryFn: ({ signal }) => getRun(id, signal),
   });
+  useTitle(
+    detail.data ? agentWord(detail.data.agent) : WORDING.assistantActivity,
+  );
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       <div className="flex flex-col gap-2">
@@ -310,7 +330,7 @@ export function RunPage() {
           className="inline-flex w-fit items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
         >
           <ArrowLeft aria-hidden="true" className="size-4" />
-          All runs
+          {WORDING.allActivity}
         </Link>
         {detail.data ? <RunJobLink run={detail.data} /> : null}
       </div>

@@ -39,6 +39,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { describeError, errorDetail } from "@/lib/api";
+import { agentWord, runErrorWords } from "@/lib/wording";
 import { cn } from "@/lib/utils";
 
 import type { LiveText } from "./live-text";
@@ -165,7 +166,7 @@ function describeStep(
         return {
           icon: CircleX,
           title: label,
-          body: data.error ? text(data.error) : undefined,
+          body: data.error ? runErrorWords(text(data.error)) : undefined,
           tone: "error",
         };
       }
@@ -485,7 +486,7 @@ export function RunPanel({
             data-testid="run-title"
             className="flex flex-wrap items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
-            <span>{title ?? `Agent ${run.agent}`}</span>
+            <span>{title ?? agentWord(run.agent)}</span>
             <StatusBadge status={shownStatus} />
           </span>
         </CardTitle>

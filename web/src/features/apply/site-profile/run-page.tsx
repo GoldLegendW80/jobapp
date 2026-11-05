@@ -7,6 +7,7 @@ import { LiveBrowser } from "@/features/browser/live-browser";
 import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
 import { browserQueryKey, getBrowser } from "@/features/browser/browser-api";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
+import { siteProfileProblem, siteProfileStateWord } from "@/lib/wording";
 import {
   action,
   autosaveSentence,
@@ -55,12 +56,13 @@ function SiteProfileRunContent({ id }: { id: string }) {
     mutationFn: (name: string) => action(id, name),
     onSuccess: update,
   });
-  if (query.isPending) return <p role="status">Loading profile run.</p>;
+  if (query.isPending)
+    return <p role="status">Loading the completion of your profile.</p>;
   if (query.error)
     return (
       <div role="alert">
         {isApiError(query.error) && query.error.status === 404
-          ? "No such profile run."
+          ? "This request to complete your profile on a site no longer exists."
           : describeError(query.error)}{" "}
         <Link to="/account">Back to Account</Link>
       </div>
@@ -84,15 +86,10 @@ function SiteProfileRunContent({ id }: { id: string }) {
           Complete your profile on {run.host}
         </h1>
         <p className="break-all text-sm text-muted-foreground">{run.url}</p>
-        <p role="status" className="capitalize">
-          {run.state.replaceAll("_", " ")}
-        </p>
+        <p role="status">{siteProfileStateWord(run.state)}</p>
       </header>
       {run.error_code && (
-        <p role="alert">
-          This profile run needs your review:{" "}
-          {run.error_code.replaceAll("_", " ")}.
-        </p>
+        <p role="alert">{siteProfileProblem(run.error_code)}</p>
       )}
       {handoff ? (
         <HandoffBanner liveOpen />
@@ -153,7 +150,7 @@ function SiteProfileRunContent({ id }: { id: string }) {
             operation.mutate("cancel");
           }}
         >
-          Cancel profile run
+          Stop completing my profile on this site
         </Button>
       )}
     </div>

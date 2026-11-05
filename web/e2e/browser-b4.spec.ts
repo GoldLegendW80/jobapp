@@ -102,7 +102,7 @@ test("A watches the browser draw the page, takes over and types", async () => {
   await pageA.goto("/account");
   await expect(
     pageA.getByText(
-      "You are watching your browser. Take over to use it yourself.",
+      "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
     ),
   ).toBeVisible({ timeout: 45_000 });
   probe("navigate", PAGE, "20");
@@ -114,8 +114,10 @@ test("A watches the browser draw the page, takes over and types", async () => {
   await pageA.keyboard.type("no");
   expect(fieldValue("#q")).toBe("");
 
-  await pageA.getByRole("button", { name: "Take over" }).click();
-  await expect(pageA.getByRole("button", { name: "Give back" })).toBeVisible();
+  await pageA.getByRole("button", { name: "Use the browser myself" }).click();
+  await expect(
+    pageA.getByRole("button", { name: "Let the assistant continue" }),
+  ).toBeVisible();
   await pageA.getByTestId("live-screen").click();
   await pageA.keyboard.type("hello b4");
   await expect
@@ -123,8 +125,12 @@ test("A watches the browser draw the page, takes over and types", async () => {
     .toBe("hello b4");
   await shots(pageA, "typing");
 
-  await pageA.getByRole("button", { name: "Give back" }).click();
-  await expect(pageA.getByRole("button", { name: "Take over" })).toBeVisible();
+  await pageA
+    .getByRole("button", { name: "Let the assistant continue" })
+    .click();
+  await expect(
+    pageA.getByRole("button", { name: "Use the browser myself" }),
+  ).toBeVisible();
   await pageA.getByTestId("live-screen").click();
   await pageA.keyboard.type("zz");
   expect(fieldValue("#q")).toBe("hello b4");

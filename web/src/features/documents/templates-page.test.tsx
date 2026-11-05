@@ -77,7 +77,12 @@ describe("the gallery", () => {
       within(classic)
         .getAllByRole("listitem")
         .map((one) => one.textContent),
-    ).toEqual(["one column", "sans", "ats friendly", "photo"]);
+    ).toEqual([
+      "one column",
+      "sans",
+      "Easy for hiring software to read",
+      "photo",
+    ]);
     expect(
       within(classic).getByRole("img", { name: "Classic, the CV" }),
     ).toHaveAttribute(
@@ -108,7 +113,7 @@ describe("the gallery", () => {
     // An own template has no tags: a columns filter does not guess it.
     expect(screen.queryByRole("region", { name: "From your CV" })).toBeNull();
 
-    await user.click(screen.getByLabelText("ATS friendly only"));
+    await user.click(screen.getByLabelText("Easy for hiring software to read"));
     expect(
       screen.getByText("No template matches these filters."),
     ).toBeVisible();
@@ -116,7 +121,9 @@ describe("the gallery", () => {
     await user.click(screen.getByRole("button", { name: "Clear the filters" }));
     expect(screen.getByText("6 templates.")).toBeVisible();
     expect(screen.getByLabelText("Columns")).toHaveValue("any");
-    expect(screen.getByLabelText("ATS friendly only")).not.toBeChecked();
+    expect(
+      screen.getByLabelText("Easy for hiring software to read"),
+    ).not.toBeChecked();
   });
 
   it("shows the letter on hover, and on a tap of See the letter", async () => {
@@ -273,9 +280,13 @@ describe("the gallery", () => {
     await user.tab();
     expect(screen.getByLabelText("Columns")).toHaveFocus();
     await user.tab();
-    expect(screen.getByLabelText("ATS friendly only")).toHaveFocus();
+    expect(
+      screen.getByLabelText("Easy for hiring software to read"),
+    ).toHaveFocus();
     await user.keyboard(" ");
-    expect(screen.getByLabelText("ATS friendly only")).toBeChecked();
+    expect(
+      screen.getByLabelText("Easy for hiring software to read"),
+    ).toBeChecked();
     const compact = screen.getByTestId("template-compact");
     within(compact).getByRole("button", { name: "See the letter" }).focus();
     await user.keyboard("{Enter}");

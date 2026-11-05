@@ -596,14 +596,17 @@ describe("list", () => {
     const api = fakeJobsApi(csvJobs(), {
       respond: () =>
         fail
-          ? HttpResponse.json({ detail: "database down" }, { status: 503 })
+          ? HttpResponse.json(
+              { detail: "The database is busy. Try again in a moment." },
+              { status: 503 },
+            )
           : undefined,
     });
     const user = userEvent.setup();
     renderApp("/jobs");
     expect(
       await screen.findByText(
-        "The postings could not be loaded. The API answered 503: database down.",
+        "The postings could not be loaded. The database is busy. Try again in a moment.",
       ),
     ).toBeInTheDocument();
     fail = false;
@@ -621,7 +624,7 @@ describe("list", () => {
     renderApp("/jobs");
     expect(
       await screen.findByText(
-        /The API sent a response this page cannot read\./,
+        /The server sent an answer this page cannot read\./,
       ),
     ).toBeInTheDocument();
   });

@@ -176,7 +176,7 @@ test("later Workday captcha: the person solves it in the live view; earlier answ
   // The wait is the person's: browserd gave them the input (no agent acts during it), so the
   // live view offers the keyboard and no Take over, which browserd would refuse.
   await expect(
-    page.getByRole("button", { name: "Take over", exact: true }),
+    page.getByRole("button", { name: "Use the browser myself", exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Keyboard", exact: true }),

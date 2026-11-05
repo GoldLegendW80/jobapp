@@ -488,7 +488,7 @@ describe("job detail", () => {
       screen.getByRole("button", { name: "Show preview of cv.pdf" }),
     );
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The API answered 404.",
+      "This file could not be loaded.",
     );
   });
 
@@ -518,7 +518,7 @@ describe("job detail", () => {
     await openDetail();
     await user.click(screen.getByText("Show answers.json"));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "answers.json could not be loaded. The API answered 404: File not found.",
+      "answers.json could not be loaded. File not found.",
     );
   });
 
@@ -615,7 +615,7 @@ describe("job detail", () => {
     renderApp(PATH);
     expect(
       await screen.findByText(
-        "This posting could not be loaded. The API answered 500: boom.",
+        "This posting could not be loaded. Something went wrong on the server. Try again in a moment.",
       ),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Retry" }));

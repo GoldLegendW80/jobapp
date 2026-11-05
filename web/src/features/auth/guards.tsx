@@ -7,11 +7,16 @@ import { NotFoundPage } from "@/features/shell/not-found-page";
 import { useAuth, useMe } from "./auth-context";
 import { loginPath, safeNext } from "./next";
 
+/** The history state of /login when a signed in page lost its session (the page says so). */
+export interface LoginState {
+  sessionEnded?: boolean;
+}
+
 /** Signed in users only; anyone else goes to /login?next=<this page>. */
 export function RequireAuth({ children }: { children: ReactNode }) {
   const me = useMe();
   const location = useLocation();
-  const { wasSignedOut } = useAuth();
+  const { wasSignedOut, wasSessionEnded } = useAuth();
   if (me.data) return children;
   if (me.isPending) return <PageLoading />;
   if (me.isError)
@@ -22,9 +27,11 @@ export function RequireAuth({ children }: { children: ReactNode }) {
         retrying={me.isFetching}
       />
     );
-  return (
-    <Navigate to={wasSignedOut() ? "/login" : loginPath(location)} replace />
-  );
+  if (wasSignedOut()) return <Navigate to="/login" replace />;
+  const state: LoginState | undefined = wasSessionEnded()
+    ? { sessionEnded: true }
+    : undefined;
+  return <Navigate to={loginPath(location)} state={state} replace />;
 }
 
 /** Admins only. Anyone else sees the not found page, as the api answers 404 to members. */

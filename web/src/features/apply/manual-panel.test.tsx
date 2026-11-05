@@ -216,7 +216,9 @@ describe("the open session", () => {
     expect(
       await within(box).findByText(/This is your own session/),
     ).toBeInTheDocument();
-    expect(within(box).queryByRole("button", { name: /Take over/ })).toBeNull();
+    expect(
+      within(box).queryByRole("button", { name: /Use the browser myself/ }),
+    ).toBeNull();
     await user.click(within(box).getByRole("button", { name: "Attach my CV" }));
     expect(manual.actions).toEqual(["attach_cv"]);
     expect(

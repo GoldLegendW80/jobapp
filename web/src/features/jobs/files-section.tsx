@@ -143,8 +143,7 @@ function PdfPreview({ url, name }: { url: string; name: string }) {
           credentials: "include",
           signal: controller.signal,
         });
-        if (!response.ok)
-          throw new Error(`The API answered ${response.status}.`);
+        if (!response.ok) throw new Error("This file could not be loaded.");
         const bytes = await response.arrayBuffer();
         const head = new TextDecoder().decode(bytes.slice(0, PDF_MAGIC.length));
         if (head !== PDF_MAGIC) throw new Error("This file is not a PDF.");

@@ -5,7 +5,7 @@ import { Link, matchRoutes, useLocation, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { useMe } from "@/features/auth/auth-context";
-import { PageLoading } from "@/features/shell/page-status";
+import { cn } from "@/lib/utils";
 
 import { getOnboarding, onboardingKey } from "./onboarding-api";
 
@@ -59,6 +59,8 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
   const handled = useRef(checked);
   // True once the gate is done in this mount: before, the page asked for may not show yet.
   const [released, setReleased] = useState(checked);
+  // True once the gate sent the person to /welcome: it waits until the wizard is on screen.
+  const [sent, setSent] = useState(false);
   const state = useQuery({
     queryKey: onboardingKey,
     queryFn: ({ signal }) => getOnboarding(signal),
@@ -89,17 +91,53 @@ export function OnboardingGate({ children }: { children: ReactNode }) {
           { replace: true },
         )
       : undefined;
-    // Every page shows again once the decision is carried out (the wizard open, or staying).
+    // Staying: every page shows again once the decision is carried out. Sent to the wizard: the
+    // router applies the move in a transition, so its promise can settle while the old page is
+    // still the one rendered; the gate lets go once the wizard is the page (below).
     void Promise.resolve(moving).then(() => {
-      setReleased(true);
+      if (send) setSent(true);
+      else setReleased(true);
     });
   }, [decided, open, userId, location, navigate, atWelcome]);
+  if (sent && atWelcome && !released) setReleased(true);
   // Until the first answer of this session, and while the move to /welcome is on its way, the
   // page asked for is not shown.
   const waiting =
-    !released && userId !== undefined && (!decided || (open && !atWelcome));
-  if (waiting) return <PageLoading />;
+    !released &&
+    userId !== undefined &&
+    (!decided || (open && !atWelcome) || (sent && !atWelcome));
+  if (waiting) return <PageSkeleton />;
   return children;
+}
+
+const BAR =
+  "rounded-md bg-foreground/10 animate-pulse motion-reduce:animate-none";
+
+/**
+ * The page's place while the gate decides: grey bars where a heading, a line and a few rows
+ * will be, inside the shell's header and footer. It fades in only after a short delay
+ * (`delayed-appear`), so a quick answer shows no flash of it; screen readers hear "Loading".
+ */
+function PageSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="page-skeleton"
+      className="delayed-appear mx-auto flex w-full max-w-6xl flex-col gap-6"
+    >
+      <span className="sr-only">Loading</span>
+      <div aria-hidden="true" className="flex flex-col gap-3">
+        <div className={cn(BAR, "h-8 w-48")} />
+        <div className={cn(BAR, "h-4 w-full max-w-md")} />
+      </div>
+      <div aria-hidden="true" className="flex flex-col gap-3">
+        {[0, 1, 2, 3].map((row) => (
+          <div key={row} className={cn(BAR, "h-16 w-full")} />
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /** The home page's "Finish setting up" while the wizard is not finished and steps are left. */

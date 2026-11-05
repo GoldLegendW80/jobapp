@@ -232,7 +232,9 @@ describe("bulk actions", () => {
       "data-status",
       "skipped",
     );
-    await screen.findByText(/Nothing was changed\. The API answered 500/);
+    await screen.findByText(
+      /Nothing was changed\. Something went wrong on the server\. Try again in a moment\./,
+    );
     expect(table().querySelector("[data-status]")).toHaveAttribute(
       "data-status",
       "found",
@@ -385,10 +387,13 @@ describe("add a posting", () => {
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("Company"), "Anthropic");
     await user.type(within(dialog).getByLabelText("Title"), "Engineer 2");
-    await user.selectOptions(
-      within(dialog).getByLabelText("Contract type"),
-      "CDI",
-    );
+    // The contracts read as words ("Permanent"); the code is the value sent.
+    const contract = within(dialog).getByLabelText("Contract type");
+    expect(
+      within(contract).getByRole("option", { name: "Permanent" }),
+    ).toHaveValue("CDI");
+    expect(contract).not.toHaveTextContent(/\b(CDI|CDD|Stage|Alternance)\b/);
+    await user.selectOptions(contract, "CDI");
     await user.click(
       within(dialog).getByRole("button", { name: "Add posting" }),
     );

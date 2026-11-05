@@ -52,6 +52,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
 import { LikeButton } from "@/features/apply/like-button";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
+import { contractWord } from "@/lib/wording";
 
 import {
   addJob,
@@ -535,7 +536,7 @@ export function AddPostingDialog({
                 <option value="">Read from the title</option>
                 {CONTRACT_TYPES.map((type) => (
                   <option key={type} value={type}>
-                    {type}
+                    {contractWord(type)}
                   </option>
                 ))}
               </NativeSelect>

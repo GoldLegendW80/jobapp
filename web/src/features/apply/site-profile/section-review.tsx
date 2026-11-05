@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { errorDetail, describeError } from "@/lib/api";
+import { siteProfileProblem } from "@/lib/wording";
 import { ConfirmDialog } from "../confirm-dialog";
 import {
   action,
@@ -361,8 +362,7 @@ function SectionReviewContent({
         )}
         {section.error_code && (
           <p role="alert" className="text-sm text-destructive">
-            The section needs another review (
-            {section.error_code.replaceAll("_", " ")}).
+            {siteProfileProblem(section.error_code)}
           </p>
         )}
         <div className="grid gap-4 md:grid-cols-2">

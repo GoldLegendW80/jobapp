@@ -188,7 +188,7 @@ export const skillsSchema = z
     none: z.array(categorySchema).max(CATEGORIES_MAX),
     gates: z
       .array(gateSchema)
-      .max(GATES_MAX, `Keep at most ${GATES_MAX} gates.`),
+      .max(GATES_MAX, `Keep at most ${GATES_MAX} requirements.`),
   })
   .superRefine((values, ctx) => {
     // Category names are unique across the three lists, as the api requires.
@@ -211,7 +211,7 @@ export const skillsSchema = z
       values.gates,
       (g) => fold(g.name),
       "name",
-      "Another gate already has this name.",
+      "Another requirement already has this name.",
       ctx,
       "gates",
     );

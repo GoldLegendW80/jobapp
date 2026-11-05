@@ -249,6 +249,35 @@ describe("the first login redirect", () => {
     expect(document.documentElement.dataset.onboarding).toBe("stay");
   });
 
+  it("shows the shell around a skeleton while it checks, never the page asked for", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    let release: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    server.use(
+      http.get("*/api/opportunities/onboarding", async () => {
+        await answered;
+        return HttpResponse.json({ ...fresh, open_wizard: false });
+      }),
+    );
+    renderApp("/jobs");
+    const skeleton = await screen.findByTestId("page-skeleton");
+    expect(skeleton).toHaveAttribute("role", "status");
+    expect(skeleton).toHaveTextContent("Loading");
+    // The frame is there: the main navigation and the footer, around the skeleton.
+    expect(screen.getByRole("navigation", { name: "Main" })).toBeVisible();
+    expect(screen.getByRole("contentinfo")).toBeInTheDocument();
+    expect(screen.getByRole("main")).toContainElement(skeleton);
+    expect(
+      screen.queryByRole("heading", { level: 1, name: "Jobs" }),
+    ).toBeNull();
+    release();
+    await screen.findByRole("heading", { level: 1, name: "Jobs" });
+    expect(screen.queryByTestId("page-skeleton")).toBeNull();
+  });
+
   it("never sends a person the api does not send", async () => {
     fakeSession(member);
     const app = renderApp("/jobs");

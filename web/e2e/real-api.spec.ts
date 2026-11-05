@@ -53,13 +53,15 @@ test.describe("real api, database up", () => {
     "set E2E_REAL_API=up with the api and database running",
   );
 
-  test('the page shows "API ok" from the running api', async ({ page }) => {
+  test('the page shows "Server reachable" from the running api', async ({
+    page,
+  }) => {
     const response = page.waitForResponse("**/api/health");
     await page.goto("/");
     expect((await response).status()).toBe(200);
     await expect(
       page.getByRole("contentinfo").getByRole("status"),
-    ).toContainText("API ok");
+    ).toContainText("Server reachable");
     await page.screenshot({
       path: path.join(evidence, "real-api-ok.png"),
       fullPage: true,
@@ -82,7 +84,7 @@ test.describe("real api, database down", () => {
     "set E2E_REAL_API=db-down with the database stopped",
   );
 
-  test('the page shows "API unavailable" from the real 503', async ({
+  test('the page shows "Server unreachable" from the real 503', async ({
     page,
   }) => {
     const response = page.waitForResponse("**/api/health");
@@ -90,10 +92,10 @@ test.describe("real api, database down", () => {
     expect((await response).status()).toBe(503);
     await expect(
       page.getByRole("contentinfo").getByRole("status"),
-    ).toContainText("API unavailable");
+    ).toContainText("Server unreachable");
     await expect(
       page.getByRole("contentinfo").getByRole("status"),
-    ).toContainText("The API answered 503: database unavailable.");
+    ).toContainText("database unavailable.");
     await page.screenshot({
       path: path.join(evidence, "real-api-db-down.png"),
       fullPage: true,

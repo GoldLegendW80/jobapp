@@ -9,7 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { describeError } from "@/lib/api";
+import { formatCount } from "@/lib/format";
 import { useTitle } from "@/lib/use-title";
+import { WORDING, templateTagWord } from "@/lib/wording";
 
 import {
   documentKey,
@@ -42,7 +44,7 @@ import {
 
 /**
  * /documents/templates: every template the api serves, the person's own under "From your CV"
- * first, with names, descriptions and tags, filters (photo, columns, ats friendly), and the letter
+ * first, with names, descriptions and tags, filters (photo, columns, easy for hiring software to read), and the letter
  * on hover or tap. Opened from a document (`?document=<id>`), each offers "Use for this document",
  * which switches that document (a base CV's template is what the CVs written from it afterwards
  * take).
@@ -197,7 +199,7 @@ function FilterBar({
             onChange({ ...filters, ats: event.target.checked });
           }}
         />
-        <Label htmlFor={atsId}>ATS friendly only</Label>
+        <Label htmlFor={atsId}>{WORDING.easyForHiringSoftware}</Label>
       </div>
     </fieldset>
   );
@@ -241,8 +243,8 @@ function Gallery({
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground" aria-live="polite">
         {isFiltered(filters)
-          ? `${String(shown.length)} of ${String(templates.length)} templates match.`
-          : `${String(templates.length)} templates.`}
+          ? `${formatCount(shown.length)} of ${formatCount(templates.length)} templates match.`
+          : `${formatCount(templates.length)} templates.`}
       </p>
       {used ? (
         <p role="status" className="text-sm font-medium">
@@ -362,10 +364,15 @@ function TemplateCard({
         <p className="text-sm text-muted-foreground">{description}</p>
       ) : null}
       {template.tags.length > 0 ? (
-        <ul aria-label={`Tags of ${name}`} className="flex flex-wrap gap-1">
+        <ul
+          aria-label={`Tags of ${name}`}
+          className="flex min-w-0 flex-wrap gap-1"
+        >
           {template.tags.map((tag) => (
-            <li key={tag}>
-              <Badge variant="outline">{tag}</Badge>
+            <li key={tag} className="max-w-full min-w-0">
+              <Badge variant="outline" className="max-w-full whitespace-normal">
+                {templateTagWord(tag)}
+              </Badge>
             </li>
           ))}
         </ul>

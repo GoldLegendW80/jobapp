@@ -26,6 +26,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { JobWebsitesSignIn } from "@/features/browser/site-signin";
 import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
 import { cn } from "@/lib/utils";
+import { REMOTE_WORDS, contractWord } from "@/lib/wording";
 
 import {
   CONTRACT_TYPES,
@@ -54,21 +55,9 @@ import {
 } from "./section-ui";
 import { useSectionForm } from "./use-section-form";
 
-const CONTRACT_LABELS: Record<(typeof CONTRACT_TYPES)[number], string> = {
-  CDI: "CDI (permanent)",
-  CDD: "CDD (fixed term)",
-  VIE: "VIE",
-  Stage: "Stage (internship)",
-  Alternance: "Alternance (apprenticeship)",
-  Freelance: "Freelance",
-};
-
-const STANCE_LABELS: Record<(typeof REMOTE_STANCES)[number], string> = {
-  remote: "Remote only",
-  hybrid: "Hybrid",
-  office: "Office",
-  any: "Any",
-};
+// The same words as the wizard and the postings (lib/wording.ts): one name for one thing.
+const STANCE_LABELS: Record<(typeof REMOTE_STANCES)[number], string> =
+  REMOTE_WORDS;
 
 export function SearchTab({
   profile,
@@ -266,7 +255,7 @@ function ContractTypes({ form }: { form: UseFormReturn<SearchForm> }) {
                       );
                     }}
                   >
-                    {CONTRACT_LABELS[type]}
+                    {contractWord(type)}
                   </Button>
                 );
               })}

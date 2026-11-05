@@ -79,7 +79,11 @@ describe("the submit lease", () => {
       const view = await connected(opened);
       expect(view.screen.viewOnly).toBe(true);
       expect(await screen.findByRole("status")).toHaveTextContent(SUBMITS);
-      for (const name of ["Take over", "Give back", "Keyboard"]) {
+      for (const name of [
+        "Use the browser myself",
+        "Let the assistant continue",
+        "Keyboard",
+      ]) {
         expect(screen.queryByRole("button", { name })).toBeNull();
       }
       expect(screen.queryByLabelText("Type into your browser")).toBeNull();
@@ -156,7 +160,7 @@ describe("the fill slot", () => {
     slot("any", false);
     await connected(opened);
     expect(
-      await screen.findByRole("button", { name: "Take over" }),
+      await screen.findByRole("button", { name: "Use the browser myself" }),
     ).toBeEnabled();
     expect(screen.getByLabelText("Type into your browser")).toBeInTheDocument();
   });

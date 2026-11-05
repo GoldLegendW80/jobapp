@@ -1,8 +1,9 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle, Timer } from "lucide-react";
+import { CircleAlert, Info, LoaderCircle, Timer } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
+import { useLocation, useSearchParams } from "react-router";
 import { z } from "zod";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -25,9 +26,11 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { useTitle } from "@/lib/use-title";
+import { WORDING } from "@/lib/wording";
 
 import { login } from "./api";
 import { useAuth } from "./auth-context";
+import type { LoginState } from "./guards";
 import { AuthLayout } from "./auth-layout";
 import { loginErrorMessage } from "./login-errors";
 import { formatWait, throttledFor, useRetryCountdown } from "./retry-countdown";
@@ -68,6 +71,13 @@ export function LoginPage() {
   const countdown = useRetryCountdown(mutation.reset);
   const locked = countdown.remaining > 0;
   const pending = mutation.isPending || mutation.isSuccess;
+  // Only when a signed in page lost its session and sent the person here with `next`: never
+  // on a first visit, nor after an explicit sign out (which lands here without `next`).
+  const location = useLocation();
+  const [params] = useSearchParams();
+  const sessionEnded =
+    params.get("next") !== null &&
+    (location.state as LoginState | null)?.sessionEnded === true;
 
   return (
     <AuthLayout>
@@ -91,6 +101,14 @@ export function LoginPage() {
             }
           >
             <CardContent className="flex flex-col gap-4">
+              {sessionEnded && !mutation.isError ? (
+                <Alert>
+                  <Info aria-hidden="true" />
+                  <AlertDescription data-testid="session-ended">
+                    {WORDING.sessionEnded}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
               {mutation.isError ? (
                 <Alert variant="destructive">
                   <CircleAlert aria-hidden="true" />

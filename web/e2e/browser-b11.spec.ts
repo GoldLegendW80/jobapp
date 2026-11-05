@@ -182,7 +182,7 @@ test("A's whole path, B refused on each of A's identifiers, and no secret in a l
     await pageA.goto("/account");
     await expect(
       pageA.getByText(
-        "You are watching your browser. Take over to use it yourself.",
+        "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
       ),
     ).toBeVisible({ timeout: 45_000 });
     agent.ask();

@@ -638,7 +638,7 @@ describe("Find jobs", () => {
     await startSearch();
     expect(
       await screen.findByText(
-        /The search did not start\. The API answered 503/,
+        /The search did not start\. The sweep could not be queued\. Try again in a minute\./,
       ),
     ).toBeInTheDocument();
     expect(

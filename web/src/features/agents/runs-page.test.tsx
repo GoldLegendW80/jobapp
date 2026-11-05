@@ -119,11 +119,18 @@ describe("/runs", () => {
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Done");
     expect(items[0]).toHaveTextContent("4,520 in, 42 out");
-    expect(items[0]).toHaveTextContent("$0.0123");
+    expect(items[0]).toHaveTextContent("$0.01");
     expect(items[0]).toHaveTextContent("4.2 s");
     expect(items[0]).toHaveAttribute("href", `/runs/${ID}`);
     expect(items[1]).toHaveTextContent("Failed");
     expect(items[1]).toHaveTextContent("limit of 4 turns");
+    // The agent by name in words, never its id.
+    expect(items[0]).toHaveTextContent("Test agent");
+    expect(items[0]).not.toHaveTextContent("echo");
+    expect(document.title).toBe("Assistant activity · jobapp");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Assistant activity" }),
+    ).toBeVisible();
     // No test agent offered (production): no test run card.
     expect(screen.queryByText("Test run")).not.toBeInTheDocument();
     // Its entry is Activity in the account menu (shell/user-menu.tsx), marked current.
@@ -135,10 +142,50 @@ describe("/runs", () => {
     ).toHaveAttribute("aria-current", "page");
   });
 
+  it("says a raw end code in a sentence", async () => {
+    agentsApi({
+      runs: [
+        run({
+          status: "failed",
+          error: "max_turns",
+          agent: "browser_discovery",
+        }),
+      ],
+    });
+    renderApp("/runs");
+    const list = await screen.findByRole("list", { name: "Runs" });
+    const [item] = within(list).getAllByRole("link");
+    expect(item).toHaveTextContent("Website search");
+    expect(item).toHaveTextContent("The run reached its limit of turns.");
+    expect(item).not.toHaveTextContent("max_turns");
+  });
+
+  it("offers Try again when the activity could not be loaded", async () => {
+    agentsApi();
+    let fail = true;
+    server.use(
+      http.get("*/api/agents/runs", () =>
+        fail
+          ? HttpResponse.json({ detail: "boom" }, { status: 500 })
+          : HttpResponse.json({ items: [] }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderApp("/runs");
+    expect(
+      await screen.findByText(
+        /The activity could not be loaded\. Something went wrong on the server\./,
+      ),
+    ).toBeVisible();
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText(/No activity yet/)).toBeInTheDocument();
+  });
+
   it("says when there is no run", async () => {
     agentsApi();
     renderApp("/runs");
-    expect(await screen.findByText(/No run yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No activity yet/)).toBeInTheDocument();
   });
 
   it("starts a test run and opens it", async () => {
@@ -602,7 +649,7 @@ describe("/runs/:id, the run panel", () => {
       const steps = await within(panel).findByRole("list", { name: "Steps" });
       const metrics = panel.querySelector("dl")!;
       await waitFor(() => {
-        expect(metrics).toHaveTextContent("$0.193");
+        expect(metrics).toHaveTextContent("$0.19");
       });
       return { panel, steps, metrics };
     }
@@ -612,10 +659,10 @@ describe("/runs/:id, the run panel", () => {
         done({ credential_kind: "anthropic_api_key" }),
       );
       expect(within(metrics).getByText("Cost")).toBeInTheDocument();
-      expect(metrics).toHaveTextContent("Cost$0.193");
+      expect(metrics).toHaveTextContent("Cost$0.19");
       expect(within(panel).queryByTestId("cost-note")).not.toBeInTheDocument();
       expect(
-        within(steps).getByText("43,100 in, 1,116 out, $0.193"),
+        within(steps).getByText("43,100 in, 1,116 out, $0.19"),
       ).toBeInTheDocument();
       expect(panel).not.toHaveTextContent(/estimate|not billed|not a bill/i);
     });
@@ -624,14 +671,14 @@ describe("/runs/:id, the run panel", () => {
       const { panel, steps, metrics } = await openRun(
         done({ credential_kind: "claude_subscription" }),
       );
-      expect(metrics).toHaveTextContent("Estimate at API prices$0.193");
+      expect(metrics).toHaveTextContent("Estimate at API prices$0.19");
       expect(within(metrics).queryByText("Cost")).not.toBeInTheDocument();
       expect(within(panel).getByTestId("cost-note")).toHaveTextContent(
         "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
       );
       expect(
         within(steps).getByText(
-          "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
+          "43,100 in, 1,116 out, $0.19 estimated at API prices, not a bill",
         ),
       ).toBeInTheDocument();
       expect(panel.textContent).not.toMatch(/[–—]| - /);
@@ -644,13 +691,13 @@ describe("/runs/:id, the run panel", () => {
       "is worded neutrally when the kind is %s",
       async (_name, changes: Partial<Run>) => {
         const { panel, steps, metrics } = await openRun(done(changes));
-        expect(metrics).toHaveTextContent("Amount at API prices$0.193");
+        expect(metrics).toHaveTextContent("Amount at API prices$0.19");
         expect(within(metrics).queryByText("Cost")).not.toBeInTheDocument();
         expect(within(panel).getByTestId("cost-note")).toHaveTextContent(
           "The kind of credential this run used was not recorded, so whether this amount was billed is not known.",
         );
         expect(
-          within(steps).getByText("43,100 in, 1,116 out, $0.193 at API prices"),
+          within(steps).getByText("43,100 in, 1,116 out, $0.19 at API prices"),
         ).toBeInTheDocument();
         expect(metrics).not.toHaveTextContent(
           /estimate|not billed|not a bill/i,
@@ -666,9 +713,9 @@ describe("/runs/:id, the run panel", () => {
     it.each([
       [
         "claude_subscription",
-        "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
+        "43,100 in, 1,116 out, $0.19 estimated at API prices, not a bill",
       ],
-      ["anthropic_api_key", "43,100 in, 1,116 out, $0.193"],
+      ["anthropic_api_key", "43,100 in, 1,116 out, $0.19"],
     ])(
       "words the usage step by the kind it carries (%s), before the detail knows it",
       async (kind, line) => {
@@ -716,7 +763,7 @@ describe("/runs/:id, the run panel", () => {
         const steps = await within(panel).findByRole("list", { name: "Steps" });
         expect(
           await within(steps).findByText(
-            "43,100 in, 1,116 out, $0.193 estimated at API prices, not a bill",
+            "43,100 in, 1,116 out, $0.19 estimated at API prices, not a bill",
           ),
         ).toBeInTheDocument();
         view.unmount();
@@ -727,7 +774,7 @@ describe("/runs/:id, the run panel", () => {
       const { panel, metrics } = await openRun(
         done({ credential_kind: "claude_subscription" }),
       );
-      const amount = within(metrics).getByText("$0.193");
+      const amount = within(metrics).getByText("$0.19");
       const note = within(panel).getByTestId("cost-note");
       expect(amount.tagName).toBe("DD");
       expect(note.id).not.toBe("");
@@ -746,7 +793,7 @@ describe("/runs/:id, the run panel", () => {
       const { metrics } = await openRun(
         done({ credential_kind: "anthropic_api_key" }),
       );
-      expect(within(metrics).getByText("$0.193")).not.toHaveAttribute(
+      expect(within(metrics).getByText("$0.19")).not.toHaveAttribute(
         "aria-describedby",
       );
     });
@@ -784,9 +831,9 @@ describe("/runs/:id, the run panel", () => {
         .getAllByTestId("run-cost")
         .map((node) => node.textContent);
       expect(costs).toEqual([
-        "$0.193",
-        "$0.193Estimate, not a bill",
-        "$0.193At API prices",
+        "$0.19",
+        "$0.19Estimate, not a bill",
+        "$0.19At API prices",
         "None yet",
       ]);
       expect(
