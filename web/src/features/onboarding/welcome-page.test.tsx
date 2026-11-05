@@ -984,6 +984,10 @@ describe("the wizard", () => {
     expect(stepHeading()).toHaveTextContent("Step 3 of 8: Where");
     const bar = screen.getByRole("progressbar", { name: "Wizard progress" });
     expect(bar).toHaveAttribute("aria-valuetext", "Step 3 of 8: Where");
+    // The step is the value, 1 to 8, not the share of the bar that is filled.
+    expect(bar).toHaveAttribute("aria-valuenow", "3");
+    expect(bar).toHaveAttribute("aria-valuemin", "1");
+    expect(bar).toHaveAttribute("aria-valuemax", "8");
     // The names are display none below sm (Tailwind's hidden) and a row from sm up.
     const names = screen.getByTestId("welcome-step-names");
     expect(names).toHaveClass("hidden", "sm:flex");

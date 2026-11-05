@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Form,
   FormControl,
@@ -354,18 +355,16 @@ function EmployerFields({
             control={control}
             name={`employers.${index}.present`}
             render={({ field }) => (
+              // No ref: on React 18 the Checkbox function drops it, and no error focuses it.
               <FormItem className="flex items-center gap-2">
                 <FormControl>
-                  <input
-                    type="checkbox"
-                    className="size-4 accent-primary"
-                    name={field.name}
-                    ref={field.ref}
+                  <Checkbox
                     checked={field.value}
                     onBlur={field.onBlur}
-                    onChange={(event) => {
-                      field.onChange(event.target.checked);
-                      if (event.target.checked) {
+                    onCheckedChange={(value) => {
+                      const checked = value === true;
+                      field.onChange(checked);
+                      if (checked) {
                         form.setValue(`employers.${index}.end`, "", {
                           shouldDirty: true,
                         });

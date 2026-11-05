@@ -2,14 +2,7 @@
  * Building blocks shared by the profile tabs: text and date fields bound to react-hook-form,
  * the up, down and remove buttons of a list item, the Save bar, and the conflict dialog.
  */
-import {
-  ArrowDown,
-  ArrowUp,
-  CircleAlert,
-  LoaderCircle,
-  Save,
-  Trash2,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, CircleAlert, Save, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Control, FieldPath, FieldValues } from "react-hook-form";
 
@@ -32,6 +25,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
@@ -264,11 +258,7 @@ export function SaveBar({
         {dirty ? "Unsaved changes" : "All changes saved"}
       </span>
       <Button type="submit" disabled={saving} aria-busy={saving}>
-        {saving ? (
-          <LoaderCircle aria-hidden="true" className="animate-spin" />
-        ) : (
-          <Save aria-hidden="true" />
-        )}
+        {saving ? <Spinner aria-hidden="true" /> : <Save aria-hidden="true" />}
         {saving ? "Saving" : `Save ${label.toLowerCase()}`}
       </Button>
     </div>

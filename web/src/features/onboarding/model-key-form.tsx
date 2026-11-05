@@ -6,14 +6,19 @@ import {
   EyeOff,
   Info,
   KeyRound,
-  LoaderCircle,
 } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { fieldError } from "@/features/account/field-error";
 import { message } from "@/features/admin/errors";
 import {
@@ -148,9 +153,7 @@ export function ModelKeyForm() {
               verify.mutate();
             }}
           >
-            {verify.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {verify.isPending ? <Spinner aria-hidden="true" /> : null}
             {WORDING.verify}
           </Button>
         )}
@@ -208,8 +211,10 @@ export function ModelKeyForm() {
             <AlertDescription>{formError}</AlertDescription>
           </Alert>
         ) : null}
-        <div className="grid gap-1.5">
-          <Label htmlFor={ids.secret}>{WORDING.apiKey}</Label>
+        <Field className="gap-1.5">
+          <FieldLabel htmlFor={ids.secret} className="leading-none">
+            {WORDING.apiKey}
+          </FieldLabel>
           <div className="relative">
             <Input
               id={ids.secret}
@@ -250,16 +255,12 @@ export function ModelKeyForm() {
               )}
             </Button>
           </div>
-          <p id={ids.hint} className="text-xs text-muted-foreground">
+          <FieldDescription id={ids.hint} className="text-xs nth-last-2:mt-0">
             It is stored encrypted and never shown again: only its last four
             characters are.
-          </p>
-          {secretError ? (
-            <p id={ids.error} role="alert" className="text-sm text-destructive">
-              {secretError}
-            </p>
-          ) : null}
-        </div>
+          </FieldDescription>
+          <FieldError id={ids.error}>{secretError}</FieldError>
+        </Field>
         <Button
           type="submit"
           variant="outline"
@@ -267,9 +268,7 @@ export function ModelKeyForm() {
           disabled={save.isPending}
           aria-busy={save.isPending}
         >
-          {save.isPending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
-          ) : null}
+          {save.isPending ? <Spinner aria-hidden="true" /> : null}
           {WORDING.saveKey}
         </Button>
       </form>

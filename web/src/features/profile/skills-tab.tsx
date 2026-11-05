@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Form,
   FormControl,
@@ -413,10 +414,8 @@ function TryIt({ form }: { form: UseFormReturn<SkillsForm> }) {
       title="Try it"
       description="Paste a job posting to see which categories and requirements match, with the rules search uses: whole words, any case, an optional plural. Uses the terms on this page, saved or not."
     >
-      <div className="grid gap-2">
-        <label htmlFor="skills-try-it" className="text-sm font-medium">
-          Posting text
-        </label>
+      <Field className="gap-2">
+        <FieldLabel htmlFor="skills-try-it">Posting text</FieldLabel>
         <Textarea
           id="skills-try-it"
           rows={6}
@@ -426,7 +425,7 @@ function TryIt({ form }: { form: UseFormReturn<SkillsForm> }) {
             setText(event.target.value);
           }}
         />
-      </div>
+      </Field>
       {sections.length > 0 ? (
         <div
           aria-label="Matches"

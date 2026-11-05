@@ -1,11 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  CircleAlert,
-  Download,
-  FileJson,
-  LoaderCircle,
-  Upload,
-} from "lucide-react";
+import { CircleAlert, Download, FileJson, Upload } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -26,6 +20,9 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import {
@@ -84,7 +81,7 @@ export function ProfileFileMenu({
             aria-busy={exporting.isPending}
           >
             {exporting.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" />
             ) : (
               <FileJson aria-hidden="true" />
             )}
@@ -254,16 +251,14 @@ function ImportBody({
   const summary = check?.ok ? check.summary : undefined;
   return (
     <div className="flex min-w-0 flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <label htmlFor={id} className="text-sm font-medium">
-          Profile file
-        </label>
-        <input
+      <Field className="gap-2">
+        <FieldLabel htmlFor={id}>Profile file</FieldLabel>
+        <Input
           id={id}
           type="file"
           accept="application/json,.json"
           disabled={mutation.isPending}
-          className="block w-full min-w-0 text-sm file:mr-3 file:rounded-md file:border file:border-input file:bg-background file:px-3 file:py-1.5 file:text-sm file:font-medium"
+          className="file:mr-3"
           onChange={(event) => {
             const chosen = event.target.files?.[0];
             // Cleared at once, so choosing the same file again (after fixing it) fires a change.
@@ -281,7 +276,7 @@ function ImportBody({
             Reading the file
           </p>
         ) : null}
-      </div>
+      </Field>
       {check && !check.ok ? (
         <Alert variant="destructive">
           <CircleAlert aria-hidden="true" />
@@ -382,7 +377,7 @@ function ImportBody({
           }}
         >
           {mutation.isPending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
+            <Spinner aria-hidden="true" />
           ) : (
             <Upload aria-hidden="true" />
           )}
