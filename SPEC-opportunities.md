@@ -137,7 +137,7 @@ All require a session and act on the caller's own rows only (404 otherwise); a p
 
 ## Frontend
 
-`/discover`: the deck (one card, Like and Pass buttons, Undo last, the mode badge, the filter row under Advanced, the empty state), first in the navigation after the rename's wording, mobile first (a thumb's reach, 375px). `/welcome`: the wizard. The profile's Search options tab: the new target fields, the pay, the opt in platforms with their risk sentences, all through the shared Advanced section. Light and dark; no dashes as separators.
+`/discover`: the deck (one card, Like and Pass buttons named under them and gone without a card, Undo last (without a card, only while there is a swipe to undo), the keys hint for a precise pointer only, the mode badge "Like: Review first" or "Like: Full auto", the filter row under Advanced, the empty state), first in the navigation after the rename's wording, mobile first (a thumb's reach, 375px). `/welcome`: the wizard. The profile's Search options tab: the new target fields, the pay, the opt in platforms with their risk sentences, all through the shared Advanced section. Light and dark; no dashes as separators.
 
 ## Testing strategy
 

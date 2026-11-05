@@ -21,8 +21,9 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  * match of that rule: on /discover the cybersecurity card never shows. A Likes the first card (Review first: the toast says the documents are being written),
  * Passes the second with the left arrow, undoes the Pass (the card is back), Passes it again by
  * a mouse drag, reloads (the deck is empty, with the threshold named, and neither Pass, Like
- * nor Undo last shows, since nothing is left to swipe or undo). The Like is in the review queue (/applications). Person B, signed in beside A, has
- * an empty deck, and A's posting answers 404 to B's Pass and its undo.
+ * nor Undo last shows, since nothing is left to swipe or undo). The Like is in the review queue
+ * (/applications). Person B, signed in beside A, has an empty deck, and A's posting answers 404
+ * to B's Pass and its undo.
  *
  * Locally, as opportunities-all.config.ts says, then:
  *   E2E_CADDY_URL=... E2E_ATS_FORMS_URL=... E2E_COMPOSE_PROJECT=... \
