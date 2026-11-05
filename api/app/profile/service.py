@@ -41,11 +41,17 @@ Two kinds of search field are kept when a save or an import leaves the key out
 `location_exclude`): a page loaded before the field existed, an export made before it, or a
 History revision restored from before it keeps the stored value, and a key sent with a list,
 the empty list included, replaces it.
+Other modules follow the changes through `register_section_callback`: after a save, an import
+or an onboarding write changed a section's content, each callback gets the session, the person,
+the names of the sections whose content changed and the new revision, in the same transaction
+(jobs: a change of `skills` asks for a rescore, app/jobs/rescore.py). This module imports none
+of them.
 The caller owns the transaction and commits it. Nothing here logs profile contents.
 """
 
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -70,6 +76,27 @@ from app.profile.schemas import (
 
 REVISIONS_PAGE_MAX = 100
 logger = logging.getLogger(__name__)
+
+# (session, user_id, the sections whose content changed, the new revision, now)
+SectionCallback = Callable[[Session, uuid.UUID, frozenset[str], int, datetime], None]
+_section_callbacks: list[SectionCallback] = []
+
+
+def register_section_callback(callback: SectionCallback) -> None:
+    """Call `callback` after every write that changes a section's content (module docstring).
+    Registering the same function again changes nothing. A callback that raises fails the write:
+    the caller rolls the transaction back, the change with it."""
+    if callback not in _section_callbacks:
+        _section_callbacks.append(callback)
+
+
+def _changed(
+    db: Session, user_id: uuid.UUID, sections: frozenset[str], revision: int, now: datetime
+) -> None:
+    if not sections:
+        return
+    for callback in _section_callbacks:
+        callback(db, user_id, sections, revision, now)
 
 
 ONBOARDING_FIELDS = ("completed_at", "dismissed_at")
@@ -292,6 +319,7 @@ def _write(
     db: Session, profile: Profile, section: str, data: dict[str, Any], now: datetime
 ) -> Profile:
     user_id = profile.user_id
+    before = (profile.sections or {}).get(section)
     profile.sections = {**(profile.sections or {}), section: data}
     profile.revision = profile.revision + 1
     profile.updated_at = now
@@ -305,6 +333,7 @@ def _write(
         )
     )
     db.flush()
+    _changed(db, user_id, frozenset({section} if before != data else ()), profile.revision, now)
     return profile
 
 
@@ -348,12 +377,15 @@ def import_profile(
                 created_at=now,
             )
         )
+    before = profile.sections or {}
+    changed = frozenset(name for name in SECTIONS if before.get(name) != sections[name])
     profile.sections = {name: sections[name] for name in SECTIONS}
     profile.revision = revision
     profile.updated_at = now
     if photo is not None:
         profile.photo, profile.photo_mime = photo.data, photo.mime
     db.flush()
+    _changed(db, user_id, changed, revision, now)
     return profile
 
 

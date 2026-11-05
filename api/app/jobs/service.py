@@ -909,6 +909,40 @@ def computed_score(
     return None if text is None else scoring.score(text, skills, title=job.title, search=search)
 
 
+DRAFT_ROWS_MAX = 2_000  # the postings a draft of the skills section is tried on, newest first
+
+
+def draft_fits(
+    db: Session,
+    user_id: uuid.UUID,
+    skills: SkillsSection,
+    search: SearchSection | None,
+    statuses: Iterable[JobStatus],
+    since: date,
+    limit: int = DRAFT_ROWS_MAX,
+) -> dict[uuid.UUID, int]:
+    """The fits a rescore with `skills` would store on the person's postings in `statuses` found
+    on or after `since` (newest first, `limit` at most), by id, storing nothing. A fit set by
+    hand is left out (a rescore keeps it), and so is a posting without text."""
+    jobs = db.scalars(
+        jobs_of(user_id)
+        .where(
+            Job.status.in_(list(statuses)),
+            Job.found_on >= since,
+            Job.fit_overridden.is_(False),
+        )
+        .options(undefer(Job.posting_text))
+        .order_by(Job.found_on.desc(), Job.id)
+        .limit(limit)
+    )
+    found: dict[uuid.UUID, int] = {}
+    for job in jobs:
+        result = computed_score(job, skills, search)
+        if result is not None:
+            found[job.id] = result.fit
+    return found
+
+
 def imported_fit_is_manual(item: ImportJob, skills: SkillsSection | None) -> bool:
     """Whether an imported row's fit was set by hand: it has a fit and a posting text, and the
     fit is not what the engine computes from that posting (header included). Without skills
@@ -1376,6 +1410,11 @@ class RescoreOutcome:
     skipped_no_text: int = 0
     skipped_busy: int = 0  # held by another transaction: not waited for, the next rescore does it
     last_id: uuid.UUID | None = None  # the last job looked at, where a next call resumes
+    # With a `threshold`: the fits that reached it from under it (or from none), and those that
+    # fell under it. `busy`: the ids counted in `skipped_busy`, for one more try.
+    up: int = 0
+    down: int = 0
+    busy: list[uuid.UUID] = field(default_factory=list)
 
 
 def rescore_batch(
@@ -1389,9 +1428,11 @@ def rescore_batch(
     limit: int,
     overwrite_manual: bool,
     outcome: RescoreOutcome,
+    threshold: int | None = None,
 ) -> int:
     """Rescore up to `limit` of the user's jobs in id order after `after` (only `ids` when
     given), adding to `outcome`. Returns how many jobs it looked at (0 when none are left).
+    With a `threshold`, counts the fits that crossed it (`up`, `down`).
 
     A job another transaction holds (a status change, an accept) is not waited for: it keeps
     its score, counts in `skipped_busy` and is scored again by the next rescore. So a held row
@@ -1413,6 +1454,8 @@ def rescore_batch(
         skip_locked=True,
     )
     outcome.skipped_busy += len(looked) - len(jobs)
+    held = {job.id for job in jobs}
+    outcome.busy.extend(job_id for job_id in looked if job_id not in held)
     outcome.last_id = looked[-1]
     search = user_search(db, user_id)  # the bonus (scoring.bonus); None gives none
     for job in jobs:
@@ -1422,9 +1465,15 @@ def rescore_batch(
             continue
         outcome.scored += 1
         manual_kept = job.fit_overridden and not overwrite_manual
+        before = job.fit
         changed = apply_score(
             db, job, result, now, overwrite_manual=overwrite_manual, via="rescore"
         )
+        if threshold is not None:
+            was = before is not None and before >= threshold
+            now_in = job.fit is not None and job.fit >= threshold
+            outcome.up += int(now_in and not was)
+            outcome.down += int(was and not now_in)
         if manual_kept:
             outcome.skipped_manual += 1
         elif changed:

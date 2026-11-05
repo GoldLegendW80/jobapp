@@ -20,6 +20,9 @@ Sweeps queue (app.queue.SWEEPS):
   sweep.STALE_AFTER (worker crash, lost queue message).
 - cron:browser_removals: every minute, the profile directories queued for removal are removed
   through browserd (browser B7, app/browser/removals.py). On this queue for its free slots.
+- rescore_tick: cron every 10 seconds (rescore.TICK_SECONDS): the rescore a change of the skills
+  section asked for, one person after the other, never two of one person at once
+  (app/jobs/rescore.py). No model call: the fit is code.
 
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
@@ -128,7 +131,7 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import service, sweep
+from app.jobs import rescore, service, sweep
 from app.logging_config import configure_logging
 
 logger = logging.getLogger("app.worker")
@@ -323,6 +326,10 @@ def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
     return count
 
 
+async def rescore_tick(ctx: dict[str, Any]) -> int:
+    return await asyncio.to_thread(rescore.tick, sessions_of(ctx), clock_of(ctx))
+
+
 async def reap_sweeps(ctx: dict[str, Any]) -> int:
     count = await asyncio.to_thread(_reap, sessions_of(ctx), clock_of(ctx)())
     if count:
@@ -511,6 +518,7 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
             func(run_sweep, name="run_sweep", timeout=SWEEP_JOB_TIMEOUT_S, max_tries=2),
             func(scheduled_sweeps, name="scheduled_sweeps", timeout=240, max_tries=1),
             func(reap_sweeps, name="reap_sweeps", timeout=60, max_tries=1),
+            func(rescore_tick, name="rescore_tick", timeout=rescore.TICK_TIMEOUT_S, max_tries=1),
         ],
         cron_jobs=[
             cron(
@@ -522,9 +530,15 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
             ),
             cron(reap_sweeps, name="cron:reap_sweeps", second=30, timeout=60),
             cron(browser_removals.drain, name="cron:browser_removals", second=20, timeout=60),
+            cron(
+                rescore_tick,
+                name="cron:rescore_tick",
+                second=set(range(0, 60, rescore.TICK_SECONDS)),
+                timeout=rescore.TICK_TIMEOUT_S,
+            ),
         ],
-        # Two users' sweeps at once, plus room for the cron jobs.
-        max_jobs=MAX_SWEEPS + 2,
+        # Two users' sweeps at once, plus room for the cron jobs (a long rescore among them).
+        max_jobs=MAX_SWEEPS + 3,
         job_timeout_s=SWEEP_JOB_TIMEOUT_S,
         on_start=reap_sweeps,
     )

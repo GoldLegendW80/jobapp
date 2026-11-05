@@ -301,6 +301,14 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
   ).toContainText("researchmatches pytorch");
   await shots(page, "skills");
   await save(page, "Skills");
+  // Owner, 2026-11-05: the postings are rescored by themselves after a skills change; the
+  // worker's tick runs it within seconds and the line beside Save says what changed.
+  const rescored = page.getByTestId("rescore-line");
+  await expect(rescored).toContainText(
+    /more postings? now fits? you at \d+ or more|Rescored: no new posting reaches a fit of \d+/,
+    { timeout: 60_000 },
+  );
+  await expect(rescored).not.toContainText(/[–—]| - /);
   expect(errors).toEqual([]);
 });
 

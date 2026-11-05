@@ -69,7 +69,7 @@ import logging
 import sys
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -148,9 +148,12 @@ def eligible(
     last_day: date,
     lookback_days: int,
     statuses: frozenset[JobStatus] = eligibility.OPEN_STATUSES,
+    fits: Mapping[uuid.UUID, int] | None = None,
 ) -> list[Candidate]:
     """The person's eligible postings, in order. The query narrows by status, fit and window;
-    `eligibility.refusal` decides on every row it returns."""
+    `eligibility.refusal` decides on every row it returns. `fits`: the fits to read in place of
+    the stored ones (what a draft of the skills section would store, for the Skills tab's line
+    before a save); a posting it leaves out keeps its stored fit."""
     if not setting.auto:
         return []
     legacy = (
@@ -158,23 +161,27 @@ def eligible(
         .where(JobFile.job_id == Job.id, JobFile.origin == FileOrigin.legacy)
         .exists()
     )
+    narrow = [
+        Job.user_id == user_id,
+        Job.status.in_(statuses),
+        Job.found_on >= eligibility.since(last_day, lookback_days),
+    ]
+    if fits is None:
+        narrow += [Job.fit.is_not(None), Job.fit >= setting.min_fit]
     rows = db.execute(
         sa.select(
             Job.id, Job.status, Job.fit, Job.found_on, Job.company, Job.title, legacy.label("lg")
-        ).where(
-            Job.user_id == user_id,
-            Job.status.in_(statuses),
-            Job.fit.is_not(None),
-            Job.fit >= setting.min_fit,
-            Job.found_on >= eligibility.since(last_day, lookback_days),
-        )
+        ).where(*narrow)
     ).all()
     rules = sweep.never_apply_rules(search) if search is not None else []
+    read = (lambda row: row.fit) if fits is None else (lambda row: fits.get(row.id, row.fit))
     found = [
-        Candidate(row.id, row.fit, row.found_on, row.status)
+        Candidate(row.id, read(row), row.found_on, row.status)
         for row in rows
         if eligibility.refusal(
-            eligibility.Posting(row.status, row.fit, row.found_on, row.company, row.title, row.lg),
+            eligibility.Posting(
+                row.status, read(row), row.found_on, row.company, row.title, row.lg
+            ),
             setting,
             rules,
             last_day,

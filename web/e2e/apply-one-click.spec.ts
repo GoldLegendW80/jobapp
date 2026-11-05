@@ -28,7 +28,11 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  *   follows the fill and the send live until it says "Sent."; the fake holds exactly one
  *   accepted submission for that form, and no Approve step was offered;
  * - the review box ticked: Apply stops at the filled form with "Approve and submit", and the
- *   fake holds no submission for that form.
+ *   fake holds no submission for that form;
+ * - the review box unticked, a posting with no CV nor letter, Apply on its Jobs list row (owner,
+ *   2026-11-05: "Apply with no documents writes them and then sends; Apply also appears on Jobs
+ *   list rows"): one click from the list, the CV and letter written by the documents pipeline's
+ *   default fake streams, then the form filled and sent, exactly once.
  *
  * Locally, as apply-all.config.ts says (the fake forms compose file, AGENTS_FAKE_BACKEND=1 on
  * the worker, the stack's browser up with COMPOSE_PROFILES=browser), then:
@@ -50,6 +54,7 @@ const SEND_MS = 600_000;
 const FORMS = {
   direct: { job: "4012346", suffix: ", Fleet" },
   review: { job: "4012347", suffix: ", Controls" },
+  list: { job: "4012349", suffix: ", Simulation" },
 } as const;
 type Key = keyof typeof FORMS;
 
@@ -58,8 +63,14 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 
-/** A posting of the person whose address is the plain fake form of `key`, with its documents. */
-async function postingOn(key: Key): Promise<string> {
+/** A posting of the person whose address is the plain fake form of `key`, with its documents
+ * unless `documents` is false. Under the threshold of 70 (`fit`), the documents tick writes
+ * nothing for it by itself, and one click Apply never reads the threshold. */
+async function postingOn(
+  key: Key,
+  documents = true,
+  fit = 90,
+): Promise<string> {
   const job = await addPosting(page.request, {
     ...person,
     posting: {
@@ -74,9 +85,10 @@ async function postingOn(key: Key): Promise<string> {
   const { updated_at } = (await read.json()) as { updated_at: string };
   const patched = await page.request.patch(`/api/jobs/${job}`, {
     headers: CSRF,
-    data: { url: posting, fit: 90, updated_at },
+    data: { url: posting, fit, updated_at },
   });
   expect(patched.status()).toBe(200);
+  if (!documents) return job;
   const written = await page.request.post(`/api/jobs/${job}/documents/write`, {
     headers: CSRF,
     data: { kinds: ["cv", "letter"], script: "journey" },
@@ -196,6 +208,40 @@ test("box ticked: Apply stops at the filled form, and nothing is sent", async ()
   expect(await sentTo("review")).toHaveLength(0);
   // The first test's submission is still the only one.
   expect(await sentTo("direct")).toHaveLength(1);
+});
+
+test("box unticked, no documents: Apply on the Jobs list row writes them, then sends", async () => {
+  await setReviewBeforeSend(page.request, false);
+  const job = await postingOn("list", false, 40);
+  const title = person.posting.title + FORMS.list.suffix;
+  await page.goto("/jobs");
+  await page
+    .getByRole("button", {
+      name: `Apply to ${title} at ${person.posting.company}`,
+    })
+    .click();
+  // One click, still on the list: the row links to the application under way.
+  await expect(page.getByRole("link", { name: /^Applying/ })).toBeVisible({
+    timeout: 30_000,
+  });
+  const started = await latest(job);
+  expect(started.mode).toBe("direct");
+  const detail = await page.request.get(`/api/applications/${started.id}`);
+  const { events } = (await detail.json()) as {
+    events: { kind: string; data: Record<string, unknown> }[];
+  };
+  expect(events.find((one) => one.kind === "documents_asked")?.data).toEqual({
+    kinds: ["cv", "letter"],
+  });
+
+  await page.goto(`/jobs/${job}`);
+  const section = page.getByRole("region", { name: "Apply", exact: true });
+  await expect(
+    section.getByRole("status").filter({ hasText: /^Sent\./ }),
+  ).toBeVisible({ timeout: FILL_MS + SEND_MS });
+  await waitForPostingDocuments(page.request, job);
+  expect(await sentTo("list")).toHaveLength(1);
+  await expect(section).not.toContainText(/[\u2013\u2014]| - /);
 });
 
 test("no page error was logged", () => {

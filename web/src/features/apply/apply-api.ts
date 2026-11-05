@@ -124,6 +124,21 @@ export const approvalKey = (id: string) => ["apply", "approval", id] as const;
 
 const id = encodeURIComponent;
 
+/** The person's newest applications, for the Jobs list's rows (at most the api's 200). */
+export const RECENT_LIMIT = 200;
+export const recentApplicationsKey = ["apply", "recent"] as const;
+
+export const recentApplications = async (
+  signal?: AbortSignal,
+): Promise<Application[]> => {
+  const list = await request(`/applications?limit=${String(RECENT_LIMIT)}`, {
+    signal,
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => applicationListSchema.parse(body),
+  });
+  return list.items;
+};
+
 /** The newest application of a posting, or none. */
 export const latestApplication = async (
   postingId: string,
