@@ -30,7 +30,7 @@ from typing import Annotated, Any
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app import queue as queues
@@ -137,11 +137,15 @@ def _out(found: dict[str, Any]) -> SuggestionsOut:
 
 
 class MoreIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # Bounded twice over: the cleaned text is checked against titles.MESSAGE_MAX below.
     message: str | None = Field(default=None, max_length=4 * titles.MESSAGE_MAX)
 
 
 class DismissIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     title: str = Field(max_length=4 * titles.TITLE_MAX)
 
 
