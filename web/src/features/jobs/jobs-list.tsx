@@ -240,10 +240,11 @@ export function JobsList({
   };
 
   return (
-    // The rows draw their own cards under 1024px: the table's border shows from there up only.
+    // The rows draw their own cards under 1024px: from there up this box draws the list's
+    // border, around Load more too, and the table's own container draws none.
     <div
       ref={boxRef}
-      className="[&>[data-slot=table-container]]:max-lg:rounded-none [&>[data-slot=table-container]]:max-lg:border-0"
+      className="lg:rounded-lg lg:border [&>[data-slot=table-container]]:rounded-none [&>[data-slot=table-container]]:border-0"
     >
       <Table
         stacked={false}
@@ -252,7 +253,11 @@ export function JobsList({
         aria-rowcount={total + 1}
         className="block"
       >
-        <TableHeader role="rowgroup" className="block max-lg:sr-only">
+        <TableHeader
+          role="rowgroup"
+          // Its row draws the tint.
+          className="block bg-transparent max-lg:sr-only"
+        >
           <TableRow
             role="row"
             aria-rowindex={1}
