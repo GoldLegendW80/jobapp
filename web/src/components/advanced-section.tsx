@@ -78,7 +78,10 @@ export function AdvancedSection({
       >
         <ChevronDown
           aria-hidden="true"
-          className={cn("size-4 transition-transform", shown && "rotate-180")}
+          className={cn(
+            "size-4 transition-transform motion-reduce:transition-none",
+            shown && "rotate-180",
+          )}
         />
         {title}
       </button>

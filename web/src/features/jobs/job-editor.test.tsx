@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
 import { waitForOnFakeClock } from "@/test/clock";
-import { fakeEditableJob, makeDetail } from "@/test/jobs";
+import { fakeEditableJob, makeDetail, unfoldPostingMore } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 
 import { NOTES_DEBOUNCE_MS, STALE_MESSAGE } from "./use-job-editor";
@@ -22,6 +22,8 @@ const PATH = `/jobs/${JOB_ID}`;
 
 beforeEach(() => {
   fakeSession(admin);
+  // Status, fit and notes live under "More about this posting", opened here.
+  unfoldPostingMore();
 });
 
 afterEach(() => {

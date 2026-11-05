@@ -200,7 +200,7 @@ export function JobsPage() {
               from={query ? `?${query}` : ""}
               selection={selection}
             />
-            <div className="mt-2 flex sm:hidden">
+            <div className="mt-2 flex lg:hidden">
               <Button variant="outline" size="sm" onClick={selection.toggleAll}>
                 {selection.allState === "none"
                   ? "Select every posting in this view"

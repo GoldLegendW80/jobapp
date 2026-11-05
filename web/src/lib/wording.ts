@@ -167,9 +167,14 @@ export const WORDING = {
   addSkills: "Add your skills",
   addModelKey: "Add it in Account, Model access",
   applicationSettings: "Application settings",
+  // The posting page: Apply and the documents first, the rest folded.
+  yourApplication: "Your application",
+  moreAboutPosting: "More about this posting",
   addWebsites: "Add websites",
   // Opportunities O3.
   pay: "Pay",
+  // A posting that states no pay, said in a muted style wherever pay is shown.
+  payNotGiven: "Pay not given",
   workMode: "Work mode",
   notStated: "Not stated",
   payLowest: "Lowest pay",

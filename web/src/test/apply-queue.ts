@@ -38,9 +38,10 @@ export function queueItem(
 type Refusal = { detail: string; code: string };
 
 /**
- * The queue routes and A6's approval routes as the api answers them, in memory: Reject and Cancel
- * take the item out of the queue, Approve moves it under way, an answer saved changes the hash.
- * Every write is recorded; `next` makes the next decision answer 409 with that refusal.
+ * The queue routes and A6's approval routes as the api answers them, in memory: Reject, Cancel
+ * and "It was submitted" take the item out of the queue, Approve moves it under way, "Try again"
+ * brings it back `ready` for a new approval, an answer saved changes the hash. Every write is
+ * recorded; `next` makes the next decision answer 409 with that refusal.
  */
 export function fakeQueue(
   items: QueueItem[],
@@ -55,6 +56,8 @@ export function fakeQueue(
     approves: [] as { id: string; hash: string }[],
     rejects: [] as { id: string; skip_posting: boolean }[],
     cancels: [] as string[],
+    /** "It was submitted" and "Try again", in order. */
+    decisions: [] as { id: string; action: "submitted" | "retry" }[],
     next: null as Refusal | null,
     /** The next approve answers 409 stale with these answers. */
     stale: null as Answer[] | null,
@@ -236,6 +239,24 @@ export function fakeQueue(
       if (refusal) return refusal;
       take(id);
       return HttpResponse.json(fakeApplication("cancelled", { id }));
+    }),
+    http.post("*/api/applications/:id/submitted", ({ params }) => {
+      const id = String(params.id);
+      state.decisions.push({ id, action: "submitted" });
+      const refusal = refused();
+      if (refusal) return refusal;
+      take(id);
+      return HttpResponse.json(fakeApplication("submitted", { id }));
+    }),
+    http.post("*/api/applications/:id/retry", ({ params }) => {
+      const id = String(params.id);
+      state.decisions.push({ id, action: "retry" });
+      const refusal = refused();
+      if (refusal) return refusal;
+      state.items = state.items.map((item) =>
+        item.id === id ? { ...item, state: "ready", mode: "review" } : item,
+      );
+      return HttpResponse.json(fakeApplication("ready", { id }));
     }),
   );
   return state;

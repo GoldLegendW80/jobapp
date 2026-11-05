@@ -13,9 +13,10 @@ import {
 import { Link, useNavigate } from "react-router";
 
 import { cn } from "@/lib/utils";
+import { WORDING, contractWord } from "@/lib/wording";
 
 import type { JobListItem } from "./api";
-import { FitBadge, StatusBadge } from "./badges";
+import { FitBadge, PayText, StatusBadge } from "./badges";
 import { formatDate } from "./format";
 
 /** Rows rendered beyond the visible ones, above and below. */
@@ -23,9 +24,9 @@ const OVERSCAN = 8;
 /** Start fetching the next page when the window gets this close to the last loaded row. */
 const PREFETCH_ROWS = 20;
 const ROW_DESKTOP = 48;
-const CARD_MOBILE = 148;
+const CARD_MOBILE = 172;
 
-const MOBILE_QUERY = "(max-width: 639px)";
+const MOBILE_QUERY = "(max-width: 1023px)";
 
 function subscribeMobile(onChange: () => void) {
   const media = window.matchMedia(MOBILE_QUERY);
@@ -35,7 +36,10 @@ function subscribeMobile(onChange: () => void) {
   };
 }
 
-/** Below 640px the rows are cards (taller): the virtualiser estimates with that height. */
+/**
+ * Below 1024px the rows are cards (taller): the virtualiser estimates with that height. Nine
+ * columns, the pay among them, need a desktop width; a tablet gets the cards.
+ */
 function useIsMobile(): boolean {
   return useSyncExternalStore(
     subscribeMobile,
@@ -45,7 +49,7 @@ function useIsMobile(): boolean {
 }
 
 const COLUMNS =
-  "sm:grid sm:grid-cols-[1.25rem_minmax(0,1.1fr)_minmax(0,2fr)_minmax(0,1.2fr)_4.5rem_6.5rem_7rem_6.5rem] sm:items-center sm:gap-3";
+  "lg:grid lg:grid-cols-[1.25rem_minmax(0,1fr)_minmax(0,1.8fr)_minmax(0,1fr)_minmax(0,1.3fr)_5.5rem_6.5rem_6.5rem_5.5rem] lg:items-center lg:gap-3";
 
 const CHECKBOX =
   "size-4 cursor-pointer rounded border-input accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
@@ -62,7 +66,7 @@ export interface ListSelection {
 
 /**
  * The list: one ARIA table, virtualised against the window scroll (only the rows near the
- * viewport are in the DOM), loading the next page as the window nears the end. From 640px up
+ * viewport are in the DOM), loading the next page as the window nears the end. From 1024px up
  * each row is a table line; below, the same row is a card. Arrow keys, Home, End, Page Up and
  * Page Down move between rows; Enter opens one.
  */
@@ -199,9 +203,9 @@ export function JobsList({
       role="table"
       aria-label="Postings"
       aria-rowcount={total + 1}
-      className="sm:rounded-lg sm:border"
+      className="lg:rounded-lg lg:border"
     >
-      <div role="rowgroup" className="max-sm:sr-only">
+      <div role="rowgroup" className="max-lg:sr-only">
         <div
           role="row"
           aria-rowindex={1}
@@ -220,6 +224,7 @@ export function JobsList({
           <span role="columnheader">Company</span>
           <span role="columnheader">Title</span>
           <span role="columnheader">Location</span>
+          <span role="columnheader">{WORDING.pay}</span>
           <span role="columnheader">Type</span>
           <span role="columnheader">Fit</span>
           <span role="columnheader">Status</span>
@@ -254,7 +259,7 @@ export function JobsList({
               onClick={(event) => {
                 onRowClick(event, job);
               }}
-              className="group absolute top-0 left-0 w-full cursor-pointer outline-none max-sm:pb-2"
+              className="group absolute top-0 left-0 w-full cursor-pointer outline-none max-lg:pb-2"
               style={{
                 transform: `translateY(${virtual.start - scrollMargin}px)`,
               }}
@@ -263,14 +268,14 @@ export function JobsList({
                 className={cn(
                   COLUMNS,
                   "flex flex-wrap items-center gap-x-2 gap-y-1 transition-colors group-hover:bg-accent/60 group-focus-visible:ring-[3px] group-focus-visible:ring-ring/50 group-focus-visible:ring-inset",
-                  "max-sm:rounded-lg max-sm:border max-sm:bg-card max-sm:p-3",
-                  "sm:h-12 sm:border-b sm:px-3",
+                  "max-lg:rounded-lg max-lg:border max-lg:bg-card max-lg:p-3",
+                  "lg:h-12 lg:border-b lg:px-3",
                   checked && "bg-accent/40",
                 )}
               >
                 <span
                   role="cell"
-                  className="flex items-center max-sm:order-first"
+                  className="flex items-center max-lg:order-first"
                 >
                   {selection ? (
                     <input
@@ -291,31 +296,40 @@ export function JobsList({
                 </span>
                 <span
                   role="cell"
-                  className="truncate text-sm text-muted-foreground max-sm:min-w-0 max-sm:flex-1 max-sm:text-xs sm:text-foreground"
+                  className="truncate text-sm text-muted-foreground max-lg:min-w-0 max-lg:flex-1 max-lg:text-xs lg:text-foreground"
                 >
                   {job.company}
                 </span>
                 <span
                   role="cell"
-                  className="min-w-0 text-sm font-medium max-sm:basis-full"
+                  className="min-w-0 text-sm font-medium max-lg:basis-full"
                 >
                   <Link
                     to={`/jobs/${job.id}`}
                     state={{ from }}
                     tabIndex={-1}
-                    className="line-clamp-2 break-words hover:underline sm:line-clamp-1"
+                    className="line-clamp-2 break-words hover:underline lg:line-clamp-1"
                   >
                     {job.title}
                   </Link>
                 </span>
                 <span
                   role="cell"
-                  className="truncate text-sm text-muted-foreground max-sm:basis-full max-sm:text-xs"
+                  className="truncate text-sm text-muted-foreground max-lg:basis-full max-lg:text-xs"
                 >
                   {job.location}
                 </span>
-                <span role="cell" className="text-xs text-muted-foreground">
-                  {job.contract_type}
+                <span
+                  role="cell"
+                  className="text-sm font-medium max-lg:basis-full lg:line-clamp-2 lg:text-xs"
+                >
+                  <PayText job={job} />
+                </span>
+                <span
+                  role="cell"
+                  className="text-xs text-muted-foreground lg:line-clamp-2"
+                >
+                  {contractWord(job.contract_type)}
                 </span>
                 <span role="cell">
                   <FitBadge fit={job.fit} overridden={job.fit_overridden} />
@@ -325,7 +339,7 @@ export function JobsList({
                 </span>
                 <span
                   role="cell"
-                  className="text-xs text-muted-foreground tabular-nums max-sm:ml-auto"
+                  className="text-xs text-muted-foreground tabular-nums max-lg:ml-auto"
                 >
                   <time dateTime={job.found_on}>
                     {formatDate(job.found_on)}
@@ -393,16 +407,16 @@ export function JobsListSkeleton({ rows = 8 }: { rows?: number }) {
       role="status"
       aria-live="polite"
       aria-label="Loading postings"
-      className="flex flex-col gap-2 sm:gap-0 sm:rounded-lg sm:border"
+      className="flex flex-col gap-2 lg:gap-0 lg:rounded-lg lg:border"
     >
       {Array.from({ length: rows }, (_, index) => (
         <div
           key={index}
           aria-hidden="true"
-          className="flex animate-pulse flex-col gap-2 max-sm:rounded-lg max-sm:border max-sm:p-3 sm:h-12 sm:flex-row sm:items-center sm:gap-3 sm:border-b sm:px-3 sm:last:border-b-0"
+          className="flex animate-pulse flex-col gap-2 max-lg:rounded-lg max-lg:border max-lg:p-3 lg:h-12 lg:flex-row lg:items-center lg:gap-3 lg:border-b lg:px-3 lg:last:border-b-0"
         >
           <span className="h-3 w-24 rounded bg-muted" />
-          <span className="h-3 w-48 rounded bg-muted sm:flex-1" />
+          <span className="h-3 w-48 rounded bg-muted lg:flex-1" />
           <span className="h-3 w-28 rounded bg-muted" />
           <span className="h-4 w-20 rounded-full bg-muted" />
         </div>

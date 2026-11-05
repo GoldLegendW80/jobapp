@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Heart, LoaderCircle, Undo2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { AdvancedSection } from "@/components/advanced-section";
@@ -23,6 +23,7 @@ import { DeckFilterRow } from "./filter-row";
 import { PostingSheet } from "./posting-sheet";
 import { SwipeCard } from "./swipe-card";
 import { useDeck, type Swipe } from "./use-deck";
+import { useFinePointer } from "./use-fine-pointer";
 import { useReducedMotion } from "./use-reduced-motion";
 
 /** Keys a deck listens to, unless the focus is in a field or a dialog is open. */
@@ -40,13 +41,19 @@ function ignoredTarget(target: EventTarget | null): boolean {
  * and Pass by drag, by the buttons or by the arrow keys (left Pass, right Like, U undoes the
  * last swipe), Undo last until the next swipe, the mode a Like runs in, the filter
  * row under Advanced and the empty state naming the person's threshold. Phone width first: the
- * buttons sit under the card, within a thumb's reach.
+ * buttons sit under the card, within a thumb's reach, each named under it. Without a card, Pass
+ * and Like are gone and Undo last stays only while there is a swipe to undo; the keys are offered
+ * only to a precise pointer.
  */
 export function DeckPage() {
   useTitle(WORDING.discover);
   const [filters, setFilters] = useState<DeckFilters>(NO_FILTERS);
   const deck = useDeck(filters);
   const motion = !useReducedMotion();
+  // The keys are offered where a keyboard is likely: a mouse or a trackpad, not a touch screen.
+  const finePointer = useFinePointer();
+  const passId = useId();
+  const likeId = useId();
   const [moreOpen, setMoreOpen] = useState(false);
   const { top, busy, refusal, last } = deck;
   // Once the person swiped or undid, a new card on top takes the focus and is announced.
@@ -115,7 +122,7 @@ export function DeckPage() {
           data-testid="deck-mode"
           className="rounded-full border px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-accent-foreground"
         >
-          {MODE_WORDS[deck.mode]}
+          {`${WORDING.like}: ${MODE_WORDS[deck.mode]}`}
         </Link>
       </header>
 
@@ -199,51 +206,88 @@ export function DeckPage() {
         />
       )}
 
-      <div className="flex items-center justify-center gap-4">
-        <Button
-          size="lg"
-          variant="outline"
-          className="size-16 rounded-full"
-          aria-label={WORDING.pass}
-          aria-keyshortcuts="ArrowLeft"
-          disabled={!top || busy}
-          onClick={() => {
-            swipe("pass");
-          }}
+      {top || last ? (
+        <div
+          data-testid="deck-controls"
+          className="flex items-start justify-center gap-4"
         >
-          <X aria-hidden="true" className="size-7" />
-        </Button>
-        <Button
-          size="lg"
-          variant="ghost"
-          className="min-h-11"
-          aria-keyshortcuts="U"
-          disabled={!last || busy}
-          onClick={undo}
+          {top ? (
+            <div className="flex flex-col items-center gap-1.5">
+              <Button
+                id={passId}
+                size="lg"
+                variant="outline"
+                className="size-16 rounded-full"
+                aria-label={WORDING.pass}
+                aria-keyshortcuts="ArrowLeft"
+                disabled={busy}
+                onClick={() => {
+                  swipe("pass");
+                }}
+              >
+                <X aria-hidden="true" className="size-7" />
+              </Button>
+              <label
+                htmlFor={passId}
+                className="cursor-pointer text-sm font-medium text-muted-foreground"
+              >
+                {WORDING.pass}
+              </label>
+            </div>
+          ) : null}
+          <div className="flex h-16 items-center">
+            <Button
+              size="lg"
+              variant="ghost"
+              className="min-h-11"
+              aria-keyshortcuts="U"
+              disabled={!last || busy}
+              onClick={undo}
+            >
+              <Undo2 aria-hidden="true" />
+              {WORDING.undoLast}
+            </Button>
+          </div>
+          {top ? (
+            <div className="flex flex-col items-center gap-1.5">
+              <Button
+                id={likeId}
+                size="lg"
+                className="size-16 rounded-full"
+                aria-label={WORDING.like}
+                aria-keyshortcuts="ArrowRight"
+                disabled={busy || likeRefused}
+                onClick={() => {
+                  swipe("like");
+                }}
+              >
+                {busy ? (
+                  <LoaderCircle
+                    aria-hidden="true"
+                    className="size-7 animate-spin"
+                  />
+                ) : (
+                  <Heart aria-hidden="true" className="size-7" />
+                )}
+              </Button>
+              <label
+                htmlFor={likeId}
+                className="cursor-pointer text-sm font-medium text-muted-foreground"
+              >
+                {WORDING.like}
+              </label>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {top && finePointer ? (
+        <p
+          data-testid="deck-keys"
+          className="text-center text-xs text-muted-foreground"
         >
-          <Undo2 aria-hidden="true" />
-          {WORDING.undoLast}
-        </Button>
-        <Button
-          size="lg"
-          className="size-16 rounded-full"
-          aria-label={WORDING.like}
-          aria-keyshortcuts="ArrowRight"
-          disabled={!top || busy || likeRefused}
-          onClick={() => {
-            swipe("like");
-          }}
-        >
-          {busy ? (
-            <LoaderCircle aria-hidden="true" className="size-7 animate-spin" />
-          ) : (
-            <Heart aria-hidden="true" className="size-7" />
-          )}
-        </Button>
-      </div>
-      <p className="text-center text-xs text-muted-foreground">
-        Keys: left arrow to pass, right arrow to like, U to undo the last one.
-      </p>
+          Keys: left arrow to pass, right arrow to like, U to undo the last one.
+        </p>
+      ) : null}
     </div>
   );
 }

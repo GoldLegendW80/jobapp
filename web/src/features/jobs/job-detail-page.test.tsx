@@ -3,8 +3,15 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { fakeApplication } from "@/test/apply";
 import { admin, fakeSession } from "@/test/auth";
-import { csvJobs, fakeJobDetail, fakeJobsApi, makeDetail } from "@/test/jobs";
+import {
+  csvJobs,
+  fakeJobDetail,
+  fakeJobsApi,
+  makeDetail,
+  unfoldPostingMore,
+} from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -37,6 +44,10 @@ const pdfBytes = () =>
 
 beforeEach(() => {
   fakeSession(admin);
+  window.localStorage.clear();
+  // Files, history and imported fields live under "More about this posting", opened here; the
+  // tests of the fold itself clear it again.
+  unfoldPostingMore();
 });
 
 async function openDetail(path = PATH) {
@@ -45,29 +56,156 @@ async function openDetail(path = PATH) {
   return app;
 }
 
+const header = () => document.querySelector("article > header") as HTMLElement;
+/** True when `a` comes before `b` in the page. */
+const before = (a: Element, b: Element) =>
+  Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
 describe("job detail", () => {
-  it("shows the pay and the work mode the posting states, and nothing when none", async () => {
+  it("shows the pay prominently in the header with separators, and the work mode in words", async () => {
     fakeJobDetail(
       makeDetail({
         pay_min: 45000,
-        pay_max: 55000,
+        pay_max: 1250000,
         pay_currency: "EUR",
         pay_period: "year",
         work_mode: "office",
       }),
     );
-    const app = await openDetail();
-    expect(screen.getByText("Pay").nextSibling).toHaveTextContent(
-      "45,000 to 55,000 EUR a year",
+    await openDetail();
+    const pay = within(header()).getByTestId("posting-pay");
+    expect(pay).toHaveTextContent("Pay: 45,000 to 1,250,000 EUR a year");
+    expect(pay).toHaveClass("text-lg", "font-semibold");
+    expect(
+      within(pay).getByText("45,000 to 1,250,000 EUR a year"),
+    ).not.toHaveClass("text-muted-foreground");
+    expect(within(header()).getByText("On site")).toBeInTheDocument();
+  });
+
+  it("says Pay not given, muted, when the posting states no pay, and no work mode when none", async () => {
+    fakeJobDetail(makeDetail({ work_mode: null }));
+    await openDetail();
+    const pay = within(header()).getByTestId("posting-pay");
+    expect(pay).toHaveTextContent(/^Pay not given$/);
+    expect(within(pay).getByText("Pay not given")).toHaveClass(
+      "text-muted-foreground",
     );
-    expect(screen.getByText("Work mode").nextSibling).toHaveTextContent(
-      "On site",
+    expect(within(header()).queryByText("Remote")).toBeNull();
+    expect(within(header()).queryByText("On site")).toBeNull();
+  });
+
+  it("says the contract in words and the fit as Fit and its number, never a code or a bare number", async () => {
+    fakeJobDetail(makeDetail({ contract_type: "CDI", fit: 13 }));
+    await openDetail();
+    expect(within(header()).getByText("Permanent")).toBeInTheDocument();
+    expect(within(header()).queryByText("CDI")).toBeNull();
+    const fit = within(header()).getByLabelText("Fit 13 out of 100");
+    expect(fit).toHaveTextContent(/^Fit 13$/);
+    expect(fit).toHaveAttribute("data-tone", "low");
+  });
+
+  it("puts Your application right under the header: Apply before the posting text and the assessment", async () => {
+    fakeJobDetail(makeDetail({ posting_text: "We build robots." }));
+    await openDetail();
+    const application = screen.getByRole("region", {
+      name: "Your application",
+    });
+    const apply = within(application).getByRole("heading", { name: "Apply" });
+    const documents = within(application).getByRole("heading", {
+      name: "Documents",
+    });
+    const text = screen.getByTestId("posting-text");
+    const assessment = screen.getByRole("region", { name: "Agent assessment" });
+    const notes = screen.getByRole("textbox", { name: "Notes" });
+    expect(before(header(), application)).toBe(true);
+    expect(before(apply, documents)).toBe(true);
+    expect(before(apply, text)).toBe(true);
+    expect(before(apply, assessment)).toBe(true);
+    expect(before(documents, text)).toBe(true);
+    expect(before(text, assessment)).toBe(true);
+    expect(before(text, notes)).toBe(true);
+    expect(
+      await within(application).findByRole("button", { name: "Apply" }),
+    ).toBeVisible();
+  });
+
+  it("sets Apply and the documents side by side while nothing is under way, and stacks them once it is", async () => {
+    fakeJobDetail(makeDetail());
+    const app = await openDetail();
+    await screen.findByText("No application yet.");
+    expect(screen.getByTestId("application-row")).toHaveAttribute(
+      "data-layout",
+      "side",
     );
     app.unmount();
+    server.use(
+      http.get("*/api/applications", () =>
+        HttpResponse.json({ items: [fakeApplication("filling")] }),
+      ),
+    );
+    await openDetail();
+    await waitFor(() => {
+      expect(screen.getByTestId("application-row")).toHaveAttribute(
+        "data-layout",
+        "stacked",
+      );
+    });
+  });
+
+  it("folds status and fit, the assessment, notes, files and history under More about this posting", async () => {
+    window.localStorage.clear();
     fakeJobDetail(makeDetail());
     await openDetail();
-    expect(screen.queryByText("Pay")).toBeNull();
-    expect(screen.queryByText("Work mode")).toBeNull();
+    const more = screen.getByRole("button", {
+      name: "More about this posting",
+    });
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("region", { name: "Agent assessment" }),
+    ).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Notes" })).toBeNull();
+    expect(
+      screen.queryByRole("list", { name: "History, newest first" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Edit status and fit" }),
+    ).toBeNull();
+    await userEvent.setup().click(more);
+    expect(more).toHaveAttribute("aria-expanded", "true");
+    const folded = screen.getByRole("region", {
+      name: "More about this posting",
+    });
+    for (const name of ["Edit status and fit", "Agent assessment"])
+      expect(within(folded).getByRole("region", { name })).toBeVisible();
+    expect(
+      within(folded).getByRole("textbox", { name: "Notes" }),
+    ).toBeVisible();
+    expect(within(folded).getByText("No files attached.")).toBeVisible();
+    expect(
+      within(folded).getByRole("list", { name: "History, newest first" }),
+    ).toBeVisible();
+    expect(window.localStorage.getItem("advanced:posting-more")).toBe("1");
+  });
+
+  it("keeps unsaved notes when the section is folded and opened again", async () => {
+    window.localStorage.clear();
+    // The save never answers: the text typed is only in the editor.
+    server.use(http.patch("*/api/jobs/:id", () => new Promise(() => {})));
+    fakeJobDetail(makeDetail({ notes: "" }));
+    const user = userEvent.setup();
+    await openDetail();
+    const more = screen.getByRole("button", {
+      name: "More about this posting",
+    });
+    await user.click(more);
+    const notes = screen.getByRole("textbox", { name: "Notes" });
+    await user.type(notes, "Call Camille on Monday");
+    await user.click(more);
+    expect(screen.queryByRole("textbox", { name: "Notes" })).toBeNull();
+    await user.click(more);
+    const again = screen.getByRole("textbox", { name: "Notes" });
+    expect(again).toBe(notes);
+    expect(again).toHaveValue("Call Camille on Monday");
   });
 
   it("shows the header: company, title, location, badges, dates, source and link", async () => {
