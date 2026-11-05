@@ -73,6 +73,7 @@ from sqlalchemy.orm import Session
 from app.agents import credentials, definitions, runs
 from app.agents.failures import TOKEN_LIMIT, TURN_LIMIT
 from app.agents.models import CredentialKind, RunStatus
+from app.browser import tool_sessions
 from app.browser.client import BrowserError
 
 if TYPE_CHECKING:
@@ -1660,6 +1661,9 @@ _LOCK = threading.Lock()
 def session_of(run_id: uuid.UUID | None) -> FinderSession | None:
     with _LOCK:
         return _SESSIONS.get(run_id) if run_id is not None else None
+
+
+tool_sessions.register(session_of)
 
 
 @dataclass(frozen=True)

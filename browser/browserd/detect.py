@@ -145,6 +145,16 @@ CREDENTIAL_FN = """e => {
   return boxes.length > SCAN || boxes.some(secret);
 }""".replace("SCAN", str(CREDENTIAL_SCAN))
 
+# A password box or a one time code box (A19: the apply agent's lease refuses typing there only,
+# hard rule 7), read from the element's own type and autocomplete tokens.
+SECRET_BOX_JS = """e => {  # noqa: S105  JS source run in the page, no secret
+  const SECRET = ["current-password", "new-password", "one-time-code"];
+  const tokens = String((e.getAttribute && e.getAttribute("autocomplete")) || "")
+    .toLowerCase().split(/\\s+/);
+  return (e.tagName === "INPUT" && String(e.type).toLowerCase() === "password")
+    || tokens.some(t => SECRET.includes(t));
+}"""
+
 # What the page tells about the element a ref names, `opts.sels` being the lease's submit selectors.
 # The control is the element itself, or the button or link it sits in, or a label's control; every
 # walk up crosses shadow roots (a shadow root's host is the next ancestor), since closest() stops
@@ -160,6 +170,7 @@ FACTS_JS = r"""
 (el, opts) => {
   const sels = (opts && opts.sels) || [];
   const isCredential = /*credential*/;
+  const isSecret = /*secret*/;
   const clickable = "button, input, select, textarea, a[href], label, summary, [role=button]," +
     " [role=link], [role=menuitem], [role=checkbox], [role=radio], [role=switch], [role=tab]," +
     " [role=option], [role=combobox]";
@@ -253,6 +264,7 @@ FACTS_JS = r"""
             value: String(n.value || "").slice(0, 2001)})),
       },
       credential: isCredential(control),
+      secret: isSecret(control),
     };
   };
   const facts = describe(el);
@@ -274,7 +286,7 @@ FACTS_JS = r"""
   }
   return facts;
 }
-""".replace("/*credential*/", CREDENTIAL_FN)  # noqa: E501  JS source run in the page, kept as written
+""".replace("/*credential*/", CREDENTIAL_FN).replace("/*secret*/", SECRET_BOX_JS)  # noqa: E501  JS source run in the page, kept as written
 
 
 def words(text: str, *, camel: bool = True) -> list[str]:
@@ -398,6 +410,46 @@ def verdict(facts: Any, *, action: str = "click", profile_edit: bool = False) ->
     if action == "type" and point.get("inside") is True:
         return _own(point, "type", profile_edit)
     return _own(point, "click" if action == "type" else action, profile_edit)
+
+
+def agent_verdict(facts: Any, *, action: str = "click") -> str | None:
+    """The apply agent's lease (A19, purpose `apply_agent`): None when the action may go ahead,
+    else `credential` (a typing into a password or one time code box, hard rule 7), `submit`
+    (the element submits a form: allowed only with the lease's capability, which the api sends
+    while the emergency stop is off) or `unreadable` (facts that cannot be read: judged as a
+    submit, fail closed). Danger words, card fields and the line's words are not read here: the
+    owner's "no guardrails" (2026-11-05). The click point is judged as in `verdict`."""
+    if not isinstance(facts, dict) or not isinstance(facts.get("names"), list):
+        return "unreadable"
+    if action == "type" and facts.get("secret") is not False:
+        return "credential"
+    targets = [facts]
+    if action in POINTED and "point" in facts:
+        point = facts["point"]
+        if not isinstance(point, dict) or not isinstance(point.get("names"), list):
+            return "unreadable"
+        if action == "type" and point.get("inside") is True:
+            return "credential" if point.get("secret") is not False else None
+        if action != "type":
+            targets.append(point)
+    if action == "type":
+        return None
+    return "submit" if any(_submits(f, action) for f in targets) else None
+
+
+def _submits(facts: dict[str, Any], action: str) -> bool:
+    """The submit part of `_own`: what marks an element as one that sends its form."""
+    names = [n for n in facts["names"] if isinstance(n, str)]
+    if facts.get("selector_error") or facts.get("selector_hit") or facts.get("custom_submit"):
+        return True
+    tag, kind, button = facts.get("tag"), facts.get("type"), button_like(facts)
+    if tag in ("button", "input") and kind in SUBMIT_TYPES:
+        return True
+    if facts.get("holds_submit"):
+        return True
+    if action == "key" and tag == "input" and not button and facts.get("in_form"):
+        return True
+    return action in ("click", "key") and button and says_submit(names)
 
 
 def _own(facts: Any, action: str, profile_edit: bool) -> str | None:

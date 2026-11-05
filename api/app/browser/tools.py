@@ -16,7 +16,9 @@ asks it, through `ask_signin`, so the api's copy of the lease waits with browser
 `gate_click` is the one call that may click a submit element: it needs the gate's capability,
 which `Leases.acquire` returns on the starting call of an `apply_submit` or `profile_edit` lease
 only (`Acquired.capability`). It is a function of its own and not a method of `LeaseTools`, so a
-binding of these tools for an agent never carries it.
+binding of these tools for an agent never carries it. `agent_act` (apply A19) is the same for
+One click Apply's agent lease: the apply session's code sends the capability with an acting
+call once it read the emergency stop off, and the model never holds it.
 """
 
 from typing import Any
@@ -160,3 +162,14 @@ async def gate_click(
     """The apply gate's click on the submit element (apply A6's submit.py, nothing else)."""
     await tools._held()
     return await tools.client.gate_click(tools.lease_id, tools._token, ref, capability, element)
+
+
+async def agent_act(
+    tools: LeaseTools, name: str, args: dict[str, Any], capability: str
+) -> dict[str, Any]:
+    """An acting tool on an `apply_agent` lease with its capability (A19): browserd lets it act
+    on a submit element. Only `app.apply.applier` calls it, after reading the emergency stop."""
+    if not capability or name == SIGNIN_TOOL:
+        raise BrowserError("refused")
+    await tools._held()
+    return await tools.client._tool(tools.lease_id, tools._token, name, args, capability)

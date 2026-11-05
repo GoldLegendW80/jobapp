@@ -44,7 +44,10 @@ from browserd.leases import APPLY_WAIT_S, APPLY_WAITS, MANUAL_PURPOSE, Lease, Le
 from browserd.tools import actions, linkedin, pacing, policy
 
 log = logging.getLogger("browserd")
-GATE_PURPOSES = ("apply_submit", "profile_edit")
+# A19: One click Apply's agent lease gets the capability too: the api sends it with a tool call
+# only while the emergency stop is off (APPLY_SUBMIT_ENABLED, the administrator's pause), and
+# only with it may that lease's tools act on a submit element (actions.Tab.judge).
+GATE_PURPOSES = ("apply_submit", "profile_edit", actions.AGENT_PURPOSE)
 # What Playwright's error says when another element would take the click or the hover (its
 # actionability log): told to the agent as `element_covered` (a cookie banner, 2026-10-28).
 COVERED = "intercepts pointer events"
@@ -155,7 +158,8 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     capability = req.headers.get("x-gate-capability")
     if capability is not None:
         good = bool(lease.gate_hash) and hmac.compare_digest(lease.gate_hash, _hash(capability))
-        if name != "browser_click" or not good:
+        agent = lease.request.purpose == actions.AGENT_PURPOSE
+        if not good or (name != "browser_click" and not (agent and name in actions.AGENT_ACTS)):
             raise LeaseError(403, "bad_capability")
     manual = lease.request.purpose == MANUAL_PURPOSE
     tab = _tab(svc, lease, gate=capability is not None)
