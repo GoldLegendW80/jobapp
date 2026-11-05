@@ -108,6 +108,7 @@ CATEGORY_OF: dict[str, str] = {
     "echo": "test",
     "job_chat": "jobs",
     "profile_extract": "profile",
+    "profile_interpret": "profile",
     "profile_titles": "profile",
     "triage": "jobs",
 }
@@ -173,6 +174,11 @@ FIRST_MESSAGES: dict[str, str] = {
         f"<the template's soft lengths>; {_JOB_LINE}."
     ),
 }
+FIRST_MESSAGES["app.profile.about_agent.InterpretDefinition"] = (
+    "One line saying what to do, then one data block: <the kind of the part>, <its heading and "
+    "text as the person wrote it when they clicked Done>, <what the profile holds of that kind "
+    "now>, <the titles of the fact blocks the part held>."
+)
 CHAT_MESSAGE = (
     "Rebuilt from the thread's messages at every run (app/agents/chat.py): <the conversation so "
     "far, each message quoted in a message tag>, then <the new message>, and <the thread's job "
