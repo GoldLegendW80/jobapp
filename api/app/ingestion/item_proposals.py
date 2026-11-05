@@ -53,6 +53,7 @@ proposal is not found. The caller owns the transaction. Nothing here logs.
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -302,6 +303,12 @@ def _takes_away(section: str, key: str, action: Any) -> str | None:
     return REMOVAL if slot is not None and slot.kind in _WHOLE_LISTS else REPLACE
 
 
+def _unlocked_exclusion(payload: Mapping[str, Any]) -> str | None:
+    if _flags(payload) or payload.get("conflict"):
+        return FLAGGED
+    return _takes_away(str(payload.get("section")), str(payload.get("key")), payload.get("action"))
+
+
 def bulk_exclusion(payload: Mapping[str, Any]) -> str | None:
     """Why "accept all" never takes this item, whatever the profile holds: `locked` (a locked
     fact), `flagged` (it reads like an instruction, is derived, cites a transcription, or holds
@@ -309,13 +316,49 @@ def bulk_exclusion(payload: Mapping[str, Any]) -> str | None:
     user's exclusions or their never apply list through one click) or `replace` (accept all
     takes additions only, the owner's decision of 2026-10-21 on #111): these are accepted one by
     one. None when nothing of the kind applies. What the profile holds adds two more reasons,
-    `stale` and `typed_by_you` (`review`, `accept_many`)."""
+    `stale` and `typed_by_you` (`review`, `accept_many`), and takes a locked fact that fills an
+    empty slot after all (`fills_empty`)."""
     section, key = payload.get("section"), payload.get("key")
     if not isinstance(section, str) or not isinstance(key, str) or items.is_locked(section, key):
         return LOCKED
-    if _flags(payload) or payload.get("conflict"):
-        return FLAGGED
-    return _takes_away(section, key, payload.get("action"))
+    return _unlocked_exclusion(payload)
+
+
+def _known_lock(payload: Mapping[str, Any]) -> bool:
+    """A locked fact of a known slot: one that may join accept all when it fills an empty slot.
+    An unknown key stays locked whatever the profile holds."""
+    section, key = payload.get("section"), payload.get("key")
+    if not isinstance(section, str) or not isinstance(key, str):
+        return False
+    slot = items.SLOTS.get(section, {}).get(key.partition(":")[0])
+    return slot is not None and slot.locked and payload.get("action") == items.Action.add.value
+
+
+# The places whose key holds the start year: the same organisation or school started another
+# year is held under another key, and may be the same entry written differently.
+_YEAR_KEYED = {"employers": re.compile(r"-[0-9]{4}$"), "education": re.compile(r":[^:]*$")}
+
+
+def _place(slot: str, key: str) -> str:
+    return _YEAR_KEYED[slot].sub("", key.partition(":")[2])
+
+
+def fills_empty(section: str, data: Mapping[str, Any] | None, key: str) -> bool:
+    """Whether the profile holds nothing where the item goes (owner, 2026-11-05: a locked fact
+    that fills an empty slot joins "Accept all additions"): no value at the key, and for a job
+    or a school no entry of the same organisation or school under another start year. A
+    replace, or a change of a value the profile holds, is never an empty slot. `data` is a
+    canonical section. Raises items.ItemError for a key the section does not have."""
+    _, key = items.parse_key(section, key)
+    if items.read(section, data, key) is not None:
+        return False
+    slot = key.partition(":")[0]
+    if section != "experience" or slot not in _YEAR_KEYED:
+        return True
+    place = _place(slot, key)
+    stored = (data or {}).get(slot) or []
+    held = (items.entry_key(items.SLOTS[section][slot], one) for one in stored)
+    return all(_place(slot, other) != place for other in held)
 
 
 def _folded(word: Any) -> Any:
@@ -377,6 +420,8 @@ def review(payload: Mapping[str, Any], section_data: Mapping[str, Any] | None) -
     stale = stale and not noop
     after = items.read(item.section, applied, item.key)
     typed = not noop and before is not None and _lost(before, after)
+    if locked and _known_lock(payload) and fills_empty(item.section, current, item.key):
+        excluded = _unlocked_exclusion(payload)
     return Review(
         before,
         after,
@@ -911,12 +956,15 @@ def accept_many(
 ) -> BulkResult:
     """ "Accept all": every pending profile item of the user (of one run, of one section, or the
     ids given, which must then also be of that run and section) except the locked and the
-    flagged ones, in one profile revision per section.
+    flagged ones, in one profile revision per section. A locked fact that adds to an empty slot
+    of the profile (`fills_empty`: nothing at its key, nor the same job or school under another
+    year) is taken like any addition (owner, 2026-11-05).
 
     Left out, each with its reason in `result.skipped`: an id that is not the user's pending
-    profile item (`not_found`, `not_pending`), one of another run or section, a locked fact, a
-    flagged item (instruction, derived, transcribed, conflict), a removal (`removal`: a `remove`,
-    or a `replace` of a whole list of words or terms), any other `replace` (`replace`), a stale
+    profile item (`not_found`, `not_pending`), one of another run or section, a locked fact that
+    would not fill an empty slot, a flagged item (instruction, derived, transcribed, conflict),
+    a removal (`removal`: a `remove`, or a `replace` of a whole list of words or terms), any
+    other `replace` (`replace`), a stale
     one, and one that would change a value the profile holds (`typed_by_you`). `result.counts`
     counts them by reason. What remains is
     applied section by section, in the order the items were proposed, all or nothing: when one
@@ -928,8 +976,13 @@ def accept_many(
     result = BulkResult()
     profile = _lock_profile(db, user_id, now)
     by_section: dict[str, list[Proposal]] = {}
+    # Locked facts that may fill an empty slot: taken only if the profile holds nothing there.
+    locked: set[uuid.UUID] = set()
     for row in _selected(db, user_id, result, proposal_ids, ingestion_run_id, section):
         excluded = bulk_exclusion(row.payload)
+        if excluded == LOCKED and _known_lock(row.payload):
+            locked.add(row.id)
+            excluded = _unlocked_exclusion(row.payload)
         if excluded is not None:
             result.skipped[row.id] = excluded
         else:
@@ -959,6 +1012,11 @@ def accept_many(
                         continue
                 except items.ProfileConflict:
                     pass  # reported below, by the apply onto the batch
+            if row.id in locked and not (
+                fills_empty(name, current, item.key) and fills_empty(name, after, item.key)
+            ):
+                result.skipped[row.id] = LOCKED
+                continue
             try:
                 if overwrites(name, current, item):
                     result.skipped[row.id] = TYPED_BY_YOU

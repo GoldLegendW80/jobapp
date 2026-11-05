@@ -118,6 +118,42 @@ export const getSummary = (signal?: AbortSignal): Promise<Summary> =>
     validate: (body) => summarySchema.parse(body),
   });
 
+const readyResultSchema = z.object({
+  application_id: z.string(),
+  approved: z.boolean(),
+  state: z.string().nullable(),
+  code: z.string().nullable(),
+  detail: z.string().nullable(),
+});
+export type ReadyResult = z.infer<typeof readyResultSchema>;
+const approvedReadySchema = z.object({
+  results: z.array(readyResultSchema),
+  approved: z.number().int(),
+  left_out: z.number().int(),
+});
+export type ApprovedReady = z.infer<typeof approvedReadySchema>;
+
+/**
+ * Approve all ready: the person's approval of exactly the items the confirmation named, each
+ * with the hash of the form it showed. The api runs each through the same gate as Approve and
+ * submit, one at a time, and answers per item; an item that changed since is left out.
+ */
+export const approveReady = (
+  items: readonly { id: string; answersHash: string }[],
+): Promise<ApprovedReady> =>
+  request("/apply/queue/approve", {
+    method: "POST",
+    body: {
+      items: items.map((one) => ({
+        application_id: one.id,
+        answers_hash: one.answersHash,
+      })),
+    },
+    // One gate decision per item: a long list takes longer than one approval.
+    timeoutMs: TIMEOUT_MS + items.length * 2_000,
+    validate: (body) => approvedReadySchema.parse(body),
+  });
+
 /** The answer to a rehearsal's "Does this look right?": Yes sends it to the queue, ready. */
 export const answerRehearsal = (applicationId: string, answer: "yes" | "no") =>
   request(`/applications/${id(applicationId)}/rehearsal`, {

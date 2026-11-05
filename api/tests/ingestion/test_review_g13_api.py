@@ -22,7 +22,7 @@ from tests.ingestion import merge_helpers as mh
 from tests.ingestion.conftest import signed_in
 from tests.ingestion.extract_helpers import key, keyring, settings
 from tests.ingestion.helpers import user_id
-from tests.ingestion.test_item_proposals import made, raw, revisions, row, stored
+from tests.ingestion.test_item_proposals import made, raw, revisions, row, save, stored
 
 _FIXTURES = (key, keyring, settings)
 FIRST = "e2e-g13-first@example.org"
@@ -136,6 +136,9 @@ def test_an_id_that_is_not_a_pending_item_of_this_run_is_left_out(
 ) -> None:
     run_id = run_of(factory, me, settings)
     headline = made(factory, me, "identity", "headline", "Engineer", run=run_id)
+    # A locked fact that would change what the profile holds is accepted on its own (one that
+    # fills an empty slot joins accept all, owner 2026-11-05).
+    save(factory, me, "identity", {"full_name": "Alice Typed"})
     locked = made(factory, me, "identity", "full_name", "Alice Martin", run=run_id)
     decided = made(factory, me, "identity", "website", "https://example.org", run=run_id)
     assert api.post(f"/api/proposals/{decided}/reject", token=first).status_code == 200
@@ -166,9 +169,13 @@ def test_an_id_that_is_not_a_pending_item_of_this_run_is_left_out(
         "other_section": 1,
     }
     held = stored(factory, me, "identity")
-    assert (held["headline"], held["full_name"], held["city"]) == ("Engineer", None, None)
+    assert (held["headline"], held["full_name"], held["city"]) == (
+        "Engineer",
+        "Alice Typed",
+        None,
+    )
     assert statuses(factory, [locked, elsewhere, section, theirs]) == {ProposalStatus.pending}
-    assert revisions(factory, me) == [(1, "identity")]
+    assert revisions(factory, me) == [(1, "identity"), (2, "identity")]
     assert revisions(factory, other) == []
     assert stored(factory, other, "identity")["headline"] is None
     # A reject names them the same way and touches none of them.

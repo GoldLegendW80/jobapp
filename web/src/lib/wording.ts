@@ -338,6 +338,8 @@ export const WORDING = {
   // Ingestion: a run reads the documents.
   startReading: "Start reading",
   startAnotherReading: "Start another reading",
+  // The button that starts a run, before its token range.
+  completeProfile: "Complete my profile",
   readingPausedAtLimit: "The reading paused at the limit you agreed to.",
   serverUnreachable: "Server unreachable",
   checkServerAgain: "Check the server again",
