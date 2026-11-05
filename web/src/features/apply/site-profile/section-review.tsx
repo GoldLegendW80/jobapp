@@ -147,49 +147,52 @@ function FieldRow({
         label="Profile value or your edit"
         className="p-3 sm:min-w-56 max-sm:items-start"
       >
-        {mutable ? (
-          <div className="space-y-2">
-            <Textarea
-              aria-label={`Edit ${field.label}`}
-              value={value}
-              disabled={pending}
-              onChange={(event) => {
-                onChange(event.target.value);
-              }}
-              rows={2}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={pending || !dirty}
-              onClick={onSave}
-            >
-              Keep edit
-            </Button>
-            {dirty && (
+        <div className="min-w-0">
+          {mutable ? (
+            <div className="space-y-2">
+              <Textarea
+                aria-label={`Edit ${field.label}`}
+                value={value}
+                disabled={pending}
+                onChange={(event) => {
+                  onChange(event.target.value);
+                }}
+                rows={2}
+              />
               <Button
                 size="sm"
-                variant="ghost"
-                disabled={pending}
-                onClick={onUndo}
+                variant="outline"
+                disabled={pending || !dirty}
+                onClick={onSave}
               >
-                Undo
+                Keep edit
               </Button>
-            )}
-          </div>
-        ) : (
-          <span className="break-words">{valueText(field.value)}</span>
-        )}
-        {field.refusal && (
-          <p className="mt-2 text-sm text-muted-foreground">
-            {refusals[field.refusal] ?? "This field is left for you to review."}
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {errorDetail(error) ?? describeError(error)}
-          </p>
-        )}
+              {dirty && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={pending}
+                  onClick={onUndo}
+                >
+                  Undo
+                </Button>
+              )}
+            </div>
+          ) : (
+            <span className="break-words">{valueText(field.value)}</span>
+          )}
+          {field.refusal && (
+            <p className="mt-2 text-sm text-muted-foreground">
+              {refusals[field.refusal] ??
+                "This field is left for you to review."}
+            </p>
+          )}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {errorDetail(error) ?? describeError(error)}
+            </p>
+          )}
+        </div>
       </TableCell>
       <TableCell label="Source" className="p-3 sm:min-w-28 text-sm">
         {field.source === "left"

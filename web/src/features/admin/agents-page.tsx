@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Fragment } from "react";
 import { CircleAlert, LoaderCircle, RotateCw } from "lucide-react";
 import { Link } from "react-router";
 
@@ -210,8 +211,17 @@ function AgentsTable({
               </span>
             </TableHead>
             <TableCell label="Module">
-              <code className="text-xs max-sm:[overflow-wrap:anywhere]">
-                {agent.module}
+              <code className="text-xs max-sm:break-words">
+                {agent.module.split(".").map((part, index) => (
+                  <Fragment key={index}>
+                    {index > 0 && (
+                      <>
+                        .<wbr />
+                      </>
+                    )}
+                    {part}
+                  </Fragment>
+                ))}
               </code>
             </TableCell>
             <TableCell label="Model" className="lg:whitespace-nowrap">

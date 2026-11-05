@@ -59,11 +59,14 @@ function TableCaption({
   className,
   ...props
 }: React.ComponentProps<"caption">) {
+  const { stacked } = React.useContext(LayoutContext);
   return (
     <caption
       data-slot="table-caption"
       className={cn(
         "px-3 py-2 text-left text-sm text-muted-foreground",
+        // A stacked table is a block under 640px: the caption spans the cards' width.
+        stacked && "max-sm:block max-sm:w-full max-sm:px-0",
         className,
       )}
       {...props}
@@ -168,7 +171,7 @@ function TableCell({
         "px-3 py-2",
         stacked &&
           (label
-            ? "max-sm:grid max-sm:grid-cols-[6.5rem_1fr] max-sm:items-center max-sm:gap-2 max-sm:px-0 max-sm:py-1 max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]"
+            ? "max-sm:grid max-sm:grid-cols-[6.5rem_minmax(0,1fr)] max-sm:items-center max-sm:gap-2 max-sm:px-0 max-sm:py-1 max-sm:before:text-xs max-sm:before:font-medium max-sm:before:text-muted-foreground max-sm:before:content-[attr(data-label)]"
             : "max-sm:px-0"),
         className,
       )}
