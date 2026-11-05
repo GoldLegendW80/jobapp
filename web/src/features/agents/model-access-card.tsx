@@ -11,7 +11,6 @@ import {
   EyeOff,
   Info,
   KeyRound,
-  LoaderCircle,
   RotateCw,
   Timer,
 } from "lucide-react";
@@ -37,8 +36,23 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Spinner } from "@/components/ui/spinner";
 import { fieldError } from "@/features/account/field-error";
 import { exactTime } from "@/features/admin/relative-time";
 import { message } from "@/features/admin/errors";
@@ -247,45 +261,54 @@ export function ModelAccessCard() {
               <AlertDescription>{formError}</AlertDescription>
             </Alert>
           ) : null}
-          <fieldset className="flex flex-col gap-3">
-            <legend className="mb-3 text-sm font-medium">
+          <FieldSet className="gap-3">
+            <FieldLegend variant="label">
               {saved ? "Replace with" : "Credential type"}
-            </legend>
-            <KindOption
-              kind="anthropic_api_key"
-              checked={chosen === "anthropic_api_key"}
-              onChoose={setKind}
+            </FieldLegend>
+            <RadioGroup
+              name="kind"
+              value={chosen}
+              onValueChange={(value) => {
+                if (isKind(value)) setKind(value);
+              }}
             >
-              Billed to your own Anthropic account. Create a key in the{" "}
-              <a
-                href="https://console.anthropic.com/settings/keys"
-                target="_blank"
-                rel="noreferrer noopener"
-                className="font-medium text-foreground underline underline-offset-4"
+              <KindOption
+                kind="anthropic_api_key"
+                checked={chosen === "anthropic_api_key"}
               >
-                Anthropic Console
-              </a>{" "}
-              (console.anthropic.com) and paste it here.
-            </KindOption>
-            <KindOption
-              kind="claude_subscription"
-              checked={chosen === "claude_subscription"}
-              onChoose={setKind}
-            >
-              For the account owner's personal use only: a Claude subscription
-              cannot be shared with other people. In a terminal with Claude Code
-              installed, run{" "}
-              <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
-                claude setup-token
-              </code>
-              , sign in, and paste the token it prints.
-            </KindOption>
-          </fieldset>
+                Billed to your own Anthropic account. Create a key in the{" "}
+                <a
+                  href="https://console.anthropic.com/settings/keys"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="font-medium text-foreground underline underline-offset-4"
+                >
+                  Anthropic Console
+                </a>{" "}
+                (console.anthropic.com) and paste it here.
+              </KindOption>
+              <KindOption
+                kind="claude_subscription"
+                checked={chosen === "claude_subscription"}
+              >
+                For the account owner's personal use only: a Claude subscription
+                cannot be shared with other people. In a terminal with Claude
+                Code installed, run{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
+                  claude setup-token
+                </code>
+                , sign in, and paste the token it prints.
+              </KindOption>
+            </RadioGroup>
+          </FieldSet>
 
-          <div className="grid gap-2">
-            <Label htmlFor={ids.secret}>{secretLabel}</Label>
-            <div className="relative">
-              <Input
+          <Field
+            className="gap-2"
+            data-invalid={secretError ? true : undefined}
+          >
+            <FieldLabel htmlFor={ids.secret}>{secretLabel}</FieldLabel>
+            <InputGroup>
+              <InputGroupInput
                 id={ids.secret}
                 name="secret"
                 type={shown ? "text" : "password"}
@@ -293,7 +316,7 @@ export function ModelAccessCard() {
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                className="pr-11 font-mono"
+                className="font-mono"
                 placeholder={
                   chosen === "claude_subscription"
                     ? "sk-ant-oat01-…"
@@ -312,38 +335,32 @@ export function ModelAccessCard() {
                   setSecretError(undefined);
                 }}
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
-                aria-label={`Show ${secretLabel.toLowerCase()}`}
-                aria-pressed={shown}
-                onClick={() => {
-                  setShown((value) => !value);
-                }}
-              >
-                {shown ? (
-                  <EyeOff aria-hidden="true" />
-                ) : (
-                  <Eye aria-hidden="true" />
-                )}
-              </Button>
-            </div>
-            <p id={ids.secretHint} className="text-sm text-muted-foreground">
+              <InputGroupAddon align="inline-end">
+                <InputGroupButton
+                  size="icon-sm"
+                  className="hover:text-foreground"
+                  aria-label={`Show ${secretLabel.toLowerCase()}`}
+                  aria-pressed={shown}
+                  onClick={() => {
+                    setShown((value) => !value);
+                  }}
+                >
+                  {shown ? (
+                    <EyeOff aria-hidden="true" />
+                  ) : (
+                    <Eye aria-hidden="true" />
+                  )}
+                </InputGroupButton>
+              </InputGroupAddon>
+            </InputGroup>
+            <FieldDescription id={ids.secretHint}>
               Saving replaces any credential saved before. It stays unverified
               until you click Verify.
-            </p>
+            </FieldDescription>
             {secretError ? (
-              <p
-                id={ids.secretError}
-                role="alert"
-                className="text-sm text-destructive"
-              >
-                {secretError}
-              </p>
+              <FieldError id={ids.secretError}>{secretError}</FieldError>
             ) : null}
-          </div>
+          </Field>
         </CardContent>
         <CardFooter className="justify-end">
           <Button
@@ -354,7 +371,7 @@ export function ModelAccessCard() {
           >
             {save.isPending ? (
               <>
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
                 Saving
               </>
             ) : saveLocked ? (
@@ -406,7 +423,7 @@ export function ModelAccessCard() {
               }}
             >
               {remove.isPending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
               ) : null}
               Remove
             </Button>
@@ -417,46 +434,35 @@ export function ModelAccessCard() {
   );
 }
 
+const isKind = (value: string): value is CredentialKind => value in KIND_LABEL;
+
+/** One kind of credential: the radio, its name and what it is, in a box. */
 function KindOption({
   kind,
   checked,
-  onChoose,
   children,
 }: {
   kind: CredentialKind;
   checked: boolean;
-  onChoose: (kind: CredentialKind) => void;
   children: ReactNode;
 }) {
   const id = useId();
   return (
-    <div
+    <Field
+      orientation="horizontal"
       className={cn(
-        "flex gap-3 rounded-lg border p-3 transition-colors",
+        "rounded-lg border p-3 transition-colors",
         checked ? "border-primary bg-accent/40" : "border-border",
       )}
     >
-      <input
-        id={id}
-        type="radio"
-        name="kind"
-        value={kind}
-        checked={checked}
-        aria-describedby={`${id}-hint`}
-        className="mt-0.5 size-4 shrink-0 accent-primary"
-        onChange={() => {
-          onChoose(kind);
-        }}
-      />
-      <div className="grid gap-1">
-        <label htmlFor={id} className="text-sm leading-none font-medium">
+      <RadioGroupItem id={id} value={kind} aria-describedby={`${id}-hint`} />
+      <FieldContent className="gap-1">
+        <FieldLabel htmlFor={id} className="leading-none">
           {KIND_LABEL[kind]}
-        </label>
-        <p id={`${id}-hint`} className="text-sm text-muted-foreground">
-          {children}
-        </p>
-      </div>
-    </div>
+        </FieldLabel>
+        <FieldDescription id={`${id}-hint`}>{children}</FieldDescription>
+      </FieldContent>
+    </Field>
   );
 }
 
@@ -483,7 +489,7 @@ function SavedCredential({
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
         Loading your credential
       </p>
     );
@@ -567,7 +573,7 @@ function SavedCredential({
         >
           {verifying ? (
             <>
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
               Verifying
             </>
           ) : verifyLocked ? (

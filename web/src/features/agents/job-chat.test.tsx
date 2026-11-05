@@ -210,6 +210,9 @@ describe("job detail: chat panel", () => {
       name: "Example questions",
     });
     expect(within(examples).getAllByRole("button")).toHaveLength(3);
+    expect(composer()).toHaveAccessibleDescription(
+      "Enter sends, Shift and Enter adds a line.",
+    );
     await waitFor(() => {
       expect(composer()).toBeEnabled();
     });
@@ -247,11 +250,15 @@ describe("job detail: chat panel", () => {
     await user.type(composer(), "Next question");
     expect(state.sends).toHaveLength(1);
     expect(sendButton()).toBeDisabled();
+    // The hint names its keys (Kbd): it is read as one sentence.
+    expect(composer()).toHaveAccessibleDescription(
+      "Enter sends your message once the answer is complete.",
+    );
     expect(
-      within(panel).getByText(
-        "Enter sends your message once the answer is complete.",
-      ),
-    ).toBeInTheDocument();
+      within(panel)
+        .getAllByText("Enter")
+        .every((key) => key.dataset.slot === "kbd"),
+    ).toBe(true);
 
     const live = await within(panel).findByTestId("chat-live-reply");
     expect(live).toHaveTextContent("Waiting for a free agent");

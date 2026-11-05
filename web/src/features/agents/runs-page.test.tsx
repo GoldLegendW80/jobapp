@@ -439,13 +439,17 @@ describe("/runs/:id, the run panel", () => {
     expect(failed).toHaveTextContent("0 characters");
     expect(failed).toHaveTextContent("Tool error");
     for (const item of [call, result, hidden, failed]) {
-      expect(item.querySelector("details")).toBeNull();
+      expect(item.querySelector("[data-slot=collapsible]")).toBeNull();
       expect(item.querySelector("pre")).toBeNull();
       expect(within(item).queryByText("Show")).toBeNull();
     }
-    // A stored result keeps its disclosure and its text.
-    expect(stored.querySelector("details")).not.toBeNull();
-    expect(within(stored).getByText("Show")).toBeInTheDocument();
+    // A stored result keeps its disclosure and its text, folded until it is opened.
+    expect(stored.querySelector("[data-slot=collapsible]")).not.toBeNull();
+    const show = within(stored).getByRole("button", { name: "Show" });
+    expect(show).toHaveAttribute("aria-expanded", "false");
+    expect(stored.querySelector("pre")).toBeNull();
+    await userEvent.setup().click(show);
+    expect(show).toHaveAttribute("aria-expanded", "true");
     expect(stored.querySelector("pre")).toHaveTextContent("stored text");
   });
 
