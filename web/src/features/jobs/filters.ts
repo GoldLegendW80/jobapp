@@ -132,6 +132,19 @@ export function hasFilters(filters: JobFilters): boolean {
   return toSearchParams(filters, { withSort: false }).toString() !== "";
 }
 
+/** How many filters narrow the list, counted as the filter bar's chips are: one per status and
+ * per type, one for the search, the company, the fit range and the found dates each. */
+export function activeFilterCount(filters: JobFilters): number {
+  return (
+    filters.statuses.length +
+    filters.types.length +
+    (filters.q ? 1 : 0) +
+    (filters.company ? 1 : 0) +
+    (filters.fitMin !== null || filters.fitMax !== null ? 1 : 0) +
+    (filters.foundFrom || filters.foundTo ? 1 : 0)
+  );
+}
+
 /** The status filter after a click on its KPI tile: that status alone, or none if it was. */
 export function toggleOnlyStatus(
   filters: JobFilters,

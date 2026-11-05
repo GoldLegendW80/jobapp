@@ -110,7 +110,7 @@ export function describeEvent(
     case "import":
       return "Updated by an import";
     case "sweep":
-      return "Seen again by a sweep";
+      return "Seen again by a search";
     default:
       return statusLabel(kind);
   }

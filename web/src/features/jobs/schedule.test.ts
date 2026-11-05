@@ -4,9 +4,31 @@ import {
   DEFAULT_SCHEDULE,
   formatInZone,
   nextRun,
+  timeZones,
+  timeZonesOwnFirst,
   zonedInstant,
   type SweepSchedule,
 } from "./schedule";
+
+describe("timeZonesOwnFirst", () => {
+  it("puts the person's own zone first, once, then every other in order", () => {
+    const zones = timeZonesOwnFirst("Asia/Tokyo", "Europe/Paris");
+    expect(zones[0]).toBe("Asia/Tokyo");
+    expect(zones.filter((zone) => zone === "Asia/Tokyo")).toHaveLength(1);
+    const rest = zones.slice(1);
+    expect(rest).toEqual([...rest].sort());
+    expect(new Set(zones)).toEqual(
+      new Set(timeZones("Europe/Paris", "Asia/Tokyo")),
+    );
+  });
+
+  it("adds an own zone the browser does not list, and keeps the order without one", () => {
+    expect(timeZonesOwnFirst("Etc/Example")[0]).toBe("Etc/Example");
+    expect(timeZonesOwnFirst(null, "Europe/Paris")).toEqual(
+      timeZones("Europe/Paris"),
+    );
+  });
+});
 
 const on = (fields: Partial<SweepSchedule> = {}): SweepSchedule => ({
   ...DEFAULT_SCHEDULE,

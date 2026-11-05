@@ -31,8 +31,9 @@ import {
   DEFAULT_SCHEDULE,
   formatInZone,
   nextRun,
+  ownTimeZone,
   TIMES_MAX,
-  timeZones,
+  timeZonesOwnFirst,
   WEEKDAY_LABELS,
   WEEKDAYS,
   type SweepSchedule,
@@ -101,7 +102,9 @@ export function ScheduleDialog({
   const [draft, setDraft] = useState<SweepSchedule>(() => initial(state));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [zones] = useState(() => timeZones(draft.timezone));
+  const [zones] = useState(() =>
+    timeZonesOwnFirst(ownTimeZone(), draft.timezone),
+  );
 
   const badTimes = draft.times.some((t) => !CLOCK.test(t));
   const invalid = !draft.days.length || !draft.times.length || badTimes;
@@ -186,7 +189,14 @@ export function ScheduleDialog({
                     key={day}
                     type="button"
                     size="sm"
-                    variant={pressed ? "default" : "outline"}
+                    // While the schedule is off its days are kept but muted: nothing runs on them.
+                    variant={
+                      pressed
+                        ? draft.enabled
+                          ? "default"
+                          : "secondary"
+                        : "outline"
+                    }
                     aria-pressed={pressed}
                     aria-label={day.charAt(0).toUpperCase() + day.slice(1)}
                     onClick={() => {
@@ -211,7 +221,8 @@ export function ScheduleDialog({
                   <Input
                     type="time"
                     aria-label={`Time ${index + 1}`}
-                    className="w-28"
+                    // Wide enough for a 12 hour clock ("06:17 AM") and its picker icon.
+                    className="w-36"
                     value={time}
                     required
                     onChange={(event) => {

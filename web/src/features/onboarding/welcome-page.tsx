@@ -407,7 +407,7 @@ function Wizard({
 
       <nav
         aria-label={WORDING.wizard}
-        className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t bg-background py-3"
+        className="sticky bottom-(--bottom-bar,0px) flex flex-wrap items-center justify-between gap-2 border-t bg-background py-3"
       >
         <Button
           variant="outline"

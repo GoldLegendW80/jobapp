@@ -15,6 +15,7 @@ import {
 } from "@/features/profile/editor-forms";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
+import { phoneScreen } from "@/test/media";
 import { fakeProfile, profileBody, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
@@ -1591,4 +1592,68 @@ it("keeps sending a stored public job search choice", async () => {
   expect(profile.saves[0]!.body.data).toMatchObject({
     linkedin_search: "api",
   });
+});
+
+it("offers Sign in as optional on a website's line, and none on LinkedIn read without signing in", async () => {
+  const { user, dialog } = await open(structuredClone(EMPTY.search), {
+    linkedin: { enabled: true, accepted: true },
+  });
+  await toggle(user, dialog, "Indeed");
+  const indeed = rowOf(dialog, "Indeed");
+  const signIn = within(indeed).getByRole("button", {
+    name: "Sign in to www.indeed.com (optional)",
+  });
+  expect(signIn).toHaveTextContent("Sign in (optional)");
+  expect(signIn).toHaveAccessibleDescription(
+    "Only if this site shows more postings to members.",
+  );
+  // LinkedIn read through its public job search never opens the browser: no Sign in on its line.
+  await toggle(user, dialog, "LinkedIn");
+  const linkedin = rowOf(dialog, "LinkedIn");
+  expect(
+    within(linkedin).queryByRole("button", { name: /^Sign in/ }),
+  ).not.toBeInTheDocument();
+  await user.click(
+    within(linkedin).getByRole("radio", { name: LINKEDIN_BROWSER }),
+  );
+  expect(
+    within(linkedin).getByRole("button", {
+      name: "Sign in to www.linkedin.com (optional)",
+    }),
+  ).toBeVisible();
+});
+
+/** The scrolling middle of the setup, which its footer is outside of. */
+const scroller = (element: HTMLElement) => element.closest(".overflow-y-auto");
+
+it("opens as a dialog on a wide screen, its footer outside the part that scrolls", async () => {
+  const { dialog } = await open();
+  expect(dialog).toHaveAttribute("data-slot", "dialog-content");
+  const save = within(dialog).getByRole("button", {
+    name: "Save and start search",
+  });
+  expect(scroller(save)).toBeNull();
+  expect(
+    scroller(within(dialog).getByLabelText("Website address")),
+  ).not.toBeNull();
+});
+
+it("opens as a sheet from the bottom on a phone, its footer in view too, and closes as the dialog does", async () => {
+  phoneScreen();
+  const { user, dialog, profile, starts } = await open();
+  expect(dialog).toHaveAttribute("data-slot", "sheet-content");
+  expect(
+    within(dialog).getByRole("heading", { name: "Find jobs" }),
+  ).toBeVisible();
+  const save = within(dialog).getByRole("button", {
+    name: "Save and start search",
+  });
+  expect(scroller(save)).toBeNull();
+  expect(
+    scroller(within(dialog).getByLabelText("Website address")),
+  ).not.toBeNull();
+  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  expect(profile.saves).toEqual([]);
+  expect(starts).toEqual([]);
+  expect(screen.getByRole("button", { name: "Find jobs" })).toHaveFocus();
 });

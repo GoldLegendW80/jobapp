@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
 import { csvJobs, CSV_COUNTS, fakeJobsApi, makeJob } from "@/test/jobs";
+import { phoneScreen } from "@/test/media";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -469,11 +470,97 @@ describe("list", () => {
     ).toBeNull();
   });
 
-  it("says when there are no postings at all", async () => {
+  it("says when there are no postings at all, with Find jobs and Add a posting by hand only there", async () => {
     fakeJobsApi([]);
+    const user = userEvent.setup();
     renderApp("/jobs");
-    expect(await screen.findByText("No postings yet")).toBeInTheDocument();
+    const empty = await screen.findByRole("region", {
+      name: "No postings yet.",
+    });
+    expect(empty).toHaveTextContent(
+      "Tell the app where to look and it brings postings here.",
+    );
     expect(screen.queryByRole("table")).toBeNull();
+    // Nothing to count, filter or chart: the tiles, the filters and the chart are left out.
+    expect(
+      screen.queryByRole("region", { name: "Postings per status" }),
+    ).toBeNull();
+    expect(screen.queryByRole("region", { name: "Filters" })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Fit distribution" }),
+    ).toBeNull();
+    // The empty list holds the page's Find jobs and Add a posting; the header does not repeat them.
+    expect(screen.getAllByRole("button", { name: "Find jobs" })).toEqual([
+      within(empty).getByRole("button", { name: "Find jobs" }),
+    ]);
+    expect(screen.queryByRole("button", { name: "Add a posting" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Past searches" })).toBeVisible();
+    await user.click(
+      within(empty).getByRole("button", { name: "Add a posting by hand" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Add a posting" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the tiles, the filters and the chart when a filter hides every posting", async () => {
+    fakeJobsApi(csvJobs());
+    renderApp("/jobs?q=nothing+like+this");
+    await screen.findByText("No postings match these filters");
+    expect(
+      screen.getByRole("region", { name: "Postings per status" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Filters" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("region", { name: "Fit distribution" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "No postings yet." }),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Find jobs" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Add a posting" })).toBeVisible();
+  });
+
+  it("writes counts with thousands separators", async () => {
+    fakeJobsApi([makeJob(1)], {
+      respond: () =>
+        HttpResponse.json({
+          items: [makeJob(1)],
+          next_cursor: null,
+          total: 14115,
+          counts_by_status: { ...CSV_COUNTS, found: 12840, applied: 1029 },
+          fit_histogram: {
+            buckets: Array.from({ length: 10 }, (_, i) => ({
+              low: i * 10,
+              high: i === 9 ? 100 : i * 10 + 9,
+              count: 0,
+            })),
+            unscored: 0,
+          },
+        }),
+    });
+    renderApp("/jobs");
+    expect(await screen.findByText("14,115 postings")).toBeInTheDocument();
+    expect(kpi("Found")).toHaveAccessibleName("Found: 12,840");
+    expect(kpi("Found")).toHaveTextContent("12,840");
+    expect(kpi("Applied")).toHaveTextContent("1,029");
+  });
+
+  it("shows the tiles as unavailable, not loading, when the list cannot be loaded", async () => {
+    fakeJobsApi([], {
+      respond: () =>
+        HttpResponse.json({ detail: "database down" }, { status: 503 }),
+    });
+    renderApp("/jobs");
+    await screen.findByText(/The postings could not be loaded\./);
+    const tiles = within(
+      screen.getByRole("region", { name: "Postings per status" }),
+    ).getAllByRole("button");
+    expect(tiles).toHaveLength(9);
+    for (const tile of tiles) {
+      expect(tile.getAttribute("aria-label")).toMatch(/: unavailable$/);
+      expect(tile).toHaveTextContent("Unavailable");
+    }
   });
 
   it("says when no posting matches, with a way out", async () => {
@@ -633,6 +720,52 @@ describe("opening a posting", () => {
     expect(tabbable).toHaveLength(1);
     for (const link of within(table()).getAllByRole("link"))
       expect(link).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+describe("on a phone", () => {
+  it("folds the filters behind one button that counts them, and leaves the chart out", async () => {
+    phoneScreen();
+    fakeJobsApi(csvJobs());
+    const user = userEvent.setup();
+    renderApp("/jobs?status=found&type=CDI&q=Engineer");
+    const toggle = await screen.findByRole("button", {
+      name: /^Filters\s*,\s*3 set$/,
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("region", { name: "Filters" })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Fit distribution" }),
+    ).toBeNull();
+    // The tiles stay, as one row.
+    expect(
+      await screen.findByRole("button", { name: /^Found: \d/ }),
+    ).toBeVisible();
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const bar = screen.getByRole("region", { name: "Filters" });
+    expect(within(bar).getByLabelText("Search postings")).toHaveValue(
+      "Engineer",
+    );
+    // A chip removed in the open filters: the button counts one less.
+    await user.click(
+      within(bar).getByRole("button", { name: "Remove filter Type: CDI" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: /^Filters\s*,\s*2 set$/ }),
+    ).toBe(toggle);
+    await user.click(toggle);
+    expect(screen.queryByRole("region", { name: "Filters" })).toBeNull();
+  });
+
+  it("names no count on the Filters button while no filter is set", async () => {
+    phoneScreen();
+    fakeJobsApi(csvJobs());
+    renderApp("/jobs");
+    expect(
+      await screen.findByRole("button", { name: "Filters" }),
+    ).toHaveAttribute("aria-expanded", "false");
   });
 });
 

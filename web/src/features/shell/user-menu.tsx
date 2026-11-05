@@ -1,5 +1,11 @@
-import { LogOut, Settings, UserRound } from "lucide-react";
-import { Link } from "react-router";
+import {
+  Activity,
+  LogOut,
+  Settings,
+  ShieldCheck,
+  UserRound,
+} from "lucide-react";
+import { Link, NavLink } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -16,7 +22,19 @@ import { useAuth } from "@/features/auth/auth-context";
 
 import { initials } from "./initials";
 
-export function UserMenu({ user }: { user: User }) {
+/**
+ * The account menu at the right of the header: Account, Settings, Activity (the assistant's
+ * runs, at every width), Admin for an admin on a phone (a wide screen has it in the header), and
+ * Sign out.
+ */
+export function UserMenu({
+  user,
+  adminLink = false,
+}: {
+  user: User;
+  /** Show Admin here: the header shows no navigation (a phone) and the user is an admin. */
+  adminLink?: boolean;
+}) {
   const { signOut, signingOut } = useAuth();
   const label = user.name || user.email;
   return (
@@ -58,6 +76,21 @@ export function UserMenu({ user }: { user: User }) {
             Settings
           </Link>
         </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <NavLink to="/runs">
+            <Activity aria-hidden="true" />
+            Activity
+          </NavLink>
+        </DropdownMenuItem>
+        {adminLink ? (
+          <DropdownMenuItem asChild>
+            <NavLink to="/admin/users">
+              <ShieldCheck aria-hidden="true" />
+              Admin
+            </NavLink>
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuSeparator />
         <DropdownMenuItem
           disabled={signingOut}
           onSelect={() => {

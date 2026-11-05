@@ -168,3 +168,22 @@ export function timeZones(...extra: string[]): string[] {
   ]);
   return [...all].sort();
 }
+
+/** The person's own time zone, as the browser reports it; null when it reports none. */
+export function ownTimeZone(): string | null {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The zones of the time zone list: the person's own first, then every other in order (the
+ * whole list starts at "Africa/Abidjan" otherwise). */
+export function timeZonesOwnFirst(
+  own: string | null,
+  ...extra: string[]
+): string[] {
+  const all = timeZones(...extra, ...(own ? [own] : []));
+  return own ? [own, ...all.filter((zone) => zone !== own)] : all;
+}

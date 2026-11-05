@@ -1,7 +1,8 @@
 /**
  * "Where to search": one box for any address, a few examples, and the list (sources.ts). Shared
  * by Find jobs (search-setup.tsx) and the wizard's "Websites to search" step. Controlled by
- * `useSources` (use-sources.ts), which saves.
+ * `useSources` (use-sources.ts), which saves. Laid out on the grid of setup-grid.tsx: icons in
+ * the gutter, every text at one edge.
  */
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
@@ -70,6 +71,15 @@ import {
   type RowKind,
   type SourceRow,
 } from "./sources";
+import {
+  BLOCK,
+  BLOCKS,
+  BOX,
+  COLUMN,
+  Glyph,
+  HANG,
+  StepNumber,
+} from "./setup-grid";
 import { useStarterBoards, type Sources } from "./use-sources";
 
 // LinkedIn keeps one switch for its search, its reader and Easy Apply (owner, 2026-10-27), so
@@ -223,45 +233,44 @@ export function SourcesEditor({
 
   return (
     <section
-      className="space-y-4"
+      className={cn(COLUMN, BLOCKS)}
       aria-labelledby={showTitle ? `${id}-title` : undefined}
       aria-label={showTitle ? undefined : "Where to search"}
     >
       {showTitle ? (
         <Heading
           id={`${id}-title`}
-          className="flex items-center gap-2 text-base font-semibold tracking-tight"
+          className={cn(
+            HANG,
+            "items-center text-base font-semibold tracking-tight",
+          )}
         >
-          {step ? (
-            <span
-              aria-hidden="true"
-              className="flex size-7 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground"
-            >
-              {step}
-            </span>
-          ) : null}
+          {step ? <StepNumber step={step} /> : <Glyph />}
           Where to search
         </Heading>
       ) : null}
 
-      <p className="text-sm text-muted-foreground">
-        Add any website with job offers:
-      </p>
-      <ul className="grid gap-1.5 text-sm text-muted-foreground">
-        <Kind kind="website" text="A job website, like LinkedIn or Indeed" />
-        <Kind
-          kind="board"
-          text="A company job board, like jobs.ashbyhq.com/doctolib"
-        />
-        <Kind
-          kind="website"
-          text="Any careers page, like https://www.example.com/careers"
-        />
-      </ul>
+      <div className={BLOCK}>
+        <p className="text-sm text-muted-foreground">
+          Add any website with job offers:
+        </p>
+        <ul className="flex flex-col gap-1 text-sm text-muted-foreground">
+          <Kind kind="website" text="A job website, like LinkedIn or Indeed" />
+          <Kind
+            kind="board"
+            text="A company job board, like jobs.ashbyhq.com/doctolib"
+          />
+          <Kind
+            kind="website"
+            text="Any careers page, like https://www.example.com/careers"
+          />
+        </ul>
+      </div>
 
-      <div className="space-y-2">
+      <div className={BLOCK}>
         <Label htmlFor={`${id}-address`}>Website address</Label>
-        <div className="flex flex-col gap-2 sm:flex-row">
+        {/* One row at every width, as the word lists' box and its Add below. */}
+        <div className="flex gap-2">
           <Input
             id={`${id}-address`}
             type="url"
@@ -315,9 +324,11 @@ export function SourcesEditor({
       </div>
 
       {examples.length ? (
-        <div className="space-y-2">
-          <p className="flex items-center gap-1.5 text-sm font-medium">
-            <Sparkles aria-hidden="true" className="size-4 text-amber-500" />
+        <div className={BLOCK}>
+          <p className={cn(HANG, "text-sm font-medium")}>
+            <Glyph line="h-5">
+              <Sparkles className="size-4 text-amber-500" />
+            </Glyph>
             Try one
           </p>
           <ul aria-label="Examples" className="flex flex-wrap gap-2">
@@ -343,7 +354,7 @@ export function SourcesEditor({
         </div>
       ) : null}
 
-      <div className="space-y-2">
+      <div className={BLOCK}>
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-medium" id={`${id}-list`}>
             Your list
@@ -353,15 +364,22 @@ export function SourcesEditor({
           </Badge>
         </div>
         {rows.length === 0 ? (
-          <div className="flex items-center gap-3 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">
-            <Sparkles aria-hidden="true" className="size-5 shrink-0" />
+          <div
+            className={cn(
+              BOX,
+              "rounded-xl border border-dashed py-3 text-sm text-muted-foreground",
+            )}
+          >
+            <Glyph line="h-5">
+              <Sparkles className="size-4" />
+            </Glyph>
             <p>
               Nothing yet. Add an address above or pick an example, and the app
               searches every place on your list.
             </p>
           </div>
         ) : (
-          <ul aria-labelledby={`${id}-list`} className="space-y-2">
+          <ul aria-labelledby={`${id}-list`} className="flex flex-col gap-2">
             {rows.map((row) => (
               <SourceLine
                 key={row.key}
@@ -425,17 +443,20 @@ function boardListed(boards: readonly CompanyBoard[] | null, url: string) {
 function Kind({ kind, text }: { kind: RowKind; text: string }) {
   const look = KIND_LOOK[kind];
   return (
-    <li className="flex items-center gap-2">
-      <span
-        aria-hidden="true"
-        className={cn(
-          "flex size-6 shrink-0 items-center justify-center rounded-md",
-          look.tone,
-        )}
-      >
-        {look.icon}
+    <li className={cn(HANG, "items-start")}>
+      <Glyph>
+        <span
+          className={cn(
+            "flex size-6 items-center justify-center rounded-md",
+            look.tone,
+          )}
+        >
+          {look.icon}
+        </span>
+      </Glyph>
+      <span className="flex min-h-7 min-w-0 items-center break-words">
+        {text}
       </span>
-      <span className="min-w-0 break-words">{text}</span>
     </li>
   );
 }
@@ -481,24 +502,31 @@ function SourceLine({
         .filter(Boolean)
         .join(" ") || null
     : null;
+  // Signing in is for a website that shows more to members; LinkedIn read through its public
+  // job search ("Without signing in") is never opened in the browser, so it offers none.
+  const signIn =
+    row.kind === "website" && !(isLinkedIn && sources.linkedinMode === "api");
   return (
     <li
       className={cn(
-        "flex min-w-0 items-start gap-3 rounded-xl border bg-card p-3 shadow-xs motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1",
+        // The line reaches 0.5rem past the gutter on each side, so its icon sits on the glyph
+        // axis and its text at the column's edge (setup-grid.tsx).
+        "-mr-2 -ml-11 grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)_auto] items-start rounded-xl border bg-card py-3 pr-2 pl-2 shadow-xs motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1",
         !row.enabled && "opacity-75",
       )}
     >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg",
-          look.tone,
-        )}
-      >
-        {look.icon}
-      </span>
-      <div className="min-w-0 flex-1 space-y-1 text-sm">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <Glyph>
+        <span
+          className={cn(
+            "flex size-7 items-center justify-center rounded-lg",
+            look.tone,
+          )}
+        >
+          {look.icon}
+        </span>
+      </Glyph>
+      <div className="flex min-w-0 flex-col gap-1.5 text-sm">
+        <div className="flex min-h-7 min-w-0 flex-wrap items-center gap-2">
           <span className="min-w-0 font-medium break-all">{row.name}</span>
           {row.enabled ? null : (
             <Badge variant="outline">
@@ -523,27 +551,29 @@ function SourceLine({
           />
         ) : null}
         {row.feed === "adzuna" ? <AdzunaNote /> : null}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          {row.enabled ? null : (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={disabled}
-              onClick={onResume}
-            >
-              Search it again
-            </Button>
-          )}
-          {/* B17: sign in to this website once, then searches read it signed in. */}
-          {row.kind === "website" ? <SiteSignIn url={row.url} /> : null}
-        </div>
+        {!row.enabled || signIn ? (
+          <div className="flex flex-col items-start gap-2 pt-0.5">
+            {row.enabled ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                onClick={onResume}
+              >
+                Search it again
+              </Button>
+            )}
+            {/* B17: sign in to this website once, then searches read it signed in. */}
+            {signIn ? <SiteSignIn url={row.url} optional /> : null}
+          </div>
+        ) : null}
       </div>
       <Button
         type="button"
-        size="icon"
+        size="icon-sm"
         variant="ghost"
-        className="shrink-0"
+        className="-mt-0.5 shrink-0"
         disabled={disabled}
         aria-label={`Remove ${row.name}`}
         onClick={onRemove}
@@ -570,12 +600,18 @@ function RiskNote({
   const label = PLATFORM_NAMES[platform];
   const also = ALSO_ALLOWS[platform];
   return (
+    // From the gutter: its sign on the glyph axis, its words at the column's edge.
     <div
       id={id}
-      className="flex gap-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-950 dark:bg-amber-950/40 dark:text-amber-100"
+      className={cn(
+        HANG,
+        "rounded-lg bg-amber-50 py-2 pr-3 text-xs text-amber-950 dark:bg-amber-950/40 dark:text-amber-100",
+      )}
     >
-      <TriangleAlert aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-      <div className="space-y-1">
+      <Glyph line="h-4">
+        <TriangleAlert className="size-3.5" />
+      </Glyph>
+      <div className="flex flex-col gap-1">
         {state.isPending ? (
           <p>Loading the {label} risk sentence…</p>
         ) : state.isError ? (
@@ -604,20 +640,23 @@ function LinkedInSearchChoice({
 }) {
   const name = useId();
   return (
-    <fieldset className="space-y-1 pt-1 text-xs">
+    <fieldset className="flex flex-col gap-1 pt-1 text-xs">
       <legend className="mb-1 font-medium">How LinkedIn is searched</legend>
       {(["api", "browser"] as const).map((mode) => (
-        <label key={mode} className="flex min-h-6 items-center gap-2">
-          <input
-            type="radio"
-            name={name}
-            value={mode}
-            className="size-3.5 shrink-0 accent-primary"
-            checked={value === mode}
-            onChange={() => {
-              onChange(mode);
-            }}
-          />
+        // The radio hangs in the gutter, so its words start at the column's edge.
+        <label key={mode} className={cn(HANG, "min-h-6 items-center")}>
+          <span className="flex w-7 justify-center">
+            <input
+              type="radio"
+              name={name}
+              value={mode}
+              className="size-3.5 accent-primary"
+              checked={value === mode}
+              onChange={() => {
+                onChange(mode);
+              }}
+            />
+          </span>
           {LINKEDIN_SEARCH_LABELS[mode]}
         </label>
       ))}

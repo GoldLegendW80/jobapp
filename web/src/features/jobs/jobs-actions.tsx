@@ -170,7 +170,8 @@ export function BulkBar({ selection }: { selection: Selection }) {
     <div
       role="region"
       aria-label="Bulk actions"
-      className="sticky bottom-3 z-30 flex flex-col gap-2 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg sm:bottom-4"
+      // Above the phone's bottom tab bar (--bottom-bar, app-shell.tsx).
+      className="sticky bottom-[calc(var(--bottom-bar,0px)+0.75rem)] z-30 flex flex-col gap-2 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg sm:bottom-4"
     >
       <div className="flex flex-wrap items-center gap-2">
         <p
@@ -211,7 +212,7 @@ export function BulkBar({ selection }: { selection: Selection }) {
                 setStatus(event.target.value);
               }}
             >
-              <option value="">Set status</option>
+              <option value="">Choose a status</option>
               {STATUSES.map((value) => (
                 <option key={value} value={value}>
                   {statusLabel(value)}
@@ -226,7 +227,7 @@ export function BulkBar({ selection }: { selection: Selection }) {
               {busy ? (
                 <LoaderCircle aria-hidden="true" className="animate-spin" />
               ) : null}
-              Apply
+              Set status
             </Button>
           </form>
           <LikeButton ids={selection.ids} onDone={selection.clear} />
@@ -401,18 +402,21 @@ const EMPTY_DRAFT: Draft = {
   posting_text: "",
 };
 
-export function AddPostingButton() {
+/** "Add a posting" in the page's header (outline: Find jobs is the page's one primary action),
+ * or, as a link, "Add a posting by hand" in the empty list. Both open the same dialog. */
+export function AddPostingButton({ asLink = false }: { asLink?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button
-        size="sm"
+        variant={asLink ? "link" : "outline"}
+        className={asLink ? "h-auto px-0" : undefined}
         onClick={() => {
           setOpen(true);
         }}
       >
-        <Plus aria-hidden="true" />
-        Add a posting
+        {asLink ? null : <Plus aria-hidden="true" />}
+        {asLink ? "Add a posting by hand" : "Add a posting"}
       </Button>
       {open ? (
         <AddPostingDialog
@@ -604,7 +608,7 @@ export function PageMenu({ selected }: { selected: string[] }) {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="icon-sm" aria-label="More actions">
+          <Button variant="outline" size="icon" aria-label="More actions">
             <EllipsisVertical aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>

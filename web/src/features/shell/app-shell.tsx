@@ -1,27 +1,45 @@
+import type { CSSProperties } from "react";
 import { Link, NavLink, Outlet } from "react-router";
 
-import { NeedsYouDot } from "@/features/apply/needs-person";
-import { QueueCount } from "@/features/apply/queue-count";
 import { useMe } from "@/features/auth/auth-context";
 import { HealthDot } from "@/features/health/health-dot";
+import { useIsPhone } from "@/lib/use-media-query";
 import { APP_NAME } from "@/lib/use-title";
 import { cn } from "@/lib/utils";
 
+import { BottomNav, TabCounts } from "./bottom-nav";
+import { MAIN_TABS } from "./main-tabs";
 import { UserMenu } from "./user-menu";
 
 const navLink = ({ isActive }: { isActive: boolean }) =>
   cn(
-    "shrink-0 rounded-md px-2 py-2 text-sm font-medium text-muted-foreground sm:px-3 transition-colors hover:bg-accent hover:text-accent-foreground",
+    "flex shrink-0 items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground",
     isActive && "bg-accent text-accent-foreground",
   );
 
-/** The signed in frame: header with the app name, navigation and the user menu. */
+/** The height the phone's bottom tab bar takes, safe area included: the page keeps clear of it,
+ * and a bar that sticks to the bottom of the page (the bulk bar, a save bar) sits above it. */
+const BOTTOM_BAR = "calc(3.5rem + 1px + env(safe-area-inset-bottom))";
+
+/**
+ * The signed in frame: header with the app name, navigation and the user menu. Wide screens keep
+ * the main navigation in the header; a phone (below `sm`) has a bottom tab bar instead, and the
+ * header keeps the app name and the user menu, which then holds Admin too. Activity (the
+ * assistant's runs) is in the user menu at every width.
+ */
 export function AppShell() {
   const { data: user } = useMe();
+  const phone = useIsPhone();
   // RequireAuth renders this only with a user; the check keeps the types honest.
   if (!user) return null;
+  const admin = user.role === "admin";
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div
+      className={cn("flex min-h-dvh flex-col", phone && "pb-(--bottom-bar)")}
+      style={
+        phone ? ({ "--bottom-bar": BOTTOM_BAR } as CSSProperties) : undefined
+      }
+    >
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:ring-2 focus:ring-ring"
@@ -29,47 +47,36 @@ export function AppShell() {
         Skip to content
       </a>
       <header className="sticky top-0 z-40 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-4 sm:gap-4">
+        <div className="mx-auto flex h-14 max-w-6xl items-center gap-4 px-4">
           <Link
             to="/jobs"
             className="rounded-md px-1 text-lg font-semibold tracking-tight"
           >
             {APP_NAME}
           </Link>
-          {/* relative: the links' sr-only words (absolute) stay inside the scrolling nav; else
-              they sit past its edge and widen the page on a phone. */}
-          <nav
-            aria-label="Main"
-            className="relative flex min-w-0 items-center gap-0.5 overflow-x-auto sm:gap-1"
-          >
-            <NavLink to="/jobs" className={navLink}>
-              Jobs
-            </NavLink>
-            <NavLink to="/discover" className={navLink}>
-              Discover
-            </NavLink>
-            <NavLink to="/profile" className={navLink}>
-              Profile
-            </NavLink>
-            <NavLink to="/applications" className={navLink}>
-              Applications
-              <QueueCount />
-              <NeedsYouDot />
-            </NavLink>
-            <NavLink to="/runs" className={navLink}>
-              Runs
-            </NavLink>
-            {user.role === "admin" ? (
-              <NavLink to="/admin/users" className={navLink}>
-                Admin
-              </NavLink>
-            ) : null}
-          </nav>
+          {phone ? null : (
+            <nav aria-label="Main" className="flex min-w-0 items-center gap-1">
+              {MAIN_TABS.map((tab) => (
+                <NavLink key={tab.to} to={tab.to} className={navLink}>
+                  {tab.label}
+                  {tab.counts ? <TabCounts /> : null}
+                </NavLink>
+              ))}
+              {admin ? (
+                <NavLink to="/admin/users" className={navLink}>
+                  Admin
+                </NavLink>
+              ) : null}
+            </nav>
+          )}
           <div className="ml-auto">
-            <UserMenu user={user} />
+            <UserMenu user={user} adminLink={phone && admin} />
           </div>
         </div>
       </header>
+      {/* Right after the header in the page's order, as the header's navigation is on a wide
+          screen: the skip link passes it, and Tab reaches it before the page. */}
+      {phone ? <BottomNav /> : null}
       <main id="main" tabIndex={-1} className="flex-1 px-4 py-6 sm:py-10">
         <Outlet />
       </main>
