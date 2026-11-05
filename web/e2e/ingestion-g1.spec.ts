@@ -462,7 +462,7 @@ test("text files are read at once: chosen by keyboard, then dropped", async () =
       transfer.items.add(
         new File([content], "cover letter.txt", { type: "text/plain" }),
       );
-      const zone = heading.parentElement;
+      const zone = heading.closest("[data-slot=empty]");
       if (!zone) throw new Error("no drop zone");
       for (const type of ["dragover", "drop"])
         zone.dispatchEvent(
