@@ -379,3 +379,7 @@ The owner's answers during the product audit, in the session that built them.
   are written as plain text or Markdown; the model interprets the Skills text into the skills
   section the fit reads (answer 1 above, for Skills). Experience, education, languages, the
   answers, identity and the search stay structured inputs.
+- 2026-11-05, the Answers too (owner: "anwsers tab should be in the plain text/markdown too"):
+  Facts, Skills and Answers are written as plain text or Markdown; the model interprets the
+  Skills and the Answers texts. A change to a yes/no consent, an EEO answer, a work authorisation
+  or a salary figure is listed on its own line and applied only by the person's Apply click.
