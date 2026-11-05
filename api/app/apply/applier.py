@@ -211,6 +211,8 @@ class ApplySession:
     question: dict[str, str] | None = None
     url: str = ""
     read: set[str] = field(default_factory=set)  # the addresses of pages read in this run
+    # Those read since the last act on a submit element: a confirmation is one of them.
+    read_since_submit: set[str] = field(default_factory=set)
     last_act: float | None = None
     acts: int = 0
 
@@ -232,6 +234,7 @@ class ApplySession:
             return "The page could not be read.", True
         self.url = str(shot.get("url") or "")[:2000]
         self.read.add(self.url)
+        self.read_since_submit.add(self.url)
         view = {"url": self.url, "title": plain(shot.get("title"), 300), "snapshot": text}
         view["snapshot"] = text[:SNAPSHOT_MAX]
         return json.dumps(view, ensure_ascii=False), False
@@ -300,6 +303,7 @@ class ApplySession:
                     from app.browser.tools import agent_act
 
                     result = await agent_act(self.tools, name, args, str(self.capability))
+                    self.read_since_submit.clear()
             finally:
                 if paced:
                     self.last_act = self.monotonic()
@@ -374,12 +378,14 @@ class ApplySession:
 
     def finish(self, outcome: object, summary: object, confirmation: object) -> tuple[str, bool]:
         """apply_done: submitted only on a page this run read; else failed with why."""
+        if self.stopped:
+            return self._ended()  # a stop (the emergency stop, a question) is the outcome
         if self.done is not None:
             return "Already reported.", True
         text = plain(summary, SUMMARY_MAX)
         if outcome == "submitted":
             address = confirmation if isinstance(confirmation, str) else ""
-            if address not in self.read:
+            if address not in (self.read_since_submit if self.armed else self.read):
                 return (
                     "Refused: read the confirmation page with browser_snapshot, then report "
                     "its address as confirmation_url.",
@@ -428,7 +434,7 @@ def _clicked_before(db: Session, application: Application) -> bool:
         .where(
             ApplicationEvent.application_id == application.id,
             ApplicationEvent.user_id == application.user_id,
-            ApplicationEvent.kind.in_(("agent_submit", "agent_done")),
+            ApplicationEvent.kind == "agent_submit",
         )
         .limit(1)
     )
@@ -569,7 +575,7 @@ def finish(
         run._event(db, application, "outcome_superseded", now, state=application.state.value)
         return "superseded"
     _report(db, application, session, ran, now)
-    outcome = session.done[0] if session.done else None
+    outcome = session.done[0] if session.done and not session.stopped else None
     run._event(db, application, "agent_done", now, outcome=outcome, code=session.stopped or None)
     if outcome == "submitted":
         if application.state is State.filling:

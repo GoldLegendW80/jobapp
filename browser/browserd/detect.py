@@ -147,13 +147,13 @@ CREDENTIAL_FN = """e => {
 
 # A password box or a one time code box (A19: the apply agent's lease refuses typing there only,
 # hard rule 7), read from the element's own type and autocomplete tokens.
-SECRET_BOX_JS = """e => {  # noqa: S105  JS source run in the page, no secret
+SECRET_BOX_JS = """e => {
   const SECRET = ["current-password", "new-password", "one-time-code"];
   const tokens = String((e.getAttribute && e.getAttribute("autocomplete")) || "")
     .toLowerCase().split(/\\s+/);
   return (e.tagName === "INPUT" && String(e.type).toLowerCase() === "password")
     || tokens.some(t => SECRET.includes(t));
-}"""
+}"""  # noqa: S105  JS source run in the page, no secret
 
 # What the page tells about the element a ref names, `opts.sels` being the lease's submit selectors.
 # The control is the element itself, or the button or link it sits in, or a label's control; every
@@ -449,7 +449,8 @@ def _submits(facts: dict[str, Any], action: str) -> bool:
         return True
     if action == "key" and tag == "input" and not button and facts.get("in_form"):
         return True
-    return action in ("click", "key") and button and says_submit(names)
+    # A link opens a page (a posting's "Apply now"): its words do not mark it, its form does.
+    return action in ("click", "key") and button and tag != "a" and says_submit(names)
 
 
 def _own(facts: Any, action: str, profile_edit: bool) -> str | None:
