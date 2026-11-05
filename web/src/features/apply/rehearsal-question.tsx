@@ -1,10 +1,10 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
 
 import { refusalOf } from "./apply-api";
@@ -79,7 +79,7 @@ export function RehearsalQuestion({
           }}
         >
           {answer.isPending && answer.variables ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
           ) : null}
           Yes, it looks right
         </Button>

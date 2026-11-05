@@ -356,7 +356,9 @@ describe("the Applications page", () => {
     fakeBank([]);
     const { user } = await openPage();
     screen.getByRole("radio", { name: "Review first" }).focus();
-    await user.keyboard("{ArrowDown}");
+    // The radio group moves the focus on the next tick and selects the radio it reaches while
+    // the arrow is still down, as in a person's key press: the key is held over that tick.
+    await user.keyboard("{ArrowDown>}{/ArrowDown}");
     expect(screen.getByRole("radio", { name: "Full auto" })).toHaveFocus();
     const turnOn = await screen.findByRole("button", {
       name: "Turn on Full auto",
@@ -403,10 +405,13 @@ describe("the Applications page", () => {
     fakeCaps([]);
     fakeBank([]);
     const { user } = await openPage();
-    const advanced = screen.getByText("Advanced");
-    expect(advanced.closest("details")).not.toHaveAttribute("open");
+    const advanced = screen.getByRole("button", { name: "Advanced" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByText(/At most 30 submissions a day in Full auto/),
+    ).toBeNull();
     await user.click(advanced);
-    expect(advanced.closest("details")).toHaveAttribute("open");
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
     expect(
       screen.getByText(/At most 30 submissions a day in Full auto/),
     ).toBeVisible();

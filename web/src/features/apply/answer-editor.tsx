@@ -1,9 +1,9 @@
-import { LoaderCircle } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 
 import type { Answer } from "./apply-api";
@@ -138,9 +138,7 @@ export function AnswerEditor({
           void onSave(documentLetter ? draft : draft.trim());
         }}
       >
-        {saving ? (
-          <LoaderCircle aria-hidden="true" className="animate-spin" />
-        ) : null}
+        {saving ? <Spinner aria-hidden="true" role={undefined} /> : null}
         Save answer
       </Button>
     </div>

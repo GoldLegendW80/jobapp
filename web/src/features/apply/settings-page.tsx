@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -13,8 +13,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
+import { Switch } from "@/components/ui/switch";
 import { message } from "@/features/admin/errors";
 import { useTitle } from "@/lib/use-title";
 
@@ -80,14 +89,14 @@ export function ApplicationsSettingsPage() {
           <PauseCard settings={query.data} />
           <ThresholdCard
             id="show-postings"
-            title="Show postings from"
+            heading="Show postings from"
             value={query.data.show_postings_from}
             sentence="Postings are listed from this fit score. You set it on your profile, Search, as Minimum fit."
             link={{ to: "/profile?tab=search", text: "Open Profile, Search" }}
           />
           <ThresholdCard
             id="write-documents"
-            title="Write documents from"
+            heading="Write documents from"
             value={query.data.write_documents_from}
             sentence="The app writes a CV and a letter for postings from this fit score. It is a documents setting, read only here."
           />
@@ -136,16 +145,14 @@ function ReviewBeforeSendCard({ settings }: { settings: ApplySettings }) {
             <AlertDescription>{problem}</AlertDescription>
           </Alert>
         ) : null}
-        <div className="flex items-start gap-2">
-          <input
+        <Field orientation="horizontal" className="gap-2">
+          <Checkbox
             id={`${id}-box`}
-            type="checkbox"
-            className="mt-0.5 size-4 shrink-0 accent-primary"
             checked={settings.review_before_send}
             disabled={save.isPending}
             aria-describedby={`${id}-text`}
-            onChange={(event) => {
-              const review = event.target.checked;
+            onCheckedChange={(checked) => {
+              const review = checked === true;
               setProblem(null);
               save.mutate(
                 { review_before_send: review },
@@ -164,16 +171,16 @@ function ReviewBeforeSendCard({ settings }: { settings: ApplySettings }) {
               );
             }}
           />
-          <div className="flex flex-col gap-0.5">
-            <Label htmlFor={`${id}-box`}>
+          <FieldContent className="gap-0.5">
+            <FieldLabel htmlFor={`${id}-box`}>
               Let me review each filled form before it is sent
-            </Label>
-            <p id={`${id}-text`} className="text-sm text-muted-foreground">
+            </FieldLabel>
+            <FieldDescription id={`${id}-text`}>
               When it is off, Apply fills the form and sends it for you. When it
               is on, you check each filled form and send it yourself.
-            </p>
-          </div>
-        </div>
+            </FieldDescription>
+          </FieldContent>
+        </Field>
       </CardContent>
     </Card>
   );
@@ -199,17 +206,13 @@ function PauseCard({ settings }: { settings: ApplySettings }) {
             <AlertDescription>{problem}</AlertDescription>
           </Alert>
         ) : null}
-        <div className="flex items-start gap-2">
-          <input
+        <Field orientation="horizontal" className="gap-2">
+          <Switch
             id={`${id}-switch`}
-            type="checkbox"
-            role="switch"
-            className="mt-0.5 size-4 shrink-0 accent-primary"
             checked={settings.paused}
             disabled={save.isPending}
             aria-describedby={`${id}-text`}
-            onChange={(event) => {
-              const paused = event.target.checked;
+            onCheckedChange={(paused) => {
               setProblem(null);
               save.mutate(
                 { paused },
@@ -228,15 +231,17 @@ function PauseCard({ settings }: { settings: ApplySettings }) {
               );
             }}
           />
-          <div className="flex flex-col gap-0.5">
-            <Label htmlFor={`${id}-switch`}>Pause automatic applications</Label>
-            <p id={`${id}-text`} className="text-sm text-muted-foreground">
+          <FieldContent className="gap-0.5">
+            <FieldLabel htmlFor={`${id}-switch`}>
+              Pause automatic applications
+            </FieldLabel>
+            <FieldDescription id={`${id}-text`}>
               {settings.paused
                 ? "Paused. The app submits nothing for you until you turn this off; your filled forms wait for you."
                 : "While paused, the app submits nothing for you: an approval is refused and the form waits for you."}
-            </p>
-          </div>
-        </div>
+            </FieldDescription>
+          </FieldContent>
+        </Field>
       </CardContent>
     </Card>
   );
@@ -244,13 +249,13 @@ function PauseCard({ settings }: { settings: ApplySettings }) {
 
 function ThresholdCard({
   id,
-  title,
+  heading,
   value,
   sentence,
   link,
 }: {
   id: string;
-  title: string;
+  heading: string;
   value: number | null;
   sentence: string;
   link?: { to: string; text: string };
@@ -260,7 +265,7 @@ function ThresholdCard({
       <CardHeader>
         <CardTitle className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 id={`${id}-title`} className="text-lg">
-            {title}
+            {heading}
           </h2>
           <span className="text-lg font-semibold tabular-nums">
             {value ?? "Not set"}
@@ -341,8 +346,8 @@ function MinFitCard({ settings }: { settings: ApplySettings }) {
               <AlertDescription>{failed}</AlertDescription>
             </Alert>
           ) : null}
-          <div className="grid gap-2">
-            <Label htmlFor={`${id}-input`}>Fit score, 0 to 100</Label>
+          <Field className="gap-2">
+            <FieldLabel htmlFor={`${id}-input`}>Fit score, 0 to 100</FieldLabel>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 id={`${id}-input`}
@@ -362,17 +367,15 @@ function MinFitCard({ settings }: { settings: ApplySettings }) {
                 aria-busy={save.isPending}
               >
                 {save.isPending ? (
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                 ) : null}
                 Save threshold
               </Button>
             </div>
             {problem ? (
-              <p id={`${id}-problem`} className="text-sm text-destructive">
-                {problem}
-              </p>
+              <FieldError id={`${id}-problem`}>{problem}</FieldError>
             ) : null}
-          </div>
+          </Field>
         </form>
       </CardContent>
     </Card>

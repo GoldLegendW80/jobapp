@@ -542,6 +542,10 @@ describe("invite dialog", () => {
       expect(
         await within(result).findByText(/This browser blocked copying/),
       ).toBeInTheDocument();
+      // The keys are shown as keys, and the sentence still reads whole.
+      expect(within(result).getByRole("status")).toHaveTextContent(
+        "This browser blocked copying. The link is selected: press Ctrl+C, or Cmd+C on a Mac.",
+      );
       const input =
         within(result).getByLabelText<HTMLInputElement>("Invite link");
       expect(input).toHaveFocus();

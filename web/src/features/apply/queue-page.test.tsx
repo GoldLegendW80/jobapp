@@ -213,6 +213,55 @@ describe("the review queue page", () => {
     },
   );
 
+  it("keeps an unsaved answer, and Approve waiting for it, while the answers are folded", async () => {
+    const item = queueItem(1, "ready", { left: 1, required_left: 1 });
+    const api = fakeQueue([item], {
+      [item.id]: [
+        fakeAnswer("email", "Email", "e2e-alex@example.org"),
+        leftAnswer("why", "Why Example Robotics?", { required: true }),
+      ],
+    });
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const ready = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    const toggle = within(ready).getByRole("button", {
+      name: "Hide the answers",
+    });
+    const panel = document.getElementById(
+      toggle.getAttribute("aria-controls") ?? "",
+    );
+    expect(panel).not.toBeNull();
+    const answer = await within(ready).findByRole("textbox", {
+      name: "Answer for Why Example Robotics?",
+    });
+    expect(panel).toContainElement(answer);
+    await user.type(answer, "I build agents.");
+    await within(ready).findByText(/Save your answers first/);
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAccessibleName("Review the answers");
+    expect(panel).not.toBeVisible();
+    // Folded, the typed answer is still there: Approve keeps waiting for it to be saved.
+    expect(answer).toHaveValue("I build agents.");
+    expect(
+      within(ready).getByRole("button", { name: "Approve and submit" }),
+    ).toBeDisabled();
+    expect(ready).toHaveTextContent(/Save your answers first/);
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(panel).toBeVisible();
+    expect(
+      within(ready).getByRole("textbox", {
+        name: "Answer for Why Example Robotics?",
+      }),
+    ).toHaveValue("I build agents.");
+    expect(api.puts).toEqual([]);
+  });
+
   it("moves focus to the next queue card after approval", async () => {
     const first = queueItem(1, "ready");
     const second = queueItem(2, "ready");

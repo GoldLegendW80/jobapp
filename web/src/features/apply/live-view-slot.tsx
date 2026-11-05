@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
 
+import { Empty, EmptyDescription, EmptyMedia } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import {
   browserQueryKey,
   getBrowser,
@@ -114,15 +115,17 @@ export function LiveViewSlot({
     );
   }
   return (
-    <div
+    <Empty
       data-testid="live-view-slot"
-      className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
+      className="min-h-40 flex-none gap-2 border p-6 md:p-6"
     >
       {stopped ? null : (
-        <LoaderCircle aria-hidden="true" className="size-5 animate-spin" />
+        <EmptyMedia className="mb-0 text-muted-foreground">
+          <Spinner aria-hidden="true" role={undefined} className="size-5" />
+        </EmptyMedia>
       )}
-      <p>{idle}</p>
-    </div>
+      <EmptyDescription>{idle}</EmptyDescription>
+    </Empty>
   );
 }
 

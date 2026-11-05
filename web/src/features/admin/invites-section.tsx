@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  LoaderCircle,
   MailPlus,
   RotateCw,
 } from "lucide-react";
@@ -27,6 +26,23 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +57,7 @@ import {
 import { message } from "./errors";
 import { InviteDialog } from "./invite-dialog";
 import { exactTime, relativeTime } from "./relative-time";
-import { cell } from "./table-cell";
+import { ACTIONS, BODY, cell, HEAD, ROW } from "./table-cell";
 
 const STATUS: Record<InviteStatus, { label: string; className: string }> = {
   active: {
@@ -99,7 +115,7 @@ export function InvitesSection() {
           className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading invites
           </span>
         </p>
@@ -120,17 +136,20 @@ export function InvitesSection() {
           </AlertDescription>
         </Alert>
       ) : page && page.total === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-10 text-center">
-          <MailPlus
-            aria-hidden="true"
-            className="size-6 text-muted-foreground"
-          />
-          <p className="font-medium">No invites yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            Invite someone to give them access. Their link appears here so you
-            can follow it and revoke it.
-          </p>
-        </div>
+        <Empty className="flex-none gap-2 border px-4 py-10 md:px-4 md:py-10">
+          <EmptyHeader className="max-w-none">
+            <EmptyMedia className="mb-0 text-muted-foreground">
+              <MailPlus aria-hidden="true" className="size-6" />
+            </EmptyMedia>
+            <EmptyTitle className="text-base tracking-normal">
+              No invites yet
+            </EmptyTitle>
+            <EmptyDescription className="max-w-sm">
+              Invite someone to give them access. Their link appears here so you
+              can follow it and revoke it.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : page ? (
         <>
           <InvitesTable
@@ -206,41 +225,38 @@ function InvitesTable({
       )}
       aria-busy={busy}
     >
-      <table className="w-full text-sm max-sm:block">
-        <caption className="sr-only">Invites, newest first</caption>
-        <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground max-sm:sr-only">
-          <tr>
-            <th scope="col" className="px-3 py-2 font-medium">
+      <Table className="max-sm:block">
+        <TableCaption className="sr-only">Invites, newest first</TableCaption>
+        <TableHeader className="bg-muted/50 text-xs max-sm:sr-only">
+          <TableRow>
+            <TableHead scope="col" className={HEAD}>
               Email
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Kind
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Role
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Status
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Expires
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
+            </TableHead>
+            <TableHead scope="col" className={cn(HEAD, "text-right")}>
               <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="max-sm:flex max-sm:flex-col max-sm:gap-3">
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody className={BODY}>
           {items.map((invite) => {
             const status = STATUS[invite.status];
             return (
-              <tr
-                key={invite.id}
-                className="border-b last:border-b-0 max-sm:flex max-sm:flex-col max-sm:rounded-lg max-sm:border max-sm:bg-card max-sm:p-3 max-sm:last:border-b"
-              >
-                <th
+              <TableRow key={invite.id} className={ROW}>
+                <TableHead
                   scope="row"
-                  className="px-3 py-2 text-left font-medium break-all max-sm:px-0 max-sm:pb-2 max-sm:text-base"
+                  className="h-auto px-3 py-2 break-all whitespace-normal max-sm:px-0 max-sm:pb-2 max-sm:text-base"
                 >
                   {invite.email}
                   {invite.created_by_name ? (
@@ -248,24 +264,24 @@ function InvitesTable({
                       by {invite.created_by_name}
                     </span>
                   ) : null}
-                </th>
-                <td {...cell("Kind")}>{KIND[invite.kind]}</td>
-                <td {...cell("Role")}>
+                </TableHead>
+                <TableCell {...cell("Kind")}>{KIND[invite.kind]}</TableCell>
+                <TableCell {...cell("Role")}>
                   {invite.role ? (
                     ROLE[invite.role]
                   ) : (
                     <span className="text-muted-foreground">Unchanged</span>
                   )}
-                </td>
-                <td {...cell("Status")}>
+                </TableCell>
+                <TableCell {...cell("Status")}>
                   <Badge variant="outline" className={status.className}>
                     {status.label}
                   </Badge>
-                </td>
-                <td {...cell("Expires")}>
+                </TableCell>
+                <TableCell {...cell("Expires")}>
                   <When invite={invite} now={now} />
-                </td>
-                <td className="px-3 py-2 text-right max-sm:px-0 max-sm:pt-2 max-sm:text-left">
+                </TableCell>
+                <TableCell className={ACTIONS}>
                   {invite.status === "active" ? (
                     <Button
                       variant="outline"
@@ -279,12 +295,12 @@ function InvitesTable({
                       Revoke
                     </Button>
                   ) : null}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -388,7 +404,7 @@ function RevokeDialog({
           >
             {mutation.isPending ? (
               <>
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
                 Revoking
               </>
             ) : (

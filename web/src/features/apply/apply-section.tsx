@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { getLinkedIn, linkedinKey } from "@/features/browser/linkedin-api";
 import { jobKey, type JobDetail } from "@/features/jobs/api";
 import { describeError } from "@/lib/api";
@@ -339,7 +339,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the application
         </p>
       ) : latest.isError && latest.data === undefined ? (
@@ -476,10 +476,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 role="status"
                 className="flex items-center gap-2 text-sm text-muted-foreground"
               >
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-4 animate-spin"
-                />
+                <Spinner aria-hidden="true" role={undefined} />
                 Loading the filled form
               </p>
             )
@@ -508,10 +505,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     }}
                   >
                     {start.isPending && start.variables === "apply" ? (
-                      <LoaderCircle
-                        aria-hidden="true"
-                        className="animate-spin"
-                      />
+                      <Spinner aria-hidden="true" role={undefined} />
                     ) : null}
                     Apply
                   </Button>
@@ -542,10 +536,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     }}
                   >
                     {start.isPending && start.variables === "manual" ? (
-                      <LoaderCircle
-                        aria-hidden="true"
-                        className="animate-spin"
-                      />
+                      <Spinner aria-hidden="true" role={undefined} />
                     ) : null}
                     Apply myself
                   </Button>
@@ -630,15 +621,16 @@ export function ApplySection({ job }: { job: JobDetail }) {
               ) : settings.isError ? (
                 <p data-testid="apply-mode-pending">
                   Your apply settings could not be read, so Apply waits.{" "}
-                  <button
+                  <Button
                     type="button"
-                    className="font-medium text-foreground underline underline-offset-4"
+                    variant="link"
+                    className="h-auto p-0 font-medium text-foreground underline"
                     onClick={() => {
                       void settings.refetch();
                     }}
                   >
                     Try again
-                  </button>
+                  </Button>
                 </p>
               ) : (
                 <p data-testid="apply-mode-pending">
@@ -802,14 +794,14 @@ function FormPanel({
             <ShotView
               applicationId={application.id}
               shotId={before.id}
-              title="The form before the click"
+              caption="The form before the click"
             />
           ) : null}
           {after ? (
             <ShotView
               applicationId={application.id}
               shotId={after.id}
-              title="The page after the click"
+              caption="The page after the click"
             />
           ) : null}
         </div>

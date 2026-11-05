@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { ChevronRight, CircleAlert } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
@@ -12,8 +12,23 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Spinner } from "@/components/ui/spinner";
 import { message } from "@/features/admin/errors";
 
 import {
@@ -99,58 +114,52 @@ export function FullAutoModeCard({ settings }: { settings: ApplySettings }) {
             <AlertDescription>{problem}</AlertDescription>
           </Alert>
         ) : null}
-        <fieldset className="flex flex-col gap-3" disabled={save.isPending}>
-          <legend className="sr-only">Mode after a Like</legend>
-          <div className="flex items-start gap-2">
-            <input
-              id={`${id}-review`}
-              type="radio"
-              name={`${id}-mode`}
-              value="review"
-              className="mt-0.5 size-4 shrink-0 accent-primary"
-              checked={chosen === "review"}
-              aria-describedby={`${id}-review-text`}
-              onChange={() => {
+        <FieldSet className="gap-3" disabled={save.isPending}>
+          <FieldLegend className="sr-only">Mode after a Like</FieldLegend>
+          <RadioGroup
+            name={`${id}-mode`}
+            value={chosen}
+            className="gap-3"
+            onValueChange={(value) => {
+              if (value === "review") {
                 if (asking) setAsking(false);
                 else if (on) change("review");
-              }}
-            />
-            <div className="flex flex-col gap-0.5">
-              <Label htmlFor={`${id}-review`}>Review first</Label>
-              <p
-                id={`${id}-review-text`}
-                className="text-sm text-muted-foreground"
-              >
-                The app fills the form and waits for your approval before it
-                submits.
-              </p>
-            </div>
-          </div>
-          <div className="flex items-start gap-2">
-            <input
-              id={`${id}-full`}
-              type="radio"
-              name={`${id}-mode`}
-              value="full_auto"
-              className="mt-0.5 size-4 shrink-0 accent-primary"
-              checked={chosen === "full_auto"}
-              aria-describedby={`${id}-full-text`}
-              onChange={() => {
+              } else if (value === "full_auto") {
                 if (!on) setAsking(true);
-              }}
-            />
-            <div className="flex flex-col gap-0.5">
-              <Label htmlFor={`${id}-full`}>Full auto</Label>
-              <p
-                id={`${id}-full-text`}
-                className="text-sm text-muted-foreground"
-              >
-                Your Like is your approval: the app fills the form, holds it so
-                you can cancel, checks it once more, then submits it for you.
-              </p>
-            </div>
-          </div>
-        </fieldset>
+              }
+            }}
+          >
+            <Field orientation="horizontal" className="gap-2">
+              <RadioGroupItem
+                id={`${id}-review`}
+                value="review"
+                aria-describedby={`${id}-review-text`}
+              />
+              <FieldContent className="gap-0.5">
+                <FieldLabel htmlFor={`${id}-review`}>Review first</FieldLabel>
+                <FieldDescription id={`${id}-review-text`}>
+                  The app fills the form and waits for your approval before it
+                  submits.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+            <Field orientation="horizontal" className="gap-2">
+              <RadioGroupItem
+                id={`${id}-full`}
+                value="full_auto"
+                aria-describedby={`${id}-full-text`}
+              />
+              <FieldContent className="gap-0.5">
+                <FieldLabel htmlFor={`${id}-full`}>Full auto</FieldLabel>
+                <FieldDescription id={`${id}-full-text`}>
+                  Your Like is your approval: the app fills the form, holds it
+                  so you can cancel, checks it once more, then submits it for
+                  you.
+                </FieldDescription>
+              </FieldContent>
+            </Field>
+          </RadioGroup>
+        </FieldSet>
 
         {asking || on ? (
           <section
@@ -193,7 +202,7 @@ export function FullAutoModeCard({ settings }: { settings: ApplySettings }) {
                   }}
                 >
                   {save.isPending ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                    <Spinner aria-hidden="true" role={undefined} />
                   ) : null}
                   Turn on Full auto
                 </Button>
@@ -257,73 +266,84 @@ export function FullAutoAdvanced({ settings }: { settings: ApplySettings }) {
   return (
     <Card>
       <CardContent>
-        <details className="group">
-          <summary className="cursor-pointer rounded-md text-lg font-semibold">
-            Advanced
-          </summary>
-          <dl className="mt-4 grid gap-3 text-sm">
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-medium">Safety ceiling</dt>
-              <dd className="text-muted-foreground">
-                At most {settings.safety_ceiling} submissions a day in Full
-                auto. The rest of the day waits for you.
-              </dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="font-medium">Hold length</dt>
-              <dd className="text-muted-foreground">
-                {holdText(settings.hold_s)} between a Full auto decision and its
-                submission, so you can cancel it. Never less than{" "}
-                {holdText(settings.hold_min_s)}.
-              </dd>
-            </div>
-          </dl>
-          <form
-            noValidate
-            aria-label="Hold length"
-            className="mt-4 flex flex-col gap-3"
-            onSubmit={onSubmit}
-          >
-            {failed ? (
-              <Alert variant="destructive">
-                <CircleAlert aria-hidden="true" />
-                <AlertDescription>{failed}</AlertDescription>
-              </Alert>
-            ) : null}
-            <div className="grid gap-2">
-              <Label htmlFor={`${id}-hold`}>Hold length in minutes</Label>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <Input
-                  id={`${id}-hold`}
-                  inputMode="numeric"
-                  maxLength={4}
-                  className="sm:w-28"
-                  value={typed}
-                  aria-invalid={problem ? true : undefined}
-                  aria-describedby={problem ? `${id}-problem` : undefined}
-                  onChange={(event) => {
-                    setTyped(event.target.value);
-                  }}
-                />
-                <Button
-                  type="submit"
-                  disabled={save.isPending || unchanged}
-                  aria-busy={save.isPending}
-                >
-                  {save.isPending ? (
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
-                  ) : null}
-                  Save hold length
-                </Button>
+        <Collapsible>
+          <CollapsibleTrigger asChild>
+            <Button
+              variant="ghost"
+              className="group h-auto cursor-pointer gap-1.5 p-0 text-lg font-semibold has-[>svg]:px-0 hover:bg-transparent dark:hover:bg-transparent"
+            >
+              <ChevronRight
+                aria-hidden="true"
+                className="size-4 group-data-[state=open]:rotate-90 motion-safe:transition-transform"
+              />
+              Advanced
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <dl className="mt-4 grid gap-3 text-sm">
+              <div className="flex flex-col gap-0.5">
+                <dt className="font-medium">Safety ceiling</dt>
+                <dd className="text-muted-foreground">
+                  At most {settings.safety_ceiling} submissions a day in Full
+                  auto. The rest of the day waits for you.
+                </dd>
               </div>
-              {problem ? (
-                <p id={`${id}-problem`} className="text-sm text-destructive">
-                  {problem}
-                </p>
+              <div className="flex flex-col gap-0.5">
+                <dt className="font-medium">Hold length</dt>
+                <dd className="text-muted-foreground">
+                  {holdText(settings.hold_s)} between a Full auto decision and
+                  its submission, so you can cancel it. Never less than{" "}
+                  {holdText(settings.hold_min_s)}.
+                </dd>
+              </div>
+            </dl>
+            <form
+              noValidate
+              aria-label="Hold length"
+              className="mt-4 flex flex-col gap-3"
+              onSubmit={onSubmit}
+            >
+              {failed ? (
+                <Alert variant="destructive">
+                  <CircleAlert aria-hidden="true" />
+                  <AlertDescription>{failed}</AlertDescription>
+                </Alert>
               ) : null}
-            </div>
-          </form>
-        </details>
+              <Field className="gap-2">
+                <FieldLabel htmlFor={`${id}-hold`}>
+                  Hold length in minutes
+                </FieldLabel>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id={`${id}-hold`}
+                    inputMode="numeric"
+                    maxLength={4}
+                    className="sm:w-28"
+                    value={typed}
+                    aria-invalid={problem ? true : undefined}
+                    aria-describedby={problem ? `${id}-problem` : undefined}
+                    onChange={(event) => {
+                      setTyped(event.target.value);
+                    }}
+                  />
+                  <Button
+                    type="submit"
+                    disabled={save.isPending || unchanged}
+                    aria-busy={save.isPending}
+                  >
+                    {save.isPending ? (
+                      <Spinner aria-hidden="true" role={undefined} />
+                    ) : null}
+                    Save hold length
+                  </Button>
+                </div>
+                {problem ? (
+                  <FieldError id={`${id}-problem`}>{problem}</FieldError>
+                ) : null}
+              </Field>
+            </form>
+          </CollapsibleContent>
+        </Collapsible>
       </CardContent>
     </Card>
   );
