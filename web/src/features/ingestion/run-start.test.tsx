@@ -46,22 +46,29 @@ async function openStep(initial: Partial<FakeRuns> = {}) {
   return { app, runs, user: userEvent.setup() };
 }
 
-/** Selects both documents and opens the start dialog on its estimate. */
+/**
+ * Selects both documents: the start panel asks the estimate for its button. Opens the folded
+ * details (what is read, the "Read again" choices, the limits).
+ */
 async function openDialog(initial: Partial<FakeRuns> = {}) {
   const opened = await openStep(initial);
   const { user } = opened;
-  await user.click(await screen.findByRole("checkbox", { name: /dossier/ }));
-  await user.click(screen.getByRole("checkbox", { name: /cv\.txt/ }));
-  await user.click(screen.getByRole("button", { name: "See the estimate" }));
-  const dialog = await screen.findByRole("dialog", {
+  await user.click(await screen.findByRole("button", { name: "Select all" }));
+  const dialog = await screen.findByRole("region", {
     name: "Before the run starts",
   });
+  await user.click(
+    await within(dialog).findByRole("button", {
+      name: "What is read, and the limits",
+    }),
+  );
   await within(dialog).findByTestId("estimate");
   return { ...opened, dialog };
 }
 
+/** The one start button, which carries the token range once the estimate is there. */
 const startButton = (dialog: HTMLElement) =>
-  within(dialog).getByRole("button", { name: "Start the run" });
+  within(dialog).getByRole("button", { name: /^Complete my profile/ });
 const accepted = {
   version: 1,
   text: CONSENT_TEXT,
@@ -75,27 +82,39 @@ afterEach(() => {
 });
 
 describe("the start of a run", () => {
-  it("sends nothing until a document is chosen and the estimate is asked for", async () => {
-    const { runs, user } = await openStep();
-    const see = await screen.findByRole("button", { name: "See the estimate" });
-    expect(see).toBeDisabled();
+  it("asks the estimate once a document is chosen, and shows its range on the one start button", async () => {
+    const { runs, user } = await openStep({ consent: accepted });
+    await screen.findByText(/Choose at least one document/);
+    expect(
+      screen.queryByRole("button", { name: /^Complete my profile/ }),
+    ).toBeNull();
     expect(runs.sent("POST", ESTIMATE)).toEqual([]);
     await user.click(screen.getByRole("button", { name: "Select all" }));
-    expect(see).toBeEnabled();
     expect(screen.getByText("2 of 2 selected")).toBeVisible();
-    expect(runs.sent("POST", ESTIMATE)).toEqual([]);
+    const start = await screen.findByRole("button", {
+      name: "Complete my profile (about 61,234 to 176,220 tokens)",
+    });
+    expect(start).toBeEnabled();
+    expect(screen.getByTestId("estimate-line")).toHaveTextContent(
+      "The run pauses at 352,440 tokens and asks you before going on.",
+    );
+    expect(runs.sent("POST", ESTIMATE)).toEqual([
+      { method: "POST", path: ESTIMATE, body: SELECTION },
+    ]);
+    // Reading the figures starts nothing: only the click does.
     expect(runs.sent("POST", RUNS)).toEqual([]);
+    expect(runs.sent("POST", CONSENT)).toEqual([]);
   });
 
   it("asks for the documents in the order they were ticked", async () => {
     const { runs, user } = await openStep();
     await user.click(await screen.findByRole("checkbox", { name: /cv\.txt/ }));
     await user.click(screen.getByRole("checkbox", { name: /dossier/ }));
-    await user.click(screen.getByRole("button", { name: "See the estimate" }));
     await waitFor(() => {
-      expect(runs.sent("POST", ESTIMATE).map((call) => call.body)).toEqual([
-        { document_ids: ["d2", "d1"], reread_document_ids: [] },
-      ]);
+      expect(runs.sent("POST", ESTIMATE).at(-1)?.body).toEqual({
+        document_ids: ["d2", "d1"],
+        reread_document_ids: [],
+      });
     });
   });
 
@@ -139,7 +158,7 @@ describe("the start of a run", () => {
 
     await user.click(startButton(dialog));
     await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(runs.sent("POST", RUNS)).toHaveLength(1);
     });
     expect(runs.sent("POST", CONSENT)).toEqual([
       { method: "POST", path: CONSENT, body: { version: 1 } },
@@ -157,23 +176,24 @@ describe("the start of a run", () => {
       await screen.findByRole("heading", { name: "The run in progress" }),
     ).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: "See the estimate" }),
+      screen.queryByRole("button", { name: /^Complete my profile/ }),
     ).toBeNull();
   });
 
-  it("declined: closing the dialog records no consent and starts nothing", async () => {
+  it("declined: a ticked box and no click records no consent and starts nothing", async () => {
     const { runs, user, dialog } = await openDialog();
-    await user.click(within(dialog).getByRole("button", { name: "Not now" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: /I have read this/ }),
+    );
+    await user.click(
+      screen.getByRole("button", { name: "Clear the selection" }),
+    );
+    expect(
+      screen.queryByRole("region", { name: "Before the run starts" }),
+    ).toBeNull();
     expect(runs.sent("POST", CONSENT)).toEqual([]);
     expect(runs.sent("POST", RUNS)).toEqual([]);
     expect(runs.runs).toEqual([]);
-    // The focus is back on the button that opened the dialog.
-    await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: "See the estimate" }),
-      ).toHaveFocus();
-    });
   });
 
   it("shows the one line reminder once the consent is recorded, and asks nothing again", async () => {
@@ -219,7 +239,7 @@ describe("the start of a run", () => {
     await user.click(startButton(dialog));
 
     expect(await shown.findByRole("alert")).toHaveTextContent(
-      "The estimate has changed since you opened it. Nothing was started.",
+      "The estimate has changed since you read it. Nothing was started.",
     );
     expect(runs.runs).toEqual([]);
     expect(
@@ -474,7 +494,9 @@ describe("the start of a run", () => {
     expect(
       await screen.findByRole("heading", { name: "The run in progress" }),
     ).toBeVisible();
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Before the run starts" }),
+    ).toBeNull();
     await waitFor(() => {
       expect(runs.sent("GET", "/api/ingestion/runs/r9")).not.toHaveLength(0);
     });
@@ -486,7 +508,7 @@ describe("the start of a run", () => {
       await screen.findByRole("heading", { name: "The run in progress" }),
     ).toBeVisible();
     expect(
-      screen.queryByRole("button", { name: "See the estimate" }),
+      screen.queryByRole("button", { name: /^Complete my profile/ }),
     ).toBeNull();
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
@@ -531,8 +553,10 @@ describe("the start of a run", () => {
     await userEvent.click(box);
     expect(box).toBeChecked();
     expect(
-      screen.getByRole("button", { name: "See the estimate" }),
-    ).toBeEnabled();
+      await screen.findByRole("button", {
+        name: /^Complete my profile \(about [0-9,]+ to [0-9,]+ tokens\)$/,
+      }),
+    ).toBeInTheDocument();
   });
 
   it.each([
@@ -540,7 +564,7 @@ describe("the start of a run", () => {
     "A run reads at most 1,500,000 characters, and the selection holds 1,612,345. Select fewer documents and start again for the others.",
     "A run reads at most 60 page images, and the selection holds 61. Select fewer documents and start again for the others.",
   ])(
-    "a selection over a limit: the dialog says what to change and starts nothing (%s)",
+    "a selection over a limit: the start says what to change and starts nothing (%s)",
     async (sentence) => {
       const { runs, user } = await openStep();
       server.use(
@@ -551,10 +575,7 @@ describe("the start of a run", () => {
       await user.click(
         await screen.findByRole("button", { name: "Select all" }),
       );
-      await user.click(
-        screen.getByRole("button", { name: "See the estimate" }),
-      );
-      const dialog = await screen.findByRole("dialog", {
+      const dialog = await screen.findByRole("region", {
         name: "Before the run starts",
       });
       expect(await within(dialog).findByText(sentence)).toBeVisible();
@@ -583,7 +604,7 @@ describe("the start of a run", () => {
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
-  it("a background read of the runs that fails keeps the open dialog and says the page keeps trying", async () => {
+  it("a background read of the runs that fails keeps the start as it is and says the page keeps trying", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const { runs, dialog, user } = await openDialog();
     server.use(
@@ -599,7 +620,7 @@ describe("the start of a run", () => {
         "The server could not be reached just now. This page keeps trying.",
       ),
     ).toBeInTheDocument();
-    // The dialog, its estimate and its box are the ones the user was reading.
+    // The start, its estimate and its box are the ones the user was reading.
     expect(dialog).toBeVisible();
     expect(within(dialog).getByTestId("estimate")).toBeVisible();
     expect(screen.queryByText("This step could not be loaded")).toBeNull();
