@@ -1,0 +1,40 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>Apply: Robot Arm Engineer, Example Robotics</title><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/forms/a1/forms.css"><body>
+<!-- A19: a two step application form. Next is a plain button of the page's own script (no
+submit of the form, as most wizards); the final Submit sends everything to /_stub/submit/a19,
+which records it, then the confirmation page opens. -->
+<h1>Robot Arm Engineer</h1>
+<form id="application" aria-label="Application">
+<fieldset id="step1"><legend>Step 1 of 2: about you</legend>
+<label for="first_name">First name</label><input id="first_name" name="first_name" required>
+<label for="last_name">Last name</label><input id="last_name" name="last_name" required>
+<label for="email">Email</label><input id="email" name="email" type="email" required>
+<label for="phone">Phone</label><input id="phone" name="phone" type="tel">
+<label for="resume">Resume</label><input id="resume" name="resume" type="file" accept="application/pdf" required>
+<button type="button" id="next">Next</button>
+</fieldset>
+<fieldset id="step2" hidden><legend>Step 2 of 2: your questions</legend>
+<label for="motivation">Why do you want to join Example Robotics?</label><textarea id="motivation" name="motivation" required></textarea>
+<label for="notice">What is your notice period?</label><input id="notice" name="notice" required>
+<button type="submit" id="submit">Submit application</button>
+</fieldset>
+<p id="problem" role="alert"></p>
+</form>
+<script>
+const step1 = document.getElementById("step1"), step2 = document.getElementById("step2");
+const problem = document.getElementById("problem");
+document.getElementById("next").onclick = () => {
+  const empty = [...step1.querySelectorAll("[required]")].filter(e => !e.value);
+  if (empty.length) { problem.textContent = "Please fill in: " + empty.map(e => e.labels[0].textContent).join(", "); return; }
+  problem.textContent = "";
+  step1.hidden = true;
+  step2.hidden = false;
+};
+document.getElementById("application").onsubmit = async event => {
+  event.preventDefault();
+  const response = await fetch("/_stub/submit/a19", {method: "POST", body: new FormData(event.currentTarget)});
+  if (response.ok) location.href = "confirmation.html";
+  else problem.textContent = "The application could not be sent.";
+};
+</script></body></html>
