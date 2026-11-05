@@ -27,6 +27,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { diffLines } from "@/features/profile/diff";
 import { isApiError } from "@/lib/api";
@@ -50,7 +58,6 @@ import {
 } from "./agents-api";
 import { message } from "./errors";
 import { exactTime, relativeTime } from "./relative-time";
-import { cell } from "./table-cell";
 
 const KIND_LABEL: Record<string, string> = {
   anthropic_api_key: "With an API key",
@@ -256,9 +263,9 @@ function AgentView({ page }: { page: AgentPage }) {
 
       <Section id="input" title="Parameters it takes">
         {page.input_fields.length ? (
-          <table className="w-full text-sm" aria-label="Input fields">
-            <thead className="max-sm:sr-only">
-              <tr className="border-b text-left text-muted-foreground">
+          <Table aria-label="Input fields">
+            <TableHeader>
+              <TableRow>
                 {[
                   "Field",
                   "Type",
@@ -267,43 +274,37 @@ function AgentView({ page }: { page: AgentPage }) {
                   "Limits",
                   "Description",
                 ].map((head) => (
-                  <th key={head} scope="col" className="px-3 py-2 font-medium">
-                    {head}
-                  </th>
+                  <TableHead key={head}>{head}</TableHead>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {page.input_fields.map((field) => (
-                <tr
-                  key={field.name}
-                  className="border-b align-top max-sm:flex max-sm:flex-col max-sm:py-2"
-                >
-                  <th
-                    scope="row"
-                    className="px-3 py-2 text-left font-medium max-sm:px-0"
-                  >
+                <TableRow key={field.name} className="align-top">
+                  <TableHead>
                     <code>{field.name}</code>
-                  </th>
-                  <td {...cell("Type")}>{field.type}</td>
-                  <td {...cell("Required")}>{field.required ? "Yes" : "No"}</td>
-                  <td {...cell("Default")}>
+                  </TableHead>
+                  <TableCell label="Type">{field.type}</TableCell>
+                  <TableCell label="Required">
+                    {field.required ? "Yes" : "No"}
+                  </TableCell>
+                  <TableCell label="Default">
                     {field.default === null || field.default === undefined
                       ? "None"
                       : JSON.stringify(field.default)}
-                  </td>
-                  <td {...cell("Limits")}>
+                  </TableCell>
+                  <TableCell label="Limits">
                     <span className="[overflow-wrap:anywhere]">
                       {field.limits || "None"}
                     </span>
-                  </td>
-                  <td {...cell("Description")}>
+                  </TableCell>
+                  <TableCell label="Description">
                     {field.description || "None"}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         ) : (
           <p className="text-sm text-muted-foreground">
             It takes no parameter.
@@ -663,12 +664,9 @@ function AgentView({ page }: { page: AgentPage }) {
 
       <Section id="runs" title="Recent runs">
         {page.runs.length ? (
-          <table
-            className="w-full text-sm"
-            aria-label="Recent runs, newest first"
-          >
-            <thead className="max-sm:sr-only">
-              <tr className="border-b text-left text-muted-foreground">
+          <Table aria-label="Recent runs, newest first">
+            <TableHeader>
+              <TableRow>
                 {[
                   "Started",
                   "Person",
@@ -678,22 +676,14 @@ function AgentView({ page }: { page: AgentPage }) {
                   "Turns",
                   "Tokens",
                 ].map((head) => (
-                  <th key={head} scope="col" className="px-3 py-2 font-medium">
-                    {head}
-                  </th>
+                  <TableHead key={head}>{head}</TableHead>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {page.runs.map((run) => (
-                <tr
-                  key={run.id}
-                  className="border-b max-sm:flex max-sm:flex-col max-sm:py-2"
-                >
-                  <th
-                    scope="row"
-                    className="px-3 py-2 text-left font-normal max-sm:px-0"
-                  >
+                <TableRow key={run.id}>
+                  <TableHead className="font-normal">
                     {run.mine ? (
                       <Link
                         to={`/runs/${run.id}`}
@@ -706,8 +696,8 @@ function AgentView({ page }: { page: AgentPage }) {
                         {started(run.started_at)}
                       </span>
                     )}
-                  </th>
-                  <td {...cell("Person")}>
+                  </TableHead>
+                  <TableCell label="Person">
                     <span className="flex min-w-0 flex-col">
                       <span className="break-words">
                         {run.user_name || run.user_email}
@@ -716,24 +706,28 @@ function AgentView({ page }: { page: AgentPage }) {
                         {run.user_email}
                       </span>
                     </span>
-                  </td>
-                  <td {...cell("Status")}>{run.status}</td>
-                  <td {...cell("Model")}>{run.model ?? "Not known"}</td>
-                  <td {...cell("Version")}>
+                  </TableCell>
+                  <TableCell label="Status">{run.status}</TableCell>
+                  <TableCell label="Model">
+                    {run.model ?? "Not known"}
+                  </TableCell>
+                  <TableCell label="Version">
                     {run.version === null
                       ? "The code's"
                       : `Version ${String(run.version)}`}
-                  </td>
-                  <td {...cell("Turns")}>{run.turns ?? "Not known"}</td>
-                  <td {...cell("Tokens")}>
+                  </TableCell>
+                  <TableCell label="Turns">
+                    {run.turns ?? "Not known"}
+                  </TableCell>
+                  <TableCell label="Tokens">
                     {run.input_tokens === null && run.output_tokens === null
                       ? "Not known"
                       : `${String(run.input_tokens ?? 0)} in, ${String(run.output_tokens ?? 0)} out`}
-                  </td>
-                </tr>
+                  </TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         ) : (
           <p className="text-sm text-muted-foreground">No run yet.</p>
         )}

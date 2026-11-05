@@ -27,8 +27,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { isApiError } from "@/lib/api";
-import { cn } from "@/lib/utils";
 
 import {
   INVITES_PAGE_SIZE,
@@ -41,7 +49,6 @@ import {
 import { message } from "./errors";
 import { InviteDialog } from "./invite-dialog";
 import { exactTime, relativeTime } from "./relative-time";
-import { cell } from "./table-cell";
 
 const STATUS: Record<InviteStatus, { label: string; className: string }> = {
   active: {
@@ -199,93 +206,69 @@ function InvitesTable({
   busy: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        "sm:overflow-x-auto sm:rounded-lg sm:border",
-        busy && "opacity-60",
-      )}
-      aria-busy={busy}
-    >
-      <table className="w-full text-sm max-sm:block">
-        <caption className="sr-only">Invites, newest first</caption>
-        <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground max-sm:sr-only">
-          <tr>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Email
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Kind
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Role
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Status
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Expires
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="max-sm:flex max-sm:flex-col max-sm:gap-3">
-          {items.map((invite) => {
-            const status = STATUS[invite.status];
-            return (
-              <tr
-                key={invite.id}
-                className="border-b last:border-b-0 max-sm:flex max-sm:flex-col max-sm:rounded-lg max-sm:border max-sm:bg-card max-sm:p-3 max-sm:last:border-b"
-              >
-                <th
-                  scope="row"
-                  className="px-3 py-2 text-left font-medium break-all max-sm:px-0 max-sm:pb-2 max-sm:text-base"
-                >
-                  {invite.email}
-                  {invite.created_by_name ? (
-                    <span className="block text-xs font-normal text-muted-foreground">
-                      by {invite.created_by_name}
-                    </span>
-                  ) : null}
-                </th>
-                <td {...cell("Kind")}>{KIND[invite.kind]}</td>
-                <td {...cell("Role")}>
-                  {invite.role ? (
-                    ROLE[invite.role]
-                  ) : (
-                    <span className="text-muted-foreground">Unchanged</span>
-                  )}
-                </td>
-                <td {...cell("Status")}>
-                  <Badge variant="outline" className={status.className}>
-                    {status.label}
-                  </Badge>
-                </td>
-                <td {...cell("Expires")}>
-                  <When invite={invite} now={now} />
-                </td>
-                <td className="px-3 py-2 text-right max-sm:px-0 max-sm:pt-2 max-sm:text-left">
-                  {invite.status === "active" ? (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="max-sm:w-full"
-                      onClick={() => {
-                        onRevoke(invite);
-                      }}
-                      aria-label={`Revoke the link for ${invite.email}`}
-                    >
-                      Revoke
-                    </Button>
-                  ) : null}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <Table busy={busy}>
+      <TableCaption className="sr-only">Invites, newest first</TableCaption>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Email</TableHead>
+          <TableHead>Kind</TableHead>
+          <TableHead>Role</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Expires</TableHead>
+          <TableHead className="text-right">
+            <span className="sr-only">Actions</span>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {items.map((invite) => {
+          const status = STATUS[invite.status];
+          return (
+            <TableRow key={invite.id}>
+              <TableHead className="break-all">
+                {invite.email}
+                {invite.created_by_name ? (
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    by {invite.created_by_name}
+                  </span>
+                ) : null}
+              </TableHead>
+              <TableCell label="Kind">{KIND[invite.kind]}</TableCell>
+              <TableCell label="Role">
+                {invite.role ? (
+                  ROLE[invite.role]
+                ) : (
+                  <span className="text-muted-foreground">Unchanged</span>
+                )}
+              </TableCell>
+              <TableCell label="Status">
+                <Badge variant="outline" className={status.className}>
+                  {status.label}
+                </Badge>
+              </TableCell>
+              <TableCell label="Expires">
+                <When invite={invite} now={now} />
+              </TableCell>
+              <TableCell className="text-right max-sm:pt-2 max-sm:text-left">
+                {invite.status === "active" ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="max-sm:w-full"
+                    onClick={() => {
+                      onRevoke(invite);
+                    }}
+                    aria-label={`Revoke the link for ${invite.email}`}
+                  >
+                    Revoke
+                  </Button>
+                ) : null}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 

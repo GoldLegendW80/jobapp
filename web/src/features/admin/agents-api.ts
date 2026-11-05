@@ -20,8 +20,24 @@ export const agentSummarySchema = z.object({
   /** The fields of that version whose code value changed since it was saved. */
   code_changed: z.array(z.string()),
   last_run_at: z.string().nullable(),
+  /** The key of its group in the list (agents A8); "" from an api that has none. */
+  category: z.string().default(""),
 });
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
+
+/** A group of the list, in the api's order (catalog.CATEGORIES). */
+export const agentCategorySchema = z.object({
+  key: z.string().min(1),
+  title: z.string().min(1),
+  sentence: z.string(),
+});
+export type AgentCategory = z.infer<typeof agentCategorySchema>;
+
+export const agentListSchema = z.object({
+  items: z.array(agentSummarySchema),
+  categories: z.array(agentCategorySchema).default([]),
+});
+export type AgentList = z.infer<typeof agentListSchema>;
 
 const editableSchema = z.object({
   description: z.string(),
@@ -135,11 +151,10 @@ export type AgentPage = z.infer<typeof agentPageSchema>;
 export const agentsKey = ["admin", "agents"] as const;
 export const agentKey = (name: string) => [...agentsKey, name] as const;
 
-export function listAgents(signal?: AbortSignal): Promise<AgentSummary[]> {
+export function listAgents(signal?: AbortSignal): Promise<AgentList> {
   return request("/admin/agents", {
     signal,
-    validate: (data) =>
-      z.object({ items: z.array(agentSummarySchema) }).parse(data).items,
+    validate: (data) => agentListSchema.parse(data),
   });
 }
 
