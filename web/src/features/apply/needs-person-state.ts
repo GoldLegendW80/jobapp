@@ -59,6 +59,11 @@ export function needOf(application: Application): Need {
         title: "A payment was asked",
         what: `${PAYMENT_SENTENCE} No card detail was typed and nothing was sent. Reject it, or look at the posting yourself.`,
       };
+    case "agent_question":
+      return {
+        title: "The assistant has a question for you",
+        what: "It stopped because nobody was watching. Answer it here and it goes on by itself.",
+      };
     case "signin":
       return {
         title: `Needs you: sign in to ${siteOf(application)}`,

@@ -198,6 +198,10 @@ export function ApplySection({ job }: { job: JobDetail }) {
     ON_PAGE.has(application.needs ?? "");
   const retrying =
     application?.state === "queued" && application.needs === "retry";
+  // One click Apply's question (A19): the detail holds its sentence.
+  const asked =
+    application?.state === "needs_person" &&
+    application.needs === "agent_question";
   const detail = useQuery({
     queryKey: applicationKey(id ?? ""),
     queryFn: ({ signal }) => getApplication(id as string, signal),
@@ -206,7 +210,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
       (hasReport(application) ||
         application?.state === "held" ||
         onPage ||
-        retrying),
+        retrying ||
+        asked),
     refetchInterval: (current) => {
       const events = current.state.data?.events;
       const wait = onPage && events ? waitOf(events) : null;
@@ -435,6 +440,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
               application={application}
               job={job}
               events={onPage ? detail.data?.events : undefined}
+              question={asked ? detail.data?.question : undefined}
             />
           ) : null}
           {phase === "filling" && !manual ? (
