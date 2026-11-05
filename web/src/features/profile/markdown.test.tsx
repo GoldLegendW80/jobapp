@@ -54,7 +54,7 @@ describe("Markdown", () => {
     expect(container.querySelector("blockquote")?.textContent).toBe("quoted");
     expect(container.querySelector("pre code")?.textContent).toBe("<b>raw</b>");
     expect(container.querySelector("b")).toBeNull();
-    expect(container.querySelector("hr")).not.toBeNull();
+    expect(screen.getByRole("separator")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "site" });
     expect(link).toHaveAttribute("href", "https://example.org");
     expect(link).toHaveAttribute("rel", "noopener noreferrer nofollow");

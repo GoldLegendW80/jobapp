@@ -25,6 +25,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { WORDING } from "@/lib/wording";
 
@@ -188,9 +193,13 @@ export function TermChips<F extends FieldValues>({
                       "border-destructive bg-destructive/10 text-destructive",
                   )}
                 >
-                  <span className="min-w-0 truncate" title={term}>
-                    {term}
-                  </span>
+                  {/* A long term is cut: the tooltip shows it whole. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="min-w-0 truncate">{term}</span>
+                    </TooltipTrigger>
+                    <TooltipContent>{term}</TooltipContent>
+                  </Tooltip>
                   <Button
                     type="button"
                     variant="ghost"

@@ -56,7 +56,7 @@ import {
 } from "./api";
 import { message } from "./errors";
 import { InviteDialog } from "./invite-dialog";
-import { exactTime, relativeTime } from "./relative-time";
+import { Moment } from "./moment";
 import { ACTIONS, BODY, cell, HEAD, ROW } from "./table-cell";
 
 const STATUS: Record<InviteStatus, { label: string; className: string }> = {
@@ -316,20 +316,15 @@ function When({ invite, now }: { invite: AdminInvite; now: Date }) {
   if (ended?.at)
     return (
       <span className="text-muted-foreground">
-        {ended.label}{" "}
-        <time dateTime={ended.at} title={exactTime(ended.at)}>
-          {relativeTime(ended.at, now)}
-        </time>
+        {ended.label} <Moment at={ended.at} now={now} />
       </span>
     );
   return (
-    <time
-      dateTime={invite.expires_at}
-      title={exactTime(invite.expires_at)}
+    <Moment
+      at={invite.expires_at}
+      now={now}
       className={invite.status === "expired" ? "text-muted-foreground" : ""}
-    >
-      {relativeTime(invite.expires_at, now)}
-    </time>
+    />
   );
 }
 

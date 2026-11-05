@@ -57,6 +57,7 @@ export function HealthDot() {
                   "size-2 shrink-0 rounded-full",
                   state === "down" && "bg-destructive",
                   state === "checking" &&
+                    // eslint-disable-next-line no-restricted-syntax -- a status light that pulses while checking, inside a <p>: not a placeholder, and Skeleton is a <div>.
                     "animate-pulse bg-muted-foreground motion-reduce:animate-none",
                 )}
               />

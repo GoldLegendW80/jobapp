@@ -4,7 +4,6 @@ import { useId, useRef, useState, type PointerEvent } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -14,7 +13,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
@@ -135,13 +136,13 @@ export function PhotoField({ profile }: { profile: Profile }) {
             </Button>
           ) : null}
         </div>
-        <input
+        {/* Opened by the buttons above, never shown itself. */}
+        <Input
           ref={input}
           type="file"
           accept="image/png,image/jpeg"
           aria-label="Photo file"
-          className="sr-only"
-          tabIndex={-1}
+          hidden
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";

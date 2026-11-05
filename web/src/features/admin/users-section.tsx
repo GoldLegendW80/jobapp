@@ -71,7 +71,7 @@ import {
   type UserChange,
 } from "./api";
 import { message } from "./errors";
-import { exactTime, relativeTime } from "./relative-time";
+import { Moment } from "./moment";
 import { ACTIONS, BODY, cell, HEAD, ROW } from "./table-cell";
 
 type Action = "promote" | "demote" | "disable" | "enable";
@@ -330,12 +330,7 @@ function UsersTable({
                 </TableCell>
                 <TableCell {...cell("Last sign in")}>
                   {user.last_login_at ? (
-                    <time
-                      dateTime={user.last_login_at}
-                      title={exactTime(user.last_login_at)}
-                    >
-                      {relativeTime(user.last_login_at, now)}
-                    </time>
+                    <Moment at={user.last_login_at} now={now} />
                   ) : (
                     <span className="text-muted-foreground">Never</span>
                   )}
