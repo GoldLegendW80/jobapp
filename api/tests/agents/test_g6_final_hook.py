@@ -612,3 +612,92 @@ def test_not_called_when_the_queues_job_timeout_ends_the_run(
     row = run_row(factory, too_long)
     assert (row.status, row.error) == (RunStatus.failed, runs.STOPPED)
     assert calls == [(after_it, RunStatus.done)]  # the worker lived, and only this hook ran
+
+
+def test_not_called_when_the_runs_own_job_bound_ends_it(
+    worker_settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    streams: Streams,
+    g6_tools: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review of agents A7: arq's timeout of run_agent is only the outer bound now (a day), and
+    what ends a job that outlives its run's own bound is run_agent's asyncio.timeout (the
+    queue's job timeout, or a raised wall time plus the margin, worker.run_job_timeout_s). It
+    cancels the runner as arq's timeout did: the run is recorded as stopped, with its end and
+    events, its hook is not called, and the worker goes on to the next run, whose hook is
+    called. Here through the real worker: a job bound of one second, arq's timeout a minute
+    above it, and a margin that leaves the runner's own clock (101 s) longer than the job, so
+    that only the job's own bound can end the run before its stream answers at 30 s."""
+    import functools
+
+    from arq import func
+
+    from app import queue as queues
+    from app import worker
+
+    calls: list[tuple[uuid.UUID, RunStatus]] = []
+
+    async def hook(final: definitions.FinalRun) -> None:
+        calls.append((final.run_id, final.status))
+
+    hooked = agent("g6_hooked", on_final=hook)
+    streams.add("g6_hooked", ANSWER)
+    streams.add("g6_stalls", STALL)
+    too_long = new_run(factory, alice_id, {"script": "g6_stalls"}, agent="g6_hooked")
+    after_it = new_run(factory, alice_id, {}, agent="g6_hooked")
+    ctx = worker_context(worker_settings, speed=1.0)
+    ctx["agent_definitions"] = {hooked.name: hooked}
+    monkeypatch.setattr(worker, "AGENT_JOB_MARGIN_S", -100)
+    spec = worker.QueueSpec(
+        name=queues.AGENTS,
+        functions=[
+            func(
+                functools.partial(worker.run_agent, default_timeout_s=1),
+                name="run_agent",
+                timeout=60,
+                max_tries=1,
+            )
+        ],
+        max_jobs=2,
+        job_timeout_s=60,
+    )
+
+    async def go() -> None:
+        stop = asyncio.Event()
+        failure: list[BaseException] = []
+
+        async def play(workers: list[Worker]) -> None:
+            try:
+                await enqueue(workers, too_long)
+                await wait_for(lambda: run_row(factory, too_long).status is RunStatus.failed)
+                # The run that must end well gets the queue's bound and the runner's clock of a
+                # real worker (agents_queue), the margin back.
+                monkeypatch.setattr(worker, "AGENT_JOB_MARGIN_S", 120)
+                for each in workers:
+                    each.functions["run_agent"].coroutine = functools.partial(
+                        worker.run_agent, default_timeout_s=3720
+                    )
+                await enqueue(workers, after_it)
+                await wait_for(lambda: len(calls) == 1, within=90)
+            except BaseException as exc:
+                failure.append(exc)
+            finally:
+                stop.set()
+
+        async def ready(workers: list[Worker]) -> None:
+            asyncio.get_running_loop().create_task(play(workers))
+
+        serving = worker.serve(worker_settings, [spec], stop=stop, ctx=ctx, on_ready=ready)
+        await asyncio.wait_for(serving, 180)
+        if failure:
+            raise failure[0]
+
+    asyncio.run(go())
+    row = run_row(factory, too_long)
+    assert (row.status, row.error) == (RunStatus.failed, runs.STOPPED)
+    assert row.finished_at is not None
+    assert [kind for kind, _ in events(factory, too_long)] == ["status", "status", "init", "status"]
+    assert calls == [(after_it, RunStatus.done)]  # the worker lived, and only this hook ran

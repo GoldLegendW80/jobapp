@@ -109,7 +109,7 @@ from typing import Any
 import sqlalchemy as sa
 from arq import cron, func
 from arq.connections import ArqRedis, create_pool
-from arq.constants import result_key_prefix
+from arq.constants import in_progress_key_prefix, result_key_prefix
 from arq.cron import CronJob
 from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
@@ -405,10 +405,11 @@ def agent_context(ctx: dict[str, Any]) -> Any:
 def run_job_timeout_s(wall_time_s: float | None, default_s: float) -> float:
     """How long one run_agent job may take (A7): the queue's job timeout, or longer for a run
     whose wall time was raised past it, that wall time plus the margin; never above arq's own
-    timeout of run_agent. None (the run or its agent not known): the queue's."""
+    timeout of run_agent, and never below the queue's (agents_queue gives arq the larger of the
+    two). None (the run or its agent not known): the queue's."""
     if wall_time_s is None:
         return default_s
-    return min(max(default_s, wall_time_s + AGENT_JOB_MARGIN_S), RUN_AGENT_MAX_S)
+    return min(max(default_s, wall_time_s + AGENT_JOB_MARGIN_S), max(default_s, RUN_AGENT_MAX_S))
 
 
 async def run_agent(
@@ -477,6 +478,9 @@ class QueueSpec:
     # Run once before the Workers start. A failure is logged and the worker starts anyway: the
     # database may not be migrated yet on a first deploy, and the crons catch up later.
     on_start: Callable[[dict[str, Any]], Awaitable[Any]] | None = None
+    # Its Worker deletes the in progress key of every job of its queue before its first poll
+    # (clear_in_progress): only for a queue this one worker process consumes alone.
+    clears_in_progress: bool = False
 
 
 def sweeps_queue(fast: bool = False) -> QueueSpec:
@@ -535,6 +539,11 @@ def agents_queue() -> QueueSpec:
         max_jobs=MAX_AGENT_RUNS,
         job_timeout_s=job_timeout_s,
         on_start=reap_agent_runs_at_start,
+        # arq keeps a job's in progress key for its Worker's longest function timeout plus 10 s,
+        # run_agent's day here (A7), and refuses the same id while it lives: a try a hard kill
+        # left (a power cut, an OOM kill, a stop past its bound) would hold a Full auto
+        # decision's id a day. The worker that starts next clears them (A7, review).
+        clears_in_progress=True,
     )
 
 
@@ -991,9 +1000,28 @@ class QueueWorker(Worker):
     reports "Unclosed client session" on whichever test or log line comes next (issue #104).
     An iteration is therefore not cancellable: it runs to its end as one of the `endings`."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, clears_in_progress: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.endings: set[asyncio.Task[Any]] = set()
+        if clears_in_progress:
+            # arq calls it once its pool exists, before the first poll (Worker.main).
+            self.on_startup = self._clear_in_progress
+
+    async def _clear_in_progress(self, ctx: dict[str, Any]) -> None:
+        try:
+            cleared = await clear_in_progress(self.pool, self.queue_name)
+        except Exception as exc:
+            # The keys then expire as arq set them; the worker starts all the same.
+            logger.warning(
+                "in progress keys not cleared at start",
+                extra={"queue": self.queue_name, "error_type": type(exc).__name__},
+            )
+            return
+        if cleared:
+            logger.warning(
+                "in progress keys of a dead worker cleared",
+                extra={"queue": self.queue_name, "count": cleared},
+            )
 
     async def _poll_iteration(self) -> None:
         # Registered when it is made, not when it first runs: a cancel of the poll at once
@@ -1028,6 +1056,20 @@ class QueueWorker(Worker):
         await self._ending(super().finish_failed_job(*args, **kwargs))
 
 
+async def clear_in_progress(pool: ArqRedis, queue_name: str) -> int:
+    """Delete the in progress key of every job id still in `queue_name`, before its Worker first
+    polls: a key there is a try of a worker process that died without writing the job's end, if
+    the queue has one consumer, this process (the agents queue: `reap_orphans` assumes the same
+    of its runs). The Worker then takes each such job again: past its max_tries, arq drops it
+    (`apply_tick` then queues a decision again, as on main once its key had expired), and
+    `reap_orphans` has already failed its run. Answers how many keys were deleted."""
+    ids = await pool.zrange(queue_name, 0, -1)
+    if not ids:
+        return 0
+    prefix = in_progress_key_prefix.encode()
+    return int(await pool.delete(*(prefix + job_id for job_id in ids)))
+
+
 def checked_queues(settings: Settings | None = None) -> list[QueueSpec]:
     """The queues the worker serves, or `AgentTooLongError`: the worker refuses to start when an
     agent registered since the agents queue was built can outlive its job timeout."""
@@ -1054,6 +1096,7 @@ def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Qu
         poll_delay=0.5,
         health_check_interval=HEALTH_INTERVAL_S,
         ctx=ctx,
+        clears_in_progress=spec.clears_in_progress,
         job_serializer=queue.serialize,
         job_deserializer=queue.deserialize,
         timezone=sweep.SWEEP_TZ,  # type: ignore[arg-type]  # arq evaluates cron in this zone

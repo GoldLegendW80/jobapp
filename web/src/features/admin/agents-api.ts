@@ -120,8 +120,10 @@ export const agentPageSchema = z.object({
     credential_kinds: z.array(z.string()),
     turns_max: z.number().int(),
     wall_time_min_s: z.number(),
-    /** The ceiling, the same for every agent: the longest the agents queue lets a run take. */
+    /** The agent's own ceiling: the bound of the job that runs it (A7). */
     wall_time_max_s: z.number(),
+    /** One sentence saying where the agent runs, the job whose bound is that ceiling. */
+    wall_time_where: z.string(),
     prompt_max: z.number().int(),
     description_max: z.number().int(),
     message_max: z.number().int(),
@@ -216,7 +218,7 @@ export function problemsOf(draft: Editable, choices: AgentPage["choices"]) {
     draft.wall_time_s < choices.wall_time_min_s ||
     draft.wall_time_s > choices.wall_time_max_s
   )
-    found.wall_time_s = `From ${String(choices.wall_time_min_s)} to ${choices.wall_time_max_s.toLocaleString("en")} seconds: never more than the agents queue lets a run take.`;
+    found.wall_time_s = `From ${String(choices.wall_time_min_s)} to ${choices.wall_time_max_s.toLocaleString("en")} seconds: never more than the job this agent runs in allows.`;
   return found;
 }
 

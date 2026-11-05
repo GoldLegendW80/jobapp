@@ -399,8 +399,9 @@ def _choices(agent: definitions.AgentDefinition) -> dict[str, Any]:
         "credential_kinds": [kind.value for kind in CredentialKind],
         "turns_max": overrides.TURNS_MAX,
         "wall_time_min_s": overrides.WALL_TIME_MIN_S,
-        # The ceiling, the same for every agent: the longest the agents queue lets a run take.
-        "wall_time_max_s": overrides.ceiling_s(),
+        # The agent's own ceiling, the bound of the job that runs it, and where that is (A7).
+        "wall_time_max_s": (ceiling := catalog.ceiling_of(agent)).seconds,
+        "wall_time_where": ceiling.where,
         "prompt_max": overrides.PROMPT_MAX,
         "description_max": overrides.DESCRIPTION_MAX,
         "message_max": overrides.MESSAGE_MAX,

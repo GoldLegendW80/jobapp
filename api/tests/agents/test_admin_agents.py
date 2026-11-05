@@ -23,6 +23,7 @@ from alembic import command
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import queue as queues
 from app import worker
 from app.agents import catalog, definitions, overrides, runner
 from app.agents.crypto import Keyring
@@ -435,7 +436,8 @@ def test_a_wall_time_may_be_raised_up_to_the_ceiling_and_never_above(
     above = save(api, admin, "triage", {"wall_time_s": ceiling + 1})
     assert above.status_code == 422
     assert above.json()["detail"] == (
-        "wall_time_s: at most 86400 seconds, the longest the agents queue lets a run take"
+        "wall_time_s: at most 86400 seconds. It runs as its own job on the agents queue, which "
+        "lets a run take this long."
     )
     for raw in ("Infinity", "NaN", "1e400"):
         answer = api.post(
@@ -454,6 +456,7 @@ def test_a_wall_time_may_be_raised_up_to_the_ceiling_and_never_above(
     assert body["effective"]["wall_time_s"] == ceiling > definitions.TRIAGE.wall_time_s
     assert body["code"]["wall_time_s"] == definitions.TRIAGE.wall_time_s
     assert body["choices"]["wall_time_max_s"] == ceiling  # the page shows it by the field
+    assert body["choices"]["wall_time_where"] == catalog.ON_THE_QUEUE
     assert "It has run for 24 hours (wall_time_s): the runner stops it." in body["ends"]
     [triage] = [
         a for a in api.get("/api/agents", token=admin).json()["items"] if a["name"] == "triage"
@@ -535,23 +538,104 @@ def test_a_version_saved_above_a_lowered_ceiling_runs_at_the_ceiling(
     assert page["effective"]["wall_time_s"] == page["choices"]["wall_time_max_s"] == lowered
 
 
+def fresh(script: str) -> Any:
+    """What `script` prints last, as JSON, in a fresh interpreter of the api."""
+    ran = subprocess.run(
+        [sys.executable, "-c", "import json\n" + script],
+        cwd=API_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ran.returncode == 0, ran.stderr[-2000:]
+    return json.loads(ran.stdout.strip().splitlines()[-1])
+
+
+def test_an_agent_inside_another_job_is_refused_above_that_jobs_bound(
+    api: Api, admin: str, factory: sessionmaker[Session]
+) -> None:
+    """Review of A7: the ceiling is the agent's own. apply_check runs inside the decision of a
+    Full auto item (apply_decide), so it gets that job's bound, not the agents queue's day."""
+    check = catalog.load()["apply_check"]
+    ceiling = catalog.ceiling_of(check)
+    assert ceiling.seconds == overrides.ceiling_s(check) < overrides.ceiling_s()
+    above = save(api, admin, "apply_check", {"wall_time_s": ceiling.seconds + 1})
+    assert above.status_code == 422
+    assert above.json()["detail"] == (
+        f"wall_time_s: at most {ceiling.seconds:g} seconds. It runs inside the decision of a "
+        "Full auto item (apply_decide), whose job ends there."
+    )
+    assert versions(factory, "apply_check") == []
+    raised = save(api, admin, "apply_check", {"wall_time_s": ceiling.seconds})
+    assert raised.status_code == 201, raised.text
+    body = raised.json()
+    assert body["effective"]["wall_time_s"] == ceiling.seconds > check.wall_time_s
+    assert body["choices"]["wall_time_max_s"] == ceiling.seconds
+    assert body["choices"]["wall_time_where"] == ceiling.where
+    # A version saved under a higher ceiling runs at this one.
+    assert overrides.apply(check, {"wall_time_s": 86_400.0}).wall_time_s == ceiling.seconds
+
+
+def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
+    """Review of A7, every agent of the app (catalog.load) has a ceiling, the bound of the job
+    that actually runs it, compared with the queues a fresh worker builds: its own run_agent
+    job's (arq's outer timeout less the margin), or that of the other module's job it runs
+    inside. A new agent must be placed here."""
+    from app.apply import form_agent
+    from app.browser import leases
+    from app.ingestion import engine
+    from app.jobs import sweep
+
+    found = fresh(
+        "from app import worker\n"
+        "specs = {s.name: {f.name: f.timeout_s for f in s.functions} for s in worker.queues()}\n"
+        "from app.agents import catalog, definitions, overrides\n"
+        "at_start = sorted(definitions.AGENTS)\n"
+        "ceilings = {name: [overrides.ceiling_s(one), catalog.ceiling_of(one).where]\n"
+        "    for name, one in catalog.load().items()}\n"
+        "print(json.dumps({'specs': specs, 'at_start': at_start, 'ceilings': ceilings}))\n"
+    )
+    agents, apply, sweeps = (
+        found["specs"][name] for name in (queues.AGENTS, queues.APPLY, queues.SWEEPS)
+    )
+    margin = worker.AGENT_JOB_MARGIN_S
+    ceilings = {name: seconds for name, (seconds, _) in found["ceilings"].items()}
+    # The decision's bound is the agents queue's job timeout, built from the agents a worker
+    # registers when it starts: every agent but a sweep's.
+    assert sorted(set(ceilings) - set(found["at_start"])) == sorted(catalog.SWEEP_AGENTS)
+    inside = {
+        "apply_check": agents["apply_decide"] - margin,
+        "apply_form": form_agent.APPLY_FORM.wall_time_s,  # the fill's form deadline
+        "apply_answer": leases.LEASE_MAX_S["apply_fill"],  # the fill's browser lease
+        "browser_finder": sweep.BROWSER_SEARCH_MAX_S,  # the sweep's own bound
+        "browser_discovery": sweep.BROWSER_SEARCH_MAX_S,
+        "profile_extract": engine.RUN_TIME.total_seconds(),  # the ingestion run's deadline
+        "document_transcribe": engine.RUN_TIME.total_seconds(),
+    }
+    expected = {name: inside.get(name, agents["run_agent"] - margin) for name in ceilings}
+    assert ceilings == expected
+    assert agents["run_agent"] - margin == 86_400
+    assert agents["apply_decide"] - margin == 3600
+    # The other jobs end after their agents' ceilings.
+    assert leases.LEASE_MAX_S["sweep"] >= sweep.BROWSER_SEARCH_MAX_S < sweeps["run_sweep"]
+    assert max(inside["apply_form"], inside["apply_answer"]) < apply["apply_fill"]
+    assert inside["profile_extract"] <= agents["apply_decide"] - margin  # its own job's bound
+    # Every agent not inside another job is one the app starts as its own run.
+    own = sorted(name for name in ceilings if name not in inside)
+    assert all(
+        name in ("echo", "job_chat", "triage") or name.startswith("documents_") for name in own
+    )
+    for name, (_, where) in found["ceilings"].items():
+        assert where.startswith("It runs "), name
+        assert where.endswith("."), name
+        assert [dash for dash in (" - ", "\u2013", "\u2014") if dash in where] == [], name
+
+
 def test_a_fresh_worker_keeps_the_queues_timeout_and_lets_a_raised_run_take_the_ceiling() -> None:
     """The agents queue a fresh worker builds keeps its job timeout of before A7 (the longest
     agent it registers, plus the margin), and arq's own timeout of run_agent, the outer bound
     of a raised run (worker.run_agent ends each job at its own bound first), covers the ceiling
     a fresh api computes, in another interpreter that never imports the worker."""
-
-    def fresh(script: str) -> Any:
-        ran = subprocess.run(
-            [sys.executable, "-c", "import json\n" + script],
-            cwd=API_DIR,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert ran.returncode == 0, ran.stderr[-2000:]
-        return json.loads(ran.stdout.strip().splitlines()[-1])
-
     built = fresh(
         "from app import worker\n"
         "spec = worker.agents_queue()\n"
@@ -571,6 +655,11 @@ def test_a_fresh_worker_keeps_the_queues_timeout_and_lets_a_raised_run_take_the_
     assert worker.run_job_timeout_s(7200, 3720) == 7320
     assert worker.run_job_timeout_s(api["ceiling"], 3720) == built["outer"]
     assert worker.run_job_timeout_s(10.0**9, 3720) == built["outer"]  # never above arq's
+    # Never below the queue's own job timeout either, were it above the outer bound.
+    above = built["outer"] + 1000
+    assert worker.run_job_timeout_s(None, above) == above
+    assert worker.run_job_timeout_s(10.0**9, above) == above
+    assert worker.run_job_timeout_s(60.0, above) == above
 
 
 def test_a_raised_run_gets_its_own_job_bound_and_another_keeps_the_queues(

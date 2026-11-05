@@ -9,9 +9,12 @@ editable fields that differ from the code when it is saved (`check`):
   wall_time_s, tools (the code's tools switched off: never one the code did not give the agent).
 
 A wall time may be lowered or raised (A7, owner 2026-11-04), from WALL_TIME_MIN_S up to the
-ceiling (`ceiling_s`): the longest wall time any agent has in code. The worker's bounds are per
-run: the job of a raised run ends at its wall time plus a margin (worker.run_job_timeout_s), the
-reaper waits as long (runs.reap_stale), and a run nobody raised keeps the queue's bounds.
+agent's own ceiling (`ceiling_s`, catalog.ceiling_of): the bound of the job that runs it, the
+longest the agents queue lets a run take for an agent run as its own run_agent job, the other
+module's job for one that runs inside it (a sweep, a fill, a Full auto decision, a profile
+import). The worker's bounds are per run: the job of a raised run ends at its wall time plus a
+margin (worker.run_job_timeout_s), the reaper waits as long (runs.reap_stale), and a run nobody
+raised keeps the queue's bounds.
 
 Everything else stays the code's: the input model, the flags (internal, private_io, bind, chat,
 needs_job, bind_job, test_only, live_text), the tools' code and schemas, and what the runner
@@ -58,8 +61,7 @@ DESCRIPTION_MAX = 300
 MESSAGE_MAX = 4_000
 NOTE_MAX = 500
 TURNS_MAX = 10_000
-# A run gets at least this long, and never more than the ceiling (`ceiling_s`): the queue's job
-# timeout is computed from the code's limits when the worker starts.
+# A run gets at least this long, and never more than its agent's ceiling (`ceiling_s`).
 WALL_TIME_MIN_S = 10.0
 EDITABLE = (
     "description",
@@ -128,10 +130,13 @@ class Changes(BaseModel):
         return value
 
 
-def ceiling_s() -> float:
-    """The longest wall time a saved version may give a run: the longest the agents queue lets
-    any run take (catalog.longest_wall_time_s; worker.RUN_AGENT_MAX_S gives arq room for it)."""
-    return catalog.longest_wall_time_s()
+def ceiling_s(definition: definitions.AgentDefinition | None = None) -> float:
+    """The longest wall time a saved version may give a run of `definition` (catalog.ceiling_of).
+    None: the agents queue's, the longest it lets any run take (catalog.longest_wall_time_s;
+    worker.RUN_AGENT_MAX_S gives arq room for it)."""
+    if definition is None:
+        return catalog.longest_wall_time_s()
+    return catalog.ceiling_of(definition).seconds
 
 
 def code_values(definition: definitions.AgentDefinition) -> dict[str, Any]:
@@ -168,11 +173,11 @@ def check(definition: definitions.AgentDefinition, raw: Mapping[str, Any]) -> di
             raise OverrideError(f"tools: not a tool of this agent: {', '.join(unknown)}")
         # Kept in the code's order, each once.
         given["tools"] = [name for name in definition.tools if name in set(given["tools"])]
-    if "wall_time_s" in given and given["wall_time_s"] > (ceiling := ceiling_s()):
-        raise OverrideError(
-            f"wall_time_s: at most {ceiling:g} seconds, "
-            "the longest the agents queue lets a run take"
-        )
+    if (
+        "wall_time_s" in given
+        and given["wall_time_s"] > (ceiling := catalog.ceiling_of(definition)).seconds
+    ):
+        raise OverrideError(f"wall_time_s: at most {ceiling.seconds:g} seconds. {ceiling.where}")
     if "default_message" in given and not definition.uses_default_message:
         raise OverrideError("default_message: this agent builds its first message in code")
     return {name: value for name, value in given.items() if value != code[name]}
@@ -213,8 +218,8 @@ def apply(
     """The definition a run uses: the code's, with the saved changes on top. A version saved
     against an older code is read the same way, field by field: a field the agent cannot take
     any more (a tool the code removed, a default message its first message no longer reads)
-    falls back to the code's value, a wall time above the ceiling of now is the ceiling, and the
-    others still apply."""
+    falls back to the code's value, a wall time above the agent's ceiling of now is that ceiling,
+    and the others still apply."""
     fields: dict[str, Any] = {}
     for name in EDITABLE:
         if name not in changes:
@@ -233,7 +238,7 @@ def apply(
         elif name == "model_by_credential":
             value = {str(kind.value): model for kind, model in value.items()}
         elif name == "wall_time_s":
-            value = min(value, ceiling_s())
+            value = min(value, ceiling_s(definition))
         fields[name] = value
     return dataclasses.replace(definition, **fields) if fields else definition
 

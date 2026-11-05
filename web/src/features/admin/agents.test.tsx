@@ -128,6 +128,8 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
       turns_max: 10000,
       wall_time_min_s: 10,
       wall_time_max_s: 86400,
+      wall_time_where:
+        "It runs as its own job on the agents queue, which lets a run take this long.",
       prompt_max: 100000,
       description_max: 300,
       message_max: 4000,
@@ -489,7 +491,7 @@ describe("editing", () => {
     await user.type(wall, "90000");
     expect(
       screen.getByText(
-        "From 10 to 86,400 seconds: never more than the agents queue lets a run take.",
+        "From 10 to 86,400 seconds: never more than the job this agent runs in allows.",
       ),
     ).toBeInTheDocument();
     expect(save).toBeDisabled();
@@ -642,12 +644,12 @@ describe("A7: the ceiling of a wall time and the person of each run", () => {
     const wall = await screen.findByLabelText("Wall time, in seconds");
     expect(wall).toHaveAttribute("max", "86400");
     expect(wall).toHaveAccessibleDescription(
-      /At most 86,400 seconds \(24 hours\), the longest the agents queue lets a run take\./,
+      /At most 86,400 seconds \(24 hours\) for this agent\. It runs as its own job on the agents queue, which lets a run take this long\. Lower or raise it within that\./,
     );
     await user.clear(wall);
     await user.type(wall, "86401");
     expect(
-      screen.getByText(/never more than the agents queue lets a run take/),
+      screen.getByText(/never more than the job this agent runs in allows/),
     ).toBeInTheDocument();
     const save = screen.getByRole("button", { name: "Save as a new version" });
     expect(save).toBeDisabled();
@@ -655,13 +657,47 @@ describe("A7: the ceiling of a wall time and the person of each run", () => {
     await user.type(wall, "7200");
     expect(screen.getByText("The code's: 600")).toBeInTheDocument();
     expect(
-      screen.queryByText(/never more than the agents queue/),
+      screen.queryByText(/never more than the job this agent runs in/),
     ).not.toBeInTheDocument();
     await user.click(save);
     await waitFor(() => {
       expect(state.saves).toHaveLength(1);
     });
     expect(state.saves[0]?.changes).toEqual({ wall_time_s: 7200 });
+    noDashes(container.textContent);
+  });
+
+  it("shows the ceiling of an agent that runs inside another job, and where it runs", async () => {
+    fakeSession(admin);
+    const page = makePage();
+    const where =
+      "It runs inside the decision of a Full auto item (apply_decide), whose job ends there.";
+    fakeAgents(
+      makePage({
+        choices: {
+          ...page.choices,
+          wall_time_max_s: 3600,
+          wall_time_where: where,
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const { container } = renderApp("/admin/agents/browser_discovery");
+    const wall = await screen.findByLabelText("Wall time, in seconds");
+    expect(wall).toHaveAttribute("max", "3600");
+    expect(wall).toHaveAccessibleDescription(
+      /At most 3,600 seconds \(1 hour\) for this agent\. It runs inside the decision of a Full auto item \(apply_decide\), whose job ends there\./,
+    );
+    await user.clear(wall);
+    await user.type(wall, "3601");
+    expect(
+      screen.getByText(
+        /From 10 to 3,600 seconds: never more than the job this agent runs in allows\./,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save as a new version" }),
+    ).toBeDisabled();
     noDashes(container.textContent);
   });
 

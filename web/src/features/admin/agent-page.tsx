@@ -526,7 +526,7 @@ function AgentView({ page }: { page: AgentPage }) {
           <Field
             label="Wall time, in seconds"
             error={problems.wall_time_s}
-            hint={`At most ${page.choices.wall_time_max_s.toLocaleString("en")} seconds (${duration(page.choices.wall_time_max_s)}), the longest the agents queue lets a run take. Lower or raise it within that.`}
+            hint={`At most ${page.choices.wall_time_max_s.toLocaleString("en")} seconds (${duration(page.choices.wall_time_max_s)}) for this agent. ${page.choices.wall_time_where} Lower or raise it within that.`}
             code={String(page.code.wall_time_s)}
             changed={draft.wall_time_s !== page.code.wall_time_s}
           >
