@@ -50,7 +50,8 @@ from typing import Annotated, Any, Literal
 import anyio.from_thread
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app import queue as queues
@@ -449,7 +450,25 @@ def spend(
 class SkillsDraftIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    skills: SkillsSection  # the section as the profile's Save validates it
+    # Free JSON validated as the profile's Save validates the section (`_draft_skills`), as
+    # PUT /api/profile/{section} takes it: its real bound is the 1 MiB default class
+    # (tests/identity/test_body_limit_api.py, UNBOUNDED_SCHEMAS).
+    skills: dict[str, Any]
+
+
+def _draft_skills(raw: dict[str, Any]) -> SkillsSection:
+    """The draft as a skills section, or the app's 422 for what Save would refuse."""
+    try:
+        return SkillsSection.model_validate(raw)
+    except ValidationError as invalid:
+        raise RequestValidationError(
+            [
+                {**error, "loc": ("body", "skills", *error["loc"])}
+                for error in invalid.errors(
+                    include_input=False, include_url=False, include_context=False
+                )
+            ]
+        ) from None
 
 
 class SkillsSpendOut(BaseModel):
@@ -466,6 +485,7 @@ class SkillsSpendOut(BaseModel):
 def skills_spend(
     body: SkillsDraftIn, user: CurrentUser, request: Request, db: Db
 ) -> SkillsSpendOut:
+    skills = _draft_skills(body.skills)
     at = deps.clock(request)
     try:
         search = sweep.load_search(db, user.id)
@@ -477,7 +497,7 @@ def skills_spend(
     drafted = jobs_service.draft_fits(
         db,
         user.id,
-        body.skills,
+        skills,
         search,
         eligibility.OPEN_STATUSES,
         eligibility.since(found_day, lookback),
