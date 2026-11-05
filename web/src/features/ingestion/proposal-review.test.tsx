@@ -892,7 +892,9 @@ describe("the review of a run's proposals", () => {
         name: "Reject the rest of this section: Facts",
       }),
     ).toBeInTheDocument();
-  });
+    // 120 proposals in the page and three rounds of role queries over them: a heavy render in
+    // jsdom, at the edge of the 5 s default already before chapter 2's larger shell.
+  }, 20_000);
 
   it("is usable with the keyboard alone and keeps the focus on the proposal decided", async () => {
     const api = fakeApi([item("headline", "Engineer")]);
