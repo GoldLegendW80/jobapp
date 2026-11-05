@@ -11,7 +11,6 @@ import {
 import {
   CircleAlert,
   EllipsisVertical,
-  LoaderCircle,
   Plus,
   RefreshCw,
   StickyNote,
@@ -32,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -46,12 +46,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { Spinner } from "@/components/ui/spinner";
 import { LikeButton } from "@/features/apply/like-button";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
+import { contractWord } from "@/lib/wording";
 
 import {
   addJob,
@@ -170,7 +173,8 @@ export function BulkBar({ selection }: { selection: Selection }) {
     <div
       role="region"
       aria-label="Bulk actions"
-      className="sticky bottom-3 z-30 flex flex-col gap-2 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg sm:bottom-4"
+      // Above the phone's bottom tab bar (--bottom-bar, app-shell.tsx).
+      className="sticky bottom-[calc(var(--bottom-bar,0px)+0.75rem)] z-30 flex flex-col gap-2 rounded-lg border bg-popover p-3 text-popover-foreground shadow-lg sm:bottom-4"
     >
       <div className="flex flex-wrap items-center gap-2">
         <p
@@ -180,10 +184,7 @@ export function BulkBar({ selection }: { selection: Selection }) {
         >
           {selection.selectingAll ? (
             <span className="inline-flex items-center gap-2">
-              <LoaderCircle
-                aria-hidden="true"
-                className="size-4 animate-spin"
-              />
+              <Spinner aria-hidden="true" role={undefined} />
               Selecting
             </span>
           ) : (
@@ -211,7 +212,7 @@ export function BulkBar({ selection }: { selection: Selection }) {
                 setStatus(event.target.value);
               }}
             >
-              <option value="">Set status</option>
+              <option value="">New status</option>
               {STATUSES.map((value) => (
                 <option key={value} value={value}>
                   {statusLabel(value)}
@@ -223,10 +224,8 @@ export function BulkBar({ selection }: { selection: Selection }) {
               size="sm"
               disabled={!status || busy || count === 0}
             >
-              {busy ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
-              ) : null}
-              Apply
+              {busy ? <Spinner aria-hidden="true" role={undefined} /> : null}
+              Set status
             </Button>
           </form>
           <LikeButton ids={selection.ids} onDone={selection.clear} />
@@ -343,16 +342,18 @@ function BulkNoteDialog({
           </DialogDescription>
         </DialogHeader>
         <form id={`${id}-form`} onSubmit={submit} className="grid gap-2">
-          <Label htmlFor={`${id}-note`}>Note</Label>
-          <Textarea
-            id={`${id}-note`}
-            value={text}
-            rows={4}
-            maxLength={100_000}
-            onChange={(event) => {
-              setText(event.target.value);
-            }}
-          />
+          <Field className="gap-2">
+            <FieldLabel htmlFor={`${id}-note`}>Note</FieldLabel>
+            <Textarea
+              id={`${id}-note`}
+              value={text}
+              rows={4}
+              maxLength={100_000}
+              onChange={(event) => {
+                setText(event.target.value);
+              }}
+            />
+          </Field>
           {error ? (
             <Alert variant="destructive">
               <CircleAlert aria-hidden="true" />
@@ -370,9 +371,7 @@ function BulkNoteDialog({
             disabled={pending || !text.trim()}
             aria-busy={pending}
           >
-            {pending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
             Add note
           </Button>
         </DialogFooter>
@@ -401,18 +400,21 @@ const EMPTY_DRAFT: Draft = {
   posting_text: "",
 };
 
-export function AddPostingButton() {
+/** "Add a posting" in the page's header (outline: Find jobs is the page's one primary action),
+ * or, as a link, "Add a posting by hand" in the empty list. Both open the same dialog. */
+export function AddPostingButton({ asLink = false }: { asLink?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <Button
-        size="sm"
+        variant={asLink ? "link" : "outline"}
+        className={asLink ? "h-auto px-0 underline" : undefined}
         onClick={() => {
           setOpen(true);
         }}
       >
-        <Plus aria-hidden="true" />
-        Add a posting
+        {asLink ? null : <Plus aria-hidden="true" />}
+        {asLink ? "Add a posting by hand" : "Add a posting"}
       </Button>
       {open ? (
         <AddPostingDialog
@@ -513,32 +515,34 @@ export function AddPostingDialog({
         </DialogHeader>
         <form id={`${id}-form`} onSubmit={submit} className="grid gap-3">
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-company`}>Company</Label>
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor={`${id}-company`}>Company</FieldLabel>
               <Input {...field("company")} required maxLength={1000} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-title`}>Title</Label>
+            </Field>
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor={`${id}-title`}>Title</FieldLabel>
               <Input {...field("title")} required maxLength={1000} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-location`}>Location</Label>
+            </Field>
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor={`${id}-location`}>Location</FieldLabel>
               <Input {...field("location")} maxLength={1000} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor={`${id}-contract_type`}>Contract type</Label>
+            </Field>
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor={`${id}-contract_type`}>
+                Contract type
+              </FieldLabel>
               <NativeSelect {...field("contract_type")}>
                 <option value="">Read from the title</option>
                 {CONTRACT_TYPES.map((type) => (
                   <option key={type} value={type}>
-                    {type}
+                    {contractWord(type)}
                   </option>
                 ))}
               </NativeSelect>
-            </div>
+            </Field>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-url`}>Link to the posting</Label>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-url`}>Link to the posting</FieldLabel>
             <Input
               {...field("url")}
               type="url"
@@ -546,9 +550,9 @@ export function AddPostingDialog({
               placeholder="https://"
               maxLength={1000}
             />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-posting_text`}>Posting text</Label>
+          </Field>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-posting_text`}>Posting text</FieldLabel>
             <Textarea
               {...field("posting_text")}
               rows={8}
@@ -556,7 +560,7 @@ export function AddPostingDialog({
               className="max-h-72 text-sm"
               placeholder="Paste the job description here."
             />
-          </div>
+          </Field>
           {error ? (
             <Alert variant="destructive">
               <CircleAlert aria-hidden="true" />
@@ -585,9 +589,7 @@ export function AddPostingDialog({
             disabled={pending || missing}
             aria-busy={pending}
           >
-            {pending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
             Add posting
           </Button>
         </DialogFooter>
@@ -604,7 +606,7 @@ export function PageMenu({ selected }: { selected: string[] }) {
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="icon-sm" aria-label="More actions">
+          <Button variant="outline" size="icon" aria-label="More actions">
             <EllipsisVertical aria-hidden="true" />
           </Button>
         </DropdownMenuTrigger>
@@ -695,24 +697,20 @@ function RescoreDialog({
             profile. Fits you set by hand are kept unless you choose otherwise.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <div className="flex items-start gap-2">
-          <input
+        <Field orientation="horizontal" className="items-start gap-2">
+          <Checkbox
             id={`${id}-overwrite`}
-            type="checkbox"
-            className="mt-0.5 size-4 accent-primary"
+            className="mt-0.5"
             checked={overwrite}
             disabled={running}
-            onChange={(event) => {
-              setOverwrite(event.target.checked);
+            onCheckedChange={(checked) => {
+              setOverwrite(checked === true);
             }}
           />
-          <Label
-            htmlFor={`${id}-overwrite`}
-            className="leading-snug font-normal"
-          >
+          <FieldLabel htmlFor={`${id}-overwrite`} className="font-normal">
             Also replace the fits I set by hand
-          </Label>
-        </div>
+          </FieldLabel>
+        </Field>
         {overwrite ? (
           <Alert variant="destructive">
             <CircleAlert aria-hidden="true" />
@@ -728,7 +726,7 @@ function RescoreDialog({
             aria-live="polite"
             className="flex items-center gap-2 text-sm"
           >
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             {progress
               ? `Rescoring: ${plural(progress.scored, "posting")} done${progress.remaining ? `, ${progress.remaining} to go` : ""}`
               : "Rescoring"}

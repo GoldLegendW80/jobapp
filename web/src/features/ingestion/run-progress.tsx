@@ -1,10 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, RotateCw } from "lucide-react";
+import { ChevronRight, RotateCw } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Spinner } from "@/components/ui/spinner";
 import { RunPanel } from "@/features/agents/run-panel";
+import { WORDING } from "@/lib/wording";
 
 import {
   documentsKey,
@@ -78,7 +85,7 @@ export function RunProgress() {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the run
         </p>
       )}
@@ -215,16 +222,16 @@ function RunView({ run }: { run: Run }) {
       headline = "The agent is reading your documents.";
     }
   } else if (run.status === "paused" && onCeiling) {
-    headline = "The run has paused at its token ceiling.";
+    headline = WORDING.readingPausedAtLimit;
     if (adds !== null && adds > 0) {
       body = (
         <>
           <p data-testid="ceiling-spent">
-            It has used {tokens(run.tokens.spent)} tokens, and its ceiling is{" "}
+            It has used {tokens(run.tokens.spent)} tokens, and its limit is{" "}
             {tokens(run.tokens.ceiling)} tokens.
           </p>
           <p data-testid="continue-adds">
-            Continue raises the ceiling by {tokens(adds)} tokens
+            Continue raises the limit by {tokens(adds)} tokens
             {raised !== null ? `, to ${tokens(raised)} tokens,` : null} and the
             run goes on. Cancel ends it here. {UNANSWERED}
           </p>
@@ -301,10 +308,7 @@ function RunView({ run }: { run: Run }) {
       >
         <p className="flex items-center gap-2 font-medium">
           {run.status === "running" ? (
-            <LoaderCircle
-              aria-hidden="true"
-              className="size-4 shrink-0 animate-spin"
-            />
+            <Spinner aria-hidden="true" role={undefined} className="shrink-0" />
           ) : null}
           {headline}
         </p>
@@ -412,53 +416,67 @@ function RunView({ run }: { run: Run }) {
         </section>
       ) : null}
 
-      <details className="rounded-lg border p-3">
-        <summary className="cursor-pointer font-medium">
-          Every step of this run
-        </summary>
-        <ol className="mt-2 flex flex-col gap-2">
-          {run.steps.map((step) => (
-            <li key={step.id} className="min-w-0 break-words">
-              <span className="font-medium">
-                {step.document_name ?? DELETED}
-              </span>
-              . {stepKind(step, run.steps)}.{" "}
-              {STEP_WORDS[step.status] ?? "Not read"}
-              {step.status === "done" || step.status === "running"
-                ? `, ${plural(step.items, "item", "items")}`
-                : null}
-              {step.refused > 0 ? `, ${tokens(step.refused)} refused` : null}
-              {step.tokens !== null
-                ? `, ${tokens(step.tokens)} tokens in its last attempt`
-                : null}
-              {step.cost_usd !== null
-                ? `, about ${step.cost_usd} USD for that attempt`
-                : null}
-              .{step.error ? ` ${step.error}` : null}
-            </li>
-          ))}
-        </ol>
-      </details>
+      <Collapsible className="rounded-lg border">
+        <FoldTrigger>Every step of this run</FoldTrigger>
+        <CollapsibleContent>
+          <ol className="flex flex-col gap-2 px-3 pb-3">
+            {run.steps.map((step) => (
+              <li key={step.id} className="min-w-0 break-words">
+                <span className="font-medium">
+                  {step.document_name ?? DELETED}
+                </span>
+                . {stepKind(step, run.steps)}.{" "}
+                {STEP_WORDS[step.status] ?? "Not read"}
+                {step.status === "done" || step.status === "running"
+                  ? `, ${plural(step.items, "item", "items")}`
+                  : null}
+                {step.refused > 0 ? `, ${tokens(step.refused)} refused` : null}
+                {step.tokens !== null
+                  ? `, ${tokens(step.tokens)} tokens in its last attempt`
+                  : null}
+                {step.cost_usd !== null
+                  ? `, about ${step.cost_usd} USD for that attempt`
+                  : null}
+                .{step.error ? ` ${step.error}` : null}
+              </li>
+            ))}
+          </ol>
+        </CollapsibleContent>
+      </Collapsible>
 
       {run.current_agent_run_id !== null ? (
-        <details
-          className="rounded-lg border p-3"
-          onToggle={(event) => {
-            setWatching(event.currentTarget.open);
-          }}
+        // The panel connects to the agent's run only while it is open.
+        <Collapsible
+          className="rounded-lg border"
+          open={watching}
+          onOpenChange={setWatching}
         >
-          <summary className="cursor-pointer font-medium">
-            What the agent is doing now
-          </summary>
-          {watching ? (
-            <div className="mt-2 min-w-0">
-              {/* The run's own Cancel stops the whole run: the panel offers none. */}
-              <RunPanel runId={run.current_agent_run_id} cancellable={false} />
-            </div>
-          ) : null}
-        </details>
+          <FoldTrigger>What the agent is doing now</FoldTrigger>
+          <CollapsibleContent className="min-w-0 px-3 pb-3">
+            {/* The run's own Cancel stops the whole run: the panel offers none. */}
+            <RunPanel runId={run.current_agent_run_id} cancellable={false} />
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
     </div>
+  );
+}
+
+/** The title of a fold: the whole first line of its box, a chevron that turns as it opens. */
+function FoldTrigger({ children }: { children: ReactNode }) {
+  return (
+    <CollapsibleTrigger asChild>
+      <Button
+        variant="ghost"
+        className="group/fold h-auto w-full justify-start gap-1.5 rounded-lg px-3 py-3 text-left font-medium whitespace-normal has-[>svg]:px-3"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className="transition-transform group-data-[state=open]/fold:rotate-90 motion-reduce:transition-none"
+        />
+        {children}
+      </Button>
+    </CollapsibleTrigger>
   );
 }
 

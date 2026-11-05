@@ -100,7 +100,7 @@ describe("starting", () => {
     linkedinState(false);
     const { user, section } = await openSection();
     expect(
-      await within(section).findByText(/Turn on LinkedIn in Account/),
+      await within(section).findByText(/To use Easy Apply, add LinkedIn/),
     ).toBeInTheDocument();
     expect(within(section).queryByRole("button", { name: "Apply" })).toBeNull();
     expect(
@@ -116,12 +116,12 @@ describe("starting", () => {
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
     expect(
-      within(section).getByText(/Turn on LinkedIn in Account/),
+      within(section).getByText(/To use Easy Apply, add LinkedIn/),
     ).toHaveTextContent(
-      "Turn on LinkedIn in Account and accept its current sentence to use Easy Apply, or tick LinkedIn in Find jobs and save. You can also apply yourself.",
+      "To use Easy Apply, add LinkedIn to your list in Find jobs and save: that gives LinkedIn's permission. You can also apply yourself.",
     );
     expect(
-      within(section).getByText(/Turn on LinkedIn in Account/).textContent,
+      within(section).getByText(/To use Easy Apply, add LinkedIn/).textContent,
     ).not.toMatch(SEPARATOR);
     link.addEventListener("click", (event) => {
       event.preventDefault();
@@ -143,7 +143,7 @@ describe("starting", () => {
     linkedinState(false);
     const { section } = await openSection();
     expect(
-      await within(section).findByText(/Turn on LinkedIn in Account/),
+      await within(section).findByText(/To use Easy Apply, add LinkedIn/),
     ).toBeInTheDocument();
     expect(within(section).queryByRole("link")).toBeNull();
     expect(within(section).queryByRole("button", { name: "Apply" })).toBeNull();
@@ -163,7 +163,7 @@ describe("starting", () => {
       name: "Apply",
     });
     expect(
-      within(section).queryByText(/Turn on LinkedIn in Account/),
+      within(section).queryByText(/To use Easy Apply, add LinkedIn/),
     ).toBeNull();
     expect(
       within(section).queryByRole("link", {
@@ -1158,7 +1158,11 @@ describe("the submit lease on the job page", () => {
       const live = await watching(section);
       expect(within(live).getByRole("status")).toHaveTextContent(sentence);
       expect(view.screen.viewOnly).toBe(true);
-      for (const name of ["Take over", "Keyboard", "Approve and submit"]) {
+      for (const name of [
+        "Use the browser myself",
+        "Keyboard",
+        "Approve and submit",
+      ]) {
         expect(within(section).queryByRole("button", { name })).toBeNull();
       }
       expect(
@@ -1182,7 +1186,7 @@ describe("the submit lease on the job page", () => {
     await connected(opened);
     const live = await watching(section);
     expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
-    for (const name of ["Take over", "Cancel application"]) {
+    for (const name of ["Use the browser myself", "Cancel application"]) {
       expect(within(section).queryByRole("button", { name })).toBeNull();
     }
   });
@@ -1255,7 +1259,7 @@ describe("the submit lease on the job page", () => {
     const live = await watching(section);
     expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
     expect(
-      within(section).queryByRole("button", { name: "Take over" }),
+      within(section).queryByRole("button", { name: "Use the browser myself" }),
     ).toBeNull();
     expect(
       within(section).getAllByRole("button", { name: "Cancel application" }),

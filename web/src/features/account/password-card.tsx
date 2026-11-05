@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle, Timer } from "lucide-react";
+import { CircleAlert, Timer } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -17,6 +17,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { message } from "@/features/admin/errors";
 import { changePassword, type User } from "@/features/auth/api";
 import { PASSWORD_HINT, passwordProblem } from "@/features/auth/password-rules";
@@ -141,7 +143,7 @@ export function PasswordCard({ user }: { user: User }) {
           }
         >
           {/* Lets password managers tie the new password to this account. */}
-          <input
+          <Input
             type="email"
             name="username"
             autoComplete="username"
@@ -185,7 +187,7 @@ export function PasswordCard({ user }: { user: User }) {
             >
               {pending ? (
                 <>
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                   Changing password
                 </>
               ) : locked ? (

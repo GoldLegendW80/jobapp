@@ -120,7 +120,7 @@ describe("export", () => {
     );
     expect(
       await screen.findByText(
-        "The profile was not exported. The API answered 500: Boom..",
+        "The profile was not exported. Something went wrong on the server. Try again in a moment.",
       ),
     ).toBeVisible();
     expect(downloads).toEqual([]);
@@ -364,7 +364,7 @@ describe("import dialog: a valid file", () => {
     [
       500,
       "Boom.",
-      "The profile was not imported. The API answered 500: Boom..",
+      "The profile was not imported. Something went wrong on the server. Try again in a moment.",
     ],
   ])("shows a %i from the server", async (status, detail, shown) => {
     fakeSession(admin);

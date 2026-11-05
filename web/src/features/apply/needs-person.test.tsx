@@ -164,7 +164,9 @@ describe("the job page", () => {
     await waitFor(() => {
       expect(opened).toHaveLength(1);
     });
-    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use the browser myself" }),
+    ).toBeNull();
     expect(screen.getAllByTestId("live-screen")).toHaveLength(1);
   });
 
@@ -200,8 +202,12 @@ describe("the job page", () => {
       expect(
         screen.getByRole("button", { name: "Keyboard" }),
       ).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
-      expect(screen.queryByRole("button", { name: "Give back" })).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Use the browser myself" }),
+      ).toBeNull();
+      expect(
+        screen.queryByRole("button", { name: "Let the assistant continue" }),
+      ).toBeNull();
       expect(
         screen.queryByRole("button", { name: "I'm signed in" }),
       ).toBeNull();
@@ -220,7 +226,7 @@ describe("the job page", () => {
       expect(opened[0]?.screen.viewOnly).toBe(true);
       expect(screen.queryByRole("button", { name: "Keyboard" })).toBeNull();
       expect(
-        screen.getByRole("button", { name: "Take over" }),
+        screen.getByRole("button", { name: "Use the browser myself" }),
       ).toBeInTheDocument();
     },
   );
@@ -265,7 +271,7 @@ describe("the job page", () => {
       expect(opened).toHaveLength(1);
     });
     expect(
-      screen.getByRole("button", { name: "Take over" }),
+      screen.getByRole("button", { name: "Use the browser myself" }),
     ).toBeInTheDocument();
   });
 
@@ -288,7 +294,9 @@ describe("the job page", () => {
     expect(screen.getByTestId("live-view-slot")).toHaveTextContent(
       "The assistant waits for you.",
     );
-    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use the browser myself" }),
+    ).toBeNull();
   });
 
   it("says the assistant stopped waiting once the wait ended", () => {
@@ -302,7 +310,9 @@ describe("the job page", () => {
     expect(screen.getByTestId("live-view-slot")).toHaveTextContent(
       "The assistant stopped waiting",
     );
-    expect(screen.queryByRole("button", { name: "Take over" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use the browser myself" }),
+    ).toBeNull();
   });
 
   it("keeps the words while nobody holds the browser for the person", async () => {
@@ -391,7 +401,7 @@ describe("the job page", () => {
     });
     current = changed;
     await userEvent.click(button);
-    await screen.findByText(/answered 409/);
+    await screen.findByText(/Changed elsewhere\./);
     await waitFor(() => {
       expect(reads).toBe(2);
     });

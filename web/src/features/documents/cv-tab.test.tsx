@@ -411,6 +411,38 @@ describe("the CV tab", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("chooses where a new CV starts from with the arrow keys, in one group", async () => {
+    setup({ cvs: [fakeCv({ id: "a", name: "Main CV" })] });
+    const { user } = await openCvs();
+    await user.click(await screen.findByRole("button", { name: "New CV" }));
+    const dialog = await screen.findByRole("dialog", { name: "New CV" });
+    const group = within(dialog).getByRole("group", { name: "Start from" });
+    const profile = within(group).getByRole("radio", { name: "My profile" });
+    const copy = within(group).getByRole("radio", {
+      name: "A copy of another CV",
+    });
+    expect(profile).toBeChecked();
+    expect(within(dialog).queryByLabelText("CV to copy")).toBeNull();
+    profile.focus();
+    // Held, as a hand holds it: the group checks the radio its focus moves to.
+    await user.keyboard("{ArrowDown>}");
+    await waitFor(() => {
+      expect(copy).toBeChecked();
+    });
+    await user.keyboard("{/ArrowDown}");
+    expect(copy).toHaveFocus();
+    expect(profile).not.toBeChecked();
+    expect(within(dialog).getByLabelText("CV to copy")).toHaveValue("a");
+    await user.keyboard("{ArrowUp>}");
+    await waitFor(() => {
+      expect(profile).toBeChecked();
+    });
+    await user.keyboard("{/ArrowUp}");
+    expect(
+      within(dialog).getByRole("button", { name: "Build it" }),
+    ).toBeVisible();
+  });
+
   it("starts the consent from New CV, closing the dialog under it", async () => {
     const api = setup({ cvs: [fakeCv({ id: "a" })] });
     const { user } = await openCvs();

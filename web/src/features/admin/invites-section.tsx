@@ -8,7 +8,6 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  LoaderCircle,
   MailPlus,
   RotateCw,
 } from "lucide-react";
@@ -27,6 +26,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -48,7 +55,7 @@ import {
 } from "./api";
 import { message } from "./errors";
 import { InviteDialog } from "./invite-dialog";
-import { exactTime, relativeTime } from "./relative-time";
+import { Moment } from "./moment";
 
 const STATUS: Record<InviteStatus, { label: string; className: string }> = {
   active: {
@@ -106,7 +113,7 @@ export function InvitesSection() {
           className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading invites
           </span>
         </p>
@@ -127,17 +134,20 @@ export function InvitesSection() {
           </AlertDescription>
         </Alert>
       ) : page && page.total === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-10 text-center">
-          <MailPlus
-            aria-hidden="true"
-            className="size-6 text-muted-foreground"
-          />
-          <p className="font-medium">No invites yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            Invite someone to give them access. Their link appears here so you
-            can follow it and revoke it.
-          </p>
-        </div>
+        <Empty className="flex-none gap-2 border px-4 py-10 md:px-4 md:py-10">
+          <EmptyHeader className="max-w-none">
+            <EmptyMedia className="mb-0 text-muted-foreground">
+              <MailPlus aria-hidden="true" className="size-6" />
+            </EmptyMedia>
+            <EmptyTitle className="text-base tracking-normal">
+              No invites yet
+            </EmptyTitle>
+            <EmptyDescription className="max-w-sm">
+              Invite someone to give them access. Their link appears here so you
+              can follow it and revoke it.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : page ? (
         <>
           <InvitesTable
@@ -283,20 +293,15 @@ function When({ invite, now }: { invite: AdminInvite; now: Date }) {
   if (ended?.at)
     return (
       <span className="text-muted-foreground">
-        {ended.label}{" "}
-        <time dateTime={ended.at} title={exactTime(ended.at)}>
-          {relativeTime(ended.at, now)}
-        </time>
+        {ended.label} <Moment at={ended.at} now={now} />
       </span>
     );
   return (
-    <time
-      dateTime={invite.expires_at}
-      title={exactTime(invite.expires_at)}
+    <Moment
+      at={invite.expires_at}
+      now={now}
       className={invite.status === "expired" ? "text-muted-foreground" : ""}
-    >
-      {relativeTime(invite.expires_at, now)}
-    </time>
+    />
   );
 }
 
@@ -371,7 +376,7 @@ function RevokeDialog({
           >
             {mutation.isPending ? (
               <>
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
                 Revoking
               </>
             ) : (

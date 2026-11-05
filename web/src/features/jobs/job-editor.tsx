@@ -3,7 +3,7 @@
  * dialog. Every change goes through `useJobEditor` (use-job-editor.ts): optimistic, one request
  * at a time, rolled back when the api refuses.
  */
-import { CircleAlert, LoaderCircle, Pencil, RotateCcw } from "lucide-react";
+import { CircleAlert, Pencil, RotateCcw } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -34,13 +34,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Field,
+  FieldDescription,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { Spinner } from "@/components/ui/spinner";
 import { CURRENCIES } from "@/features/profile/api";
 import { describeError, errorDetail } from "@/lib/api";
-import { PAY_PERIOD_WORDS, WORDING, WORK_MODE_WORDS } from "@/lib/wording";
+import {
+  PAY_PERIOD_WORDS,
+  WORDING,
+  WORK_MODE_WORDS,
+  contractWord,
+} from "@/lib/wording";
 
 import { duplicateOf, isStale, type JobDetail, type JobPatch } from "./api";
 import { CONTRACT_TYPES, STATUSES, statusLabel } from "./labels";
@@ -71,8 +83,8 @@ export function StatusControl({ job, save }: { job: JobDetail; save: Save }) {
   };
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>Status</Label>
+    <Field className="w-auto gap-1.5">
+      <FieldLabel htmlFor={id}>Status</FieldLabel>
       <NativeSelect
         id={id}
         value={job.status}
@@ -118,7 +130,7 @@ export function StatusControl({ job, save }: { job: JobDetail; save: Save }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </Field>
   );
 }
 
@@ -202,36 +214,38 @@ export function NotesEditor({ job, save }: { job: JobDetail; save: Save }) {
           data-testid="notes-status"
         >
           {state === "saving" ? (
-            <LoaderCircle aria-hidden="true" className="size-3 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} className="size-3" />
           ) : null}
           {label}
         </p>
       </div>
-      <Label htmlFor={id} className="sr-only">
-        Notes
-      </Label>
-      <Textarea
-        id={id}
-        value={draft}
-        rows={5}
-        placeholder="What you learnt, who you talked to, what comes next."
-        aria-invalid={tooLong || state === "error"}
-        aria-describedby={`${id}-help`}
-        onChange={(event) => {
-          setDraft(event.target.value);
-          setState("dirty");
-          setError("");
-        }}
-        onBlur={() => {
-          if (!tooLong) commit(draft);
-        }}
-        className="min-h-28 text-sm"
-      />
-      <p id={`${id}-help`} className="text-xs text-muted-foreground">
-        {tooLong
-          ? `Too long: ${draft.length.toLocaleString("en-GB")} characters, at most ${NOTES_MAX.toLocaleString("en-GB")}.`
-          : "Saved automatically as you type."}
-      </p>
+      <Field className="gap-2">
+        <FieldLabel htmlFor={id} className="sr-only">
+          Notes
+        </FieldLabel>
+        <Textarea
+          id={id}
+          value={draft}
+          rows={5}
+          placeholder="What you learnt, who you talked to, what comes next."
+          aria-invalid={tooLong || state === "error"}
+          aria-describedby={`${id}-help`}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setState("dirty");
+            setError("");
+          }}
+          onBlur={() => {
+            if (!tooLong) commit(draft);
+          }}
+          className="min-h-28 text-sm"
+        />
+        <FieldDescription id={`${id}-help`} className="text-xs leading-4">
+          {tooLong
+            ? `Too long: ${draft.length.toLocaleString("en-GB")} characters, at most ${NOTES_MAX.toLocaleString("en-GB")}.`
+            : "Saved automatically as you type."}
+        </FieldDescription>
+      </Field>
       {state === "error" ? (
         <Alert variant="destructive">
           <CircleAlert aria-hidden="true" />
@@ -286,66 +300,68 @@ export function FitControl({ job, save }: { job: JobDetail; save: Save }) {
   };
 
   return (
-    <form onSubmit={submit} className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>Fit</Label>
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          id={id}
-          type="number"
-          inputMode="numeric"
-          min={0}
-          max={100}
-          step={1}
-          value={value}
-          aria-invalid={value !== "" && !valid}
-          aria-describedby={`${id}-help`}
-          onChange={(event) => {
-            setValue(event.target.value);
-          }}
-          className="w-24 tabular-nums"
-        />
-        <Button
-          type="submit"
-          variant="outline"
-          size="sm"
-          disabled={!valid || unchanged}
-        >
-          Set by hand
-        </Button>
-        {job.fit_overridden ? (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              save({ fit: null }, { fit_overridden: false }).then(
-                (result) => {
-                  toast.success(
-                    result.fit === null
-                      ? "The fit is computed again."
-                      : `The fit is computed again: ${result.fit}.`,
-                  );
-                },
-                (error: unknown) => {
-                  toast.error(
-                    isStale(error)
-                      ? STALE_MESSAGE
-                      : `Not saved. ${errorDetail(error)?.replace(/^fit: /, "") ?? describeError(error)}`,
-                  );
-                },
-              );
+    <form onSubmit={submit}>
+      <Field className="gap-1.5">
+        <FieldLabel htmlFor={id}>Fit</FieldLabel>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            id={id}
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={100}
+            step={1}
+            value={value}
+            aria-invalid={value !== "" && !valid}
+            aria-describedby={`${id}-help`}
+            onChange={(event) => {
+              setValue(event.target.value);
             }}
+            className="w-24 tabular-nums"
+          />
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            disabled={!valid || unchanged}
           >
-            <RotateCcw aria-hidden="true" />
-            Use computed
+            Set by hand
           </Button>
-        ) : null}
-      </div>
-      <p id={`${id}-help`} className="text-xs text-muted-foreground">
-        {job.fit_overridden
-          ? "Set by hand: a rescore keeps it."
-          : "Computed from the posting and your skills. A fit set by hand is kept by every rescore."}
-      </p>
+          {job.fit_overridden ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                save({ fit: null }, { fit_overridden: false }).then(
+                  (result) => {
+                    toast.success(
+                      result.fit === null
+                        ? "The fit is computed again."
+                        : `The fit is computed again: ${result.fit}.`,
+                    );
+                  },
+                  (error: unknown) => {
+                    toast.error(
+                      isStale(error)
+                        ? STALE_MESSAGE
+                        : `Not saved. ${errorDetail(error)?.replace(/^fit: /, "") ?? describeError(error)}`,
+                    );
+                  },
+                );
+              }}
+            >
+              <RotateCcw aria-hidden="true" />
+              Use computed
+            </Button>
+          ) : null}
+        </div>
+        <FieldDescription id={`${id}-help`} className="text-xs leading-4">
+          {job.fit_overridden
+            ? "Set by hand: a rescore keeps it."
+            : "Computed from the posting and your skills. A fit set by hand is kept by every rescore."}
+        </FieldDescription>
+      </Field>
     </form>
   );
 }
@@ -518,30 +534,34 @@ function EditDetailsDialog({
           </DialogDescription>
         </DialogHeader>
         <form id={`${id}-form`} onSubmit={submit} className="grid gap-3">
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-company`}>Company</Label>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-company`}>Company</FieldLabel>
             <Input {...field("company")} required maxLength={1000} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-title`}>Title</Label>
+          </Field>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-title`}>Title</FieldLabel>
             <Input {...field("title")} required maxLength={1000} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-location`}>Location</Label>
+          </Field>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-location`}>Location</FieldLabel>
             <Input {...field("location")} maxLength={1000} />
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-contract_type`}>Contract type</Label>
+          </Field>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-contract_type`}>
+              Contract type
+            </FieldLabel>
             <NativeSelect {...field("contract_type")}>
               {CONTRACT_TYPES.map((type) => (
                 <option key={type} value={type}>
-                  {type}
+                  {contractWord(type)}
                 </option>
               ))}
             </NativeSelect>
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-work_mode`}>{WORDING.workMode}</Label>
+          </Field>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-work_mode`}>
+              {WORDING.workMode}
+            </FieldLabel>
             <NativeSelect {...field("work_mode")}>
               <option value="">{WORDING.notStated}</option>
               {Object.entries(WORK_MODE_WORDS).map(([mode, word]) => (
@@ -550,11 +570,11 @@ function EditDetailsDialog({
                 </option>
               ))}
             </NativeSelect>
-          </div>
-          <fieldset className="grid gap-1.5">
-            <legend className="mb-1.5 text-sm font-medium">
+          </Field>
+          <FieldSet className="gap-1.5">
+            <FieldLegend variant="label" className="mb-1.5">
               {WORDING.pay}
-            </legend>
+            </FieldLegend>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <Input
                 {...field("pay_min")}
@@ -591,9 +611,9 @@ function EditDetailsDialog({
                 ))}
               </NativeSelect>
             </div>
-          </fieldset>
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-url`}>Link to the posting</Label>
+          </FieldSet>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-url`}>Link to the posting</FieldLabel>
             <Input
               {...field("url")}
               type="url"
@@ -601,7 +621,7 @@ function EditDetailsDialog({
               placeholder="https://"
               maxLength={1000}
             />
-          </div>
+          </Field>
           {error ? (
             <Alert variant="destructive">
               <CircleAlert aria-hidden="true" />
@@ -635,9 +655,7 @@ function EditDetailsDialog({
             disabled={pending || missing}
             aria-busy={pending}
           >
-            {pending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
             Save
           </Button>
         </DialogFooter>

@@ -3,20 +3,20 @@
  * its setup (owner, 2026-10-30), follow it live (the website being read, new
  * postings so far), then a summary of what it found. An older sweep that read boards still
  * shows them. The history of the last sweeps, with the automatic schedule and its next run, is one
- * click away. A sweep already running when the page opens (started elsewhere, or an automatic
- * one) is followed the same way.
+ * click away ("Past searches"). A sweep already running when the page opens (started elsewhere,
+ * or an automatic one) is followed the same way. The code says "sweep"; the person reads
+ * "search" (Chapter 2 of the audit: the word left the interface).
  */
 import { useQuery } from "@tanstack/react-query";
 import {
   CalendarClock,
   CircleAlert,
   History,
-  LoaderCircle,
   Search,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useState } from "react";
+import { Link } from "react-router";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -29,6 +29,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Progress } from "@/components/ui/progress";
 import { describeError } from "@/lib/api";
 
 import { FitBadge, StatusBadge } from "./badges";
@@ -40,54 +49,41 @@ import { sourceLabel, sourceName } from "./labels";
 import { SweepSources } from "./sweep-sources";
 import { SearchSetup } from "./search-setup";
 import { getSweep, listSweeps, sweepsKey, type Sweep } from "./sweeps-api";
+import type { FindJobs } from "./use-find-jobs";
 import { scheduleLine } from "./use-schedule";
 import type { SweepRunner } from "./use-sweep-runner";
 
-export function FindJobsButton({ runner }: { runner: SweepRunner }) {
-  // `/jobs?find=1` (the wizard's Start with an empty list, Discover's empty deck) opens the
-  // setup at once; the word then leaves the address, so a reload does not open it again.
-  const [params, setParams] = useSearchParams();
-  const asked = params.get("find") === "1";
-  const [setup, setSetup] = useState(asked);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const busy = runner.starting || runner.running !== null;
-  useEffect(() => {
-    if (!asked) return;
-    setParams(
-      (old) => {
-        const next = new URLSearchParams(old);
-        next.delete("find");
-        return next;
-      },
-      { replace: true },
-    );
-  }, [asked, setParams]);
+/** A button that opens the page's Find jobs setup (use-find-jobs.ts); it says when a search
+ * runs. */
+export function FindJobsButton({ finder }: { finder: FindJobs }) {
+  const busy = finder.runner.starting || finder.runner.running !== null;
   return (
-    <>
-      <Button
-        ref={trigger}
-        onClick={() => {
-          setSetup(true);
-        }}
-        disabled={busy}
-      >
-        {busy ? (
-          <LoaderCircle aria-hidden="true" className="animate-spin" />
-        ) : (
-          <Search aria-hidden="true" />
-        )}
-        {busy ? "Finding jobs" : "Find jobs"}
-      </Button>
-      {setup ? (
-        <SearchSetup
-          runner={runner}
-          onClose={() => {
-            setSetup(false);
-          }}
-          onReturnFocus={() => trigger.current?.focus()}
-        />
-      ) : null}
-    </>
+    <Button
+      data-find-jobs=""
+      onClick={(event) => {
+        finder.show(event.currentTarget);
+      }}
+      disabled={busy}
+    >
+      {busy ? (
+        <Spinner aria-hidden="true" role={undefined} />
+      ) : (
+        <Search aria-hidden="true" />
+      )}
+      {busy ? "Finding jobs" : "Find jobs"}
+    </Button>
+  );
+}
+
+/** The setup itself, while open. */
+export function FindJobsSetup({ finder }: { finder: FindJobs }) {
+  if (!finder.open) return null;
+  return (
+    <SearchSetup
+      runner={finder.runner}
+      onClose={finder.close}
+      onReturnFocus={finder.returnFocus}
+    />
   );
 }
 
@@ -158,7 +154,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const reading = readingLine(sweep);
   return (
     <section
-      aria-label="Sweep in progress"
+      aria-label="Search in progress"
       className="flex flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground"
     >
       <div
@@ -182,19 +178,15 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
           {plural(sweep.new, "new posting")}
         </span>
       </div>
-      <div
-        role="progressbar"
+      {/* The bar is drawn from the percentage; it says the websites searched of all. */}
+      <Progress
+        value={percent}
         aria-label="Websites searched"
-        aria-valuemin={0}
         aria-valuemax={total || 1}
         aria-valuenow={done}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-      >
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-500 motion-reduce:transition-none"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+        aria-valuetext={undefined}
+        className="h-1.5 bg-muted [&>[data-slot=progress-indicator]]:rounded-full [&>[data-slot=progress-indicator]]:duration-500 [&>[data-slot=progress-indicator]]:motion-reduce:transition-none"
+      />
     </section>
   );
 }
@@ -247,7 +239,7 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
         <DialogHeader>
           <DialogTitle>
             {failed
-              ? "The sweep stopped"
+              ? "The search stopped"
               : sweep.new
                 ? `${plural(sweep.new, "new posting")} found`
                 : "No new posting"}
@@ -278,27 +270,34 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
             <ul className="flex flex-col divide-y rounded-md border">
               {sweep.new_jobs.map((job) => (
                 <li key={job.id}>
-                  <Link
-                    to={`/jobs/${job.id}`}
-                    onClick={() => {
-                      runner.showSummary(null);
-                    }}
-                    className="flex items-center gap-3 px-3 py-2 hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+                  <Item
+                    asChild
+                    size="sm"
+                    className="flex-nowrap gap-3 rounded-none px-3 py-2 hover:bg-muted/60 focus-visible:bg-muted/60"
                   >
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-sm font-medium">
-                        {job.title}
-                      </span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {job.company}
-                        {job.location ? `, ${job.location}` : ""}
-                      </span>
-                    </span>
-                    {job.status === "skipped" ? (
-                      <StatusBadge status={job.status} />
-                    ) : null}
-                    <FitBadge fit={job.fit} />
-                  </Link>
+                    <Link
+                      to={`/jobs/${job.id}`}
+                      onClick={() => {
+                        runner.showSummary(null);
+                      }}
+                    >
+                      <ItemContent className="min-w-0 gap-0">
+                        <ItemTitle className="block w-auto truncate">
+                          {job.title}
+                        </ItemTitle>
+                        <ItemDescription className="line-clamp-1 text-xs break-all">
+                          {job.company}
+                          {job.location ? `, ${job.location}` : ""}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions>
+                        {job.status === "skipped" ? (
+                          <StatusBadge status={job.status} />
+                        ) : null}
+                        <FitBadge fit={job.fit} />
+                      </ItemActions>
+                    </Link>
+                  </Item>
                 </li>
               ))}
             </ul>
@@ -352,8 +351,8 @@ const STATUS_TEXT: Record<string, string> = {
   failed: "Failed",
 };
 
-/** The last sweeps and the automatic schedule, in a dialog. */
-export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
+/** The last sweeps and the automatic schedule, in a dialog: "Past searches". */
+export function PastSearchesButton({ runner }: { runner: SweepRunner }) {
   const [open, setOpen] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -374,7 +373,7 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
       },
       (error: unknown) => {
         setOpening(null);
-        toast.error(`This sweep could not be opened. ${describeError(error)}`);
+        toast.error(`This search could not be opened. ${describeError(error)}`);
       },
     );
   };
@@ -383,19 +382,17 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
     <>
       <Button
         variant="outline"
-        size="icon"
-        aria-label="Sweep history"
-        title="Sweep history"
         onClick={() => {
           setOpen(true);
         }}
       >
         <History aria-hidden="true" />
+        Past searches
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg [&>*]:min-w-0">
           <DialogHeader>
-            <DialogTitle>Sweeps</DialogTitle>
+            <DialogTitle>Past searches</DialogTitle>
             <DialogDescription>
               The last searches for postings.
             </DialogDescription>
@@ -423,27 +420,29 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
             <Alert variant="destructive">
               <CircleAlert aria-hidden="true" />
               <AlertDescription>
-                The sweeps could not be loaded. {describeError(history.error)}
+                The past searches could not be loaded.{" "}
+                {describeError(history.error)}
               </AlertDescription>
             </Alert>
           ) : history.data.items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No sweep yet. Find jobs searches the websites ticked in its setup.
+              No search yet. Find jobs searches every place on your list.
             </p>
           ) : (
             <ul
-              aria-label="Last sweeps"
+              aria-label="Last searches"
               className="flex flex-col divide-y rounded-md border"
             >
               {history.data.items.map((sweep) => (
                 <li key={sweep.id}>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     disabled={sweep.status === "running" || opening !== null}
                     onClick={() => {
                       show(sweep.id);
                     }}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none disabled:cursor-default disabled:hover:bg-transparent"
+                    className="h-auto w-full justify-start gap-3 rounded-none px-3 py-2 text-left font-normal whitespace-normal hover:bg-muted/60 hover:text-foreground focus-visible:bg-muted/60 disabled:cursor-default disabled:opacity-100 dark:hover:bg-muted/60"
                   >
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="font-medium">
@@ -459,15 +458,12 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
                     </span>
                     <span className="tabular-nums text-muted-foreground">
                       {opening === sweep.id ? (
-                        <LoaderCircle
-                          aria-label="Opening"
-                          className="size-4 animate-spin"
-                        />
+                        <Spinner aria-label="Opening" />
                       ) : (
                         `${sweep.new} new`
                       )}
                     </span>
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>

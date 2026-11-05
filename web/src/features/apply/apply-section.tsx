@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { getLinkedIn, linkedinKey } from "@/features/browser/linkedin-api";
 import { jobKey, type JobDetail } from "@/features/jobs/api";
 import { describeError } from "@/lib/api";
@@ -14,14 +14,10 @@ import {
   applicationsKey,
   approvalKey,
   approveApplication,
-  cancelApplication,
-  confirmSubmitted,
   getApplication,
   getApproval,
   latestApplication,
   refusalOf,
-  rejectApplication,
-  retryApplication,
   saveAnswer,
   startApplication,
   type Answer,
@@ -42,7 +38,8 @@ import {
   statusLine,
 } from "./apply-state";
 import { ApproveDialog } from "./approve-dialog";
-import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
+import { ConfirmDialog } from "./confirm-dialog";
+import { DECISIONS, type DecisionKind } from "./decisions";
 import { EmailApplication } from "./email-application";
 import { FieldsList } from "./fields-list";
 import { serverOffset } from "./full-auto-state";
@@ -55,48 +52,6 @@ import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
 import { applySettingsKey, getApplySettings } from "./settings-api";
 import { ShotView } from "./shot-view";
-
-/** The decisions that need a second click, each with its own sentence and the call it makes. */
-const DECISIONS = {
-  reject: {
-    title: "Reject this filled form?",
-    sentence: "Nothing is sent. You can start again.",
-    confirm: "Reject the form",
-    call: rejectApplication,
-  },
-  cancel: {
-    title: "Cancel this application?",
-    sentence: "Nothing is sent.",
-    confirm: "Cancel the application",
-    call: cancelApplication,
-  },
-  submitted: {
-    title: "Mark this application as submitted?",
-    sentence:
-      "Only do this if you saw the confirmation. It cannot be undone, and the app will refuse another application for this posting.",
-    confirm: "Mark as submitted",
-    call: confirmSubmitted,
-  },
-  retry: {
-    title: "Fill and approve again?",
-    sentence:
-      "If the first one went through, the company may receive two applications.",
-    confirm: "Fill and approve again",
-    call: retryApplication,
-  },
-  // One click Apply's agent (A19): Try again is one more run of the agent, which sends.
-  retryAgent: {
-    title: "Apply again?",
-    sentence:
-      "The assistant applies again and sends it by itself. It looks on the site first for the earlier one, but if that one went through, the company may receive two applications.",
-    confirm: "Apply again",
-    call: retryApplication,
-  },
-} satisfies Record<
-  string,
-  Confirmation & { call: (applicationId: string) => Promise<Application> }
->;
-type DecisionKind = keyof typeof DECISIONS;
 
 /** A failed refresh keeps the section on screen after this many tries. */
 const POLL_RETRIES = 2;
@@ -396,7 +351,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the application
         </p>
       ) : latest.isError && latest.data === undefined ? (
@@ -537,10 +492,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 role="status"
                 className="flex items-center gap-2 text-sm text-muted-foreground"
               >
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-4 animate-spin"
-                />
+                <Spinner aria-hidden="true" role={undefined} />
                 Loading the filled form
               </p>
             )
@@ -555,9 +507,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
               <>
                 {linkedinBlocked ? (
                   <p className="text-sm text-muted-foreground">
-                    Turn on LinkedIn in Account and accept its current sentence
-                    to use Easy Apply, or tick LinkedIn in Find jobs and save.
-                    You can also apply yourself.
+                    To use Easy Apply, add LinkedIn to your list in Find jobs
+                    and save: that gives LinkedIn&apos;s permission. You can
+                    also apply yourself.
                   </p>
                 ) : (
                   <Button
@@ -569,10 +521,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     }}
                   >
                     {start.isPending && start.variables === "apply" ? (
-                      <LoaderCircle
-                        aria-hidden="true"
-                        className="animate-spin"
-                      />
+                      <Spinner aria-hidden="true" role={undefined} />
                     ) : null}
                     Apply
                   </Button>
@@ -603,10 +552,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     }}
                   >
                     {start.isPending && start.variables === "manual" ? (
-                      <LoaderCircle
-                        aria-hidden="true"
-                        className="animate-spin"
-                      />
+                      <Spinner aria-hidden="true" role={undefined} />
                     ) : null}
                     Apply myself
                   </Button>
@@ -693,15 +639,16 @@ export function ApplySection({ job }: { job: JobDetail }) {
               ) : settings.isError ? (
                 <p data-testid="apply-mode-pending">
                   Your apply settings could not be read, so Apply waits.{" "}
-                  <button
+                  <Button
                     type="button"
-                    className="font-medium text-foreground underline underline-offset-4"
+                    variant="link"
+                    className="h-auto p-0 font-medium text-foreground underline"
                     onClick={() => {
                       void settings.refetch();
                     }}
                   >
                     Try again
-                  </button>
+                  </Button>
                 </p>
               ) : (
                 <p data-testid="apply-mode-pending">
@@ -865,14 +812,14 @@ function FormPanel({
             <ShotView
               applicationId={application.id}
               shotId={before.id}
-              title="The form before the click"
+              caption="The form before the click"
             />
           ) : null}
           {after ? (
             <ShotView
               applicationId={application.id}
               shotId={after.id}
-              title="The page after the click"
+              caption="The page after the click"
             />
           ) : null}
         </div>

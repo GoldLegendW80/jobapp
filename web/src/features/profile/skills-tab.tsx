@@ -1,6 +1,7 @@
 /**
  * Skills: the scoring model. Years of experience; three lists of categories (have, adjacent,
- * lacking), each a name and term chips with its own advanced switch; gates with a penalty; and a
+ * lacking), each a name and term chips with its own advanced switch; gates with a penalty, shown
+ * as "Requirements you do not meet" with the "Points taken off" a match costs the fit; and a
  * "Try it" box that matches a pasted posting against the categories and gates being edited,
  * with the server's matching rules ported to the browser (matching.ts).
  */
@@ -9,6 +10,8 @@ import { useMemo, useState } from "react";
 import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
+import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Form,
   FormControl,
@@ -19,6 +22,7 @@ import {
 } from "@/components/ui/form";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { WORDING } from "@/lib/wording";
 
 import type { Profile } from "./api";
 import {
@@ -116,8 +120,8 @@ export function SkillsTab({
             <CategoryList key={list} form={form} list={list} />
           ))}
           <Group
-            title="Gates"
-            description="Hard requirements you do not meet, such as a PhD or a clearance. A posting that names one loses its penalty."
+            title={WORDING.requirementsNotMet}
+            description="Hard requirements you do not have, such as a PhD or a clearance. When a posting names one of its terms, its points are taken off that posting's fit."
             action={
               <Button
                 type="button"
@@ -132,12 +136,12 @@ export function SkillsTab({
                 }}
               >
                 <Plus aria-hidden="true" />
-                Add gate
+                {WORDING.addRequirement}
               </Button>
             }
           >
             {gates.fields.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No gate yet.</p>
+              <p className="text-sm text-muted-foreground">{WORDING.noneYet}</p>
             ) : (
               <ol className="flex flex-col gap-4">
                 {gates.fields.map((item, index) => (
@@ -299,14 +303,14 @@ function GateFields({
           control={form.control}
           name={`gates.${index}.name`}
           label="Name"
-          srSuffix={`of gate ${n}`}
+          srSuffix={`of requirement ${n}`}
           autoComplete="off"
           className="min-w-0 flex-1"
         />
         <ItemControls
           index={index}
           count={count}
-          name={`gate ${n}`}
+          name={`requirement ${n}`}
           onMove={onMove}
           onRemove={onRemove}
         />
@@ -314,7 +318,7 @@ function GateFields({
       <TermChips
         form={form}
         name={`gates.${index}`}
-        label={name.trim() || `gate ${n}`}
+        label={name.trim() || `requirement ${n}`}
         title="Terms"
         compact
       />
@@ -325,25 +329,26 @@ function GateFields({
           <FormItem>
             <div className="flex items-baseline justify-between gap-2">
               <FormLabel>
-                <LabelText label="Penalty" srSuffix={`of gate ${n}`} />
+                <LabelText
+                  label={WORDING.pointsTakenOff}
+                  srSuffix={`of requirement ${n}`}
+                />
               </FormLabel>
               <output className="text-sm tabular-nums text-muted-foreground">
                 {field.value} points
               </output>
             </div>
             <FormControl>
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={100}
                 step={5}
-                className="w-full accent-primary"
                 name={field.name}
-                ref={field.ref}
-                value={field.value}
+                aria-label={`${WORDING.pointsTakenOff} of requirement ${String(n)}`}
+                value={[field.value]}
                 onBlur={field.onBlur}
-                onChange={(event) => {
-                  field.onChange(Number(event.target.value));
+                onValueChange={([value]) => {
+                  if (value !== undefined) field.onChange(value);
                 }}
               />
             </FormControl>
@@ -392,7 +397,10 @@ function TryIt({ form }: { form: UseFormReturn<SkillsForm> }) {
         title: LISTS[list].title,
         categories: (values[list] ?? []) as CategoryForm[],
       })),
-      { title: "Gates", categories: (values.gates ?? []) as CategoryForm[] },
+      {
+        title: WORDING.requirementsNotMet,
+        categories: (values.gates ?? []) as CategoryForm[],
+      },
     ];
     return lists.map((list) => ({
       title: list.title,
@@ -403,12 +411,10 @@ function TryIt({ form }: { form: UseFormReturn<SkillsForm> }) {
   return (
     <Group
       title="Try it"
-      description="Paste a job posting to see which categories and gates match, with the rules search uses: whole words, any case, an optional plural. Uses the terms on this page, saved or not."
+      description="Paste a job posting to see which categories and requirements match, with the rules search uses: whole words, any case, an optional plural. Uses the terms on this page, saved or not."
     >
-      <div className="grid gap-2">
-        <label htmlFor="skills-try-it" className="text-sm font-medium">
-          Posting text
-        </label>
+      <Field className="gap-2">
+        <FieldLabel htmlFor="skills-try-it">Posting text</FieldLabel>
         <Textarea
           id="skills-try-it"
           rows={6}
@@ -418,7 +424,7 @@ function TryIt({ form }: { form: UseFormReturn<SkillsForm> }) {
             setText(event.target.value);
           }}
         />
-      </div>
+      </Field>
       {sections.length > 0 ? (
         <div
           aria-label="Matches"

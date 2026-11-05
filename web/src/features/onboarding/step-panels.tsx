@@ -1,18 +1,23 @@
-import { useQuery } from "@tanstack/react-query";
-import { KeyRound, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
 
 import { AdvancedSection } from "@/components/advanced-section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
-import {
-  getModelCredential,
-  modelCredentialQueryKey,
-} from "@/features/agents/api";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { holdText, type ApplySettings } from "@/features/apply/settings-api";
 import { UploadPanel } from "@/features/documents/upload-panel";
 import { RunProgress } from "@/features/ingestion/run-progress";
@@ -29,8 +34,10 @@ import {
   SENIORITIES,
   type Search,
 } from "@/features/profile/api";
+import { cn } from "@/lib/utils";
 import { contractWord, WORDING } from "@/lib/wording";
 
+import { ModelKeyForm } from "./model-key-form";
 import {
   readPay,
   STEP_IDS,
@@ -62,6 +69,9 @@ function toggle<T>(list: readonly T[], item: T, on: boolean): T[] {
     : list.filter((x) => x !== item);
 }
 
+/** A field's label as tight as the plain Label it replaces, so the field keeps its height. */
+const TIGHT = "leading-none";
+
 function TextAnswer({
   label,
   hint,
@@ -80,8 +90,10 @@ function TextAnswer({
   const ownId = useId();
   const id = fieldId ?? ownId;
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor={id}>{label}</Label>
+    <Field className="gap-1.5">
+      <FieldLabel htmlFor={id} className={TIGHT}>
+        {label}
+      </FieldLabel>
       <Input
         id={id}
         value={value}
@@ -92,12 +104,26 @@ function TextAnswer({
           onChange(event.target.value);
         }}
       />
-      <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+      <FieldDescription id={`${id}-hint`} className="text-xs">
         {hint}
-      </p>
-    </div>
+      </FieldDescription>
+    </Field>
   );
 }
+
+/** One choice of a card: the whole box is the label, and it is marked while checked. */
+const CHOICE =
+  "min-h-11 w-full items-center rounded-md border px-3 font-normal leading-snug";
+
+/** The card around a group of choices; its legend sits on the border. */
+const CHOICE_CARD = "gap-2 rounded-md border p-4";
+
+/** A mode of the Apply step: a card with a title and a line under it. */
+const MODE =
+  "min-h-11 w-full items-start rounded-md border px-3 py-2 font-normal";
+
+/** A box alone on its row: the whole row is the label, a tap target of 44 px. */
+const ONE_BOX = "min-h-11 font-normal leading-snug";
 
 function Choices<T extends string>({
   legend,
@@ -114,32 +140,29 @@ function Choices<T extends string>({
 }) {
   const id = useId();
   return (
-    <fieldset
-      className="flex flex-col gap-2 rounded-md border p-4"
-      data-simple-card
-    >
-      <legend className="mb-1 text-sm font-medium">{legend}</legend>
+    <FieldSet className={CHOICE_CARD} data-simple-card>
+      <FieldLegend variant="label" className="mb-1">
+        {legend}
+      </FieldLegend>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {options.map((option) => (
-          <label
+          <FieldLabel
             key={option}
             htmlFor={`${id}-${option}`}
-            className="flex min-h-11 items-center gap-2 rounded-md border px-3 text-sm"
+            className={CHOICE}
           >
-            <input
+            <Checkbox
               id={`${id}-${option}`}
-              type="checkbox"
-              className="size-4 accent-primary"
               checked={chosen.includes(option)}
-              onChange={(event) => {
-                onChange(toggle(chosen, option, event.target.checked));
+              onCheckedChange={(checked) => {
+                onChange(toggle(chosen, option, checked === true));
               }}
             />
             {words(option)}
-          </label>
+          </FieldLabel>
         ))}
       </div>
-    </fieldset>
+    </FieldSet>
   );
 }
 
@@ -158,68 +181,31 @@ function Radios<T extends string>({
 }) {
   const id = useId();
   return (
-    <fieldset
-      className="flex flex-col gap-2 rounded-md border p-4"
-      data-simple-card
-    >
-      <legend className="mb-1 text-sm font-medium">{legend}</legend>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+    <FieldSet className={CHOICE_CARD} data-simple-card>
+      <FieldLegend variant="label" className="mb-1">
+        {legend}
+      </FieldLegend>
+      <RadioGroup
+        name={id}
+        value={value ?? ""}
+        className="grid-cols-1 gap-2 sm:grid-cols-2"
+        onValueChange={(next) => {
+          const option = options.find((o) => o === next);
+          if (option !== undefined) onChange(option);
+        }}
+      >
         {options.map((option) => (
-          <label
+          <FieldLabel
             key={option}
             htmlFor={`${id}-${option}`}
-            className="flex min-h-11 items-center gap-2 rounded-md border px-3 text-sm"
+            className={CHOICE}
           >
-            <input
-              id={`${id}-${option}`}
-              type="radio"
-              name={id}
-              className="size-4 accent-primary"
-              checked={value === option}
-              onChange={() => {
-                onChange(option);
-              }}
-            />
+            <RadioGroupItem id={`${id}-${option}`} value={option} />
             {words(option)}
-          </label>
+          </FieldLabel>
         ))}
-      </div>
-    </fieldset>
-  );
-}
-
-// --- the model key ------------------------------------------------------------------------------
-
-/**
- * Said once while no model credential is saved: reading the CV, the website search, the CV and
- * letter writers and applying all run on the person's own key (SPEC-agents, Credentials). Says
- * nothing while the credential loads or when it cannot be read.
- */
-export function ModelKeyNotice() {
-  const credential = useQuery({
-    queryKey: modelCredentialQueryKey,
-    queryFn: ({ signal }) => getModelCredential(signal),
-    retry: false,
-  });
-  if (credential.data !== null) return null;
-  return (
-    <Alert>
-      <KeyRound aria-hidden="true" />
-      <AlertDescription>
-        <p>
-          Reading your CV, searching websites, writing your CVs and letters and
-          applying use your own Anthropic API key, billed to your Anthropic
-          account. No key is saved yet.{" "}
-          <Link
-            className="font-medium underline underline-offset-4"
-            to="/account"
-          >
-            {WORDING.addModelKey}
-          </Link>
-          .
-        </p>
-      </AlertDescription>
-    </Alert>
+      </RadioGroup>
+    </FieldSet>
   );
 }
 
@@ -229,7 +215,6 @@ export function StepProfile() {
   // The run part asks the api only once the person opens the disclosure.
   return (
     <div className="flex flex-col gap-6">
-      <ModelKeyNotice />
       <p className="text-sm text-muted-foreground">
         Upload your CV: the app keeps it as your base CV, and can fill your
         profile from it. You review every proposal before it is written. The
@@ -369,18 +354,16 @@ export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
   );
   return (
     <div className="flex flex-col gap-6">
-      <label htmlFor={id} className="flex min-h-11 items-center gap-2 text-sm">
-        <input
+      <Label htmlFor={id} className={ONE_BOX}>
+        <Checkbox
           id={id}
-          type="checkbox"
-          className="size-4 accent-primary"
           checked={draft.anywhere}
-          onChange={(event) => {
-            change({ anywhere: event.target.checked });
+          onCheckedChange={(checked) => {
+            change({ anywhere: checked === true });
           }}
         />
         {WORDING.anywhere}
-      </label>
+      </Label>
       {draft.anywhere ? null : patterns?.places ? (
         <AdvancedSection
           pageKey="welcome-where"
@@ -411,33 +394,32 @@ export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
 
 // --- 5. How you want to work --------------------------------------------------------------------
 
+/** The contracts, one group whose last box is Freelance mission; a code this build does not
+ * offer stays saved as it was. */
+const CONTRACT_ORDER: readonly string[] = [
+  ...CONTRACT_TYPES.filter((type) => type !== "Freelance"),
+  "Freelance",
+];
+
 export function StepWork({ draft, change }: PanelProps) {
   return (
     <div className="flex flex-col gap-4">
-      {[
-        CONTRACT_TYPES.filter((type) => type !== "Freelance"),
-        ["Freelance"],
-      ].map((options, index) => (
-        <Choices
-          key={index}
-          legend={
-            index === 0
-              ? WORDING.employmentContracts
-              : WORDING.freelanceContracts
-          }
-          options={options}
-          words={contractWord}
-          chosen={draft.contracts.filter((type) => options.includes(type))}
-          onChange={(chosen) => {
-            change({
-              contracts: [
-                ...draft.contracts.filter((type) => !options.includes(type)),
-                ...chosen,
-              ],
-            });
-          }}
-        />
-      ))}
+      <Choices
+        legend={WORDING.contractsChooseAny}
+        options={CONTRACT_ORDER}
+        words={contractWord}
+        chosen={draft.contracts.filter((type) => CONTRACT_ORDER.includes(type))}
+        onChange={(chosen) => {
+          change({
+            contracts: [
+              ...draft.contracts.filter(
+                (type) => !CONTRACT_ORDER.includes(type),
+              ),
+              ...chosen,
+            ],
+          });
+        }}
+      />
     </div>
   );
 }
@@ -458,11 +440,15 @@ function PayFields({
   onChange: (pay: PayDraft) => void;
 }) {
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-sm font-medium">{legend}</legend>
+    <FieldSet className="gap-2">
+      <FieldLegend variant="label" className="mb-1">
+        {legend}
+      </FieldLegend>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-min`}>{WORDING.payFrom}</Label>
+        <Field className="gap-1.5">
+          <FieldLabel htmlFor={`${id}-min`} className={TIGHT}>
+            {WORDING.payFrom}
+          </FieldLabel>
           <Input
             id={`${id}-min`}
             aria-invalid={invalid}
@@ -473,9 +459,11 @@ function PayFields({
               onChange({ ...pay, min: event.target.value });
             }}
           />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${id}-max`}>{WORDING.payTo}</Label>
+        </Field>
+        <Field className="gap-1.5">
+          <FieldLabel htmlFor={`${id}-max`} className={TIGHT}>
+            {WORDING.payTo}
+          </FieldLabel>
           <Input
             id={`${id}-max`}
             inputMode="numeric"
@@ -484,9 +472,11 @@ function PayFields({
               onChange({ ...pay, max: event.target.value });
             }}
           />
-        </div>
-        <div className="col-span-2 flex flex-col gap-1.5 sm:col-span-1">
-          <Label htmlFor={`${id}-currency`}>{WORDING.payCurrency}</Label>
+        </Field>
+        <Field className="col-span-2 gap-1.5 sm:col-span-1">
+          <FieldLabel htmlFor={`${id}-currency`} className={TIGHT}>
+            {WORDING.payCurrency}
+          </FieldLabel>
           <NativeSelect
             id={`${id}-currency`}
             value={pay.currency}
@@ -500,9 +490,9 @@ function PayFields({
               </option>
             ))}
           </NativeSelect>
-        </div>
+        </Field>
       </div>
-    </fieldset>
+    </FieldSet>
   );
 }
 
@@ -524,18 +514,16 @@ export function StepPay({ draft, change, problem }: PanelProps) {
         Shown on the cards next to a posting&apos;s pay. It is never typed into
         an application form.
       </p>
-      <label htmlFor={id} className="flex min-h-11 items-center gap-2 text-sm">
-        <input
+      <Label htmlFor={id} className={ONE_BOX}>
+        <Checkbox
           id={id}
-          type="checkbox"
-          className="size-4 accent-primary"
           checked={draft.ratherNotSay}
-          onChange={(event) => {
-            change({ ratherNotSay: event.target.checked });
+          onCheckedChange={(checked) => {
+            change({ ratherNotSay: checked === true });
           }}
         />
         {WORDING.ratherNotSay}
-      </label>
+      </Label>
       {draft.ratherNotSay ? null : (
         <AdvancedSection
           pageKey="welcome-pay"
@@ -569,6 +557,11 @@ export function StepPay({ draft, change, problem }: PanelProps) {
 
 // --- 7. How the app applies ---------------------------------------------------------------------
 
+/**
+ * Two choices, each kept in apply's own settings (A11, issue #738): the mode after a Like, and
+ * "Let me review each filled form before it is sent", which a click on Apply follows. Full auto
+ * is only shown here: it is turned on in Application settings, with its own checks.
+ */
 export function StepApply({
   draft,
   change,
@@ -578,66 +571,98 @@ export function StepApply({
   const fullAutoOn =
     settings?.mode_after_like === "full_auto" && draft.mode === null;
   const hold = holdText(settings?.hold_s ?? 900);
+  const review = draft.review ?? settings?.review_before_send ?? false;
   return (
     <div className="flex flex-col gap-6">
-      <fieldset
-        className="flex flex-col gap-2 rounded-md border p-4"
+      <FieldSet
+        className={cn(CHOICE_CARD, "has-[>[data-slot=radio-group]]:gap-2")}
         data-simple-card
+        aria-describedby={`${id}-like`}
       >
-        <legend className="mb-1 text-sm font-medium">
+        <FieldLegend variant="label" className="mb-1">
           {WORDING.afterLike}
-        </legend>
-        <label
-          htmlFor={`${id}-review`}
-          className="flex min-h-11 items-start gap-2 rounded-md border px-3 py-2 text-sm"
+        </FieldLegend>
+        <FieldDescription id={`${id}-like`} className="nth-last-2:mt-0">
+          A Like on a posting in Discover asks the app to write your CV and
+          letter for it and to prepare the application.
+        </FieldDescription>
+        <RadioGroup
+          name={`${id}-mode`}
+          value={fullAutoOn ? "full_auto" : "review"}
+          className="gap-2"
+          onValueChange={(mode) => {
+            if (mode === "review") change({ mode: "review" });
+          }}
         >
-          <input
-            id={`${id}-review`}
-            type="radio"
-            name={`${id}-mode`}
-            className="mt-0.5 size-4 accent-primary"
-            checked={!fullAutoOn}
-            onChange={() => {
-              change({ mode: "review" });
+          <FieldLabel htmlFor={`${id}-review`} className={MODE}>
+            <RadioGroupItem
+              id={`${id}-review`}
+              value="review"
+              className="mt-0.5"
+            />
+            <span className="flex flex-col">
+              <span className="font-medium">{WORDING.reviewFirst}</span>
+              <span className="text-muted-foreground">
+                You approve each application a Like prepares before it is sent.
+              </span>
+            </span>
+          </FieldLabel>
+          <FieldLabel
+            htmlFor={`${id}-full`}
+            className={cn(MODE, "border-dashed")}
+          >
+            <RadioGroupItem
+              id={`${id}-full`}
+              value="full_auto"
+              className="mt-0.5"
+              disabled
+              aria-describedby={`${id}-full-text`}
+            />
+            <span className="flex flex-col">
+              <span className="font-medium">{WORDING.fullAuto}</span>
+              <span id={`${id}-full-text`} className="text-muted-foreground">
+                A Like is enough. The app applies after a hold of at least{" "}
+                {hold}, only above your threshold. It is turned on in{" "}
+                <Link
+                  className="font-medium text-foreground underline underline-offset-4"
+                  to="/settings/applications"
+                >
+                  {WORDING.applicationSettings}
+                </Link>
+                , with its own checks.
+              </span>
+            </span>
+          </FieldLabel>
+        </RadioGroup>
+      </FieldSet>
+      <FieldSet className={CHOICE_CARD} data-simple-card>
+        <FieldLegend variant="label" className="mb-1">
+          {WORDING.whenYouClickApply}
+        </FieldLegend>
+        <Field
+          orientation="horizontal"
+          className="min-h-11 gap-2 rounded-md border px-3 py-2"
+        >
+          <Checkbox
+            id={`${id}-send`}
+            className="mt-0.5"
+            checked={review}
+            aria-describedby={`${id}-send-text`}
+            onCheckedChange={(checked) => {
+              change({ review: checked === true });
             }}
           />
-          <span className="flex flex-col">
-            <span className="font-medium">{WORDING.reviewFirst}</span>
-            <span className="text-muted-foreground">
-              You approve every application.
-            </span>
-          </span>
-        </label>
-        <label
-          htmlFor={`${id}-full`}
-          className="flex min-h-11 items-start gap-2 rounded-md border border-dashed px-3 py-2 text-sm"
-        >
-          <input
-            id={`${id}-full`}
-            type="radio"
-            name={`${id}-mode`}
-            className="mt-0.5 size-4 accent-primary"
-            checked={fullAutoOn}
-            disabled
-            readOnly
-            aria-describedby={`${id}-full-text`}
-          />
-          <span className="flex flex-col">
-            <span className="font-medium">{WORDING.fullAuto}</span>
-            <span id={`${id}-full-text`} className="text-muted-foreground">
-              A Like is enough. The app applies after a hold of at least {hold},
-              only above your threshold. It is turned on in{" "}
-              <Link
-                className="font-medium text-foreground underline underline-offset-4"
-                to="/settings/applications"
-              >
-                {WORDING.applicationSettings}
-              </Link>
-              , with its own checks.
-            </span>
-          </span>
-        </label>
-      </fieldset>
+          <FieldContent className="gap-0">
+            <FieldLabel htmlFor={`${id}-send`}>
+              {WORDING.reviewEachForm}
+            </FieldLabel>
+            <FieldDescription id={`${id}-send-text`}>
+              When it is off, Apply fills the form and sends it for you. When it
+              is on, you check each filled form and send it yourself.
+            </FieldDescription>
+          </FieldContent>
+        </Field>
+      </FieldSet>
       <Radios
         legend={WORDING.documentsLanguage}
         options={DOCUMENTS_LANGUAGES}
@@ -750,7 +775,7 @@ export function StepSummary({
           </AlertDescription>
         </Alert>
       )}
-      <ModelKeyNotice />
+      <ModelKeyForm />
     </div>
   );
 }

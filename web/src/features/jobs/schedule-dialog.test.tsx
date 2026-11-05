@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { emptySweeps, server } from "@/test/server";
 
+import { ownTimeZone } from "./schedule";
 import type { ScheduleState } from "./sweeps-api";
 
 const SEARCH = {
@@ -76,7 +77,16 @@ beforeEach(() => {
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
 
-async function openSchedule() {
+/** The line the Schedule button shows in its tooltip: the pointer leaves it, then rests on it. */
+async function hintOf(button: HTMLElement): Promise<string | null> {
+  fireEvent.pointerLeave(button);
+  fireEvent.pointerMove(button);
+  return (await screen.findByRole("tooltip")).textContent;
+}
+
+async function openSchedule(
+  beforeOpen?: (button: HTMLElement) => Promise<void>,
+) {
   fakeJobsApi([makeJob(1)]);
   renderApp("/jobs");
   await screen.findByRole("table", { name: "Postings" });
@@ -85,6 +95,7 @@ async function openSchedule() {
   await waitFor(() => {
     expect(button).toHaveTextContent(/Off|On/);
   });
+  await beforeOpen?.(button);
   await user.click(button);
   const dialog = await screen.findByRole("dialog", {
     name: "Automatic search",
@@ -150,10 +161,33 @@ describe("Schedule", () => {
     await waitFor(() => {
       expect(button).toHaveTextContent("On");
     });
-    expect(button).toHaveAttribute(
-      "title",
+    expect(await hintOf(button)).toBe(
       "Automatic search: on, weekdays at 06:17 and 18:30 (America/New_York). Next: Sat 10 Oct, 00:17 (America/New_York).",
     );
+  });
+
+  it("lists the person's own time zone first, and mutes the days while off", async () => {
+    fakeProfile();
+    const { user, dialog } = await openSchedule();
+    const zones = within(
+      within(dialog).getByLabelText("Time zone"),
+    ).getAllByRole("option");
+    const own = ownTimeZone();
+    expect(own).not.toBeNull();
+    expect(zones[0]).toHaveValue(own);
+    expect(
+      zones.filter((zone) => zone.getAttribute("value") === own),
+    ).toHaveLength(1);
+    // Off: the chosen days are kept, but do not look chosen.
+    const monday = within(dialog).getByRole("button", { name: "Monday" });
+    expect(monday).toHaveAttribute("aria-pressed", "true");
+    expect(monday).toHaveAttribute("data-variant", "secondary");
+    expect(monday).toBeDisabled();
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Search automatically" }),
+    );
+    expect(monday).toHaveAttribute("data-variant", "default");
+    expect(monday).toBeEnabled();
   });
 
   it("puts the schedule onto a profile changed meanwhile (409), once", async () => {
@@ -266,10 +300,12 @@ describe("Schedule", () => {
       search: null,
       schedule: { enabled: true, active: false, next_run: null },
     });
-    const { user, dialog, button } = await openSchedule();
+    const seen = { hint: null as string | null };
+    const { user, dialog, button } = await openSchedule(async (target) => {
+      seen.hint = await hintOf(target);
+    });
     expect(button).toHaveTextContent("On");
-    expect(button).toHaveAttribute(
-      "title",
+    expect(seen.hint).toBe(
       "Automatic search: on, every day at 06:17 (Europe/Paris). No job website is ticked in Find jobs, so nothing runs.",
     );
     await user.click(
@@ -312,9 +348,11 @@ describe("Schedule", () => {
     renderApp("/jobs");
     const user = userEvent.setup();
     await user.click(
-      await screen.findByRole("button", { name: "Sweep history" }),
+      await screen.findByRole("button", { name: "Past searches" }),
     );
-    const history = await screen.findByRole("dialog", { name: "Sweeps" });
+    const history = await screen.findByRole("dialog", {
+      name: "Past searches",
+    });
     await user.click(
       await within(history).findByRole("button", { name: "Change schedule" }),
     );

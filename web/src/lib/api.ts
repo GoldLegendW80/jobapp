@@ -427,22 +427,52 @@ export function errorDetail(error: unknown): string | undefined {
     : undefined;
 }
 
-/** A short sentence for the user explaining an api failure, without dashes. */
+/** The sentence of a server failure, whatever its status: never a bare code. */
+export const SERVER_FAILED =
+  "Something went wrong on the server. Try again in a moment.";
+
+/** What a 4xx without a detail means for the person, by status. */
+const CLIENT_STATUS: Partial<Record<number, string>> = {
+  401: "You are signed out. Sign in again.",
+  403: "You are not allowed to do this.",
+  404: "This was not found. It may have been removed.",
+  409: "This changed in the meantime. Reload the page, then try again.",
+  413: "This is too large to send.",
+  429: "Too many requests at once. Wait a moment, then try again.",
+};
+
+/** A detail as one sentence: its own final stop, or one added ("Boom." never reads "Boom.."). */
+function asSentence(detail: string): string {
+  const text = detail.trim();
+  if (/[.!?]$/.test(text)) return text;
+  return `${text}.`;
+}
+
+/**
+ * A short sentence for the user explaining an api failure, without dashes and without a status
+ * code. A 4xx keeps the api's detail, which says what to change; a 503 keeps it too, as the api
+ * writes its 503 details for people ("The browser is not available right now."); any other
+ * server failure reads the same plain sentence, as its detail, if any, is no help to the person.
+ * Callers that act on a status read `error.status`, never this sentence.
+ */
 export function describeError(error: unknown): string {
   if (!isApiError(error)) return "Something unexpected went wrong.";
   switch (error.kind) {
     case "http": {
       const detail = errorDetail(error);
-      return detail
-        ? `The API answered ${error.status}: ${detail}.`
-        : `The API answered ${error.status}.`;
+      const status = error.status ?? 0;
+      if (status >= 500) {
+        return status === 503 && detail ? asSentence(detail) : SERVER_FAILED;
+      }
+      if (detail) return asSentence(detail);
+      return CLIENT_STATUS[status] ?? "The server refused this request.";
     }
     case "timeout":
-      return "The API did not answer in time.";
+      return "The server is slow to answer. Try again.";
     case "network":
-      return "The API could not be reached.";
+      return "The app cannot reach the server. Check your connection, then try again.";
     case "parse":
-      return "The API sent a response this page cannot read.";
+      return "The server sent an answer this page cannot read.";
     case "aborted":
       return "The request was cancelled.";
   }

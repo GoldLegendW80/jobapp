@@ -1,5 +1,4 @@
 import { useWindowVirtualizer } from "@tanstack/react-virtual";
-import { LoaderCircle } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -12,10 +11,23 @@ import {
 } from "react";
 import { Link, useNavigate } from "react-router";
 
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { WORDING, contractWord } from "@/lib/wording";
 
 import type { JobListItem } from "./api";
-import { FitBadge, StatusBadge } from "./badges";
+import { FitBadge, PayText, StatusBadge } from "./badges";
 import { formatDate } from "./format";
 
 /** Rows rendered beyond the visible ones, above and below. */
@@ -23,9 +35,11 @@ const OVERSCAN = 8;
 /** Start fetching the next page when the window gets this close to the last loaded row. */
 const PREFETCH_ROWS = 20;
 const ROW_DESKTOP = 48;
-const CARD_MOBILE = 148;
+const CARD_MOBILE = 172;
+/** The space under each card on a phone. */
+const CARD_GAP = 8;
 
-const MOBILE_QUERY = "(max-width: 639px)";
+const MOBILE_QUERY = "(max-width: 1023px)";
 
 function subscribeMobile(onChange: () => void) {
   const media = window.matchMedia(MOBILE_QUERY);
@@ -35,7 +49,10 @@ function subscribeMobile(onChange: () => void) {
   };
 }
 
-/** Below 640px the rows are cards (taller): the virtualiser estimates with that height. */
+/**
+ * Below 1024px the rows are cards (taller): the virtualiser estimates with that height. Nine
+ * columns, the pay among them, need a desktop width; a tablet gets the cards.
+ */
 function useIsMobile(): boolean {
   return useSyncExternalStore(
     subscribeMobile,
@@ -45,10 +62,13 @@ function useIsMobile(): boolean {
 }
 
 const COLUMNS =
-  "sm:grid sm:grid-cols-[1.25rem_minmax(0,1.1fr)_minmax(0,2fr)_minmax(0,1.2fr)_4.5rem_6.5rem_7rem_6.5rem] sm:items-center sm:gap-3";
+  "lg:grid lg:grid-cols-[1.25rem_minmax(0,1fr)_minmax(0,1.8fr)_minmax(0,1fr)_minmax(0,1.3fr)_5.5rem_6.5rem_6.5rem_5.5rem] lg:items-center lg:gap-3";
 
-const CHECKBOX =
-  "size-4 cursor-pointer rounded border-input accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+/** A header or a cell of the grid above: none of the table's own padding, and a checkbox on
+ * the row's centre line. The table's elements are laid out as blocks and grids (a virtualised
+ * row is positioned on its own), so their roles are said again for the screen readers that drop
+ * a table's semantics with its display. */
+const CELL = "p-0 [&>[role=checkbox]]:translate-y-0";
 
 /** What the list needs to show and change the selection (jobs-page.tsx owns it). */
 export interface ListSelection {
@@ -61,10 +81,10 @@ export interface ListSelection {
 }
 
 /**
- * The list: one ARIA table, virtualised against the window scroll (only the rows near the
- * viewport are in the DOM), loading the next page as the window nears the end. From 640px up
- * each row is a table line; below, the same row is a card. Arrow keys, Home, End, Page Up and
- * Page Down move between rows; Enter opens one.
+ * The list: one table, virtualised against the window scroll (only the rows near the viewport
+ * are in the DOM), loading the next page as the window nears the end. From 1024px up each row
+ * is a table line; below, the same row is a card. Arrow keys, Home, End, Page Up and Page Down
+ * move between rows; Enter opens one.
  */
 export function JobsList({
   items,
@@ -86,14 +106,17 @@ export function JobsList({
 }) {
   const mobile = useIsMobile();
   const navigate = useNavigate();
-  const bodyRef = useRef<HTMLDivElement>(null);
+  // The table's parts take no ref (function components on React 18): the body and its rows are
+  // found from this box.
+  const boxRef = useRef<HTMLDivElement>(null);
+  const measured = useRef(new WeakSet<Element>());
   const [scrollMargin, setScrollMargin] = useState(0);
   const [active, setActive] = useState(0);
   const focusPending = useRef(false);
   const estimate = mobile ? CARD_MOBILE : ROW_DESKTOP;
 
   useLayoutEffect(() => {
-    const body = bodyRef.current;
+    const body = boxRef.current?.querySelector("tbody");
     if (!body) return;
     const measure = () => {
       setScrollMargin(body.getBoundingClientRect().top + window.scrollY);
@@ -110,6 +133,8 @@ export function JobsList({
     estimateSize: () => estimate,
     overscan: OVERSCAN,
     scrollMargin,
+    gap: mobile ? CARD_GAP : 0,
+    paddingEnd: mobile ? CARD_GAP : 0,
     getItemKey: (index) => items[index]?.id ?? index,
     // jsdom and hidden rows measure 0: keep the estimate instead of collapsing the row.
     measureElement: (element) =>
@@ -117,6 +142,19 @@ export function JobsList({
   });
   const virtualItems = virtualizer.getVirtualItems();
   const last = virtualItems.at(-1)?.index ?? -1;
+
+  // Each row is measured once it is in the DOM, then by the virtualiser's own observer when its
+  // size changes; rows gone from the DOM are forgotten.
+  useLayoutEffect(() => {
+    virtualizer.measureElement(null);
+    const rows =
+      boxRef.current?.querySelectorAll("tbody > tr[data-index]") ?? [];
+    for (const row of rows) {
+      if (measured.current.has(row)) continue;
+      measured.current.add(row);
+      virtualizer.measureElement(row);
+    }
+  });
 
   useEffect(() => {
     if (
@@ -132,8 +170,8 @@ export function JobsList({
 
   useEffect(() => {
     if (!focusPending.current) return;
-    const row = bodyRef.current?.querySelector<HTMLElement>(
-      `[data-index="${current}"]`,
+    const row = boxRef.current?.querySelector<HTMLElement>(
+      `tbody > [data-index="${current}"]`,
     );
     if (row) {
       focusPending.current = false;
@@ -155,7 +193,10 @@ export function JobsList({
     virtualizer.scrollToIndex(next, { align: "auto" });
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
+  const onKeyDown = (
+    event: KeyboardEvent<HTMLTableRowElement>,
+    index: number,
+  ) => {
     const page = Math.max(1, Math.floor(window.innerHeight / estimate) - 1);
     const keys: Record<string, number> = {
       ArrowDown: index + 1,
@@ -187,155 +228,204 @@ export function JobsList({
     }
   };
 
-  const onRowClick = (event: MouseEvent<HTMLDivElement>, job: JobListItem) => {
+  const onRowClick = (
+    event: MouseEvent<HTMLTableRowElement>,
+    job: JobListItem,
+  ) => {
     // The title link navigates on its own (and keeps middle click and new tab); the checkbox
     // selects.
-    if ((event.target as HTMLElement).closest("a, input, label")) return;
+    if ((event.target as HTMLElement).closest("a, button, input, label"))
+      return;
     open(job);
   };
 
   return (
+    // The rows draw their own cards under 1024px: from there up this box draws the list's
+    // border, around Load more too, and the table's own container draws none.
     <div
-      role="table"
-      aria-label="Postings"
-      aria-rowcount={total + 1}
-      className="sm:rounded-lg sm:border"
+      ref={boxRef}
+      className="lg:rounded-lg lg:border [&>[data-slot=table-container]]:rounded-none [&>[data-slot=table-container]]:border-0"
     >
-      <div role="rowgroup" className="max-sm:sr-only">
-        <div
-          role="row"
-          aria-rowindex={1}
-          className={cn(
-            COLUMNS,
-            "border-b bg-muted/50 px-3 py-2 text-left text-xs font-medium text-muted-foreground",
-          )}
-        >
-          <span role="columnheader" className="flex items-center">
-            {selection ? (
-              <HeaderCheckbox selection={selection} />
-            ) : (
-              <span className="sr-only">Select</span>
-            )}
-          </span>
-          <span role="columnheader">Company</span>
-          <span role="columnheader">Title</span>
-          <span role="columnheader">Location</span>
-          <span role="columnheader">Type</span>
-          <span role="columnheader">Fit</span>
-          <span role="columnheader">Status</span>
-          <span role="columnheader">Found</span>
-        </div>
-      </div>
-      <div
-        ref={bodyRef}
-        role="rowgroup"
-        className="relative"
-        style={{ height: virtualizer.getTotalSize() }}
+      <Table
+        stacked={false}
+        role="table"
+        aria-label="Postings"
+        aria-rowcount={total + 1}
+        className="block"
       >
-        {virtualItems.map((virtual) => {
-          const job = items[virtual.index];
-          if (!job) return null;
-          const checked = selection?.selected.has(job.id) ?? false;
-          return (
-            <div
-              key={virtual.key}
-              ref={virtualizer.measureElement}
-              data-index={virtual.index}
-              role="row"
-              aria-rowindex={virtual.index + 2}
-              aria-selected={selection ? checked : undefined}
-              tabIndex={virtual.index === current ? 0 : -1}
-              onKeyDown={(event) => {
-                onKeyDown(event, virtual.index);
-              }}
-              onFocus={() => {
-                setActive(virtual.index);
-              }}
-              onClick={(event) => {
-                onRowClick(event, job);
-              }}
-              className="group absolute top-0 left-0 w-full cursor-pointer outline-none max-sm:pb-2"
-              style={{
-                transform: `translateY(${virtual.start - scrollMargin}px)`,
-              }}
+        <TableHeader
+          role="rowgroup"
+          // Its row draws the tint.
+          className="block bg-transparent max-lg:sr-only"
+        >
+          <TableRow
+            role="row"
+            aria-rowindex={1}
+            className={cn(
+              COLUMNS,
+              "bg-muted/50 px-3 py-2 text-left text-xs font-medium text-muted-foreground hover:bg-muted/50",
+            )}
+          >
+            <TableHead
+              role="columnheader"
+              className={cn(CELL, "flex h-auto items-center")}
             >
-              <div
+              {selection ? (
+                <HeaderCheckbox selection={selection} />
+              ) : (
+                <span className="sr-only">Select</span>
+              )}
+            </TableHead>
+            {[
+              "Company",
+              "Title",
+              "Location",
+              WORDING.pay,
+              "Type",
+              "Fit",
+              "Status",
+              "Found",
+            ].map((name) => (
+              <TableHead
+                key={name}
+                role="columnheader"
+                className={cn(CELL, "h-auto whitespace-normal text-inherit")}
+              >
+                {name}
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody
+          role="rowgroup"
+          className="relative block"
+          style={{ height: virtualizer.getTotalSize() }}
+        >
+          {virtualItems.map((virtual) => {
+            const job = items[virtual.index];
+            if (!job) return null;
+            const checked = selection?.selected.has(job.id) ?? false;
+            return (
+              <TableRow
+                key={virtual.key}
+                data-index={virtual.index}
+                role="row"
+                aria-rowindex={virtual.index + 2}
+                aria-selected={selection ? checked : undefined}
+                tabIndex={virtual.index === current ? 0 : -1}
+                onKeyDown={(event) => {
+                  onKeyDown(event, virtual.index);
+                }}
+                onFocus={() => {
+                  setActive(virtual.index);
+                }}
+                onClick={(event) => {
+                  onRowClick(event, job);
+                }}
                 className={cn(
+                  "absolute top-0 left-0 w-full cursor-pointer outline-none",
                   COLUMNS,
-                  "flex flex-wrap items-center gap-x-2 gap-y-1 transition-colors group-hover:bg-accent/60 group-focus-visible:ring-[3px] group-focus-visible:ring-ring/50 group-focus-visible:ring-inset",
-                  "max-sm:rounded-lg max-sm:border max-sm:bg-card max-sm:p-3",
-                  "sm:h-12 sm:border-b sm:px-3",
+                  "flex flex-wrap items-center gap-x-2 gap-y-1 transition-colors hover:bg-accent/60 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset",
+                  // A card keeps its border when it is the last row (the body clears that one).
+                  "max-lg:rounded-lg max-lg:border! max-lg:bg-card max-lg:p-3",
+                  "lg:h-12 lg:px-3",
                   checked && "bg-accent/40",
                 )}
+                style={{
+                  transform: `translateY(${virtual.start - scrollMargin}px)`,
+                }}
               >
-                <span
+                <TableCell
                   role="cell"
-                  className="flex items-center max-sm:order-first"
+                  className={cn(CELL, "flex items-center max-lg:order-first")}
                 >
                   {selection ? (
-                    <input
-                      type="checkbox"
-                      className={CHECKBOX}
+                    <Checkbox
                       checked={checked}
                       aria-label={`Select ${job.title} at ${job.company}`}
                       tabIndex={-1}
+                      className="cursor-pointer"
                       onClick={(event) => {
                         event.stopPropagation();
                         selection.toggle(virtual.index, event.shiftKey);
                       }}
-                      onChange={() => {
-                        /* handled on click, which knows about Shift */
-                      }}
                     />
                   ) : null}
-                </span>
-                <span
+                </TableCell>
+                <TableCell
                   role="cell"
-                  className="truncate text-sm text-muted-foreground max-sm:min-w-0 max-sm:flex-1 max-sm:text-xs sm:text-foreground"
+                  className={cn(
+                    CELL,
+                    "truncate text-sm text-muted-foreground max-lg:min-w-0 max-lg:flex-1 max-lg:text-xs lg:text-foreground",
+                  )}
                 >
                   {job.company}
-                </span>
-                <span
+                </TableCell>
+                <TableCell
                   role="cell"
-                  className="min-w-0 text-sm font-medium max-sm:basis-full"
+                  className={cn(
+                    CELL,
+                    "min-w-0 text-sm font-medium whitespace-normal max-lg:basis-full",
+                  )}
                 >
                   <Link
                     to={`/jobs/${job.id}`}
                     state={{ from }}
                     tabIndex={-1}
-                    className="line-clamp-2 break-words hover:underline sm:line-clamp-1"
+                    className="line-clamp-2 break-words hover:underline lg:line-clamp-1"
                   >
                     {job.title}
                   </Link>
-                </span>
-                <span
+                </TableCell>
+                <TableCell
                   role="cell"
-                  className="truncate text-sm text-muted-foreground max-sm:basis-full max-sm:text-xs"
+                  className={cn(
+                    CELL,
+                    "truncate text-sm text-muted-foreground max-lg:basis-full max-lg:text-xs",
+                  )}
                 >
                   {job.location}
-                </span>
-                <span role="cell" className="text-xs text-muted-foreground">
-                  {job.contract_type}
-                </span>
-                <span role="cell">
-                  <FitBadge fit={job.fit} overridden={job.fit_overridden} />
-                </span>
-                <span role="cell">
-                  <StatusBadge status={job.status} />
-                </span>
-                <span
+                </TableCell>
+                <TableCell
                   role="cell"
-                  className="text-xs text-muted-foreground tabular-nums max-sm:ml-auto"
+                  className={cn(
+                    CELL,
+                    "text-sm font-medium whitespace-normal max-lg:basis-full lg:line-clamp-2 lg:text-xs",
+                  )}
+                >
+                  <PayText job={job} />
+                </TableCell>
+                <TableCell
+                  role="cell"
+                  className={cn(
+                    CELL,
+                    "text-xs whitespace-normal text-muted-foreground lg:line-clamp-2",
+                  )}
+                >
+                  {contractWord(job.contract_type)}
+                </TableCell>
+                <TableCell role="cell" className={CELL}>
+                  <FitBadge fit={job.fit} overridden={job.fit_overridden} />
+                </TableCell>
+                <TableCell role="cell" className={CELL}>
+                  <StatusBadge status={job.status} />
+                </TableCell>
+                <TableCell
+                  role="cell"
+                  className={cn(
+                    CELL,
+                    "text-xs text-muted-foreground tabular-nums max-lg:ml-auto",
+                  )}
                 >
                   <time dateTime={job.found_on}>
                     {formatDate(job.found_on)}
                   </time>
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
       {hasNextPage ? (
         <p
           role="status"
@@ -344,20 +434,18 @@ export function JobsList({
         >
           {isFetchingNextPage ? (
             <>
-              <LoaderCircle
-                aria-hidden="true"
-                className="size-4 animate-spin"
-              />
+              <Spinner aria-hidden="true" role={undefined} />
               Loading more postings
             </>
           ) : (
-            <button
+            <Button
               type="button"
-              className="underline underline-offset-4"
+              variant="link"
+              className="h-auto p-0 font-normal text-inherit underline has-[>svg]:px-0"
               onClick={fetchNextPage}
             >
               Load more postings
-            </button>
+            </Button>
           )}
         </p>
       ) : null}
@@ -366,22 +454,22 @@ export function JobsList({
 }
 
 function HeaderCheckbox({ selection }: { selection: ListSelection }) {
-  const ref = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (ref.current) ref.current.indeterminate = selection.allState === "some";
-  }, [selection.allState]);
   return (
-    <input
-      ref={ref}
-      type="checkbox"
-      className={CHECKBOX}
-      checked={selection.allState === "all"}
+    <Checkbox
+      className="cursor-pointer"
+      checked={
+        selection.allState === "all"
+          ? true
+          : selection.allState === "some"
+            ? "indeterminate"
+            : false
+      }
       aria-label={
         selection.allState === "none"
           ? "Select every posting in this view"
           : "Clear the selection"
       }
-      onChange={selection.toggleAll}
+      onCheckedChange={selection.toggleAll}
     />
   );
 }
@@ -393,18 +481,18 @@ export function JobsListSkeleton({ rows = 8 }: { rows?: number }) {
       role="status"
       aria-live="polite"
       aria-label="Loading postings"
-      className="flex flex-col gap-2 sm:gap-0 sm:rounded-lg sm:border"
+      className="flex flex-col gap-2 lg:gap-0 lg:rounded-lg lg:border"
     >
       {Array.from({ length: rows }, (_, index) => (
         <div
           key={index}
           aria-hidden="true"
-          className="flex animate-pulse flex-col gap-2 max-sm:rounded-lg max-sm:border max-sm:p-3 sm:h-12 sm:flex-row sm:items-center sm:gap-3 sm:border-b sm:px-3 sm:last:border-b-0"
+          className="flex flex-col gap-2 max-lg:rounded-lg max-lg:border max-lg:p-3 lg:h-12 lg:flex-row lg:items-center lg:gap-3 lg:border-b lg:px-3 lg:last:border-b-0"
         >
-          <span className="h-3 w-24 rounded bg-muted" />
-          <span className="h-3 w-48 rounded bg-muted sm:flex-1" />
-          <span className="h-3 w-28 rounded bg-muted" />
-          <span className="h-4 w-20 rounded-full bg-muted" />
+          <Skeleton className="h-3 w-24 rounded bg-muted" />
+          <Skeleton className="h-3 w-48 rounded bg-muted lg:flex-1" />
+          <Skeleton className="h-3 w-28 rounded bg-muted" />
+          <Skeleton className="h-4 w-20 rounded-full bg-muted" />
         </div>
       ))}
     </div>

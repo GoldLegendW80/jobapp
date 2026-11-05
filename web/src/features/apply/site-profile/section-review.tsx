@@ -2,6 +2,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -13,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { errorDetail, describeError } from "@/lib/api";
+import { siteProfileProblem } from "@/lib/wording";
 import { ConfirmDialog } from "../confirm-dialog";
 import {
   action,
@@ -204,18 +207,17 @@ function FieldRow({
       <TableCell label="Replace" className="p-3 sm:min-w-32">
         {field.current_value != null && field.current_value !== "" ? (
           mutable ? (
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
+            <Label className="font-normal">
+              <Checkbox
                 aria-label={`Replace ${field.label}`}
                 checked={replace}
                 disabled={pending}
-                onChange={(event) => {
-                  onReplace(event.target.checked);
+                onCheckedChange={(checked) => {
+                  onReplace(checked === true);
                 }}
               />
               Replace
-            </label>
+            </Label>
           ) : (
             "Current value kept"
           )
@@ -379,8 +381,7 @@ function SectionReviewContent({
         )}
         {section.error_code && (
           <p role="alert" className="text-sm text-destructive">
-            The section needs another review (
-            {section.error_code.replaceAll("_", " ")}).
+            {siteProfileProblem(section.error_code)}
           </p>
         )}
         <div className="grid gap-4 md:grid-cols-2">

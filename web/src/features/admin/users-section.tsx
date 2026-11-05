@@ -9,7 +9,6 @@ import {
   ChevronRight,
   CircleAlert,
   Ellipsis,
-  LoaderCircle,
   RotateCw,
   ShieldCheck,
   ShieldOff,
@@ -42,6 +41,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import {
   Table,
   TableBody,
   TableCaption,
@@ -64,7 +71,7 @@ import {
   type UserChange,
 } from "./api";
 import { message } from "./errors";
-import { exactTime, relativeTime } from "./relative-time";
+import { Moment } from "./moment";
 
 type Action = "promote" | "demote" | "disable" | "enable";
 
@@ -118,7 +125,7 @@ export function UsersSection() {
           className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading accounts
           </span>
         </p>
@@ -139,13 +146,19 @@ export function UsersSection() {
           </AlertDescription>
         </Alert>
       ) : page && page.total === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-10 text-center">
-          <Users aria-hidden="true" className="size-6 text-muted-foreground" />
-          <p className="font-medium">No accounts yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            People you invite appear here once they accept their link.
-          </p>
-        </div>
+        <Empty className="flex-none gap-2 border px-4 py-10 md:px-4 md:py-10">
+          <EmptyHeader className="max-w-none">
+            <EmptyMedia className="mb-0 text-muted-foreground">
+              <Users aria-hidden="true" className="size-6" />
+            </EmptyMedia>
+            <EmptyTitle className="text-base tracking-normal">
+              No accounts yet
+            </EmptyTitle>
+            <EmptyDescription className="max-w-sm">
+              People you invite appear here once they accept their link.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : page ? (
         <>
           <UsersTable
@@ -292,12 +305,7 @@ function UsersTable({
               </TableCell>
               <TableCell label="Last sign in">
                 {user.last_login_at ? (
-                  <time
-                    dateTime={user.last_login_at}
-                    title={exactTime(user.last_login_at)}
-                  >
-                    {relativeTime(user.last_login_at, now)}
-                  </time>
+                  <Moment at={user.last_login_at} now={now} />
                 ) : (
                   <span className="text-muted-foreground">Never</span>
                 )}
@@ -540,7 +548,7 @@ function ConfirmDialog({
           >
             {mutation.isPending ? (
               <>
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
                 {text?.busy}
               </>
             ) : (

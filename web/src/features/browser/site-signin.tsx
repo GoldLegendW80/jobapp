@@ -1,8 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, LoaderCircle, LogIn } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, LogIn } from "lucide-react";
+import { Fragment, useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemContent,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail } from "@/lib/api";
 
 import {
@@ -35,9 +43,22 @@ export const EXPIRED =
  * A job website's Sign in (browser B17): the person's own browser opens on the website in the
  * live view, the person signs in themselves, and Done ends the session and checks that the
  * browser kept the website's login. The searches then read that website signed in, in this
- * person's browser only. "Forget all logins" (B7) removes every website's login.
+ * person's browser only. "Forget all logins" (B7) removes every website's login. `optional`
+ * (a line of Find jobs) says, before any login, that signing in is only for a website that shows
+ * more postings to members.
  */
-export function SiteSignIn({ url }: { url: string }) {
+export function SiteSignIn({
+  url,
+  forget = true,
+  optional = false,
+}: {
+  url: string;
+  /** false: no "Forget all logins" of its own (Account's list has one for every website). */
+  forget?: boolean;
+  /** true in Find jobs: the button reads "Sign in (optional)" with a one line hint. */
+  optional?: boolean;
+}) {
+  const hintId = useId();
   const host = hostOf(url);
   const client = useQueryClient();
   const [opened, setOpened] = useState(false);
@@ -95,6 +116,7 @@ export function SiteSignIn({ url }: { url: string }) {
   if (!host) return null;
   const login = logins.data?.find((site) => site.host === host);
   const failure = start.error ?? done.error;
+  const offered = optional && !login && !opened;
   return (
     <div className="flex w-full flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -115,7 +137,7 @@ export function SiteSignIn({ url }: { url: string }) {
             }}
           >
             {done.isPending ? (
-              <LoaderCircle aria-hidden className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : null}
             Done
           </Button>
@@ -124,7 +146,8 @@ export function SiteSignIn({ url }: { url: string }) {
             type="button"
             size="sm"
             variant="outline"
-            aria-label={`Sign in to ${host}`}
+            aria-label={`Sign in to ${host}${offered ? " (optional)" : ""}`}
+            aria-describedby={offered ? hintId : undefined}
             disabled={start.isPending}
             onClick={() => {
               setNote(null);
@@ -133,10 +156,19 @@ export function SiteSignIn({ url }: { url: string }) {
             }}
           >
             <LogIn aria-hidden />
-            {login?.state === "expired" ? "Sign in again" : "Sign in"}
+            {login?.state === "expired"
+              ? "Sign in again"
+              : offered
+                ? "Sign in (optional)"
+                : "Sign in"}
           </Button>
         )}
-        {login ? (
+        {offered ? (
+          <span id={hintId} className="text-xs text-muted-foreground">
+            Only if this site shows more postings to members.
+          </span>
+        ) : null}
+        {login && forget ? (
           <ForgetDialog
             profile={browser.data?.profile}
             onForgotten={() => {
@@ -195,17 +227,21 @@ export function JobWebsitesSignIn({ urls }: { urls: string[] }) {
         For a website of Find jobs that shows its jobs to members only: sign in
         once, and the next searches read it signed in, in your own browser only.
       </p>
-      <ul className="divide-y rounded-md border">
+      <ItemGroup className="rounded-md border">
         {urls.map((url, index) => (
-          <li
-            key={`${url}:${index}`}
-            className="flex min-w-0 flex-wrap items-center gap-2 p-2 text-sm"
-          >
-            <span className="min-w-0 flex-1 break-all">{url}</span>
-            <SiteSignIn url={url} />
-          </li>
+          <Fragment key={`${url}:${index}`}>
+            {index > 0 ? <ItemSeparator /> : null}
+            <Item role="listitem" className="min-w-0 gap-2 rounded-none p-2">
+              <ItemContent className="min-w-0">
+                <ItemTitle className="w-auto font-normal break-all">
+                  {url}
+                </ItemTitle>
+              </ItemContent>
+              <SiteSignIn url={url} />
+            </Item>
+          </Fragment>
         ))}
-      </ul>
+      </ItemGroup>
     </section>
   );
 }

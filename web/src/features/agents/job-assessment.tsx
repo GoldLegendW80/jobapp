@@ -9,14 +9,7 @@
  * /api/agents/runs?job_id=&agent=triage), and the proposals are polled while it runs.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Check,
-  LoaderCircle,
-  Pencil,
-  Sparkles,
-  X,
-  type LucideIcon,
-} from "lucide-react";
+import { Check, Pencil, Sparkles, X, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -24,6 +17,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { jobKey, jobsKey, type JobDetail } from "@/features/jobs/api";
 import { statusLabel } from "@/features/jobs/labels";
@@ -232,7 +226,7 @@ function ProposalCard({
                 }}
               >
                 {reject.isPending ? (
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                 ) : (
                   <X aria-hidden="true" />
                 )}
@@ -270,7 +264,7 @@ function ActionButton({
       onClick={onClick}
     >
       {busy ? (
-        <LoaderCircle aria-hidden="true" className="animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
       ) : (
         <Icon aria-hidden="true" />
       )}
@@ -362,7 +356,7 @@ export function JobAssessment({ job }: { job: JobDetail }) {
           }}
         >
           {start.isPending || running ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
           ) : (
             <Sparkles aria-hidden="true" />
           )}

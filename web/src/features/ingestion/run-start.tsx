@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -13,6 +13,7 @@ import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -21,7 +22,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Field,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 import { errorDetail, isApiError } from "@/lib/api";
+import { cn } from "@/lib/utils";
+import { WORDING } from "@/lib/wording";
 
 import {
   documentsKey,
@@ -55,7 +65,11 @@ import {
 /** The heading of the run on the page (run-progress.tsx): it takes the focus after a start. */
 export const RUN_HEADING_ID = "run-heading";
 
-const CHECKBOX = "mt-0.5 size-4 shrink-0 accent-primary";
+/**
+ * The label of a box that names a document: the whole of it, its name and the line under it,
+ * is the box's name and ticks it.
+ */
+const TWO_LINES = "min-w-0 flex-col items-start gap-0 font-normal";
 
 /**
  * Step 3, first part: choosing the documents and starting a run. Nothing is sent to a model
@@ -76,6 +90,7 @@ export function RunStart() {
   const [chosen, setChosen] = useState<readonly string[]>([]);
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
+  const boxes = useId();
 
   if (runs.isPending || documents.isPending)
     return (
@@ -83,7 +98,7 @@ export function RunStart() {
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
         Loading
       </p>
     );
@@ -115,7 +130,9 @@ export function RunStart() {
   return (
     <section aria-labelledby="start-heading" className="flex flex-col gap-3">
       <h3 id="start-heading" className="text-base font-semibold tracking-tight">
-        {runs.data.runs.length > 0 ? "Start another run" : "Start a run"}
+        {runs.data.runs.length > 0
+          ? WORDING.startAnotherReading
+          : WORDING.startReading}
       </h3>
       <p className="text-sm text-muted-foreground">
         Choose the documents the agent reads, in the order you want them read.
@@ -133,22 +150,29 @@ export function RunStart() {
         </p>
       ) : (
         <>
-          <fieldset className="flex flex-col gap-2">
-            <legend className="sr-only">Documents to read</legend>
+          <FieldSet className="gap-2">
+            <FieldLegend className="sr-only">Documents to read</FieldLegend>
             <ul className="flex flex-col divide-y rounded-lg border">
               {items.map((one) => (
                 <li key={one.id} className="min-w-0 px-3 py-2">
-                  <label className="flex min-w-0 items-start gap-3 text-sm">
-                    <input
-                      type="checkbox"
-                      className={CHECKBOX}
+                  <Field
+                    orientation="horizontal"
+                    className="min-w-0 items-start"
+                    data-disabled={!canBeChosen(one) || undefined}
+                  >
+                    <Checkbox
+                      id={`${boxes}-${one.id}`}
+                      className="mt-0.5"
                       checked={selected.includes(one.id)}
                       disabled={!canBeChosen(one)}
-                      onChange={(event) => {
-                        toggle(one.id, event.target.checked);
+                      onCheckedChange={(state) => {
+                        toggle(one.id, state === true);
                       }}
                     />
-                    <span className="flex min-w-0 flex-col">
+                    <FieldLabel
+                      htmlFor={`${boxes}-${one.id}`}
+                      className={TWO_LINES}
+                    >
                       <span className="font-medium break-words">
                         {one.name}
                       </span>
@@ -158,12 +182,12 @@ export function RunStart() {
                           ? null
                           : `. ${statusView(one).label}: it cannot be read yet`}
                       </span>
-                    </span>
-                  </label>
+                    </FieldLabel>
+                  </Field>
                 </li>
               ))}
             </ul>
-          </fieldset>
+          </FieldSet>
           <div className="flex flex-wrap items-center gap-2">
             <Button
               ref={opener}
@@ -447,10 +471,7 @@ export function StartDialog({
               role="status"
               className="flex items-center gap-2 text-sm text-muted-foreground"
             >
-              <LoaderCircle
-                aria-hidden="true"
-                className="size-4 animate-spin"
-              />
+              <Spinner aria-hidden="true" role={undefined} />
               Computing the estimate
             </p>
           )
@@ -497,22 +518,20 @@ export function StartDialog({
                 tick the box if you agree.
               </p>
             ) : null}
-            <label
-              htmlFor={boxId}
-              className="flex items-start gap-3 text-sm font-medium"
-            >
-              <input
+            <Field orientation="horizontal" className="items-start">
+              <Checkbox
                 id={boxId}
-                type="checkbox"
-                className={CHECKBOX}
+                className="mt-0.5"
                 checked={ticked}
                 disabled={start.isPending}
-                onChange={(event) => {
-                  setTickedVersion(event.target.checked ? text.version : null);
+                onCheckedChange={(state) => {
+                  setTickedVersion(state === true ? text.version : null);
                 }}
               />
-              I have read this and I agree to send the selected documents
-            </label>
+              <FieldLabel htmlFor={boxId}>
+                I have read this and I agree to send the selected documents
+              </FieldLabel>
+            </Field>
           </section>
         )}
 
@@ -536,7 +555,7 @@ export function StartDialog({
             }}
           >
             {start.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : (
               <Play aria-hidden="true" />
             )}
@@ -566,6 +585,7 @@ function EstimateView({
   onReread: (id: string, on: boolean) => void;
 }) {
   const { cost, limits } = estimate;
+  const boxes = useId();
   return (
     <div className="flex flex-col gap-4 text-sm" data-testid="estimate">
       {estimate.blockers.length > 0 ? (
@@ -612,23 +632,30 @@ function EstimateView({
                   </span>
                 ) : null}
                 {one.reused_steps > 0 || again ? (
-                  <label className="flex items-start gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      className={CHECKBOX}
+                  <Field
+                    orientation="horizontal"
+                    className="items-start gap-2"
+                    data-disabled={busy || undefined}
+                  >
+                    <Checkbox
+                      id={`${boxes}-${one.id}`}
+                      className="mt-px"
                       checked={again}
                       disabled={busy}
-                      onChange={(event) => {
-                        onReread(one.id, event.target.checked);
+                      onCheckedChange={(state) => {
+                        onReread(one.id, state === true);
                       }}
                     />
-                    <span>
-                      Read {one.name} again
-                      <span className="block text-muted-foreground">
+                    <FieldLabel
+                      htmlFor={`${boxes}-${one.id}`}
+                      className={cn(TWO_LINES, "text-xs")}
+                    >
+                      <span>Read {one.name} again</span>
+                      <span className="text-muted-foreground">
                         Reading it again uses tokens again.
                       </span>
-                    </span>
-                  </label>
+                    </FieldLabel>
+                  </Field>
                 ) : null}
               </li>
             );

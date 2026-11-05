@@ -100,6 +100,37 @@ function show(
   return { state, opened, tickets, client, router, refresh };
 }
 
+describe("completing a profile on a site, in words", () => {
+  it("says the state and the problem in sentences, never their codes", async () => {
+    const { state } = show(FREE);
+    state.run = {
+      ...fixture(),
+      state: "failed",
+      error_code: "fill_interrupted",
+    };
+    expect(
+      await screen.findByText("Stopped before the end."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The filling stopped before it ended. Start again when you are ready.",
+    );
+    expect(document.body).not.toHaveTextContent(
+      /fill.interrupted|profile run/i,
+    );
+  });
+
+  it("names the Stop button by what it stops", async () => {
+    const { state } = show(FREE);
+    state.run = { ...fixture(), state: "ready" };
+    expect(await screen.findByText("Ready for your review.")).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: "Stop completing my profile on this site",
+      }),
+    ).toBeEnabled();
+  });
+});
+
 describe("site profile run live view readiness", () => {
   it.each([
     [

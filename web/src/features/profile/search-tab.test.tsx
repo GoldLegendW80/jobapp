@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { setSlider } from "@/test/slider";
 
 import type { Search, Weekday } from "./api";
 
@@ -50,15 +51,19 @@ describe("search tab: terms and preferences", () => {
     expect(
       screen.getByRole("list", { name: "Terms of Unwanted places" }),
     ).toHaveTextContent("United States");
-    expect(
-      screen.getByRole("button", { name: "CDI (permanent)" }),
-    ).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Permanent" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     expect(screen.getByRole("button", { name: "VIE" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
     expect(screen.getByLabelText("Remote stance")).toHaveValue("any");
-    expect(screen.getByLabelText("Minimum fit")).toHaveValue("70");
+    expect(screen.getByLabelText("Minimum fit")).toHaveAttribute(
+      "aria-valuenow",
+      "70",
+    );
     expect(screen.getByLabelText("Posting age window (days)")).toHaveValue(
       "30",
     );
@@ -83,16 +88,14 @@ describe("search tab: terms and preferences", () => {
     );
     await user.click(screen.getByRole("button", { name: "Remove Remote" }));
     await user.click(screen.getByRole("button", { name: "VIE" }));
-    await user.click(screen.getByRole("button", { name: "Freelance" }));
-    await user.click(screen.getByRole("button", { name: "CDD (fixed term)" }));
+    await user.click(screen.getByRole("button", { name: "Freelance mission" }));
+    await user.click(screen.getByRole("button", { name: "Fixed term" }));
     expect(screen.getByRole("button", { name: "VIE" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
     await user.selectOptions(screen.getByLabelText("Remote stance"), "hybrid");
-    fireEvent.change(screen.getByLabelText("Minimum fit"), {
-      target: { value: "82" },
-    });
+    setSlider(screen.getByLabelText("Minimum fit"), 82);
     expect(screen.getByText("82 / 100")).toBeVisible();
     const days = screen.getByLabelText("Posting age window (days)");
     await user.clear(days);
@@ -115,7 +118,9 @@ describe("search tab: terms and preferences", () => {
     expect(data.min_fit).toBe(82);
     expect(data.days).toBe(14);
     expect(data.never_apply).toEqual(haraldLike().search.never_apply);
-  });
+    // Much typing through user-event: about 4 to 5 s alone on the dev machine (4.7 s before
+    // chapter 2 too), past the 5 s default when the whole suite runs in parallel.
+  }, 15_000);
 
   it("refuses a days window outside 1 to 365 and accepts no stance", async () => {
     const { user, state } = await openSearch();
@@ -136,7 +141,9 @@ describe("search tab: terms and preferences", () => {
     await screen.findByText("Search saved.");
     expect(saved(state).remote_stance).toBeNull();
     expect(saved(state).days).toBe(365);
-  });
+    // Much typing through user-event: about 4 to 5 s alone on the dev machine (4.7 s before
+    // chapter 2 too), past the 5 s default when the whole suite runs in parallel.
+  }, 15_000);
 
   it("puts the server's regex error under the right title chip", async () => {
     const { user } = await openSearch();
@@ -203,7 +210,10 @@ describe("search tab: terms and preferences", () => {
     // The four lists (job titles, unwanted titles, places, unwanted places), and the industries
     // kept mounted under Advanced.
     expect(screen.getAllByText("No term yet.")).toHaveLength(5);
-    expect(screen.getByLabelText("Minimum fit")).toHaveValue("70");
+    expect(screen.getByLabelText("Minimum fit")).toHaveAttribute(
+      "aria-valuenow",
+      "70",
+    );
     await user.type(
       screen.getByLabelText("New term for Job titles"),
       "ai engineer{enter}",
@@ -283,7 +293,7 @@ describe("search tab: automatic search", () => {
     expect(saved(state).sweep_schedule).toEqual(ON);
     expect(saved(state).days).toBe(14);
     // And again after the form was reset from the saved version.
-    await user.click(screen.getByRole("button", { name: "CDD (fixed term)" }));
+    await user.click(screen.getByRole("button", { name: "Fixed term" }));
     await user.click(save());
     await waitFor(() => {
       expect(state.saves).toHaveLength(2);

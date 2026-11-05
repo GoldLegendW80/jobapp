@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Fragment } from "react";
-import { CircleAlert, LoaderCircle, RotateCw } from "lucide-react";
+import { CircleAlert, RotateCw } from "lucide-react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
   TableBody,
@@ -25,7 +26,7 @@ import {
   type AgentSummary,
 } from "./agents-api";
 import { message } from "./errors";
-import { exactTime, relativeTime } from "./relative-time";
+import { Moment } from "./moment";
 
 /**
  * Admin, Agents: every agent of the app, what it runs on and when it last ran, grouped by
@@ -56,7 +57,7 @@ export function AdminAgentsPage() {
           className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading agents
           </span>
         </p>
@@ -247,12 +248,7 @@ function AgentsTable({
             </TableCell>
             <TableCell label="Last run" className="lg:whitespace-nowrap">
               {agent.last_run_at ? (
-                <time
-                  dateTime={agent.last_run_at}
-                  title={exactTime(agent.last_run_at)}
-                >
-                  {relativeTime(agent.last_run_at, now)}
-                </time>
+                <Moment at={agent.last_run_at} now={now} />
               ) : (
                 "Never"
               )}

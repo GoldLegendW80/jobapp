@@ -84,7 +84,10 @@ describe("reasonLine", () => {
 describe("the words", () => {
   it("say the card in one line for a screen reader", () => {
     expect(cardLabel(makeCard(1))).toBe(
-      "Example Role 1 at Example Robotics 1, Lyon, France, Permanent, Fit 89",
+      "Example Role 1 at Example Robotics 1, Lyon, France, Permanent, Pay not given, Fit 89",
+    );
+    expect(cardLabel(makeCard(1, { pay: "600 EUR a day" }))).toBe(
+      "Example Role 1 at Example Robotics 1, Lyon, France, Permanent, 600 EUR a day, Fit 89",
     );
     expect(cardLabel(makeCard(2, { fit: null }))).toContain("Not scored yet");
   });

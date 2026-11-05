@@ -77,10 +77,21 @@ export const canCancel = (item: QueueItem) =>
     isDeciding(item)) &&
   !isHeld(item);
 
-/** What only the posting's page can do: the live view, "It was submitted", "Try again". */
+/**
+ * What the posting's page shows and the card does not: the live view, the run report and the
+ * screenshot after the click. An item after the click also offers its decisions on the card.
+ */
 export const needsPostingPage = (item: QueueItem) =>
   item.mode === "manual" ||
   ["needs_person", "refused_by_site", "submit_unknown"].includes(item.state);
+
+/** The app could not confirm the click: the person says it was submitted (the posting's "unknown"). */
+export const canConfirmSubmitted = (item: QueueItem) =>
+  item.state === "submit_unknown";
+
+/** "Try again" after the click, as on the posting's page: a new approval, never the same one. */
+export const canRetry = (item: QueueItem) =>
+  item.state === "submit_unknown" || item.state === "refused_by_site";
 
 const FITS: Record<string, string> = {
   one_page: "fits on one page",

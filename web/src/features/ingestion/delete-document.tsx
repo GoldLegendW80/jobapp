@@ -1,5 +1,4 @@
 import { useMutation } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
 import { useRef, useState, type RefObject } from "react";
 
 import {
@@ -11,6 +10,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 
 import {
   deleteDocument,
@@ -147,7 +147,7 @@ function Ask({
             }}
           >
             {mutation.isPending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+              <Spinner aria-hidden="true" role={undefined} />
             ) : null}
             Delete for good
           </Button>

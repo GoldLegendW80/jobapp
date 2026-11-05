@@ -842,7 +842,9 @@ describe("the review of a run's proposals", () => {
     const body = api.calls[0]?.body as { proposal_ids: string[] };
     expect(body.proposal_ids).toHaveLength(2 * PAGE);
     expect(api.count("pending")).toBe(200);
-  });
+    // 100 proposals in the page, as the test below: about 4 s alone, past the 5 s default on a
+    // loaded machine, before this batch as after it.
+  }, 20_000);
 
   it("says how many a bulk accept takes when the section holds more than is shown", async () => {
     const many = Array.from({ length: 120 }, (_, index) =>
@@ -892,7 +894,9 @@ describe("the review of a run's proposals", () => {
         name: "Reject the rest of this section: Facts",
       }),
     ).toBeInTheDocument();
-  });
+    // 120 proposals in the page and three rounds of role queries over them: a heavy render in
+    // jsdom, at the edge of the 5 s default already before chapter 2's larger shell.
+  }, 20_000);
 
   it("is usable with the keyboard alone and keeps the focus on the proposal decided", async () => {
     const api = fakeApi([item("headline", "Engineer")]);

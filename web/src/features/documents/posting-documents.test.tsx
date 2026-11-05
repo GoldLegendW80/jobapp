@@ -444,7 +444,7 @@ describe("the Documents section of a posting", () => {
     ]);
     const { section } = await openSection();
     expect(within(section).getByTestId("posting-cv")).toHaveTextContent(
-      /Sent on Oct 12, 2026/,
+      /Sent on 12 Oct 2026/,
     );
   });
 

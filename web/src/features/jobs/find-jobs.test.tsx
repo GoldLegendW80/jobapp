@@ -212,7 +212,7 @@ describe("Find jobs", () => {
     await startSearch(user);
 
     const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
+      name: "Search in progress",
     });
     await waitFor(() => {
       // The one source running is named, whatever `current_board` still says.
@@ -251,7 +251,7 @@ describe("Find jobs", () => {
       expect(jobs.requests.length).toBeGreaterThan(before);
     });
     expect(
-      screen.queryByRole("region", { name: "Sweep in progress" }),
+      screen.queryByRole("region", { name: "Search in progress" }),
     ).not.toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: "Done" }));
@@ -320,7 +320,7 @@ describe("Find jobs", () => {
     const user = userEvent.setup();
     await startSearch(user);
     const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
+      name: "Search in progress",
     });
     expect(progress).toHaveTextContent("Searching job websites");
     expect(progress).toHaveTextContent(
@@ -574,7 +574,7 @@ describe("Find jobs", () => {
     await openJobs();
     await startSearch();
     expect(
-      await screen.findByText("A sweep is already running: following it."),
+      await screen.findByText("A search is already running: showing it."),
     ).toBeInTheDocument();
     expect(
       await screen.findByRole("dialog", { name: "No new posting" }),
@@ -638,7 +638,7 @@ describe("Find jobs", () => {
     await startSearch();
     expect(
       await screen.findByText(
-        /The search did not start\. The API answered 503/,
+        /The search did not start\. The sweep could not be queued\. Try again in a minute\./,
       ),
     ).toBeInTheDocument();
     expect(
@@ -663,7 +663,7 @@ describe("Find jobs", () => {
     fakeSweeps({ list: [running], states: [running, finished()] });
     await openJobs();
     const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
+      name: "Search in progress",
     });
     expect(progress).toHaveTextContent(/2 of 3 websites searched/);
     const bar = within(progress).getByRole("progressbar", {
@@ -694,7 +694,7 @@ describe("Find jobs", () => {
     await openJobs();
     await startSearch();
     const dialog = await screen.findByRole("dialog", {
-      name: "The sweep stopped",
+      name: "The search stopped",
     });
     expect(dialog).toHaveTextContent(
       "The sweep took too long and was stopped.",
@@ -714,7 +714,7 @@ describe("Find jobs", () => {
     await startSearch();
     await waitFor(() => {
       expect(
-        screen.queryByRole("region", { name: "Sweep in progress" }),
+        screen.queryByRole("region", { name: "Search in progress" }),
       ).not.toBeInTheDocument();
     });
     const seen = calls.detail;
@@ -724,7 +724,7 @@ describe("Find jobs", () => {
   });
 });
 
-describe("Sweep history", () => {
+describe("Past searches", () => {
   it("lists the last sweeps with the automatic schedule and opens one", async () => {
     fakeSweeps({
       schedule: {
@@ -759,15 +759,15 @@ describe("Sweep history", () => {
     });
     await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Sweep history" }));
-    const dialog = await screen.findByRole("dialog", { name: "Sweeps" });
+    await user.click(screen.getByRole("button", { name: "Past searches" }));
+    const dialog = await screen.findByRole("dialog", { name: "Past searches" });
     expect(
       within(dialog).getByRole("region", { name: "Automatic search" }),
     ).toHaveTextContent(
       "Automatic search: on, every day at 06:17 (Europe/Paris). Next: Sat 10 Oct, 06:17 (Europe/Paris).",
     );
     const items = within(
-      within(dialog).getByRole("list", { name: "Last sweeps" }),
+      within(dialog).getByRole("list", { name: "Last searches" }),
     ).getAllByRole("button");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent(/Automatic, Done/);
@@ -784,10 +784,58 @@ describe("Sweep history", () => {
     await openJobs();
     await userEvent
       .setup()
-      .click(screen.getByRole("button", { name: "Sweep history" }));
-    const dialog = await screen.findByRole("dialog", { name: "Sweeps" });
+      .click(screen.getByRole("button", { name: "Past searches" }));
+    const dialog = await screen.findByRole("dialog", { name: "Past searches" });
     expect(dialog).toHaveTextContent("Automatic search: off.");
-    expect(dialog).toHaveTextContent("No sweep yet.");
+    expect(dialog).toHaveTextContent("No search yet.");
+    // The word "sweep" is not in what the person reads.
+    expect(dialog.textContent).not.toMatch(/sweep/i);
+  });
+});
+
+describe("Find jobs on an empty list", () => {
+  const emptyList = () =>
+    screen.findByRole("region", { name: "No postings yet." });
+
+  it("opens the setup from the empty list's Find jobs, and gives the focus back to it", async () => {
+    fakeSweeps({ list: [] });
+    fakeJobsApi([]);
+    const user = userEvent.setup();
+    renderApp("/jobs");
+    const find = within(await emptyList()).getByRole("button", {
+      name: "Find jobs",
+    });
+    await user.click(find);
+    const setup = await screen.findByRole("dialog", { name: "Find jobs" });
+    await user.click(
+      await within(setup).findByRole("button", { name: "Cancel" }),
+    );
+    await waitFor(() => {
+      expect(find).toHaveFocus();
+    });
+  });
+
+  it("opens the setup at once from /jobs?find=1 and drops the word from the address", async () => {
+    // The wizard's "Start with an empty list" and Discover's empty deck send here.
+    fakeSweeps({ list: [] });
+    fakeJobsApi([]);
+    const user = userEvent.setup();
+    const { location } = renderApp("/jobs?find=1");
+    const setup = await screen.findByRole("dialog", { name: "Find jobs" });
+    await waitFor(() => {
+      expect(location()).toBe("/jobs");
+    });
+    await user.click(
+      await within(setup).findByRole("button", { name: "Cancel" }),
+    );
+    // Opened by the address, it gives the focus to the Find jobs on the page.
+    await waitFor(() => {
+      expect(
+        within(
+          screen.getByRole("region", { name: "No postings yet." }),
+        ).getByRole("button", { name: "Find jobs" }),
+      ).toHaveFocus();
+    });
   });
 });
 
@@ -830,10 +878,12 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
     });
     await openJobs();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "Sweep history" }));
-    const history = await screen.findByRole("dialog", { name: "Sweeps" });
+    await user.click(screen.getByRole("button", { name: "Past searches" }));
+    const history = await screen.findByRole("dialog", {
+      name: "Past searches",
+    });
     const [item] = within(
-      within(history).getByRole("list", { name: "Last sweeps" }),
+      within(history).getByRole("list", { name: "Last searches" }),
     ).getAllByRole("button");
     expect(item).toHaveTextContent(/By hand, Done/);
     expect(item).not.toHaveTextContent(/websites only/i);
@@ -892,7 +942,7 @@ describe("Find jobs with sources read side by side", () => {
     const user = userEvent.setup();
     await startSearch(user);
     const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
+      name: "Search in progress",
     });
     expect(progress).toHaveTextContent("Reading 3 sources");
     expect(progress).toHaveTextContent(/0 of 4 sources searched/);
@@ -919,7 +969,7 @@ describe("Find jobs with sources read side by side", () => {
     const user = userEvent.setup();
     await startSearch(user);
     const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
+      name: "Search in progress",
     });
     expect(progress).toHaveTextContent("Reading careers.example.org");
     expect(progress).not.toHaveTextContent(/Reading \d+ sources/);
@@ -960,7 +1010,7 @@ describe("Find jobs with sources read side by side", () => {
     const user = userEvent.setup();
     await startSearch(user);
     const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
+      name: "Search in progress",
     });
     expect(progress).toHaveTextContent("Reading LinkedIn");
     expect(progress).not.toHaveTextContent("Example Labs");
@@ -970,6 +1020,8 @@ describe("Find jobs with sources read side by side", () => {
 
 describe("Find jobs with job feeds", () => {
   it("counts the job feeds with the websites and lists them in the summary", async () => {
+    // Slow enough that the progress line is seen before the end, as in the first test.
+    sweepTiming.pollMs = 300;
     const feed = (
       kind: string,
       phase: string,
@@ -1011,7 +1063,7 @@ describe("Find jobs with job feeds", () => {
     const user = userEvent.setup();
     await startSearch(user);
     const progress = await screen.findByRole("region", {
-      name: "Sweep in progress",
+      name: "Search in progress",
     });
     expect(progress).toHaveTextContent(/0 of 3 sources searched/);
     const dialog = await screen.findByRole("dialog", {

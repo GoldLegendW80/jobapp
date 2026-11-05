@@ -108,16 +108,16 @@ describe("multi-select", () => {
     expect(screen.queryByRole("region", { name: "Bulk actions" })).toBeNull();
     await user.click(rowBoxes()[1]!);
     expect(within(bar()).getByText("1 posting selected")).toBeVisible();
+    // Some of the view is selected: the header box says so, half ticked.
+    expect(
+      within(table()).getByRole("checkbox", { name: "Clear the selection" }),
+    ).toBePartiallyChecked();
     await user.keyboard("{Shift>}");
     await user.click(rowBoxes()[5]!);
     await user.keyboard("{/Shift}");
     expect(within(bar()).getByText("5 postings selected")).toBeVisible();
-    expect(
-      rowBoxes()
-        .slice(1, 6)
-        .every((b) => (b as HTMLInputElement).checked),
-    ).toBe(true);
-    expect((rowBoxes()[0] as HTMLInputElement).checked).toBe(false);
+    for (const box of rowBoxes().slice(1, 6)) expect(box).toBeChecked();
+    expect(rowBoxes()[0]).not.toBeChecked();
     // Shift again unselects a range from the last click.
     fireEvent.click(rowBoxes()[3]!, { shiftKey: true });
     expect(within(bar()).getByText("2 postings selected")).toBeVisible();
@@ -194,7 +194,7 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "shortlisted",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     // Optimistic: the rows show the new status before the api answers.
     const badges = () =>
       Array.from(table().querySelectorAll("[data-status]")).map((b) =>
@@ -227,12 +227,14 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "skipped",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     expect(table().querySelector("[data-status]")).toHaveAttribute(
       "data-status",
       "skipped",
     );
-    await screen.findByText(/Nothing was changed\. The API answered 500/);
+    await screen.findByText(
+      /Nothing was changed\. Something went wrong on the server\. Try again in a moment\./,
+    );
     expect(table().querySelector("[data-status]")).toHaveAttribute(
       "data-status",
       "found",
@@ -250,7 +252,7 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "applied",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("Mark 2 postings as applied?");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -301,7 +303,7 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "closed",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     const toast = await screen.findByText("1 posting set to Closed.");
     await user.click(
       within(toast.closest("[data-sonner-toast]") as HTMLElement).getByRole(
@@ -385,10 +387,13 @@ describe("add a posting", () => {
     const dialog = await screen.findByRole("dialog");
     await user.type(within(dialog).getByLabelText("Company"), "Anthropic");
     await user.type(within(dialog).getByLabelText("Title"), "Engineer 2");
-    await user.selectOptions(
-      within(dialog).getByLabelText("Contract type"),
-      "CDI",
-    );
+    // The contracts read as words ("Permanent"); the code is the value sent.
+    const contract = within(dialog).getByLabelText("Contract type");
+    expect(
+      within(contract).getByRole("option", { name: "Permanent" }),
+    ).toHaveValue("CDI");
+    expect(contract).not.toHaveTextContent(/\b(CDI|CDD|Stage|Alternance)\b/);
+    await user.selectOptions(contract, "CDI");
     await user.click(
       within(dialog).getByRole("button", { name: "Add posting" }),
     );

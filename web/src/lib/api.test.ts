@@ -119,9 +119,8 @@ describe("request: http errors", () => {
       status: "error",
       detail: "database unavailable",
     });
-    expect(describeError(error)).toBe(
-      "The API answered 503: database unavailable.",
-    );
+    // A 503 keeps the api's detail (the api writes them for people), as one sentence.
+    expect(describeError(error)).toBe("database unavailable.");
   });
 
   it("keeps a non JSON error body as text", async () => {
@@ -136,13 +135,18 @@ describe("request: http errors", () => {
     expect(error.kind).toBe("http");
     expect(error.status).toBe(502);
     expect(error.body).toBe("<html><body>502 Bad Gateway</body></html>");
-    expect(describeError(error)).toBe("The API answered 502.");
+    expect(describeError(error)).toBe(
+      "Something went wrong on the server. Try again in a moment.",
+    );
   });
 
   it("handles an error with an empty body", async () => {
     health(() => new HttpResponse(null, { status: 500 }));
     const error = await failure(getHealth());
     expect(error).toMatchObject({ kind: "http", status: 500, body: undefined });
+    expect(describeError(error)).toBe(
+      "Something went wrong on the server. Try again in a moment.",
+    );
   });
 
   it("ignores a detail that is not a string", async () => {
@@ -150,8 +154,43 @@ describe("request: http errors", () => {
       HttpResponse.json({ detail: [{ msg: "bad" }] }, { status: 422 }),
     );
     expect(describeError(await failure(getHealth()))).toBe(
-      "The API answered 422.",
+      "The server refused this request.",
     );
+  });
+
+  it.each([
+    [500, "Internal Server Error"],
+    [502, "Bad gateway"],
+    [504, "Gateway timeout"],
+  ])("never shows the detail or the code of a %i", async (status, detail) => {
+    health(() => HttpResponse.json({ detail }, { status }));
+    const sentence = describeError(await failure(getHealth()));
+    expect(sentence).toBe(
+      "Something went wrong on the server. Try again in a moment.",
+    );
+    expect(sentence).not.toMatch(/\d{3}|API/);
+  });
+
+  it.each([
+    ["The posting is gone.", "The posting is gone."],
+    ["Not saved", "Not saved."],
+    ["Boom.", "Boom."],
+    ["Is this right?", "Is this right?"],
+    ["  Spaces around.  ", "Spaces around."],
+  ])("keeps a 4xx detail %j as one sentence", async (detail, expected) => {
+    health(() => HttpResponse.json({ detail }, { status: 409 }));
+    expect(describeError(await failure(getHealth()))).toBe(expected);
+  });
+
+  it.each([
+    [403, "You are not allowed to do this."],
+    [404, "This was not found. It may have been removed."],
+    [409, "This changed in the meantime. Reload the page, then try again."],
+    [429, "Too many requests at once. Wait a moment, then try again."],
+    [418, "The server refused this request."],
+  ])("says what a %i without a detail means", async (status, expected) => {
+    health(() => new HttpResponse(null, { status }));
+    expect(describeError(await failure(getHealth()))).toBe(expected);
   });
 });
 
@@ -193,7 +232,7 @@ describe("request: unreadable success bodies", () => {
     expect(error.kind).toBe("parse");
     expect(error.body).toEqual(body);
     expect(describeError(error)).toBe(
-      "The API sent a response this page cannot read.",
+      "The server sent an answer this page cannot read.",
     );
   });
 });
@@ -204,7 +243,9 @@ describe("request: no response", () => {
     const error = await failure(getHealth());
     expect(error.kind).toBe("network");
     expect(error.status).toBeUndefined();
-    expect(describeError(error)).toBe("The API could not be reached.");
+    expect(describeError(error)).toBe(
+      "The app cannot reach the server. Check your connection, then try again.",
+    );
   });
 
   it("aborts after the timeout when the server never answers", async () => {
@@ -216,7 +257,9 @@ describe("request: no response", () => {
     const error = await failure(getHealth({ timeoutMs: 50 }));
     expect(error.kind).toBe("timeout");
     expect(Date.now() - started).toBeLessThan(2000);
-    expect(describeError(error)).toBe("The API did not answer in time.");
+    expect(describeError(error)).toBe(
+      "The server is slow to answer. Try again.",
+    );
   });
 
   it("times out a body that starts and then stalls", async () => {

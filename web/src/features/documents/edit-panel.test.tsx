@@ -992,11 +992,7 @@ describe("the Edit view", () => {
       "Platform engineer",
     );
     client.setQueryData(documentKey("doc-2"), other);
-    rerender(
-      <QueryClientProvider client={client}>
-        {view("doc-2")}
-      </QueryClientProvider>,
-    );
+    rerender(view("doc-2"));
     expect(screen.getByLabelText("Headline")).toHaveValue("Data engineer");
     await retype(user, "Summary", "Typed in the second document.");
     await waitFor(() => {

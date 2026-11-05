@@ -353,6 +353,11 @@ test("steps 2 to 5 by keyboard, and Back keeps every value", async () => {
   await press(pageN.getByRole("button", { name: "Skip this step" }), "Enter");
 
   await step(pageN, 5);
+  // One group of contracts, Freelance mission its last box (audit chapter 2).
+  await expect(
+    pageN.getByRole("group", { name: "Contracts (choose any)" }),
+  ).toBeVisible();
+  await expect(pageN.getByText("Freelance work")).toHaveCount(0);
   await press(
     pageN.getByRole("checkbox", { name: "Freelance mission" }),
     "Space",
@@ -407,6 +412,16 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
   await expect(
     pageN.getByRole("radio", { name: /Review first/ }),
   ).toBeChecked();
+  // What a Like does, then the Apply click's review box, unticked by default (2026-11-01).
+  await expect(
+    pageN.getByText(/A Like on a posting in Discover asks the app/),
+  ).toBeVisible();
+  const review = pageN
+    .getByRole("group", { name: "When you click Apply on a posting" })
+    .getByRole("checkbox", {
+      name: "Let me review each filled form before it is sent",
+    });
+  await expect(review).not.toBeChecked();
   await press(pageN.getByRole("radio", { name: "Warm" }), "Space");
   await noDash(pageN);
   await shots(pageN, "step-7");
@@ -418,6 +433,11 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
   await expect(summary).toContainText("Paris; Hybrid");
   await expect(summary).toContainText("Freelance mission, Permanent");
   await expect(summary).toContainText("Rather not say");
+  await expect(summary).toContainText(
+    "Review first after a Like; Apply sends each filled form for you",
+  );
+  // N saved a model key in step 1: the summary asks for none.
+  await expect(pageN.getByLabel("API key", { exact: true })).toHaveCount(0);
   // N skipped Websites to search: the summary says the list is empty.
   await expect(summary).toContainText("Nothing yet");
   await expect(
@@ -454,8 +474,10 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
     await pageN.request.get("/api/apply/settings")
   ).json()) as {
     mode_after_like: string;
+    review_before_send: boolean;
   };
   expect(settings.mode_after_like).toBe("review");
+  expect(settings.review_before_send).toBe(false);
   expect((await stateOf(pageN)).completed_at).not.toBeNull();
 });
 
@@ -512,6 +534,17 @@ test("B, with roles and no website, ends the wizard without a sweep", async () =
   await expect(
     pageB.getByText(/Your list of websites is empty, so the first search/),
   ).toBeVisible();
+  // No key saved: the optional key form shows just before Start, which works without it.
+  const key = pageB.getByRole("form", {
+    name: "Your Anthropic API key (optional)",
+  });
+  await expect(key).toBeVisible();
+  await expect(key.getByLabel("API key", { exact: true })).toHaveAttribute(
+    "type",
+    "password",
+  );
+  await noDash(pageB);
+  await shots(pageB, "summary-key");
   await press(pageB.getByRole("button", { name: "Start" }), "Enter");
   await expect(pageB.getByText(NO_WEBSITES)).toBeVisible();
   await expect(pageB).toHaveURL(/\/jobs$/);

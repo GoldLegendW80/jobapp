@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { absoluteTime, relativeTime } from "@/features/profile/when";
 import { fakeSession, member } from "@/test/auth";
 import { fakeDocument, fakeDocuments, LIMITS } from "@/test/ingestion";
 import { renderApp } from "@/test/render";
@@ -63,6 +64,17 @@ describe("documents: the list", () => {
       screen.getByText("No document yet. Add a file or paste a text above."),
     ).toBeVisible();
     expect(screen.queryByText(/used$/)).toBeNull();
+  });
+
+  it("gives the exact time a document was added on hover of its age", async () => {
+    const added = "2026-10-01T08:30:00Z";
+    const { user } = await open([
+      fakeDocument({ name: "dated.md", created_at: added }),
+    ]);
+    await user.hover(row("dated.md").getByText(relativeTime(added)));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      absoluteTime(added),
+    );
   });
 
   it("says exactly who can see the documents", async () => {
@@ -407,7 +419,7 @@ describe("documents: adding files", () => {
     const { state } = await open();
     const zone = screen
       .getByRole("heading", { name: "Drop files here, or choose them" })
-      .closest("div") as HTMLElement;
+      .closest("[data-slot=empty]") as HTMLElement;
     fireEvent.dragOver(zone, { dataTransfer: { files: [], items: [] } });
     expect(zone).toHaveAttribute("data-over", "true");
     fireEvent.dragLeave(zone, { relatedTarget: document.body });
@@ -425,7 +437,7 @@ describe("documents: adding files", () => {
     await open();
     const zone = screen
       .getByRole("heading", { name: "Drop files here, or choose them" })
-      .closest("div") as HTMLElement;
+      .closest("[data-slot=empty]") as HTMLElement;
     fireEvent.dragOver(zone, { dataTransfer: { files: [], items: [] } });
     // jsdom has no DragEvent: a mouse event carries the element the pointer went to.
     fireEvent(
@@ -450,7 +462,7 @@ describe("documents: adding files", () => {
     const { state } = await open();
     const zone = screen
       .getByRole("heading", { name: "Drop files here, or choose them" })
-      .closest("div") as HTMLElement;
+      .closest("[data-slot=empty]") as HTMLElement;
     const file = text("beside the folder", "beside.md");
     fireEvent.drop(zone, {
       dataTransfer: {

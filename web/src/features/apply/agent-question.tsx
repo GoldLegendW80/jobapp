@@ -1,6 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { describeError } from "@/lib/api";
 import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
 
@@ -34,6 +37,7 @@ export function AgentQuestion({
   question: Question;
 }) {
   const client = useQueryClient();
+  const id = useId();
   const [answer, setAnswer] = useState("");
   const [remember, setRemember] = useState(false);
   const fact = question.kind === "fact";
@@ -61,27 +65,28 @@ export function AgentQuestion({
       {afterSend ? <p className="text-sm">{AFTER_SEND}</p> : null}
       {fact ? (
         <>
-          <label className="flex flex-col gap-1 text-sm">
-            <span>Your answer</span>
-            <textarea
-              className="min-h-20 rounded-md border bg-background p-2 text-sm"
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={`${id}-answer`}>Your answer</Label>
+            <Textarea
+              id={`${id}-answer`}
+              className="min-h-20"
               maxLength={5000}
               value={answer}
               onChange={(event) => {
                 setAnswer(event.target.value);
               }}
             />
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id={`${id}-remember`}
               checked={remember}
-              onChange={(event) => {
-                setRemember(event.target.checked);
+              onCheckedChange={(checked) => {
+                setRemember(checked === true);
               }}
             />
-            <span>Remember this answer</span>
-          </label>
+            <Label htmlFor={`${id}-remember`}>Remember this answer</Label>
+          </div>
         </>
       ) : (
         <LaterHandoffBanner

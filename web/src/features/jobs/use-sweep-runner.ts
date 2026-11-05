@@ -82,7 +82,7 @@ export function useSweepRunner(): SweepRunner {
           setStarting(false);
           const already = runningSweepOf(error);
           if (already) {
-            toast.info("A sweep is already running: following it.");
+            toast.info("A search is already running: showing it.");
             setEnded((old) => {
               const next = new Set(old);
               next.delete(already);
@@ -106,7 +106,7 @@ export function useSweepRunner(): SweepRunner {
             });
             return;
           }
-          toast.error(`The sweep did not start. ${describeError(error)}`);
+          toast.error(`The search did not start. ${describeError(error)}`);
         },
       );
     },

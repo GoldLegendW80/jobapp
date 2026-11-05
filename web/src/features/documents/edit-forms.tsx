@@ -3,7 +3,12 @@ import { useId, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import {
+  Field,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
 import type { Profile } from "@/features/profile/api";
 import { slugify } from "@/features/profile/forms";
@@ -147,11 +152,10 @@ function Experience({
         const fact = employers.get(key);
         const name = fact?.organisation ?? key;
         return (
-          <fieldset
-            key={index}
-            className="flex min-w-0 flex-col gap-2 border-t pt-3"
-          >
-            <legend className="text-sm font-medium">{name}</legend>
+          <FieldSet key={index} className="min-w-0 gap-2 border-t pt-3">
+            <FieldLegend variant="label" className="mb-0">
+              {name}
+            </FieldLegend>
             <div className="flex items-start justify-between gap-2">
               {fact === undefined && known ? (
                 <p
@@ -196,11 +200,13 @@ function Experience({
               itemMax={MAX.bullet}
               multiline
             />
-          </fieldset>
+          </FieldSet>
         );
       })}
-      <div className="flex flex-col gap-1.5 border-t pt-3">
-        <Label htmlFor={selectId}>Add an employer of your profile</Label>
+      <Field className="gap-1.5 border-t pt-3">
+        <FieldLabel htmlFor={selectId}>
+          Add an employer of your profile
+        </FieldLabel>
         <div className="flex flex-wrap gap-2">
           <div className="min-w-0 flex-1">
             <NativeSelect
@@ -238,7 +244,7 @@ function Experience({
             Add
           </Button>
         </div>
-      </div>
+      </Field>
       <p aria-live="polite" className="sr-only">
         {moves.said}
       </p>
@@ -282,11 +288,10 @@ function Skills({ form }: { form: Form }) {
   return (
     <Section title="Skills">
       {groups.map((_, index) => (
-        <fieldset
-          key={index}
-          className="flex min-w-0 flex-col gap-2 border-t pt-3"
-        >
-          <legend className="text-sm font-medium">Group {index + 1}</legend>
+        <FieldSet key={index} className="min-w-0 gap-2 border-t pt-3">
+          <FieldLegend variant="label" className="mb-0">
+            Group {index + 1}
+          </FieldLegend>
           <div className="flex justify-end">
             <EntryButtons
               id={`${base}-${String(index)}`}
@@ -308,7 +313,7 @@ function Skills({ form }: { form: Form }) {
             max={MAX.term}
           />
           <TermsField form={form} path={[...path, index, "items"]} />
-        </fieldset>
+        </FieldSet>
       ))}
       <div>
         <Button
@@ -420,8 +425,10 @@ function FixedList({
     form.set([...path, index], { ...row, organisation: value, key: next });
   };
   return (
-    <fieldset className="flex min-w-0 flex-col gap-3">
-      <legend className="text-sm font-medium">{list.title}</legend>
+    <FieldSet className="min-w-0 gap-3">
+      <FieldLegend variant="label" className="mb-0">
+        {list.title}
+      </FieldLegend>
       {rows.map((_, index) => (
         <div key={index} className="flex flex-col gap-2 border-t pt-3">
           <div className="flex items-center justify-between gap-2">
@@ -500,7 +507,7 @@ function FixedList({
       <p aria-live="polite" className="sr-only">
         {moves.said}
       </p>
-    </fieldset>
+    </FieldSet>
   );
 }
 

@@ -8,11 +8,16 @@ import {
   FileCode,
   FileJson,
   FileText,
-  LoaderCircle,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
 
 import { fetchFileJson, fileUrl, jobsKey, type JobFile } from "./api";
@@ -73,50 +78,62 @@ function FileRow({ jobId, file }: { jobId: string; file: JobFile }) {
   const json = file.mime === "application/json";
   const [preview, setPreview] = useState(false);
   return (
-    <li className="flex flex-col gap-2 p-3">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <FileIcon mime={file.mime} />
-        <span className="min-w-0 font-medium break-all">{file.name}</span>
-        <span className="text-xs text-muted-foreground tabular-nums">
-          {formatSize(file.size)}
-          {ORIGIN_LABELS[file.origin] ? `, ${ORIGIN_LABELS[file.origin]}` : ""}
-        </span>
-        <div className="ml-auto flex gap-2">
-          {pdf ? (
-            <Button
-              variant="outline"
-              size="sm"
-              aria-expanded={preview}
-              aria-label={`${preview ? "Hide" : "Show"} preview of ${file.name}`}
-              onClick={() => {
-                setPreview((open) => !open);
-              }}
-            >
-              {preview ? (
-                <EyeOff aria-hidden="true" />
-              ) : (
-                <Eye aria-hidden="true" />
-              )}
-              {preview ? "Hide preview" : "Preview"}
+    <Collapsible
+      asChild
+      open={preview}
+      onOpenChange={setPreview}
+      className="flex flex-col gap-2 p-3"
+    >
+      <li>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <FileIcon mime={file.mime} />
+          <span className="min-w-0 font-medium break-all">{file.name}</span>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {formatSize(file.size)}
+            {ORIGIN_LABELS[file.origin]
+              ? `, ${ORIGIN_LABELS[file.origin]}`
+              : ""}
+          </span>
+          <div className="ml-auto flex gap-2">
+            {pdf ? (
+              <CollapsibleTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  aria-label={`${preview ? "Hide" : "Show"} preview of ${file.name}`}
+                >
+                  {preview ? (
+                    <EyeOff aria-hidden="true" />
+                  ) : (
+                    <Eye aria-hidden="true" />
+                  )}
+                  {preview ? "Hide preview" : "Preview"}
+                </Button>
+              </CollapsibleTrigger>
+            ) : null}
+            <Button asChild variant="outline" size="sm">
+              <a
+                href={url}
+                target={pdf ? "_blank" : undefined}
+                rel="noopener noreferrer"
+                download={pdf ? undefined : file.name}
+                aria-label={`${pdf ? "Open" : "Download"} ${file.name}`}
+              >
+                <Download aria-hidden="true" />
+                {pdf ? "Open" : "Download"}
+              </a>
             </Button>
-          ) : null}
-          <Button asChild variant="outline" size="sm">
-            <a
-              href={url}
-              target={pdf ? "_blank" : undefined}
-              rel="noopener noreferrer"
-              download={pdf ? undefined : file.name}
-              aria-label={`${pdf ? "Open" : "Download"} ${file.name}`}
-            >
-              <Download aria-hidden="true" />
-              {pdf ? "Open" : "Download"}
-            </a>
-          </Button>
+          </div>
         </div>
-      </div>
-      {pdf && preview ? <PdfPreview url={url} name={file.name} /> : null}
-      {json ? <JsonViewer jobId={jobId} file={file} /> : null}
-    </li>
+        {/* Mounted only while shown: hiding it frees the PDF's blob. */}
+        {pdf ? (
+          <CollapsibleContent>
+            <PdfPreview url={url} name={file.name} />
+          </CollapsibleContent>
+        ) : null}
+        {json ? <JsonViewer jobId={jobId} file={file} /> : null}
+      </li>
+    </Collapsible>
   );
 }
 
@@ -143,8 +160,7 @@ function PdfPreview({ url, name }: { url: string; name: string }) {
           credentials: "include",
           signal: controller.signal,
         });
-        if (!response.ok)
-          throw new Error(`The API answered ${response.status}.`);
+        if (!response.ok) throw new Error("This file could not be loaded.");
         const bytes = await response.arrayBuffer();
         const head = new TextDecoder().decode(bytes.slice(0, PDF_MAGIC.length));
         if (head !== PDF_MAGIC) throw new Error("This file is not a PDF.");
@@ -174,7 +190,7 @@ function PdfPreview({ url, name }: { url: string; name: string }) {
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
         Loading the preview
       </p>
     );
@@ -212,20 +228,24 @@ function JsonViewer({ jobId, file }: { jobId: string; file: JobFile }) {
     staleTime: Infinity,
   });
   return (
-    <details
-      className="group rounded-md border bg-muted/30"
-      onToggle={(event) => {
-        setOpen(event.currentTarget.open);
-      }}
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="rounded-md border bg-muted/30"
     >
-      <summary className="flex cursor-pointer items-center gap-1 px-3 py-2 text-sm select-none">
-        <ChevronRight
-          aria-hidden="true"
-          className="size-4 transition-transform group-open:rotate-90"
-        />
-        Show {file.name}
-      </summary>
-      <div className="border-t px-3 py-2">
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="group h-auto w-full justify-start gap-1 rounded-md px-3 py-2 font-normal has-[>svg]:px-3 data-[state=open]:rounded-b-none"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+          />
+          Show {file.name}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="border-t px-3 py-2">
         {content.isPending ? (
           <p role="status" className="text-sm text-muted-foreground">
             Loading
@@ -242,7 +262,7 @@ function JsonViewer({ jobId, file }: { jobId: string; file: JobFile }) {
             {prettyJson(content.data)}
           </pre>
         )}
-      </div>
-    </details>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

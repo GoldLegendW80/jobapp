@@ -14,7 +14,12 @@ import {
   waitForRender,
   type Person,
 } from "./documents-helpers";
-import { clearAttempts, newContext, watchErrors } from "./stack";
+import {
+  clearAttempts,
+  newContext,
+  openPostingMore,
+  watchErrors,
+} from "./stack";
 
 /**
  * Documents D14 against the real stack through Caddy, the worker and the real renderer, no
@@ -82,6 +87,7 @@ test("a CV is rendered through the api and nothing is frozen yet", async () => {
 
 test("setting the posting to applied on the job page freezes the version", async () => {
   await page.goto(`/jobs/${postingId}`);
+  await openPostingMore(page);
   await page.getByLabel("Status", { exact: true }).selectOption("applied");
   await page.getByRole("button", { name: "Mark as applied" }).click();
   await expect(page.getByText("Status set to Applied.")).toBeVisible();

@@ -4,7 +4,6 @@ import {
   Check,
   CircleAlert,
   Copy,
-  LoaderCircle,
   TriangleAlert,
   UserPlus,
 } from "lucide-react";
@@ -24,6 +23,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import {
   Form,
   FormControl,
@@ -34,7 +34,9 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { NativeSelect } from "@/components/ui/native-select";
+import { Spinner } from "@/components/ui/spinner";
 import { SERVER_UNREACHABLE } from "@/features/auth/login-errors";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
@@ -253,7 +255,7 @@ function InviteForm({
             >
               {mutation.isPending ? (
                 <>
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                   Creating link
                 </>
               ) : (
@@ -318,10 +320,10 @@ function LinkResult({
           old link stops working.
         </AlertDescription>
       </Alert>
-      <div className="grid gap-2">
-        <label htmlFor={inputId} className="text-sm font-medium">
+      <Field className="gap-2">
+        <FieldLabel htmlFor={inputId}>
           {kind === "invite" ? "Invite link" : "Reset link"}
-        </label>
+        </FieldLabel>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Input
             id={inputId}
@@ -346,22 +348,34 @@ function LinkResult({
             {copy === "copied" ? "Copied" : "Copy link"}
           </Button>
         </div>
-        <p
+        <FieldDescription
           role="status"
           aria-live="polite"
-          className={
-            copy === "failed"
-              ? "text-sm text-destructive"
-              : "text-sm text-muted-foreground"
-          }
+          className={copy === "failed" ? "text-destructive" : undefined}
         >
-          {copy === "failed"
-            ? "This browser blocked copying. The link is selected: press Ctrl+C, or Cmd+C on a Mac."
-            : copy === "copied"
-              ? "The link is on your clipboard."
-              : ""}
-        </p>
-      </div>
+          {copy === "failed" ? (
+            <>
+              This browser blocked copying. The link is selected: press{" "}
+              <KbdGroup>
+                <Kbd>Ctrl</Kbd>
+                <span>+</span>
+                <Kbd>C</Kbd>
+              </KbdGroup>
+              , or{" "}
+              <KbdGroup>
+                <Kbd>Cmd</Kbd>
+                <span>+</span>
+                <Kbd>C</Kbd>
+              </KbdGroup>{" "}
+              on a Mac.
+            </>
+          ) : copy === "copied" ? (
+            "The link is on your clipboard."
+          ) : (
+            ""
+          )}
+        </FieldDescription>
+      </Field>
       <DialogFooter>
         <Button type="button" variant="outline" onClick={onDone}>
           Done

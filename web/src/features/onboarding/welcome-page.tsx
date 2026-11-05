@@ -1,14 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, ArrowRight, CircleAlert, LoaderCircle } from "lucide-react";
+import { ArrowLeft, ArrowRight, CircleAlert } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+import { Spinner } from "@/components/ui/spinner";
 import {
   applySettingsKey,
   getApplySettings,
+  saveApplySettings,
   type ApplySettings,
 } from "@/features/apply/settings-api";
 import { useMe } from "@/features/auth/auth-context";
@@ -35,7 +38,6 @@ import {
   getOnboarding,
   onboardingKey,
   passStep,
-  saveLikeMode,
   type OnboardingState,
 } from "./onboarding-api";
 import {
@@ -204,9 +206,18 @@ function Wizard({
     mutationFn: async (current: StepId): Promise<Profile | null> => {
       const cached = client.getQueryData<Profile>(profileKey) ?? profile;
       if (current === "apply") {
-        if (draft.mode !== null && draft.mode !== settings?.mode_after_like) {
-          await saveLikeMode(draft.mode);
-          void client.invalidateQueries({ queryKey: applySettingsKey });
+        // Apply's own route, with only what the person changed here (nothing when nothing).
+        const changed: Parameters<typeof saveApplySettings>[0] = {};
+        if (draft.mode !== null && draft.mode !== settings?.mode_after_like)
+          changed.mode_after_like = draft.mode;
+        if (
+          draft.review !== null &&
+          draft.review !== settings?.review_before_send
+        )
+          changed.review_before_send = draft.review;
+        if (Object.keys(changed).length) {
+          const kept = await saveApplySettings(changed);
+          client.setQueryData(applySettingsKey, kept);
         }
         return saveSection(
           "preferences",
@@ -353,7 +364,7 @@ function Wizard({
           A few short answers, and the app looks for postings that fit. You can
           change every answer later in your profile.
         </p>
-        <Progress
+        <WizardProgress
           current={index}
           onOpen={(open) => {
             goTo(open);
@@ -407,7 +418,7 @@ function Wizard({
 
       <nav
         aria-label={WORDING.wizard}
-        className="sticky bottom-0 flex flex-wrap items-center justify-between gap-2 border-t bg-background py-3"
+        className="sticky bottom-(--bottom-bar,0px) flex flex-wrap items-center justify-between gap-2 border-t bg-background py-3"
       >
         <Button
           variant="outline"
@@ -438,16 +449,12 @@ function Wizard({
                 finish.mutate();
               }}
             >
-              {finish.isPending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
-              ) : null}
+              {finish.isPending ? <Spinner aria-hidden="true" /> : null}
               {WORDING.start}
             </Button>
           ) : (
             <Button disabled={busy} onClick={onNext}>
-              {save.isPending ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
-              ) : null}
+              {save.isPending ? <Spinner aria-hidden="true" /> : null}
               {WORDING.next}
               <ArrowRight aria-hidden="true" />
             </Button>
@@ -474,8 +481,16 @@ function Wizard({
   );
 }
 
-/** The progress bar: the eight names, the current one marked; a step already passed opens. */
-function Progress({
+/** One box for every name of the list, a button or not, so they all sit on one baseline. */
+const STEP_LABEL =
+  "inline-flex min-h-6 items-center rounded leading-5 whitespace-nowrap";
+
+/**
+ * The progress bar and, from sm up, the eight names, the current one marked; a step already
+ * passed opens. Below sm only the bar shows: the heading under it says "Step N of 8: Name", the
+ * bar's value says it too, and Back and the summary's Change open the steps passed.
+ */
+function WizardProgress({
   current,
   reachable,
   onOpen,
@@ -484,43 +499,51 @@ function Progress({
   reachable: readonly StepId[];
   onOpen: (step: StepId) => void;
 }) {
+  const name = STEP_NAMES[STEP_IDS[current] ?? "profile"];
   return (
     <nav aria-label={WORDING.progress}>
-      <div
-        role="progressbar"
+      {/* The value is the share of the bar filled; what is read is the step, 1 to 8. */}
+      <Progress
+        value={((current + 1) / STEP_IDS.length) * 100}
         aria-label={WORDING.wizardProgress}
         aria-valuemin={1}
         aria-valuemax={STEP_IDS.length}
         aria-valuenow={current + 1}
-        aria-valuetext={`Step ${current + 1} of ${STEP_IDS.length}`}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
+        aria-valuetext={`Step ${current + 1} of ${STEP_IDS.length}: ${name}`}
+        className="h-1.5 bg-muted *:data-[slot=progress-indicator]:motion-reduce:transition-none"
+      />
+      <ol
+        className="mt-2 hidden flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:flex"
+        data-testid="welcome-step-names"
       >
-        <div
-          className="h-full rounded-full bg-primary transition-[width]"
-          style={{ width: `${((current + 1) / STEP_IDS.length) * 100}%` }}
-        />
-      </div>
-      <ol className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
         {STEP_IDS.map((step, at) => {
           const open = at === current;
           const canOpen = !open && (at < current || reachable.includes(step));
           return (
-            <li key={step}>
+            <li key={step} className="flex">
               {canOpen ? (
-                <button
+                <Button
                   type="button"
-                  className="min-h-6 rounded text-muted-foreground underline-offset-4 hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  variant="link"
+                  // The size first: a text size after it would drop the box's leading-5.
+                  className={cn(
+                    "h-auto p-0 text-xs font-normal text-muted-foreground",
+                    STEP_LABEL,
+                  )}
                   onClick={() => {
                     onOpen(step);
                   }}
                 >
                   {STEP_NAMES[step]}
-                </button>
+                </Button>
               ) : (
                 <span
                   aria-current={open ? "step" : undefined}
                   className={cn(
-                    open ? "font-semibold" : "text-muted-foreground",
+                    STEP_LABEL,
+                    open
+                      ? "font-semibold text-foreground"
+                      : "text-muted-foreground",
                   )}
                 >
                   {STEP_NAMES[step]}

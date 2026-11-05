@@ -11,6 +11,12 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/button";
+import { Toggle } from "@/components/ui/toggle";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import { STATUS_LABELS, STATUSES, type JobStatus } from "../labels";
@@ -104,8 +110,6 @@ export function WorldMap({
   const frame = useRef<HTMLDivElement>(null);
   const width = useWidth(frame);
   const [view, setView] = useState<ViewBox>(FULL);
-  const [tip, setTip] = useState<string | null>(null);
-  const tipId = useId();
   const hintId = useId();
   const pointers = useRef(new Map<number, { x: number; y: number }>());
 
@@ -134,7 +138,6 @@ export function WorldMap({
   const visible = pins.filter((pin) => pin.inView);
   const labels = useMemo(() => placeLabels(visible, zoom), [visible, zoom]);
   const legend = STATUSES.filter((s) => pins.some((pin) => pin.status === s));
-  const tipPin = visible.find((pin) => pin.name === tip);
 
   // The wheel zooms about the pointer. A native listener: React's is passive.
   useEffect(() => {
@@ -212,10 +215,7 @@ export function WorldMap({
       ArrowUp: () => panBy(view, 0, -PAN_STEP),
       ArrowDown: () => panBy(view, 0, PAN_STEP),
     };
-    if (event.key === "Escape") {
-      setTip(null);
-      return;
-    }
+    // Escape closes a pin's tooltip by itself (the Tooltip listens for it).
     const next = step[event.key];
     if (!next || event.altKey || event.ctrlKey || event.metaKey) return;
     event.preventDefault();
@@ -239,20 +239,16 @@ export function WorldMap({
           {(Object.keys(REGIONS) as Region[]).map((region) => {
             const pressed = sameView(view, regionBox(region));
             return (
-              <button
+              <Toggle
                 key={region}
-                type="button"
-                aria-pressed={pressed}
-                onClick={() => {
+                pressed={pressed}
+                onPressedChange={() => {
                   setView(regionBox(region));
                 }}
-                className={cn(
-                  "rounded px-2 py-1 font-medium text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
-                  pressed && "bg-background text-foreground shadow-sm",
-                )}
+                className="h-auto min-w-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
               >
                 {REGIONS[region].label}
-              </button>
+              </Toggle>
             );
           })}
         </div>
@@ -339,50 +335,57 @@ export function WorldMap({
         {visible.map((pin) => {
           const isSelected = selected === pin.name;
           return (
-            <button
-              key={pin.name}
-              type="button"
-              aria-label={`${pin.name}: ${describePlace(pin.place)}`}
-              aria-pressed={isSelected}
-              aria-describedby={tip === pin.name ? tipId : undefined}
-              data-place={pin.name}
-              data-status={pin.status ?? undefined}
-              onClick={() => {
-                onSelect(isSelected ? null : pin.name);
-              }}
-              onMouseEnter={() => {
-                setTip(pin.name);
-              }}
-              onMouseLeave={() => {
-                setTip((t) => (t === pin.name ? null : t));
-              }}
-              onFocus={() => {
-                setTip(pin.name);
-              }}
-              onBlur={() => {
-                setTip((t) => (t === pin.name ? null : t));
-              }}
-              style={{
-                left: `${pin.fx * 100}%`,
-                top: `${pin.fy * 100}%`,
-                // The dot plus 3 px: wider targets would hide crowded neighbours (the
-                // places list is the full-size alternative). Smaller pins come later, on top.
-                width: `${pin.r * 2 + 6}px`,
-                height: `${pin.r * 2 + 6}px`,
-                zIndex: isSelected ? 3 : 2,
-              }}
-              className="group absolute grid -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring"
-            >
-              <span
-                aria-hidden="true"
-                style={{ width: `${pin.r * 2}px`, height: `${pin.r * 2}px` }}
-                className={cn(
-                  "block rounded-full opacity-90 ring-2 ring-card transition-[filter] group-hover:brightness-90",
-                  pin.status ? STATUS_FILL[pin.status] : "bg-muted-foreground",
-                  isSelected && "opacity-100 ring-foreground",
-                )}
-              />
-            </button>
+            <Tooltip key={pin.name} disableHoverableContent>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  aria-label={`${pin.name}: ${describePlace(pin.place)}`}
+                  aria-pressed={isSelected}
+                  data-place={pin.name}
+                  data-status={pin.status ?? undefined}
+                  onClick={() => {
+                    onSelect(isSelected ? null : pin.name);
+                  }}
+                  style={{
+                    left: `${pin.fx * 100}%`,
+                    top: `${pin.fy * 100}%`,
+                    // The dot plus 3 px: wider targets would hide crowded neighbours (the
+                    // places list is the full-size alternative). Smaller pins come later, on top.
+                    width: `${pin.r * 2 + 6}px`,
+                    height: `${pin.r * 2 + 6}px`,
+                    zIndex: isSelected ? 3 : 2,
+                  }}
+                  className="group absolute grid -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full p-0 transition-none hover:bg-transparent focus-visible:ring-ring dark:hover:bg-transparent"
+                >
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: `${pin.r * 2}px`,
+                      height: `${pin.r * 2}px`,
+                    }}
+                    className={cn(
+                      "block rounded-full opacity-90 ring-2 ring-card transition-[filter] group-hover:brightness-90",
+                      pin.status
+                        ? STATUS_FILL[pin.status]
+                        : "bg-muted-foreground",
+                      isSelected && "opacity-100 ring-foreground",
+                    )}
+                  />
+                </Button>
+              </TooltipTrigger>
+              {/* Above the pin, or below it near the top edge. */}
+              <TooltipContent
+                side={pin.fy < 0.3 ? "bottom" : "top"}
+                sideOffset={4}
+                className="max-w-56 motion-reduce:animate-none!"
+              >
+                <span className="block font-medium">{pin.name}</span>
+                <span className="block text-background/80">
+                  {describePlace(pin.place)}
+                </span>
+              </TooltipContent>
+            </Tooltip>
           );
         })}
 
@@ -404,28 +407,6 @@ export function WorldMap({
             </span>
           );
         })}
-
-        {tipPin ? (
-          <div
-            id={tipId}
-            role="tooltip"
-            style={{
-              left: `${Math.min(Math.max(tipPin.fx * 100, 12), 88)}%`,
-              top: `${tipPin.fy * 100}%`,
-              // Above the pin, or below it near the top edge.
-              transform:
-                tipPin.fy < 0.3
-                  ? `translate(-50%, ${tipPin.r + 6}px)`
-                  : `translate(-50%, calc(-100% - ${tipPin.r + 6}px))`,
-            }}
-            className="pointer-events-none absolute z-10 w-max max-w-56 rounded-md border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md"
-          >
-            <p className="font-medium">{tipPin.name}</p>
-            <p className="text-muted-foreground">
-              {describePlace(tipPin.place)}
-            </p>
-          </div>
-        ) : null}
       </div>
 
       {legend.length ? (

@@ -4,6 +4,7 @@ import { useForm, type UseFormReturn } from "react-hook-form";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORDING } from "@/lib/wording";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
@@ -148,7 +149,12 @@ describe("a reload of the lists", () => {
       });
       return <SearchLists form={form} />;
     }
-    render(<Harness />);
+    // The chips show a long term whole in a tooltip, as under the app's root.
+    render(
+      <TooltipProvider>
+        <Harness />
+      </TooltipProvider>,
+    );
     expect(screen.queryByText(WORDING.listUsesRegularExpressions)).toBeNull();
     act(() => {
       form!.reset(

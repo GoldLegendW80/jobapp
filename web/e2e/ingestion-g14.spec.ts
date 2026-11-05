@@ -150,7 +150,7 @@ test("a run started in the page reads the page images, then the texts", async ()
   // The run is started in the Review step. A document that waits for the agent can be ticked.
   await page.goto("/profile/fill?step=review");
   await expect(
-    page.getByRole("heading", { name: "Start a run" }),
+    page.getByRole("heading", { name: "Start reading" }),
   ).toBeVisible();
   for (const name of FILES)
     await page.getByRole("checkbox", { name: named(name) }).check();

@@ -148,11 +148,11 @@ describe("a running website search", () => {
       screen.getByTestId("live-screen"),
     );
     expect(
-      await screen.findByRole("button", { name: "Take over" }),
+      await screen.findByRole("button", { name: "Use the browser myself" }),
     ).toBeEnabled();
     expect(
       screen.getByText(
-        "You are watching your browser. Take over to use it yourself.",
+        "You are watching your browser. Choose Use the browser myself to type and click in it: the assistant waits.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(STARTING)).toBeNull();
@@ -181,13 +181,15 @@ describe("a running website search", () => {
     const { client } = renderApp(`/runs/${ID}`);
     await connected(opened);
     const sentence =
-      "The assistant needs your help on jobs.example.org. Take over, do what the page asks, then Give back.";
+      "The assistant needs your help on jobs.example.org. Choose Use the browser myself, do what the page asks, then Let the assistant continue.";
     const ask = await screen.findByText(sentence);
     expect(ask).toHaveAttribute("role", "status");
     expect(ask).toHaveClass("bg-muted", "text-foreground", "border-border");
     expect(ask.className).not.toMatch(/#|rgb|\[/);
     expect(screen.getByTestId("run-live-view")).toContainElement(ask);
-    expect(screen.getByRole("button", { name: "Take over" })).toBeEnabled();
+    expect(
+      screen.getByRole("button", { name: "Use the browser myself" }),
+    ).toBeEnabled();
     state.browser = mine(lease());
     await act(() => client.invalidateQueries({ queryKey: browserQueryKey }));
     await waitFor(() => {
@@ -219,12 +221,16 @@ describe("a running website search", () => {
     const user = userEvent.setup();
     renderApp(`/runs/${ID}`);
     const view = await connected(opened);
-    await user.click(await screen.findByRole("button", { name: "Take over" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Use the browser myself" }),
+    );
     expect(
-      await screen.findByRole("button", { name: "Give back" }),
+      await screen.findByRole("button", { name: "Let the assistant continue" }),
     ).toBeVisible();
     expect(view.screen.viewOnly).toBe(false);
-    await user.click(screen.getByRole("button", { name: "Give back" }));
+    await user.click(
+      screen.getByRole("button", { name: "Let the assistant continue" }),
+    );
     await waitFor(() => {
       expect(view.screen.viewOnly).toBe(true);
     });
@@ -383,7 +389,9 @@ describe("a running website search", () => {
     renderApp(`/runs/${ID}`);
     await connected(opened);
     await panel();
-    const take = await screen.findByRole("button", { name: "Take over" });
+    const take = await screen.findByRole("button", {
+      name: "Use the browser myself",
+    });
     act(() => {
       take.focus();
     });
@@ -586,7 +594,7 @@ describe("askText", () => {
     expect(
       askText(lease({ ...waiting, wait_reason: "ask_person", wait_host: "" })),
     ).toBe(
-      "The assistant needs your help on this page. Take over, do what the page asks, then Give back.",
+      "The assistant needs your help on this page. Choose Use the browser myself, do what the page asks, then Let the assistant continue.",
     );
     expect(askText(lease({ ...waiting, wait_reason: "signin" }))).toBeNull();
     expect(askText(lease({ wait_reason: "ask_person" }))).toBeNull();

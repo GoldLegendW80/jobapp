@@ -303,6 +303,18 @@ export async function skipWelcome(page: Page) {
   await expect(page).toHaveURL(/\/jobs$/);
 }
 
+/**
+ * Opens "More about this posting" on a posting page (status and fit, the assessment, the notes,
+ * the files and the history), unless it is open already: the page keeps that choice in local
+ * storage, so a reload or the next posting finds it open.
+ */
+export async function openPostingMore(page: Page) {
+  const more = page.getByRole("button", { name: "More about this posting" });
+  await expect(more).toBeVisible();
+  if ((await more.getAttribute("aria-expanded")) !== "true") await more.click();
+  await expect(more).toHaveAttribute("aria-expanded", "true");
+}
+
 export async function signIn(page: Page, email: string, password: string) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);

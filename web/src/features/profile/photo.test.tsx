@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { setSlider } from "@/test/slider";
 
 import * as crop from "./crop";
 
@@ -30,6 +31,12 @@ const pngFile = (name = "me.png") =>
 const release = vi.fn();
 
 beforeEach(() => {
+  // The Avatar shows its image once the browser says it loaded: jsdom loads none, so every
+  // image reads as loaded, with a width.
+  vi.spyOn(HTMLImageElement.prototype, "complete", "get").mockReturnValue(true);
+  vi.spyOn(HTMLImageElement.prototype, "naturalWidth", "get").mockReturnValue(
+    300,
+  );
   vi.mocked(crop.loadImage).mockResolvedValue({
     image: {} as CanvasImageSource,
     width: 400,
@@ -44,6 +51,7 @@ beforeEach(() => {
 afterEach(() => {
   toast.dismiss();
   release.mockReset();
+  vi.restoreAllMocks();
 });
 
 async function open(options: { photo?: string | null } = {}) {
@@ -114,17 +122,14 @@ describe("photo", () => {
     expect(square.style.width).toBe("75%");
     expect(square.style.height).toBe("100%");
     expect(within(dialog).getByText("300 by 300 pixels")).toBeVisible();
-    expect(within(dialog).getByLabelText("Vertical position")).toBeDisabled();
+    expect(within(dialog).getByLabelText("Vertical position")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
-    fireEvent.change(within(dialog).getByLabelText("Size"), {
-      target: { value: "0.5" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Horizontal position"), {
-      target: { value: "0" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Vertical position"), {
-      target: { value: "1" },
-    });
+    setSlider(within(dialog).getByLabelText("Size"), 0.5);
+    setSlider(within(dialog).getByLabelText("Horizontal position"), 0);
+    setSlider(within(dialog).getByLabelText("Vertical position"), 1);
     expect(within(dialog).getByText("150 by 150 pixels")).toBeVisible();
     await user.click(
       within(dialog).getByRole("button", { name: "Use this photo" }),
@@ -231,7 +236,7 @@ describe("photo", () => {
     await user.click(screen.getByRole("button", { name: "Remove photo" }));
     expect(
       await screen.findByText(
-        "The photo was not removed. The API could not be reached.",
+        "The photo was not removed. The app cannot reach the server. Check your connection, then try again.",
       ),
     ).toBeVisible();
     expect(

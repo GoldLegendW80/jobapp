@@ -22,6 +22,8 @@ export interface AuthActions {
   signingOut: boolean;
   /** True right after an explicit sign out, so the guard lands on /login without `next`. */
   wasSignedOut: () => boolean;
+  /** True once a signed in browser lost its session (a 401 on a call): the sign in page says so. */
+  wasSessionEnded: () => boolean;
   clearSignedOut: () => void;
 }
 
