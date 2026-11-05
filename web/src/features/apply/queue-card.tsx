@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
@@ -15,7 +15,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { jobsKey } from "@/features/jobs/api";
 import { describeError, errorDetail } from "@/lib/api";
 import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
@@ -412,25 +419,24 @@ export function QueueCard({
           <ShotView
             applicationId={item.id}
             shotId={item.shot_id}
-            title="The form before the click"
+            caption="The form before the click"
           />
         </div>
       ) : null}
 
       {withAnswers ? (
-        <div className="flex flex-col gap-3">
-          <Button
-            variant="outline"
-            className="w-full sm:w-fit"
-            aria-expanded={open}
-            aria-controls={panelId}
-            onClick={() => {
-              setToggled(!open);
-            }}
-          >
-            {open ? "Hide the answers" : "Review the answers"}
-          </Button>
-          <div id={panelId} hidden={!open}>
+        <Collapsible
+          open={open}
+          onOpenChange={setToggled}
+          className="flex flex-col gap-3"
+        >
+          {/* The answers stay mounted while folded: an unsaved edit keeps Approve waiting. */}
+          <CollapsibleTrigger asChild aria-controls={panelId}>
+            <Button variant="outline" className="w-full sm:w-fit">
+              {open ? "Hide the answers" : "Review the answers"}
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent forceMount id={panelId} hidden={!open}>
             {approval ? (
               <FieldsList
                 answers={approval.answers}
@@ -465,15 +471,12 @@ export function QueueCard({
                 role="status"
                 className="flex items-center gap-2 text-sm text-muted-foreground"
               >
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-4 animate-spin"
-                />
+                <Spinner aria-hidden="true" role={undefined} />
                 Loading the answers
               </p>
             )}
-          </div>
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
       ) : null}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start">
@@ -652,14 +655,13 @@ function RejectDialog({
           </AlertDialogDescription>
         </AlertDialogHeader>
         <div className="flex items-start gap-2">
-          <input
+          <Checkbox
             id={boxId}
-            type="checkbox"
-            className="mt-0.5 size-4 shrink-0 accent-primary"
+            className="mt-0.5"
             checked={skip}
             disabled={pending}
-            onChange={(event) => {
-              setSkip(event.target.checked);
+            onCheckedChange={(checked) => {
+              setSkip(checked === true);
             }}
           />
           <Label htmlFor={boxId} className="leading-snug font-normal">
@@ -674,9 +676,7 @@ function RejectDialog({
             }}
             disabled={pending}
           >
-            {pending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
             Reject
           </Button>
         </AlertDialogFooter>

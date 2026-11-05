@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle, Plus } from "lucide-react";
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { CircleAlert, Plus } from "lucide-react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -12,8 +19,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { message } from "@/features/admin/errors";
 
 import { ConfirmDialog } from "./confirm-dialog";
@@ -132,76 +149,80 @@ export function CapsEditor() {
                 company.
               </p>
             ) : (
-              <ul aria-label="Your caps" className="flex flex-col divide-y">
-                {query.data.items.map((cap) =>
+              <ItemGroup aria-label="Your caps">
+                {query.data.items.map((cap, index) => (
                   // Every save replaces the rows and their ids, so a row is keyed on its label.
-                  editing === cap.label ? (
-                    <li key={cap.label} className="py-3">
-                      <CapForm
-                        title={`Edit the cap of ${cap.label}`}
-                        initial={cap}
-                        pending={save.isPending}
-                        submit="Save cap"
-                        onCancel={() => {
-                          setEditing(null);
-                        }}
-                        onSave={(draft) => {
-                          change(
-                            query.data.items.map((one) =>
-                              one.label === cap.label ? draft : toDraft(one),
-                            ),
-                            "Cap saved.",
-                          );
-                        }}
-                      />
-                    </li>
-                  ) : (
-                    <li
-                      key={cap.label}
-                      className="flex flex-col gap-2 py-3 sm:flex-row sm:items-center sm:justify-between"
-                    >
-                      <div className="flex min-w-0 flex-col gap-0.5">
-                        <span className="text-sm font-medium break-words">
-                          {capSentence(cap)}
-                        </span>
-                        <span className="text-sm text-muted-foreground">
-                          {cap.used} of {cap.max_count} used in the last{" "}
-                          {days(cap.window_days)}
-                        </span>
-                      </div>
-                      <div className="flex shrink-0 gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={`Edit the cap of ${cap.label}`}
-                          disabled={save.isPending}
-                          onClick={() => {
-                            setAdding(false);
-                            setEditing(cap.label);
+                  <Fragment key={cap.label}>
+                    {index > 0 ? <ItemSeparator /> : null}
+                    {editing === cap.label ? (
+                      <div role="listitem" className="py-3">
+                        <CapForm
+                          formLabel={`Edit the cap of ${cap.label}`}
+                          initial={cap}
+                          pending={save.isPending}
+                          submit="Save cap"
+                          onCancel={() => {
+                            setEditing(null);
                           }}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={`Remove the cap of ${cap.label}`}
-                          disabled={save.isPending}
-                          onClick={() => {
-                            setRemoving(cap);
+                          onSave={(draft) => {
+                            change(
+                              query.data.items.map((one) =>
+                                one.label === cap.label ? draft : toDraft(one),
+                              ),
+                              "Cap saved.",
+                            );
                           }}
-                        >
-                          Remove
-                        </Button>
+                        />
                       </div>
-                    </li>
-                  ),
-                )}
-              </ul>
+                    ) : (
+                      <Item
+                        role="listitem"
+                        size="sm"
+                        className="flex-col items-stretch gap-2 rounded-none border-0 px-0 sm:flex-row sm:items-center"
+                      >
+                        <ItemContent className="min-w-0 gap-0.5">
+                          <ItemTitle className="break-words">
+                            {capSentence(cap)}
+                          </ItemTitle>
+                          <ItemDescription>
+                            {cap.used} of {cap.max_count} used in the last{" "}
+                            {days(cap.window_days)}
+                          </ItemDescription>
+                        </ItemContent>
+                        <ItemActions className="shrink-0">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            aria-label={`Edit the cap of ${cap.label}`}
+                            disabled={save.isPending}
+                            onClick={() => {
+                              setAdding(false);
+                              setEditing(cap.label);
+                            }}
+                          >
+                            Edit
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            aria-label={`Remove the cap of ${cap.label}`}
+                            disabled={save.isPending}
+                            onClick={() => {
+                              setRemoving(cap);
+                            }}
+                          >
+                            Remove
+                          </Button>
+                        </ItemActions>
+                      </Item>
+                    )}
+                  </Fragment>
+                ))}
+              </ItemGroup>
             )}
             {adding ? (
               <CapForm
-                title="New cap"
+                formLabel="New cap"
                 pending={save.isPending}
                 submit="Add cap"
                 onCancel={() => {
@@ -270,14 +291,14 @@ const FIELDS = [
 ] as const;
 
 function CapForm({
-  title,
+  formLabel,
   initial,
   pending,
   submit,
   onCancel,
   onSave,
 }: {
-  title: string;
+  formLabel: string;
   initial?: CapDraft;
   pending: boolean;
   submit: string;
@@ -316,7 +337,7 @@ function CapForm({
   return (
     <form
       noValidate
-      aria-label={title}
+      aria-label={formLabel}
       className="flex flex-col gap-4 rounded-md border p-3"
       onSubmit={onSubmit}
     >
@@ -325,15 +346,13 @@ function CapForm({
           const problem = problems[field.name];
           const inputId = `${id}-${field.name}`;
           return (
-            <div
+            <Field
               key={field.name}
               className={
-                field.name === "label"
-                  ? "grid gap-2 sm:col-span-2"
-                  : "grid content-start gap-2"
+                field.name === "label" ? "gap-2 sm:col-span-2" : "gap-2"
               }
             >
-              <Label htmlFor={inputId}>{field.label}</Label>
+              <FieldLabel htmlFor={inputId}>{field.label}</FieldLabel>
               <Input
                 ref={field.name === "label" ? first : undefined}
                 id={inputId}
@@ -351,14 +370,9 @@ function CapForm({
                 }}
               />
               {problem ? (
-                <p
-                  id={`${inputId}-problem`}
-                  className="text-sm text-destructive"
-                >
-                  {problem}
-                </p>
+                <FieldError id={`${inputId}-problem`}>{problem}</FieldError>
               ) : null}
-            </div>
+            </Field>
           );
         })}
       </div>
@@ -372,9 +386,7 @@ function CapForm({
           Cancel
         </Button>
         <Button type="submit" disabled={pending} aria-busy={pending}>
-          {pending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
-          ) : null}
+          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
           {submit}
         </Button>
       </div>

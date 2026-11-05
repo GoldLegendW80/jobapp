@@ -2,6 +2,17 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { errorDetail, describeError } from "@/lib/api";
 import { siteProfileProblem } from "@/lib/wording";
@@ -120,19 +131,22 @@ function FieldRow({
   const mutable = canEditField(field) && !run.autosave;
   const dirty = value !== editText(field.value);
   return (
-    <tr className="align-top border-b last:border-0">
-      <th scope="row" className="p-3 text-left font-medium min-w-36">
+    <TableRow>
+      <TableHead
+        scope="row"
+        className="h-auto min-w-36 p-3 align-top whitespace-normal"
+      >
         {field.label}
         {field.required && (
           <span className="block text-xs text-muted-foreground">
             Required by the site
           </span>
         )}
-      </th>
-      <td className="p-3 min-w-40 break-words">
+      </TableHead>
+      <TableCell className="min-w-40 p-3 align-top break-words whitespace-normal">
         {valueText(field.current_value)}
-      </td>
-      <td className="p-3 min-w-56">
+      </TableCell>
+      <TableCell className="min-w-56 p-3 align-top whitespace-normal">
         {mutable ? (
           <div className="space-y-2">
             <Textarea
@@ -176,37 +190,36 @@ function FieldRow({
             {errorDetail(error) ?? describeError(error)}
           </p>
         )}
-      </td>
-      <td className="p-3 min-w-28 text-sm">
+      </TableCell>
+      <TableCell className="min-w-28 p-3 align-top text-sm whitespace-normal">
         {field.source === "left"
           ? "Left for you"
           : field.source === "person"
             ? "Your edit"
             : (sourceLabels[field.source] ?? field.source)}
-      </td>
-      <td className="p-3 min-w-32">
+      </TableCell>
+      <TableCell className="min-w-32 p-3 align-top whitespace-normal">
         {field.current_value != null && field.current_value !== "" ? (
           mutable ? (
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
+            <Label className="font-normal">
+              <Checkbox
                 aria-label={`Replace ${field.label}`}
                 checked={replace}
                 disabled={pending}
-                onChange={(event) => {
-                  onReplace(event.target.checked);
+                onCheckedChange={(checked) => {
+                  onReplace(checked === true);
                 }}
               />
               Replace
-            </label>
+            </Label>
           ) : (
             "Current value kept"
           )
         ) : (
           "Empty field"
         )}
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -388,13 +401,13 @@ function SectionReviewContent({
             ))}
         </div>
         <div className="max-w-full overflow-x-auto rounded-md border">
-          <table className="w-full text-sm">
-            <caption className="p-3 text-left text-muted-foreground">
+          <Table className="caption-top">
+            <TableCaption className="mt-0 p-3 text-left">
               Fields and their sources. Existing site values stay until you
               select Replace.
-            </caption>
-            <thead className="bg-muted/40">
-              <tr>
+            </TableCaption>
+            <TableHeader className="bg-muted/40">
+              <TableRow>
                 {[
                   "Field",
                   "Value on the site",
@@ -402,17 +415,13 @@ function SectionReviewContent({
                   "Source",
                   "Replace",
                 ].map((label) => (
-                  <th
-                    className="p-3 text-left font-medium"
-                    key={label}
-                    scope="col"
-                  >
+                  <TableHead className="h-auto p-3" key={label} scope="col">
                     {label}
-                  </th>
+                  </TableHead>
                 ))}
-              </tr>
-            </thead>
-            <tbody>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {section.fields.map((field) => (
                 <FieldRow
                   key={field.field_key}
@@ -456,8 +465,8 @@ function SectionReviewContent({
                   }}
                 />
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </div>
         {save.error && (
           <p role="alert" className="text-sm text-destructive">

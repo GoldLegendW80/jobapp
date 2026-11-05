@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle, RotateCw } from "lucide-react";
+import { CircleAlert, RotateCw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate, useParams } from "react-router";
@@ -17,6 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Form,
   FormControl,
@@ -27,7 +28,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
@@ -95,10 +96,7 @@ export function LinkPage({ mode }: { mode: Mode }) {
             </CardTitle>
             <CardDescription role="status" aria-live="polite">
               <span className="delayed-appear inline-flex items-center gap-2">
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-4 animate-spin"
-                />
+                <Spinner aria-hidden="true" role={undefined} />
                 Checking your link
               </span>
             </CardDescription>
@@ -271,8 +269,8 @@ function SetPasswordForm({
                   <AlertDescription>{formError}</AlertDescription>
                 </Alert>
               ) : null}
-              <div className="grid gap-2">
-                <Label htmlFor="link-email">Email</Label>
+              <Field className="gap-2">
+                <FieldLabel htmlFor="link-email">Email</FieldLabel>
                 <Input
                   id="link-email"
                   type="email"
@@ -282,7 +280,7 @@ function SetPasswordForm({
                   autoComplete="username"
                   className="bg-muted text-muted-foreground"
                 />
-              </div>
+              </Field>
               {invite.kind === "invite" ? (
                 <FormField
                   control={form.control}
@@ -345,7 +343,7 @@ function SetPasswordForm({
               >
                 {pending ? (
                   <>
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                    <Spinner aria-hidden="true" role={undefined} />
                     {copy.pending}
                   </>
                 ) : (

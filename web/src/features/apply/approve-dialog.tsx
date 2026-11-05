@@ -1,5 +1,4 @@
 import { useState, type ComponentProps } from "react";
-import { LoaderCircle } from "lucide-react";
 
 import {
   AlertDialog,
@@ -11,6 +10,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 
 import type { Approval } from "./apply-api";
 import { documentLine, leftFields } from "./apply-state";
@@ -90,15 +92,13 @@ export function ApproveDialog({
                   <p className="max-h-48 overflow-auto whitespace-pre-wrap">
                     {emailText("email_body")}
                   </p>
-                  <label className="flex items-start gap-2">
-                    <input
-                      type="checkbox"
+                  <Label className="items-start leading-snug font-normal">
+                    <Checkbox
+                      className="mt-0.5"
                       checked={recipientConfirmed}
-                      onChange={(event) => {
+                      onCheckedChange={(checked) => {
                         setConfirmedHash(
-                          event.currentTarget.checked
-                            ? approval.answers_hash
-                            : "",
+                          checked === true ? approval.answers_hash : "",
                         );
                       }}
                     />
@@ -106,17 +106,20 @@ export function ApproveDialog({
                       I confirm this new email recipient from the posting:{" "}
                       {typeof recipient === "string" ? recipient : ""}
                     </span>
-                  </label>
+                  </Label>
                   {issues.map((issue) => (
-                    <label key={issue.id} className="flex items-start gap-2">
-                      <input
-                        type="checkbox"
+                    <Label
+                      key={issue.id}
+                      className="items-start leading-snug font-normal"
+                    >
+                      <Checkbox
+                        className="mt-0.5"
                         disabled={agentIssues}
                         checked={
                           acknowledged[issue.id] === approval.answers_hash
                         }
-                        onChange={(event) => {
-                          const checked = event.currentTarget.checked;
+                        onCheckedChange={(state) => {
+                          const checked = state === true;
                           setAcknowledged((old) => ({
                             ...old,
                             [issue.id]: checked ? approval.answers_hash : "",
@@ -127,7 +130,7 @@ export function ApproveDialog({
                         I checked this claim against my profile:{" "}
                         {emailText("email_body").slice(issue.start, issue.end)}
                       </span>
-                    </label>
+                    </Label>
                   ))}
                   {agentIssues ? (
                     <p>
@@ -169,9 +172,7 @@ export function ApproveDialog({
                   agentIssues))
             }
           >
-            {pending ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
             Approve and submit
           </Button>
         </AlertDialogFooter>

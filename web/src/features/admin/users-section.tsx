@@ -9,7 +9,6 @@ import {
   ChevronRight,
   CircleAlert,
   Ellipsis,
-  LoaderCircle,
   RotateCw,
   ShieldCheck,
   ShieldOff,
@@ -41,6 +40,23 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { meQueryKey, useMe } from "@/features/auth/auth-context";
 import { isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -56,7 +72,7 @@ import {
 } from "./api";
 import { message } from "./errors";
 import { exactTime, relativeTime } from "./relative-time";
-import { cell } from "./table-cell";
+import { ACTIONS, BODY, cell, HEAD, ROW } from "./table-cell";
 
 type Action = "promote" | "demote" | "disable" | "enable";
 
@@ -110,7 +126,7 @@ export function UsersSection() {
           className="rounded-lg border px-4 py-8 text-center text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading accounts
           </span>
         </p>
@@ -131,13 +147,19 @@ export function UsersSection() {
           </AlertDescription>
         </Alert>
       ) : page && page.total === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-10 text-center">
-          <Users aria-hidden="true" className="size-6 text-muted-foreground" />
-          <p className="font-medium">No accounts yet</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            People you invite appear here once they accept their link.
-          </p>
-        </div>
+        <Empty className="flex-none gap-2 border px-4 py-10 md:px-4 md:py-10">
+          <EmptyHeader className="max-w-none">
+            <EmptyMedia className="mb-0 text-muted-foreground">
+              <Users aria-hidden="true" className="size-6" />
+            </EmptyMedia>
+            <EmptyTitle className="text-base tracking-normal">
+              No accounts yet
+            </EmptyTitle>
+            <EmptyDescription className="max-w-sm">
+              People you invite appear here once they accept their link.
+            </EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : page ? (
         <>
           <UsersTable
@@ -221,45 +243,45 @@ function UsersTable({
       )}
       aria-busy={busy}
     >
-      <table className="w-full text-sm max-sm:block">
-        <caption className="sr-only">Accounts, by name</caption>
-        <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground max-sm:sr-only">
-          <tr>
-            <th scope="col" className="px-3 py-2 font-medium">
+      <Table className="max-sm:block">
+        <TableCaption className="sr-only">Accounts, by name</TableCaption>
+        <TableHeader className="bg-muted/50 text-xs max-sm:sr-only">
+          <TableRow>
+            <TableHead scope="col" className={HEAD}>
               Name
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Role
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Status
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Last sign in
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
+            </TableHead>
+            <TableHead scope="col" className={HEAD}>
               Sessions
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
+            </TableHead>
+            <TableHead scope="col" className={cn(HEAD, "text-right")}>
               <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="max-sm:flex max-sm:flex-col max-sm:gap-3">
+            </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody className={BODY}>
           {items.map((user) => {
             const self = user.id === meId;
             const protectedAdmin =
               lastAdmin && user.is_active && user.role === "admin";
             return (
-              <tr
+              <TableRow
                 key={user.id}
                 data-disabled={!user.is_active || undefined}
-                className="border-b last:border-b-0 max-sm:flex max-sm:flex-col max-sm:rounded-lg max-sm:border max-sm:bg-card max-sm:p-3 max-sm:last:border-b data-disabled:text-muted-foreground"
+                className={cn(ROW, "data-disabled:text-muted-foreground")}
               >
-                <th
+                <TableHead
                   scope="row"
                   className={cn(
-                    "px-3 py-2 text-left font-medium max-sm:px-0 max-sm:pb-2 max-sm:text-base",
+                    "h-auto px-3 py-2 whitespace-normal text-inherit max-sm:px-0 max-sm:pb-2 max-sm:text-base",
                     !user.is_active && "opacity-70",
                   )}
                 >
@@ -274,8 +296,8 @@ function UsersTable({
                   <span className="block text-xs font-normal break-all text-muted-foreground">
                     {user.email}
                   </span>
-                </th>
-                <td {...cell("Role")}>
+                </TableHead>
+                <TableCell {...cell("Role")}>
                   <Badge
                     variant="outline"
                     className={
@@ -286,8 +308,8 @@ function UsersTable({
                   >
                     {user.role === "admin" ? "Admin" : "Member"}
                   </Badge>
-                </td>
-                <td {...cell("Status")}>
+                </TableCell>
+                <TableCell {...cell("Status")}>
                   {user.is_active ? (
                     <span className="inline-flex items-center gap-1.5">
                       <span
@@ -305,8 +327,8 @@ function UsersTable({
                       Disabled
                     </span>
                   )}
-                </td>
-                <td {...cell("Last sign in")}>
+                </TableCell>
+                <TableCell {...cell("Last sign in")}>
                   {user.last_login_at ? (
                     <time
                       dateTime={user.last_login_at}
@@ -317,23 +339,23 @@ function UsersTable({
                   ) : (
                     <span className="text-muted-foreground">Never</span>
                   )}
-                </td>
-                <td {...cell("Sessions")}>
+                </TableCell>
+                <TableCell {...cell("Sessions")}>
                   <span className="tabular-nums">{user.sessions}</span>
-                </td>
-                <td className="px-3 py-2 text-right max-sm:px-0 max-sm:pt-2 max-sm:text-left">
+                </TableCell>
+                <TableCell className={ACTIONS}>
                   <ActionsMenu
                     user={user}
                     self={self}
                     protectedAdmin={protectedAdmin}
                     onAction={onAction}
                   />
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -557,7 +579,7 @@ function ConfirmDialog({
           >
             {mutation.isPending ? (
               <>
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
                 {text?.busy}
               </>
             ) : (

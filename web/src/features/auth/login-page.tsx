@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
-import { CircleAlert, Info, LoaderCircle, Timer } from "lucide-react";
+import { CircleAlert, Info, Timer } from "lucide-react";
 import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { useLocation, useSearchParams } from "react-router";
@@ -25,6 +25,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { useTitle } from "@/lib/use-title";
 import { WORDING } from "@/lib/wording";
 
@@ -164,7 +165,7 @@ export function LoginPage() {
               >
                 {pending ? (
                   <>
-                    <LoaderCircle aria-hidden="true" className="animate-spin" />
+                    <Spinner aria-hidden="true" role={undefined} />
                     Signing in
                   </>
                 ) : locked ? (

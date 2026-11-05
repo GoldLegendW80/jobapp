@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleAlert, LoaderCircle } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import { useCallback, useEffect, useRef } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
@@ -95,7 +96,7 @@ export function QueuePage() {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading your queue
         </p>
       ) : query.isError && query.data === undefined ? (
@@ -131,7 +132,7 @@ export function QueuePage() {
             <>
               <QueueSection
                 id="queue-waiting"
-                title={`Waiting for you (${waiting.length})`}
+                heading={`Waiting for you (${waiting.length})`}
                 empty="Nothing waits for you."
                 items={waiting}
                 onLeave={leave}
@@ -139,7 +140,7 @@ export function QueuePage() {
               />
               <QueueSection
                 id="queue-under-way"
-                title={`Under way (${underWay.length})`}
+                heading={`Under way (${underWay.length})`}
                 empty="Nothing is under way."
                 items={underWay}
                 onLeave={leave}
@@ -161,14 +162,14 @@ export function QueuePage() {
 
 function QueueSection({
   id,
-  title,
+  heading,
   empty,
   items,
   onLeave,
   offset,
 }: {
   id: string;
-  title: string;
+  heading: string;
   empty: string;
   items: QueueItem[];
   onLeave: () => void;
@@ -177,7 +178,7 @@ function QueueSection({
   return (
     <section aria-labelledby={id} className="flex flex-col gap-3">
       <h2 id={id} className="text-lg font-semibold tracking-tight">
-        {title}
+        {heading}
       </h2>
       {items.length > 0 ? (
         <ul className="flex flex-col gap-4">
