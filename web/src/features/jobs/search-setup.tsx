@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Search as SearchIcon } from "lucide-react";
+import { Search as SearchIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 
@@ -28,10 +28,19 @@ import {
   FormMessage,
   Form,
 } from "@/components/ui/form";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
+import { Spinner } from "@/components/ui/spinner";
 import {
   CONTRACT_TYPES,
   REMOTE_STANCES,
@@ -381,10 +390,13 @@ function SetupForm({
                 <div className="[&>section]:rounded-none [&>section]:border-0 [&>section]:p-0 sm:[&>section]:p-0">
                   <TargetFields form={form} />
                 </div>
-                <div className={BLOCK}>
-                  <Label htmlFor={`${id}-instructions`}>
+                <Field className={BLOCK}>
+                  <FieldLabel
+                    htmlFor={`${id}-instructions`}
+                    className="leading-none"
+                  >
                     Instructions for the assistant
-                  </Label>
+                  </FieldLabel>
                   <Textarea
                     id={`${id}-instructions`}
                     maxLength={2000}
@@ -395,11 +407,11 @@ function SetupForm({
                       setInstructions(event.target.value);
                     }}
                   />
-                  <p className="text-xs text-muted-foreground">
+                  <FieldDescription className="text-xs leading-4">
                     Optional, up to 2,000 characters, kept for your next
                     searches.
-                  </p>
-                </div>
+                  </FieldDescription>
+                </Field>
               </AdvancedSection>
             </section>
           </fieldset>
@@ -443,7 +455,7 @@ function SetupForm({
               disabled={conflict || locked}
             >
               {locked ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
+                <Spinner aria-hidden="true" role={undefined} />
               ) : (
                 <SearchIcon aria-hidden="true" />
               )}
@@ -457,6 +469,7 @@ function SetupForm({
 }
 
 function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
+  const id = useId();
   return (
     <>
       <FormField
@@ -485,22 +498,51 @@ function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
           </FormItem>
         )}
       />
-      <fieldset className="space-y-2">
-        <legend className="text-sm font-medium">Contract types</legend>
-        <div className="flex flex-wrap gap-3">
-          {CONTRACT_TYPES.map((contract) => (
-            <label key={contract} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="size-4 accent-primary"
-                value={contract}
-                {...form.register("contract_types")}
-              />
-              {contractWord(contract)}
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <FormField
+        control={form.control}
+        name="contract_types"
+        render={({ field }) => (
+          <FieldSet className="gap-2">
+            <FieldLegend variant="label" className="mb-2">
+              Contract types
+            </FieldLegend>
+            <FieldGroup
+              data-slot="checkbox-group"
+              className="flex-row flex-wrap gap-3"
+            >
+              {CONTRACT_TYPES.map((contract) => (
+                <Field
+                  key={contract}
+                  orientation="horizontal"
+                  className="w-auto gap-2"
+                >
+                  <Checkbox
+                    id={`${id}-contract-${contract}`}
+                    checked={field.value.includes(contract)}
+                    onBlur={field.onBlur}
+                    onCheckedChange={(checked) => {
+                      // As the boxes of one name did: the ticked ones, in the order shown.
+                      field.onChange(
+                        CONTRACT_TYPES.filter((one) =>
+                          one === contract
+                            ? checked === true
+                            : field.value.includes(one),
+                        ),
+                      );
+                    }}
+                  />
+                  <FieldLabel
+                    htmlFor={`${id}-contract-${contract}`}
+                    className="font-normal"
+                  >
+                    {contractWord(contract)}
+                  </FieldLabel>
+                </Field>
+              ))}
+            </FieldGroup>
+          </FieldSet>
+        )}
+      />
       <FormField
         control={form.control}
         name="days"

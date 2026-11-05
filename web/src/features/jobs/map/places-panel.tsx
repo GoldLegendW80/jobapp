@@ -2,6 +2,12 @@ import { ArrowLeft, MapPinOff } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemTitle,
+} from "@/components/ui/item";
 import { cn } from "@/lib/utils";
 
 import { FitBadge, StatusBadge } from "../badges";
@@ -62,23 +68,23 @@ export function PlacesPanel({
             if (!job) return null;
             return (
               <li key={id}>
-                <Link
-                  to={`/jobs/${id}`}
-                  state={{ from }}
-                  className="flex flex-col gap-1 rounded-md px-2 py-2 hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  <span className="text-sm font-medium break-words">
-                    {job.title}
-                  </span>
-                  <span className="text-xs break-words text-muted-foreground">
-                    {job.company}
-                    {job.location ? ` · ${job.location}` : ""}
-                  </span>
-                  <span className="flex flex-wrap gap-1.5">
-                    <StatusBadge status={job.status} />
-                    <FitBadge fit={job.fit} />
-                  </span>
-                </Link>
+                <Item asChild size="sm" className="px-2 py-2">
+                  <Link to={`/jobs/${id}`} state={{ from }}>
+                    <ItemContent className="min-w-0">
+                      <ItemTitle className="w-auto break-words">
+                        {job.title}
+                      </ItemTitle>
+                      <ItemDescription className="line-clamp-none text-xs break-words text-wrap">
+                        {job.company}
+                        {job.location ? ` · ${job.location}` : ""}
+                      </ItemDescription>
+                      <span className="flex flex-wrap gap-1.5">
+                        <StatusBadge status={job.status} />
+                        <FitBadge fit={job.fit} />
+                      </span>
+                    </ItemContent>
+                  </Link>
+                </Item>
               </li>
             );
           })}
@@ -115,13 +121,14 @@ export function PlacesPanel({
             const status = dominantStatus(p.counts_by_status);
             return (
               <li key={p.name}>
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   aria-label={`${p.name}: ${describePlace(p)}`}
                   onClick={() => {
                     onSelect(p.name);
                   }}
-                  className="grid w-full grid-cols-[minmax(0,1fr)_4.5rem_3ch] items-center gap-2.5 px-4 py-1.5 text-left text-sm hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
+                  className="grid h-auto w-full grid-cols-[minmax(0,1fr)_4.5rem_3ch] justify-stretch gap-2.5 rounded-none px-4 py-1.5 text-left font-normal hover:text-foreground focus-visible:ring-inset dark:hover:bg-accent"
                 >
                   <span className="truncate">{p.name}</span>
                   <span
@@ -139,7 +146,7 @@ export function PlacesPanel({
                   <span className="text-right text-muted-foreground tabular-nums">
                     {p.count}
                   </span>
-                </button>
+                </Button>
               </li>
             );
           })}

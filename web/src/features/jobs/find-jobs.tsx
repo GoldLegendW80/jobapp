@@ -12,7 +12,6 @@ import {
   CalendarClock,
   CircleAlert,
   History,
-  LoaderCircle,
   Search,
   TriangleAlert,
 } from "lucide-react";
@@ -30,6 +29,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Progress } from "@/components/ui/progress";
 import { describeError } from "@/lib/api";
 
 import { FitBadge, StatusBadge } from "./badges";
@@ -58,7 +66,7 @@ export function FindJobsButton({ finder }: { finder: FindJobs }) {
       disabled={busy}
     >
       {busy ? (
-        <LoaderCircle aria-hidden="true" className="animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
       ) : (
         <Search aria-hidden="true" />
       )}
@@ -170,19 +178,15 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
           {plural(sweep.new, "new posting")}
         </span>
       </div>
-      <div
-        role="progressbar"
+      {/* The bar is drawn from the percentage; it says the websites searched of all. */}
+      <Progress
+        value={percent}
         aria-label="Websites searched"
-        aria-valuemin={0}
         aria-valuemax={total || 1}
         aria-valuenow={done}
-        className="h-1.5 w-full overflow-hidden rounded-full bg-muted"
-      >
-        <div
-          className="h-full rounded-full bg-primary transition-[width] duration-500 motion-reduce:transition-none"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
+        aria-valuetext={undefined}
+        className="h-1.5 bg-muted [&>[data-slot=progress-indicator]]:rounded-full [&>[data-slot=progress-indicator]]:duration-500 [&>[data-slot=progress-indicator]]:motion-reduce:transition-none"
+      />
     </section>
   );
 }
@@ -266,27 +270,34 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
             <ul className="flex flex-col divide-y rounded-md border">
               {sweep.new_jobs.map((job) => (
                 <li key={job.id}>
-                  <Link
-                    to={`/jobs/${job.id}`}
-                    onClick={() => {
-                      runner.showSummary(null);
-                    }}
-                    className="flex items-center gap-3 px-3 py-2 hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none"
+                  <Item
+                    asChild
+                    size="sm"
+                    className="flex-nowrap gap-3 rounded-none px-3 py-2 hover:bg-muted/60 focus-visible:bg-muted/60"
                   >
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-sm font-medium">
-                        {job.title}
-                      </span>
-                      <span className="truncate text-xs text-muted-foreground">
-                        {job.company}
-                        {job.location ? `, ${job.location}` : ""}
-                      </span>
-                    </span>
-                    {job.status === "skipped" ? (
-                      <StatusBadge status={job.status} />
-                    ) : null}
-                    <FitBadge fit={job.fit} />
-                  </Link>
+                    <Link
+                      to={`/jobs/${job.id}`}
+                      onClick={() => {
+                        runner.showSummary(null);
+                      }}
+                    >
+                      <ItemContent className="min-w-0 gap-0">
+                        <ItemTitle className="block w-auto truncate">
+                          {job.title}
+                        </ItemTitle>
+                        <ItemDescription className="line-clamp-1 text-xs break-all">
+                          {job.company}
+                          {job.location ? `, ${job.location}` : ""}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions>
+                        {job.status === "skipped" ? (
+                          <StatusBadge status={job.status} />
+                        ) : null}
+                        <FitBadge fit={job.fit} />
+                      </ItemActions>
+                    </Link>
+                  </Item>
                 </li>
               ))}
             </ul>
@@ -424,13 +435,14 @@ export function PastSearchesButton({ runner }: { runner: SweepRunner }) {
             >
               {history.data.items.map((sweep) => (
                 <li key={sweep.id}>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
                     disabled={sweep.status === "running" || opening !== null}
                     onClick={() => {
                       show(sweep.id);
                     }}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left text-sm hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:outline-none disabled:cursor-default disabled:hover:bg-transparent"
+                    className="h-auto w-full justify-start gap-3 rounded-none px-3 py-2 text-left font-normal whitespace-normal hover:bg-muted/60 hover:text-foreground focus-visible:bg-muted/60 disabled:cursor-default disabled:opacity-100 dark:hover:bg-muted/60"
                   >
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="font-medium">
@@ -446,15 +458,12 @@ export function PastSearchesButton({ runner }: { runner: SweepRunner }) {
                     </span>
                     <span className="tabular-nums text-muted-foreground">
                       {opening === sweep.id ? (
-                        <LoaderCircle
-                          aria-label="Opening"
-                          className="size-4 animate-spin"
-                        />
+                        <Spinner aria-label="Opening" />
                       ) : (
                         `${sweep.new} new`
                       )}
                     </span>
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>

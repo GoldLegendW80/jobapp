@@ -6,10 +6,23 @@ import {
   SearchX,
   SlidersHorizontal,
 } from "lucide-react";
-import { useCallback, useId, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
 import { FinishSetupCard } from "@/features/onboarding/onboarding-gate";
 import { describeError } from "@/lib/api";
 import { useIsPhone } from "@/lib/use-media-query";
@@ -170,22 +183,27 @@ export function JobsPage() {
           </Alert>
         ) : first && first.total === 0 ? (
           filtered ? (
-            <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-10 text-center">
-              <SearchX
-                aria-hidden="true"
-                className="size-6 text-muted-foreground"
-              />
-              <p className="font-medium">No postings match these filters</p>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  setFilters({ ...EMPTY_FILTERS, sort: filters.sort });
-                }}
-              >
-                Clear filters
-              </Button>
-            </div>
+            <Empty className="gap-2 border px-4 py-10 md:px-4 md:py-10">
+              <EmptyHeader className="gap-2">
+                <EmptyMedia className="mb-0 text-muted-foreground">
+                  <SearchX aria-hidden="true" className="size-6" />
+                </EmptyMedia>
+                <EmptyTitle className="text-base tracking-normal">
+                  No postings match these filters
+                </EmptyTitle>
+              </EmptyHeader>
+              <EmptyContent>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setFilters({ ...EMPTY_FILTERS, sort: filters.sort });
+                  }}
+                >
+                  Clear filters
+                </Button>
+              </EmptyContent>
+            </Empty>
           ) : (
             <EmptyList finder={finder} />
           )
@@ -238,28 +256,27 @@ export function JobsPage() {
 /** No posting at all and no filter: what to do to get some. */
 function EmptyList({ finder }: { finder: FindJobs }) {
   return (
-    <section
-      aria-labelledby="jobs-empty-title"
-      className="flex flex-col items-center gap-4 rounded-lg border border-dashed px-4 py-12 text-center"
-    >
-      <span
-        aria-hidden="true"
-        className="flex size-12 items-center justify-center rounded-full bg-primary/10 text-primary"
-      >
-        <Briefcase className="size-6" />
-      </span>
-      <div className="flex max-w-sm flex-col gap-1">
-        <h2 id="jobs-empty-title" className="font-semibold">
-          No postings yet.
-        </h2>
-        <p className="text-sm text-muted-foreground">
-          Tell the app where to look and it brings postings here.
-        </p>
-      </div>
-      <div className="flex flex-col items-center gap-2">
-        <FindJobsButton finder={finder} />
-        <AddPostingButton asLink />
-      </div>
+    <section aria-labelledby="jobs-empty-title">
+      <Empty className="gap-4 border px-4 py-12 md:px-4 md:py-12">
+        <EmptyHeader className="gap-1">
+          <EmptyMedia
+            variant="icon"
+            className="mb-3 size-12 rounded-full bg-primary/10 text-primary"
+          >
+            <Briefcase aria-hidden="true" className="size-6" />
+          </EmptyMedia>
+          <EmptyTitle className="text-base font-semibold tracking-normal">
+            <h2 id="jobs-empty-title">No postings yet.</h2>
+          </EmptyTitle>
+          <EmptyDescription className="text-sm">
+            Tell the app where to look and it brings postings here.
+          </EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent className="gap-2">
+          <FindJobsButton finder={finder} />
+          <AddPostingButton asLink />
+        </EmptyContent>
+      </Empty>
     </section>
   );
 }
@@ -272,37 +289,35 @@ function FoldedFilters({
   filters: JobFilters;
   onChange: (next: JobFilters) => void;
 }) {
-  const id = useId();
   const [open, setOpen] = useState(false);
   const active = activeFilterCount(filters);
   return (
-    <div className="flex flex-col gap-3">
-      <Button
-        variant="outline"
-        className="w-fit"
-        aria-expanded={open}
-        aria-controls={id}
-        onClick={() => {
-          setOpen((old) => !old);
-        }}
-      >
-        <SlidersHorizontal aria-hidden="true" />
-        Filters
-        {active ? (
-          <>
-            <span
-              aria-hidden="true"
-              className="inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground tabular-nums"
-            >
-              {active}
-            </span>
-            <span className="sr-only">, {active} set</span>
-          </>
-        ) : null}
-      </Button>
-      <div id={id} hidden={!open}>
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      className="flex flex-col gap-3"
+    >
+      <CollapsibleTrigger asChild>
+        <Button variant="outline" className="w-fit">
+          <SlidersHorizontal aria-hidden="true" />
+          Filters
+          {active ? (
+            <>
+              <span
+                aria-hidden="true"
+                className="inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground tabular-nums"
+              >
+                {active}
+              </span>
+              <span className="sr-only">, {active} set</span>
+            </>
+          ) : null}
+        </Button>
+      </CollapsibleTrigger>
+      {/* Mounted while folded, so a half typed range survives a fold. */}
+      <CollapsibleContent forceMount hidden={!open}>
         <FilterBar filters={filters} onChange={onChange} />
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

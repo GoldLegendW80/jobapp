@@ -10,6 +10,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Field,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -275,10 +282,10 @@ function FitRange({
     value: string,
     set: (value: string) => void,
   ) => (
-    <div className="flex flex-col gap-1">
-      <Label htmlFor={id} className="text-xs text-muted-foreground">
+    <Field className="w-20 gap-1">
+      <FieldLabel htmlFor={id} className="text-xs text-muted-foreground">
         {label}
-      </Label>
+      </FieldLabel>
       <Input
         id={id}
         inputMode="numeric"
@@ -294,26 +301,22 @@ function FitRange({
           if (event.key === "Enter") commit();
         }}
       />
-    </div>
+    </Field>
   );
 
   return (
-    <fieldset className="flex flex-col gap-1">
-      <legend className="sr-only">Fit range</legend>
+    <FieldSet className="gap-1">
+      <FieldLegend className="sr-only">Fit range</FieldLegend>
       <div className="flex items-end gap-2">
         {field(`${ids}-min`, "Fit from", min, setMin)}
         {field(`${ids}-max`, "Fit to", max, setMax)}
       </div>
       {error ? (
-        <p
-          id={`${ids}-error`}
-          role="alert"
-          className="text-xs text-destructive"
-        >
+        <FieldError id={`${ids}-error`} className="text-xs">
           {error}
-        </p>
+        </FieldError>
       ) : null}
-    </fieldset>
+    </FieldSet>
   );
 }
 
@@ -341,16 +344,16 @@ function DateRange({
   };
 
   return (
-    <fieldset className="flex flex-col gap-1">
-      <legend className="sr-only">Found between</legend>
+    <FieldSet className="gap-1">
+      <FieldLegend className="sr-only">Found between</FieldLegend>
       <div className="flex items-end gap-2">
-        <div className="flex flex-col gap-1">
-          <Label
+        <Field className="w-40 gap-1">
+          <FieldLabel
             htmlFor={`${ids}-from`}
             className="text-xs text-muted-foreground"
           >
             Found from
-          </Label>
+          </FieldLabel>
           <Input
             id={`${ids}-from`}
             type="date"
@@ -360,14 +363,14 @@ function DateRange({
               set("foundFrom", event.target.value);
             }}
           />
-        </div>
-        <div className="flex flex-col gap-1">
-          <Label
+        </Field>
+        <Field className="w-40 gap-1">
+          <FieldLabel
             htmlFor={`${ids}-to`}
             className="text-xs text-muted-foreground"
           >
             Found to
-          </Label>
+          </FieldLabel>
           <Input
             id={`${ids}-to`}
             type="date"
@@ -377,14 +380,10 @@ function DateRange({
               set("foundTo", event.target.value);
             }}
           />
-        </div>
+        </Field>
       </div>
-      {error ? (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
-    </fieldset>
+      {error ? <FieldError className="text-xs">{error}</FieldError> : null}
+    </FieldSet>
   );
 }
 
@@ -400,14 +399,16 @@ function Chip({
   return (
     <li className="inline-flex max-w-full items-center gap-1 rounded-full border bg-secondary py-0.5 pr-1 pl-3 text-xs text-secondary-foreground">
       <span className="truncate">{children}</span>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon-xs"
         aria-label={`Remove filter ${label}`}
         onClick={onRemove}
-        className="grid size-5 shrink-0 place-items-center rounded-full hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        className="size-5 rounded-full"
       >
-        <X aria-hidden="true" className="size-3" />
-      </button>
+        <X aria-hidden="true" />
+      </Button>
     </li>
   );
 }

@@ -4,7 +4,6 @@ import {
   ChevronRight,
   CircleAlert,
   ExternalLink,
-  LoaderCircle,
   RotateCw,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -14,6 +13,12 @@ import { AdvancedSection } from "@/components/advanced-section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Spinner } from "@/components/ui/spinner";
 import { applicationsKey, latestApplication } from "@/features/apply/apply-api";
 import { ApplySection } from "@/features/apply/apply-section";
 import { phaseOf } from "@/features/apply/apply-state";
@@ -29,7 +34,7 @@ import { WORDING, WORK_MODE_WORDS, contractWord } from "@/lib/wording";
 
 import { sourceLabel } from "./labels";
 import { getJob, jobKey, type JobDetail } from "./api";
-import { FitBadge, PayText, StatusBadge } from "./badges";
+import { BadgeHint, FitBadge, PayText, StatusBadge } from "./badges";
 import { FilesSection } from "./files-section";
 import {
   EditDetailsButton,
@@ -90,7 +95,7 @@ export function JobDetailPage() {
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
           <span className="delayed-appear inline-flex items-center gap-2">
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading the posting
           </span>
         </p>
@@ -252,9 +257,9 @@ function JobDetailView({ job }: { job: JobDetail }) {
           <FitBadge fit={job.fit} overridden={job.fit_overridden} />
           <Badge variant="outline">{contractWord(job.contract_type)}</Badge>
           {workMode ? (
-            <Badge variant="outline" title={WORDING.workMode}>
-              {workMode}
-            </Badge>
+            <BadgeHint hint={WORDING.workMode}>
+              <Badge variant="outline">{workMode}</Badge>
+            </BadgeHint>
           ) : null}
         </div>
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
@@ -421,24 +426,33 @@ function PostingHistory({ job }: { job: JobDetail }) {
 /** The fields an import brought that the app has no place for, folded. */
 function ImportedFields({ fields }: { fields: [string, unknown][] }) {
   return (
-    <details className="group rounded-lg border">
-      <summary className="flex cursor-pointer items-center gap-1 px-3 py-2 text-sm font-medium select-none">
-        <ChevronRight
-          aria-hidden="true"
-          className="size-4 transition-transform group-open:rotate-90"
-        />
-        Imported fields
-      </summary>
-      <dl className="flex flex-col gap-3 border-t px-3 py-3">
-        {fields.map(([key, value]) => (
-          <div key={key} className="flex flex-col gap-0.5">
-            <dt className="text-xs font-medium text-muted-foreground">{key}</dt>
-            <dd className="text-sm break-words whitespace-pre-wrap">
-              {typeof value === "string" ? value : prettyJson(value)}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </details>
+    <Collapsible className="rounded-lg border">
+      <CollapsibleTrigger asChild>
+        <Button
+          variant="ghost"
+          className="group h-auto w-full justify-start gap-1 rounded-lg px-3 py-2 has-[>svg]:px-3 data-[state=open]:rounded-b-none"
+        >
+          <ChevronRight
+            aria-hidden="true"
+            className="transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+          />
+          Imported fields
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent asChild>
+        <dl className="flex flex-col gap-3 border-t px-3 py-3">
+          {fields.map(([key, value]) => (
+            <div key={key} className="flex flex-col gap-0.5">
+              <dt className="text-xs font-medium text-muted-foreground">
+                {key}
+              </dt>
+              <dd className="text-sm break-words whitespace-pre-wrap">
+                {typeof value === "string" ? value : prettyJson(value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

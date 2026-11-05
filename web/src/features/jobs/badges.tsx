@@ -1,4 +1,11 @@
+import type { ReactNode } from "react";
+
 import { Badge } from "@/components/ui/badge";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { WORDING } from "@/lib/wording";
 
@@ -24,6 +31,29 @@ export function StatusBadge({
 }
 
 /**
+ * A hint shown when the pointer rests on a badge, which is not a control. The span anchors the
+ * tooltip: a Badge drops its ref on React 18.
+ */
+export function BadgeHint({
+  hint,
+  children,
+}: {
+  hint: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent className="motion-reduce:animate-none!">
+        {hint}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
  * The fit score on the colour scale of the histogram, said in words too ("Fit 13"), so the colour
  * is never the only clue; "Unscored" when there is none.
  */
@@ -37,11 +67,10 @@ export function FitBadge({
   className?: string;
 }) {
   const tone = fitTone(fit);
-  return (
+  const badge = (
     <Badge
       variant="outline"
       data-tone={tone}
-      title={overridden ? "Fit set by hand" : undefined}
       aria-label={
         fit === null
           ? "Unscored"
@@ -65,6 +94,11 @@ export function FitBadge({
         `Fit ${fit}`
       )}
     </Badge>
+  );
+  return overridden ? (
+    <BadgeHint hint="Fit set by hand">{badge}</BadgeHint>
+  ) : (
+    badge
   );
 }
 

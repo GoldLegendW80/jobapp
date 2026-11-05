@@ -552,9 +552,9 @@ test("on a phone the rows are cards and nothing overflows", async () => {
   const header = postings(page).getByRole("rowgroup").first();
   await expect(header).toContainText("Company");
   expect((await header.boundingBox())?.width ?? 0).toBeLessThanOrEqual(1);
-  const inner = card.locator(":scope > div");
-  await expect(inner).toHaveCSS("border-top-style", "solid");
-  const box = await inner.boundingBox();
+  // The row itself is the card (a table row holds its cells only).
+  await expect(card).toHaveCSS("border-top-style", "solid");
+  const box = await card.boundingBox();
   expect(box?.width ?? 999).toBeLessThanOrEqual(375 - 32);
   expect(
     await page.evaluate(

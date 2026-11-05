@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { LoaderCircle } from "lucide-react";
 import { Link } from "react-router";
 
 import {
@@ -9,6 +8,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Spinner } from "@/components/ui/spinner";
 import { getJob, jobKey } from "@/features/jobs/api";
 import { paragraphs } from "@/features/jobs/text";
 import { WORDING } from "@/lib/wording";
@@ -42,10 +42,7 @@ export function PostingSheet({
         <div className="flex flex-col gap-3 px-4 pb-6 text-sm leading-relaxed">
           {job.isPending ? (
             <p className="flex items-center gap-2 text-muted-foreground">
-              <LoaderCircle
-                aria-hidden="true"
-                className="size-4 animate-spin"
-              />
+              <Spinner aria-hidden="true" role={undefined} />
               Loading the posting
             </p>
           ) : job.isError ? (

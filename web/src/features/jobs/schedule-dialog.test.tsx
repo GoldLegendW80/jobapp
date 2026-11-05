@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -77,7 +77,16 @@ beforeEach(() => {
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
 
-async function openSchedule() {
+/** The line the Schedule button shows in its tooltip: the pointer leaves it, then rests on it. */
+async function hintOf(button: HTMLElement): Promise<string | null> {
+  fireEvent.pointerLeave(button);
+  fireEvent.pointerMove(button);
+  return (await screen.findByRole("tooltip")).textContent;
+}
+
+async function openSchedule(
+  beforeOpen?: (button: HTMLElement) => Promise<void>,
+) {
   fakeJobsApi([makeJob(1)]);
   renderApp("/jobs");
   await screen.findByRole("table", { name: "Postings" });
@@ -86,6 +95,7 @@ async function openSchedule() {
   await waitFor(() => {
     expect(button).toHaveTextContent(/Off|On/);
   });
+  await beforeOpen?.(button);
   await user.click(button);
   const dialog = await screen.findByRole("dialog", {
     name: "Automatic search",
@@ -151,8 +161,7 @@ describe("Schedule", () => {
     await waitFor(() => {
       expect(button).toHaveTextContent("On");
     });
-    expect(button).toHaveAttribute(
-      "title",
+    expect(await hintOf(button)).toBe(
       "Automatic search: on, weekdays at 06:17 and 18:30 (America/New_York). Next: Sat 10 Oct, 00:17 (America/New_York).",
     );
   });
@@ -291,10 +300,12 @@ describe("Schedule", () => {
       search: null,
       schedule: { enabled: true, active: false, next_run: null },
     });
-    const { user, dialog, button } = await openSchedule();
+    const seen = { hint: null as string | null };
+    const { user, dialog, button } = await openSchedule(async (target) => {
+      seen.hint = await hintOf(target);
+    });
     expect(button).toHaveTextContent("On");
-    expect(button).toHaveAttribute(
-      "title",
+    expect(seen.hint).toBe(
       "Automatic search: on, every day at 06:17 (Europe/Paris). No job website is ticked in Find jobs, so nothing runs.",
     );
     await user.click(
