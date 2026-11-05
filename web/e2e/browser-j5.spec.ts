@@ -233,7 +233,7 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
     "text/event-stream",
   );
 
-  const progress = page.getByRole("region", { name: "Sweep in progress" });
+  const progress = page.getByRole("region", { name: "Search in progress" });
   await expect(progress).toContainText(`Reading ${SITE_HOST}`, {
     timeout: 60_000,
   });
@@ -267,13 +267,13 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
   );
 
   // The history: automatic search is off for every account until its owner turns it on.
-  await page.getByRole("button", { name: "Sweep history" }).click();
-  const history = page.getByRole("dialog", { name: "Sweeps" });
+  await page.getByRole("button", { name: "Past searches" }).click();
+  const history = page.getByRole("dialog", { name: "Past searches" });
   await expect(
     history.getByRole("region", { name: "Automatic search" }),
   ).toContainText("Automatic search: off.");
   await expect(
-    history.getByRole("list", { name: "Last sweeps" }),
+    history.getByRole("list", { name: "Last searches" }),
   ).toContainText(/By hand, Done/);
   await fitsInside(page, history);
   await shots(page, "sweep-history", false);

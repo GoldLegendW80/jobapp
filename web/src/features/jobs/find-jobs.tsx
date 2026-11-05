@@ -3,8 +3,9 @@
  * its setup (owner, 2026-10-30), follow it live (the website being read, new
  * postings so far), then a summary of what it found. An older sweep that read boards still
  * shows them. The history of the last sweeps, with the automatic schedule and its next run, is one
- * click away. A sweep already running when the page opens (started elsewhere, or an automatic
- * one) is followed the same way.
+ * click away ("Past searches"). A sweep already running when the page opens (started elsewhere,
+ * or an automatic one) is followed the same way. The code says "sweep"; the person reads
+ * "search" (Chapter 2 of the audit: the word left the interface).
  */
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -15,8 +16,8 @@ import {
   Search,
   TriangleAlert,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useState } from "react";
+import { Link } from "react-router";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -40,54 +41,41 @@ import { sourceLabel, sourceName } from "./labels";
 import { SweepSources } from "./sweep-sources";
 import { SearchSetup } from "./search-setup";
 import { getSweep, listSweeps, sweepsKey, type Sweep } from "./sweeps-api";
+import type { FindJobs } from "./use-find-jobs";
 import { scheduleLine } from "./use-schedule";
 import type { SweepRunner } from "./use-sweep-runner";
 
-export function FindJobsButton({ runner }: { runner: SweepRunner }) {
-  // `/jobs?find=1` (the wizard's Start with an empty list, Discover's empty deck) opens the
-  // setup at once; the word then leaves the address, so a reload does not open it again.
-  const [params, setParams] = useSearchParams();
-  const asked = params.get("find") === "1";
-  const [setup, setSetup] = useState(asked);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const busy = runner.starting || runner.running !== null;
-  useEffect(() => {
-    if (!asked) return;
-    setParams(
-      (old) => {
-        const next = new URLSearchParams(old);
-        next.delete("find");
-        return next;
-      },
-      { replace: true },
-    );
-  }, [asked, setParams]);
+/** A button that opens the page's Find jobs setup (use-find-jobs.ts); it says when a search
+ * runs. */
+export function FindJobsButton({ finder }: { finder: FindJobs }) {
+  const busy = finder.runner.starting || finder.runner.running !== null;
   return (
-    <>
-      <Button
-        ref={trigger}
-        onClick={() => {
-          setSetup(true);
-        }}
-        disabled={busy}
-      >
-        {busy ? (
-          <LoaderCircle aria-hidden="true" className="animate-spin" />
-        ) : (
-          <Search aria-hidden="true" />
-        )}
-        {busy ? "Finding jobs" : "Find jobs"}
-      </Button>
-      {setup ? (
-        <SearchSetup
-          runner={runner}
-          onClose={() => {
-            setSetup(false);
-          }}
-          onReturnFocus={() => trigger.current?.focus()}
-        />
-      ) : null}
-    </>
+    <Button
+      data-find-jobs=""
+      onClick={(event) => {
+        finder.show(event.currentTarget);
+      }}
+      disabled={busy}
+    >
+      {busy ? (
+        <LoaderCircle aria-hidden="true" className="animate-spin" />
+      ) : (
+        <Search aria-hidden="true" />
+      )}
+      {busy ? "Finding jobs" : "Find jobs"}
+    </Button>
+  );
+}
+
+/** The setup itself, while open. */
+export function FindJobsSetup({ finder }: { finder: FindJobs }) {
+  if (!finder.open) return null;
+  return (
+    <SearchSetup
+      runner={finder.runner}
+      onClose={finder.close}
+      onReturnFocus={finder.returnFocus}
+    />
   );
 }
 
@@ -158,7 +146,7 @@ export function SweepProgress({ runner }: { runner: SweepRunner }) {
   const reading = readingLine(sweep);
   return (
     <section
-      aria-label="Sweep in progress"
+      aria-label="Search in progress"
       className="flex flex-col gap-2 rounded-lg border bg-card p-3 text-card-foreground"
     >
       <div
@@ -247,7 +235,7 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
         <DialogHeader>
           <DialogTitle>
             {failed
-              ? "The sweep stopped"
+              ? "The search stopped"
               : sweep.new
                 ? `${plural(sweep.new, "new posting")} found`
                 : "No new posting"}
@@ -352,8 +340,8 @@ const STATUS_TEXT: Record<string, string> = {
   failed: "Failed",
 };
 
-/** The last sweeps and the automatic schedule, in a dialog. */
-export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
+/** The last sweeps and the automatic schedule, in a dialog: "Past searches". */
+export function PastSearchesButton({ runner }: { runner: SweepRunner }) {
   const [open, setOpen] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -374,7 +362,7 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
       },
       (error: unknown) => {
         setOpening(null);
-        toast.error(`This sweep could not be opened. ${describeError(error)}`);
+        toast.error(`This search could not be opened. ${describeError(error)}`);
       },
     );
   };
@@ -383,19 +371,17 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
     <>
       <Button
         variant="outline"
-        size="icon"
-        aria-label="Sweep history"
-        title="Sweep history"
         onClick={() => {
           setOpen(true);
         }}
       >
         <History aria-hidden="true" />
+        Past searches
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg [&>*]:min-w-0">
           <DialogHeader>
-            <DialogTitle>Sweeps</DialogTitle>
+            <DialogTitle>Past searches</DialogTitle>
             <DialogDescription>
               The last searches for postings.
             </DialogDescription>
@@ -423,16 +409,17 @@ export function SweepHistoryButton({ runner }: { runner: SweepRunner }) {
             <Alert variant="destructive">
               <CircleAlert aria-hidden="true" />
               <AlertDescription>
-                The sweeps could not be loaded. {describeError(history.error)}
+                The past searches could not be loaded.{" "}
+                {describeError(history.error)}
               </AlertDescription>
             </Alert>
           ) : history.data.items.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No sweep yet. Find jobs searches the websites ticked in its setup.
+              No search yet. Find jobs searches every place on your list.
             </p>
           ) : (
             <ul
-              aria-label="Last sweeps"
+              aria-label="Last searches"
               className="flex flex-col divide-y rounded-md border"
             >
               {history.data.items.map((sweep) => (

@@ -216,11 +216,12 @@ const kpi = (page: Page, label: string) =>
   page
     .getByRole("region", { name: "Postings per status" })
     .getByRole("button", { name: new RegExp(`^${label}: `) });
+// A tile names its count with thousands separators ("Found: 1,029").
 const kpiCount = async (page: Page, label: string) =>
   Number(
-    /: (\d+)$/.exec(
-      (await kpi(page, label).getAttribute("aria-label")) ?? "",
-    )?.[1],
+    /: ([\d,]+)$/
+      .exec((await kpi(page, label).getAttribute("aria-label")) ?? "")?.[1]
+      ?.replaceAll(",", ""),
   );
 const postings = (page: Page) => page.getByRole("table", { name: "Postings" });
 const rowBoxes = (page: Page) =>
@@ -356,7 +357,7 @@ test("select five rows, set them to Shortlisted, then Undo", async () => {
   await expect(bulkBar(page)).toContainText("5 postings selected");
   await shots(page, "bulk-bar", false);
   await bulkBar(page).getByLabel("New status").selectOption("shortlisted");
-  await bulkBar(page).getByRole("button", { name: "Apply" }).click();
+  await bulkBar(page).getByRole("button", { name: "Set status" }).click();
   const toast = page.getByText("5 postings set to Shortlisted.");
   await expect(toast).toBeVisible();
   await expect(kpi(page, "Found")).toHaveAccessibleName(`Found: ${found - 5}`);

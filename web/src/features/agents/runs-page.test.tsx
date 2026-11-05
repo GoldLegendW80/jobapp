@@ -126,10 +126,13 @@ describe("/runs", () => {
     expect(items[1]).toHaveTextContent("limit of 4 turns");
     // No test agent offered (production): no test run card.
     expect(screen.queryByText("Test run")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Runs" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    // Its entry is Activity in the account menu (shell/user-menu.tsx), marked current.
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: /^Account menu/ }));
+    expect(
+      await screen.findByRole("menuitem", { name: "Activity" }),
+    ).toHaveAttribute("aria-current", "page");
   });
 
   it("says when there is no run", async () => {

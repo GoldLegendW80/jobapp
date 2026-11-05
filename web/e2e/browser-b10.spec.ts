@@ -136,7 +136,7 @@ async function findJobs(page: Page) {
     .check();
   await setup.getByRole("button", { name: "Save and start search" }).click();
   const dialog = page.getByRole("dialog", {
-    name: /new postings? found|No new posting|The sweep stopped/,
+    name: /new postings? found|No new posting|The search stopped/,
   });
   await expect(dialog).toBeVisible({ timeout: 300_000 });
   return dialog;

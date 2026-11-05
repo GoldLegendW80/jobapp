@@ -194,7 +194,7 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "shortlisted",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     // Optimistic: the rows show the new status before the api answers.
     const badges = () =>
       Array.from(table().querySelectorAll("[data-status]")).map((b) =>
@@ -227,7 +227,7 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "skipped",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     expect(table().querySelector("[data-status]")).toHaveAttribute(
       "data-status",
       "skipped",
@@ -250,7 +250,7 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "applied",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("Mark 2 postings as applied?");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
@@ -301,7 +301,7 @@ describe("bulk actions", () => {
       within(bar()).getByLabelText("New status"),
       "closed",
     );
-    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    await user.click(within(bar()).getByRole("button", { name: "Set status" }));
     const toast = await screen.findByText("1 posting set to Closed.");
     await user.click(
       within(toast.closest("[data-sonner-toast]") as HTMLElement).getByRole(

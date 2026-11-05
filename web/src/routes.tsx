@@ -39,7 +39,13 @@ export const routes: RouteObject[] = [
     element: (
       <AuthProvider>
         <Outlet />
-        <Toaster position="bottom-center" />
+        {/* On a phone, above the shell's bottom tab bar (shell/bottom-nav.tsx). */}
+        <Toaster
+          position="bottom-center"
+          mobileOffset={{
+            bottom: "calc(4.5rem + env(safe-area-inset-bottom))",
+          }}
+        />
       </AuthProvider>
     ),
     children: [

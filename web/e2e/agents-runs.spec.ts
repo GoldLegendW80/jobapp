@@ -101,7 +101,9 @@ test("the runs page is empty and offers a test run", async () => {
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
-  await page.getByRole("link", { name: "Runs" }).click();
+  // The runs are Activity in the account menu (chapter 2 of the audit).
+  await page.getByRole("button", { name: /^Account menu/ }).click();
+  await page.getByRole("menuitem", { name: "Activity" }).click();
   await expect(page.getByRole("heading", { name: "Agent runs" })).toBeVisible();
   await expect(page.getByText(/No run yet/)).toBeVisible();
   await expect(page.getByText("Test run", { exact: true })).toBeVisible();

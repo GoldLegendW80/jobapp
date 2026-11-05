@@ -68,7 +68,9 @@ export function AdvancedSection({
         type="button"
         aria-expanded={shown}
         aria-controls={id}
-        className="flex min-h-11 w-fit items-center gap-1 rounded-md text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none sm:min-h-0"
+        // A form with an icon gutter (jobs/setup-grid.tsx) sets the two properties, so the
+        // chevron hangs in its gutter and the title starts at its text edge; else 0 and 0.25rem.
+        className="ms-[calc(-1*var(--advanced-hang,0px))] flex min-h-11 w-fit items-center gap-(--advanced-gap,0.25rem) rounded-md text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none sm:min-h-0"
         onClick={() => {
           const next = !shown;
           setOwn(next);

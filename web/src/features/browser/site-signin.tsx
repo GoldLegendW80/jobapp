@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, LoaderCircle, LogIn } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { describeError, errorDetail } from "@/lib/api";
@@ -35,16 +35,22 @@ export const EXPIRED =
  * A job website's Sign in (browser B17): the person's own browser opens on the website in the
  * live view, the person signs in themselves, and Done ends the session and checks that the
  * browser kept the website's login. The searches then read that website signed in, in this
- * person's browser only. "Forget all logins" (B7) removes every website's login.
+ * person's browser only. "Forget all logins" (B7) removes every website's login. `optional`
+ * (a line of Find jobs) says, before any login, that signing in is only for a website that shows
+ * more postings to members.
  */
 export function SiteSignIn({
   url,
   forget = true,
+  optional = false,
 }: {
   url: string;
   /** false: no "Forget all logins" of its own (Account's list has one for every website). */
   forget?: boolean;
+  /** true in Find jobs: the button reads "Sign in (optional)" with a one line hint. */
+  optional?: boolean;
 }) {
+  const hintId = useId();
   const host = hostOf(url);
   const client = useQueryClient();
   const [opened, setOpened] = useState(false);
@@ -102,6 +108,7 @@ export function SiteSignIn({
   if (!host) return null;
   const login = logins.data?.find((site) => site.host === host);
   const failure = start.error ?? done.error;
+  const offered = optional && !login && !opened;
   return (
     <div className="flex w-full flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
@@ -131,7 +138,8 @@ export function SiteSignIn({
             type="button"
             size="sm"
             variant="outline"
-            aria-label={`Sign in to ${host}`}
+            aria-label={`Sign in to ${host}${offered ? " (optional)" : ""}`}
+            aria-describedby={offered ? hintId : undefined}
             disabled={start.isPending}
             onClick={() => {
               setNote(null);
@@ -140,9 +148,18 @@ export function SiteSignIn({
             }}
           >
             <LogIn aria-hidden />
-            {login?.state === "expired" ? "Sign in again" : "Sign in"}
+            {login?.state === "expired"
+              ? "Sign in again"
+              : offered
+                ? "Sign in (optional)"
+                : "Sign in"}
           </Button>
         )}
+        {offered ? (
+          <span id={hintId} className="text-xs text-muted-foreground">
+            Only if this site shows more postings to members.
+          </span>
+        ) : null}
         {login && forget ? (
           <ForgetDialog
             profile={browser.data?.profile}

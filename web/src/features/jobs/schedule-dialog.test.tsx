@@ -8,6 +8,7 @@ import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { emptySweeps, server } from "@/test/server";
 
+import { ownTimeZone } from "./schedule";
 import type { ScheduleState } from "./sweeps-api";
 
 const SEARCH = {
@@ -154,6 +155,30 @@ describe("Schedule", () => {
       "title",
       "Automatic search: on, weekdays at 06:17 and 18:30 (America/New_York). Next: Sat 10 Oct, 00:17 (America/New_York).",
     );
+  });
+
+  it("lists the person's own time zone first, and mutes the days while off", async () => {
+    fakeProfile();
+    const { user, dialog } = await openSchedule();
+    const zones = within(
+      within(dialog).getByLabelText("Time zone"),
+    ).getAllByRole("option");
+    const own = ownTimeZone();
+    expect(own).not.toBeNull();
+    expect(zones[0]).toHaveValue(own);
+    expect(
+      zones.filter((zone) => zone.getAttribute("value") === own),
+    ).toHaveLength(1);
+    // Off: the chosen days are kept, but do not look chosen.
+    const monday = within(dialog).getByRole("button", { name: "Monday" });
+    expect(monday).toHaveAttribute("aria-pressed", "true");
+    expect(monday).toHaveAttribute("data-variant", "secondary");
+    expect(monday).toBeDisabled();
+    await user.click(
+      within(dialog).getByRole("checkbox", { name: "Search automatically" }),
+    );
+    expect(monday).toHaveAttribute("data-variant", "default");
+    expect(monday).toBeEnabled();
   });
 
   it("puts the schedule onto a profile changed meanwhile (409), once", async () => {
@@ -312,9 +337,11 @@ describe("Schedule", () => {
     renderApp("/jobs");
     const user = userEvent.setup();
     await user.click(
-      await screen.findByRole("button", { name: "Sweep history" }),
+      await screen.findByRole("button", { name: "Past searches" }),
     );
-    const history = await screen.findByRole("dialog", { name: "Sweeps" });
+    const history = await screen.findByRole("dialog", {
+      name: "Past searches",
+    });
     await user.click(
       await within(history).findByRole("button", { name: "Change schedule" }),
     );

@@ -3,6 +3,9 @@ import { cn } from "@/lib/utils";
 import type { FitBucket } from "./api";
 import { bucketTone } from "./labels";
 
+/** A count with thousands separators ("5,100"). */
+const count = (n: number) => n.toLocaleString("en-GB");
+
 /**
  * Fit distribution of the filtered rows: ten buckets (0 to 9 ... 90 to 100) drawn as bars. Each
  * bar is a button that narrows the list to its range (a second click clears it), named for
@@ -35,7 +38,9 @@ export function FitHistogram({
         <h2 id="fit-title" className="text-sm font-medium">
           Fit distribution
         </h2>
-        <p className="text-xs text-muted-foreground">{unscored} unscored</p>
+        <p className="text-xs text-muted-foreground">
+          {count(unscored)} unscored
+        </p>
       </div>
       <ul
         aria-label="Postings per fit range"
@@ -54,8 +59,8 @@ export function FitHistogram({
               <button
                 type="button"
                 aria-pressed={pressed}
-                aria-label={`Fit ${bucket.low} to ${bucket.high}: ${bucket.count} postings`}
-                title={`Fit ${bucket.low} to ${bucket.high}: ${bucket.count}`}
+                aria-label={`Fit ${bucket.low} to ${bucket.high}: ${count(bucket.count)} postings`}
+                title={`Fit ${bucket.low} to ${bucket.high}: ${count(bucket.count)}`}
                 onClick={() => {
                   onSelect(bucket.low, bucket.high);
                 }}
@@ -63,9 +68,9 @@ export function FitHistogram({
               >
                 <span
                   aria-hidden="true"
-                  className="text-[10px] leading-none text-muted-foreground tabular-nums"
+                  className="text-[10px] leading-none tracking-tight whitespace-nowrap text-muted-foreground tabular-nums"
                 >
-                  {bucket.count}
+                  {count(bucket.count)}
                 </span>
                 <span
                   aria-hidden="true"
