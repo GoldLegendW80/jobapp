@@ -20,7 +20,9 @@ const shots = makeShots("profile-titles", "titles");
  * the real stack through Caddy: a fresh account gets a made up profile through the operator CLI,
  * takes the place of its profile in one click, saves a made up API key, asks for ideas (the
  * worker replays the fake stream `profile_titles`: no model is called), adds one in one click and
- * saves. The ideas the code refuses (a cybersecurity title, a dash, a repeat) never show.
+ * saves. The ideas the code refuses (an unwanted title, a dash, a repeat) never show. Then "Not for
+ * me" removes an idea for good, and a message to the assistant asks again: the ideas shown stay,
+ * nothing comes back twice, and the last message shows under the box until Clear.
  *
  * Locally, on a scratch Compose project with the fake agent backend (as agents-triage):
  *   E2E_CADDY_URL=http://127.0.0.1:8095 E2E_COMPOSE_PROJECT=jobapp-p5 \
@@ -171,8 +173,8 @@ test("with a key: the cost before the click, then ideas that passed the checks",
   await expect(add).toHaveAccessibleDescription(
     "Your SQL and dbt work matches this role.",
   );
-  // What the code refused never shows: a cybersecurity title, a dash, a repeat.
-  await expect(ideas()).not.toContainText(/security/i);
+  // What the code refused never shows: an unwanted title, a dash, a repeat.
+  await expect(ideas()).not.toContainText("Data intern");
   await expect(ideas()).not.toContainText(/[–—]| - /);
   await expect(ideas().getByRole("button", { name: /^Add / })).toHaveCount(5);
   await shots(page, "ideas");
@@ -194,5 +196,48 @@ test("one click adds an idea to the list; Save keeps it and the idea leaves", as
       name: "Add Data platform engineer to Job titles",
     }),
   ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("Not for me removes an idea for good; a message asks again and the ideas stay", async () => {
+  await ideas()
+    .getByRole("button", { name: "Not for me: Data consultant" })
+    .click();
+  await expect(ideas()).not.toContainText("Data consultant");
+  await page.reload();
+  await expect(
+    ideas().getByRole("button", {
+      name: "Add Data platform engineer to Job titles",
+    }),
+  ).toBeVisible();
+  await expect(ideas()).not.toContainText("Data consultant");
+  const box = ideas().getByLabel("Tell the assistant what you want to do");
+  await box.fill("Stay in data, work remotely");
+  await box.press("Enter"); // sends the message, never the Search form
+  // An automatic refresh may be on its way after the save above: then Send waits and is
+  // clicked again, as a person would.
+  await expect(async () => {
+    if (await box.inputValue()) {
+      await ideas()
+        .getByRole("button", { name: "Send" })
+        .click({ timeout: 2_000 });
+    }
+    await expect(ideas()).toContainText(
+      "You told the assistant: “Stay in data, work remotely”",
+      { timeout: 2_000 },
+    );
+  }).toPass({ timeout: 60_000 });
+  // The same stream again: nothing new, the ideas shown stay, the dismissed one stays away.
+  await expect(ideas()).toContainText("No new idea this time.", {
+    timeout: 90_000,
+  });
+  await expect(ideas().getByRole("button", { name: /^Add / })).toHaveCount(3);
+  await expect(ideas()).not.toContainText("Data consultant");
+  await expect(page.getByText("Search saved.")).toHaveCount(0);
+  await shots(page, "chat");
+  await ideas()
+    .getByRole("button", { name: "Clear what you told the assistant" })
+    .click();
+  await expect(ideas()).not.toContainText("You told the assistant");
   expect(errors).toEqual([]);
 });
