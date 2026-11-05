@@ -48,12 +48,16 @@ const questionSchema = z.object({
   label: z.string(),
   host: z.string(),
   kind: z.enum(["fact", "action"]),
+  // Asked after a control that may have sent the form: the answer is a Try again.
+  after_send: z.boolean().optional(),
 });
 export type Question = z.infer<typeof questionSchema>;
 
 const detailSchema = applicationSchema.extend({
   events: z.array(eventSchema),
   question: questionSchema.nullable().optional(),
+  // One click Apply's agent may have sent it: Try again runs the agent once more.
+  agent: z.boolean().optional(),
   // The end of a Full auto hold and the server's time, for the countdown.
   hold_until: z.string().nullable().optional(),
   now: z.string().optional(),

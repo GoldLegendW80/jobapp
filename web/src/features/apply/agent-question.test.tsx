@@ -6,6 +6,8 @@ import { fakeApplication } from "@/test/apply";
 import { makeDetail } from "@/test/jobs";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
+import { AFTER_SEND, AgentQuestion } from "./agent-question";
+import { valueText } from "./apply-state";
 import { NeedsPerson } from "./needs-person";
 import { needOf } from "./needs-person-state";
 
@@ -70,6 +72,64 @@ describe("One click Apply's question (A19)", () => {
     expect(
       screen.getByRole("button", { name: "I did it, go on" }),
     ).toBeEnabled();
+  });
+
+  it("after a possible send, warns first and makes the answer a Try again", async () => {
+    const sent: unknown[] = [];
+    const application = {
+      ...fakeApplication("submit_unknown"),
+      mode: "direct",
+    };
+    server.use(
+      http.post("*/api/applications/:id/question", async ({ request }) => {
+        sent.push(await request.json());
+        return HttpResponse.json({ ...application, state: "queued" });
+      }),
+    );
+    renderWithQuery(
+      <AgentQuestion
+        application={application}
+        question={{ ...FACT, after_send: true }}
+      />,
+    );
+    expect(screen.getByText(FACT.sentence)).toBeInTheDocument();
+    expect(screen.getByText(AFTER_SEND)).toBeInTheDocument();
+    expect(AFTER_SEND).not.toMatch(DASHES);
+    expect(screen.getByLabelText("Remember this answer")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Your answer"), "Two months");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Try again with this answer" }),
+    );
+    await waitFor(() => {
+      expect(sent).toEqual([{ answer: "Two months", remember: false }]);
+    });
+  });
+
+  it("after a possible send, an action is done on the site, then tried again", () => {
+    renderWithQuery(
+      <AgentQuestion
+        application={{ ...fakeApplication("submit_unknown"), mode: "direct" }}
+        question={{ ...FACT, kind: "action", after_send: true }}
+      />,
+    );
+    expect(screen.queryByLabelText("Your answer")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "I did it, try again" }),
+    ).toBeEnabled();
+  });
+
+  it("shows the run report as text, not as raw JSON", () => {
+    const report = {
+      summary: "Filled both steps and sent it.",
+      confirmation_url: "https://jobs.example.org/thanks",
+    };
+    expect(valueText(report)).toBe(
+      "Filled both steps and sent it. Confirmation page: https://jobs.example.org/thanks",
+    );
+    expect(valueText({ summary: "It failed.", confirmation_url: "" })).toBe(
+      "It failed.",
+    );
+    expect(valueText({ other: 1 })).toBe('{"other":1}');
   });
 
   it("names the need in plain words, with no dash", () => {

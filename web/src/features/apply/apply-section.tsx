@@ -49,6 +49,7 @@ import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
 import { LiveViewSlot, type LeaseOf } from "./live-view-slot";
 import { ManualPanel } from "./manual-panel";
+import { AgentQuestion } from "./agent-question";
 import { NeedsPerson } from "./needs-person";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
@@ -81,6 +82,14 @@ const DECISIONS = {
     sentence:
       "If the first one went through, the company may receive two applications.",
     confirm: "Fill and approve again",
+    call: retryApplication,
+  },
+  // One click Apply's agent (A19): Try again is one more run of the agent, which sends.
+  retryAgent: {
+    title: "Apply again?",
+    sentence:
+      "The assistant applies again and sends it by itself. It looks on the site first for the earlier one, but if that one went through, the company may receive two applications.",
+    confirm: "Apply again",
     call: retryApplication,
   },
 } satisfies Record<
@@ -219,6 +228,12 @@ export function ApplySection({ job }: { job: JobDetail }) {
     },
   });
 
+  // A question asked after a control that may have sent the form (A19): its answer is the
+  // person's Try again, in place of the plain button.
+  const afterSend =
+    application?.state === "submit_unknown" && detail.data?.question?.after_send
+      ? detail.data.question
+      : null;
   const holdUntil =
     application?.state === "held" ? detail.data?.hold_until : undefined;
   const submitLease = submitLeaseOf(application);
@@ -443,6 +458,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
               question={asked ? detail.data?.question : undefined}
             />
           ) : null}
+          {application && afterSend && !manual ? (
+            <AgentQuestion application={application} question={afterSend} />
+          ) : null}
           {phase === "filling" && !manual ? (
             <LiveViewSlot
               idle={
@@ -620,16 +638,18 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 >
                   It was submitted
                 </Button>
-                <Button
-                  variant="outline"
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    ask("retry");
-                  }}
-                >
-                  Try again
-                </Button>
+                {afterSend ? null : (
+                  <Button
+                    variant="outline"
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      ask(detail.data?.agent ? "retryAgent" : "retry");
+                    }}
+                  >
+                    Try again
+                  </Button>
+                )}
               </>
             ) : null}
             {phase === "refused" ? (

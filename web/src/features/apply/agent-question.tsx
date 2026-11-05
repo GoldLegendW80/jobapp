@@ -18,8 +18,14 @@ import {
  * label and the site, never the assistant's words. A fact gets a text box, whose answer is given
  * to the assistant when it goes on, and saved to Saved answers when "Remember this answer" is
  * ticked; an action (a password, a code, a captcha) is the person's on the site: Take over opens
- * it, then "I did it, go on". No dashes as separators.
+ * it, then "I did it, go on". Asked after a control that may have sent the form (`after_send`,
+ * the application `submit_unknown`), the page says so first, and the answer is the person's Try
+ * again: the assistant looks on the site for the earlier one before it sends again. No dashes as
+ * separators.
  */
+export const AFTER_SEND =
+  "The assistant may have sent this application already, before it stopped here. Look for a confirmation mail or on the site first.";
+
 export function AgentQuestion({
   application,
   question,
@@ -31,6 +37,7 @@ export function AgentQuestion({
   const [answer, setAnswer] = useState("");
   const [remember, setRemember] = useState(false);
   const fact = question.kind === "fact";
+  const afterSend = question.after_send === true;
   const send = useMutation({
     mutationFn: () =>
       answerQuestion(application.id, fact ? answer : "", fact && remember),
@@ -51,6 +58,7 @@ export function AgentQuestion({
       }}
     >
       <p className="text-sm font-medium">{question.sentence}</p>
+      {afterSend ? <p className="text-sm">{AFTER_SEND}</p> : null}
       {fact ? (
         <>
           <label className="flex flex-col gap-1 text-sm">
@@ -88,7 +96,13 @@ export function AgentQuestion({
         type="submit"
         disabled={send.isPending || (fact && !answer.trim())}
       >
-        {fact ? "Send the answer" : "I did it, go on"}
+        {afterSend
+          ? fact
+            ? "Try again with this answer"
+            : "I did it, try again"
+          : fact
+            ? "Send the answer"
+            : "I did it, go on"}
       </Button>
       {send.isError ? (
         <p className="text-sm text-destructive" role="alert">

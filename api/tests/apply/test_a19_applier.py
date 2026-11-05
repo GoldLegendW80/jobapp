@@ -533,3 +533,142 @@ def test_a_confirmation_read_before_the_last_submit_act_is_refused(
     assert text.startswith("Refused: read the confirmation page")
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.submit_unknown, "no_confirmation")
+
+
+@pytest.mark.parametrize(
+    ("label", "secret"),
+    [
+        ("Password", True),
+        ("Confirm your password *", True),
+        ("Passwort", True),
+        ("Kennwort wiederholen", True),
+        ("Mot de passe", True),
+        ("Mot de passe (8 caractères)", True),
+        ("PIN", True),
+        ("Verification code", True),
+        ("Enter the code we sent to your e-mail", True),
+        ("One-time code", True),
+        ("Code de vérification", True),
+        ("Bestätigungscode", True),
+        ("Sicherheitscode", True),
+        ("SMS code", True),
+        ("OTP", True),
+        ("2FA token", True),
+        ("Captcha", True),
+        ("Card number", True),
+        ("Credit card", True),
+        ("Numéro de carte bancaire", True),
+        ("CVC", True),
+        ("IBAN", True),
+        ("Payment method", True),
+        ("Moyen de paiement", True),
+        ("Promo code", True),
+        ("Programming languages you code in", True),  # "code" alone: fail closed, an action
+        # Facts the person answers in the app's box.
+        ("Postal code", False),
+        ("ZIP code", False),
+        ("Code postal", False),
+        ("Postcode", False),
+        ("Country code", False),
+        ("Area code", False),
+        ("Notice period *", False),
+        ("What is your notice period?", False),
+        ("Expected salary", False),
+        ("Desired pay rate", False),
+        ("Do you hold a security clearance?", False),
+        ("Work permit expiry date", False),
+        ("Residence permit (carte de séjour)", False),
+        ("Années d'expérience", False),
+        ("", False),
+    ],
+)
+def test_a_label_that_reads_as_a_password_a_code_or_a_payment_is_an_action(
+    label: str, secret: bool
+) -> None:
+    assert applier.secret_label(label) is secret
+
+
+def test_a_question_names_only_what_the_page_shows_and_a_password_is_an_action(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    from app.apply.router import _question
+
+    app_id = started(db, person_a, Mode.direct)
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        brief = json.loads(message)
+        await session.navigate(brief["posting"]["url"])
+        await session.interact("browser_click", {"ref": "e1"})
+        go.unseen = await session.ask_person(  # type: ignore[attr-defined]
+            "Type your bank password here.", "Your bank password", "fact"
+        )
+        await session.ask_person("The site asks for a password.", "password", "fact")
+        return applier.Ran(1, 1)
+
+    assert apply(svc(factory, Site(), go), app_id) == "needs_person"
+    text, error = go.unseen  # type: ignore[attr-defined]
+    assert error
+    assert text.startswith("Refused: `field` is the field's label")
+    shown = _question(db, application(db, app_id))
+    assert shown is not None
+    # The label as the agent gave it (found on the page), asked as an action: no text box.
+    assert (shown.label, shown.kind) == ("password", "action")
+    assert len(applier._questions(db, application(db, app_id))) == 1
+
+
+def test_busy_runs_queue_the_application_again_until_the_retries_run_out(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    async def busy(session: applier.ApplySession, message: str) -> applier.Ran:
+        return applier.Ran(stopped="busy")
+
+    app_id = started(db, person_a, Mode.direct)
+    assert apply(svc(factory, Site(), busy), app_id) == "queued"
+    found = application(db, app_id)
+    assert (found.state, found.needs, found.error_code) == (State.queued, "retry", "busy")
+    retry = [e for e in events(db, app_id) if e.kind == "retry"]
+    assert retry[-1].data["code"] == "busy"
+    assert retry[-1].data["delay_s"] > 0
+    db.execute(
+        sa.update(applier.Application).where(applier.Application.id == app_id).values(attempt=99)
+    )
+    db.commit()
+    assert apply(svc(factory, Site(), busy), app_id) == "failed"
+    assert application(db, app_id).error_code == "busy"
+
+
+def test_a_cancel_stops_the_agent_at_its_next_tool_call(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    from app.apply import gate
+
+    app_id = started(db, person_a, Mode.direct)
+    site = Site()
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        await session.navigate(json.loads(message)["posting"]["url"])
+        with factory() as other:
+            gate.cancel(other, person_a.user_id, app_id, AT, reject=False)
+            other.commit()
+        go.after = await session.interact("browser_click", {"ref": "e1"})  # type: ignore[attr-defined]
+        return applier.Ran(1, 1)
+
+    assert apply(svc(factory, site, go), app_id) == "superseded"
+    assert application(db, app_id).state is State.cancelled
+    assert go.after[1]  # type: ignore[attr-defined]
+    assert ("browser_click", False) not in site.calls
+
+
+def test_a_rehearsal_never_runs_the_agent(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    db.execute(
+        sa.update(applier.Application).where(applier.Application.id == app_id).values(dry_run=True)
+    )
+    db.commit()
+    site = Site()
+    services_ = svc(factory, site, agent())
+    assert apply(services_, app_id) == "dry_run"
+    assert services_.fill.leases.acquired == []
+    assert site.calls == []
