@@ -11,7 +11,8 @@ import {
 import { describeError } from "@/lib/api";
 import { LaterHandoffBanner } from "@/features/browser/later-handoff-banner";
 
-import type { Application, ApplicationEvent } from "./apply-api";
+import { AgentQuestion } from "./agent-question";
+import type { Application, ApplicationEvent, Question } from "./apply-api";
 import { LiveViewSlot } from "./live-view-slot";
 import {
   getNeedsCount,
@@ -34,11 +35,14 @@ export function NeedsPerson({
   application,
   job,
   events,
+  question,
 }: {
   application: Application | null;
   job: JobDetail;
   // The application's events; undefined while they load.
   events?: readonly ApplicationEvent[];
+  // One click Apply's open question (A19); undefined while it loads.
+  question?: Question | null;
 }) {
   if (application?.state === "posting_closed") {
     return <ClosedProposal job={job} />;
@@ -61,6 +65,9 @@ export function NeedsPerson({
       ) : null}
       {ON_PAGE.has(application.needs ?? "") ? (
         <OnPageSlot events={events} />
+      ) : null}
+      {application.needs === "agent_question" && question ? (
+        <AgentQuestion application={application} question={question} />
       ) : null}
     </div>
   );

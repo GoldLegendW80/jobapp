@@ -35,6 +35,13 @@ Tightened by apply A6 (issue #296):
   records `submitted` from `queued`, `filling` or `needs_person` without `submitting` and
   without the gate (`MANUAL_SENT_FROM`), for a `manual` application only
   (test_the_manual_move_is_for_manual_applications_only).
+- One click Apply's agent (A19, `applier.py`, owner 2026-11-05): the agent clicks Submit
+  itself, so the app commits `submitting` from `filling` just before browserd lets its first
+  act on a submit element through (`move(..., by_agent=True)`, for a `direct` application only,
+  AGENT_MOVES); the outcomes are then the usual ones (test_a19_applier). After a control that
+  may have sent the form, the person's Try again (gate.retry, or the answer to the question the
+  agent asked there, applier.answer_question) moves `submit_unknown` to `queued` for one more
+  run of the agent (`move(..., retried_by_person=True)`, PERSON_RETRIES), never the tick.
 - Before the click the submit lease may stop: `approved` to `ready` (a difference on the read
   back, the approval spent), `needs_person` (a captcha on the refilled form), or an end.
 """
@@ -79,6 +86,11 @@ TRANSITIONS: dict[State, frozenset[State]] = {
 # Apply myself: the person sent it from the live view, the one way to `submitted` past the gate.
 MANUAL_SENT_FROM = frozenset({S.queued, S.filling, S.needs_person})
 
+# One click Apply's agent (A19): its own first act on a submit element, never another mode's.
+AGENT_MOVES = {S.filling: frozenset({S.submitting})}
+# One click Apply's agent (A19): the person's Try again after a send it could not confirm.
+PERSON_RETRIES = {S.submit_unknown: frozenset({S.queued})}
+
 # Where a `submitting` with no click goes (`move(..., click_refused=True)`): back to `ready`, or
 # the end `recheck` gives the same refusal before the arm (never apply, a closed posting).
 NO_CLICK_TO = frozenset({S.ready, S.blocked, S.posting_closed})
@@ -104,6 +116,8 @@ def move(
     *,
     by_gate: bool = False,
     click_refused: bool = False,
+    by_agent: bool = False,
+    retried_by_person: bool = False,
 ) -> None:
     """Move `application` to `to`, or raise TransitionError. The caller holds its row lock and
     commits. `submitted_at` is set when the move records the click, and kept after it. Only the
@@ -117,7 +131,15 @@ def move(
         application.mode is Mode.manual and to is S.submitted and current in MANUAL_SENT_FROM
     )
     no_click = click_refused and current is S.submitting and to in NO_CLICK_TO
-    if not sent_by_person and not no_click and not allowed(current, to):
+    agent_click = (
+        by_agent and application.mode is Mode.direct and to in AGENT_MOVES.get(current, ())
+    )
+    person_retry = (
+        retried_by_person
+        and application.mode is Mode.direct
+        and to in PERSON_RETRIES.get(current, ())
+    )
+    if not (sent_by_person or no_click or agent_click or person_retry or allowed(current, to)):
         raise TransitionError(f"an application cannot move from {current.value} to {to.value}")
     if to in DECIDED and not by_gate:
         raise TransitionError(

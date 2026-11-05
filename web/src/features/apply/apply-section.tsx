@@ -46,6 +46,7 @@ import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
 import { LiveViewSlot, type LeaseOf } from "./live-view-slot";
 import { ManualPanel } from "./manual-panel";
+import { AgentQuestion } from "./agent-question";
 import { NeedsPerson } from "./needs-person";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
 import { RunReport } from "./run-report";
@@ -161,6 +162,10 @@ export function ApplySection({ job }: { job: JobDetail }) {
     ON_PAGE.has(application.needs ?? "");
   const retrying =
     application?.state === "queued" && application.needs === "retry";
+  // One click Apply's question (A19): the detail holds its sentence.
+  const asked =
+    application?.state === "needs_person" &&
+    application.needs === "agent_question";
   const detail = useQuery({
     queryKey: applicationKey(id ?? ""),
     queryFn: ({ signal }) => getApplication(id as string, signal),
@@ -169,7 +174,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
       (hasReport(application) ||
         application?.state === "held" ||
         onPage ||
-        retrying),
+        retrying ||
+        asked),
     refetchInterval: (current) => {
       const events = current.state.data?.events;
       const wait = onPage && events ? waitOf(events) : null;
@@ -177,6 +183,12 @@ export function ApplySection({ job }: { job: JobDetail }) {
     },
   });
 
+  // A question asked after a control that may have sent the form (A19): its answer is the
+  // person's Try again, in place of the plain button.
+  const afterSend =
+    application?.state === "submit_unknown" && detail.data?.question?.after_send
+      ? detail.data.question
+      : null;
   const holdUntil =
     application?.state === "held" ? detail.data?.hold_until : undefined;
   const submitLease = submitLeaseOf(application);
@@ -398,7 +410,11 @@ export function ApplySection({ job }: { job: JobDetail }) {
               application={application}
               job={job}
               events={onPage ? detail.data?.events : undefined}
+              question={asked ? detail.data?.question : undefined}
             />
+          ) : null}
+          {application && afterSend && !manual ? (
+            <AgentQuestion application={application} question={afterSend} />
           ) : null}
           {phase === "filling" && !manual ? (
             <LiveViewSlot
@@ -568,16 +584,18 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 >
                   It was submitted
                 </Button>
-                <Button
-                  variant="outline"
-                  className="w-full sm:w-fit"
-                  disabled={busy}
-                  onClick={() => {
-                    ask("retry");
-                  }}
-                >
-                  Try again
-                </Button>
+                {afterSend ? null : (
+                  <Button
+                    variant="outline"
+                    className="w-full sm:w-fit"
+                    disabled={busy}
+                    onClick={() => {
+                      ask(detail.data?.agent ? "retryAgent" : "retry");
+                    }}
+                  >
+                    Try again
+                  </Button>
+                )}
               </>
             ) : null}
             {phase === "refused" ? (

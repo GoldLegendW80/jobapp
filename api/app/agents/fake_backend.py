@@ -9,6 +9,10 @@ A stream (app/agents/fake_streams/<name>.json) is a list of steps:
   sees what the real SDK would give it;
 - {"raise": "process" | "cli_not_found" | "connection"}: fail like the SDK does when the CLI
   dies, is missing or cannot start.
+Any step may hold `"if_prompt": "<text>"` (replayed only when the run's prompt holds that text)
+or `"unless_prompt": "<text>"` (only when it does not): what a model does next depends on its
+first message, so one recorded stream asks the person in a run whose prompt lacks the answer and
+uses the answer in the run after it (apply A19, `apply_agent.json`).
 
 The messages follow the documented types (Python reference, Message types): `system` (subtype
 `init`), `assistant` (content blocks text, thinking, tool_use; usage), `user` (tool_result
@@ -110,6 +114,12 @@ def load(name: str) -> dict[str, Any]:
     return script
 
 
+def kept(step: dict[str, Any], prompt: str) -> bool:
+    """Whether `step` is replayed for a run of this prompt (`if_prompt`, `unless_prompt`)."""
+    has, lacks = step.get("if_prompt"), step.get("unless_prompt")
+    return (has is None or str(has) in prompt) and (lacks is None or str(lacks) not in prompt)
+
+
 def load_script(name: str) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = load(name)["steps"]
     return steps
@@ -192,7 +202,7 @@ class FakeBackend:
         turns = 0
         replayed: set[int] = set()  # recorded steps already yielded ahead of their turn
         for position, step in enumerate(steps):
-            if position in replayed:
+            if position in replayed or not kept(step, request.prompt or ""):
                 continue
             if self._interrupted.is_set():
                 yield self._result(variables, started, turns, "error_during_execution", True)

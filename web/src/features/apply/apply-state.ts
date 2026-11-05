@@ -309,9 +309,21 @@ export function valueText(value: unknown): string {
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value))
     return value.map(valueText).filter(Boolean).join(", ");
-  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "object")
+    return reportText(value) ?? JSON.stringify(value);
   if (typeof value === "string") return value;
   return typeof value === "number" ? String(value) : "";
+}
+
+/** One click Apply's report (A19): what the assistant did, then the confirmation's address. */
+function reportText(value: object): string | null {
+  const report = value as { summary?: unknown; confirmation_url?: unknown };
+  if (typeof report.summary !== "string") return null;
+  const page =
+    typeof report.confirmation_url === "string" && report.confirmation_url
+      ? ` Confirmation page: ${report.confirmation_url}`
+      : "";
+  return `${report.summary}${page}`.trim();
 }
 
 /** Left for the person and still empty. A value the person typed ends the leaving. */

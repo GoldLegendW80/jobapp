@@ -28,6 +28,15 @@ ask's too: live.Live.person_holds, read for each request), the request floor doe
 agent's calls wait, and the person signs in or solves a check. browserd's egress proxy keeps
 every request to a public address.
 
+One click Apply's agent (A19, owner 2026-11-05: "do it exactly like Mac") holds a lease of
+purpose AGENT_PURPOSE: the person's own persisted context, any public http or https address (no
+host list; the egress proxy refuses a private one), at most three tabs, every Playwright CLI
+command and the file upload of the documents placed on the lease. Its tools may click a submit
+element, press Enter in a form or run a script only when the call carries the lease's
+capability, which the api sends only while the emergency stop is off (`detect.agent_verdict`);
+a result that acted on a submit element says so (`submit_clicked`). They type into any field but
+a password or one time code box (hard rule 7). The line of a discovery is not applied to it.
+
 Refs are those of the last `browser_snapshot` (Playwright's `aria-ref=eN` selector). A ref the
 page no longer has (a re-render) answers `stale_ref`: nothing is clicked elsewhere.
 """
@@ -48,6 +57,12 @@ from browserd.tools import ask_person, discovery, line, pacing, policy, request_
 
 log = logging.getLogger("browserd")
 
+AGENT_PURPOSE = "apply_agent"
+# The agent lease's tools that may carry the capability (routes.call_tool): those that act.
+AGENT_ACTS = frozenset({
+    "browser_click", "browser_type", "browser_press_key", "browser_select_option",
+    "browser_check", "browser_file_upload", "browser_evaluate",
+})  # fmt: skip
 ACTION_S = 5.0  # an element's actionability (scroll, hover, click, fill), a failure result past it
 SHOT_MAX = 8 * 1024 * 1024
 ABOUT_BLANK = "about:blank"
@@ -108,6 +123,7 @@ MESSAGES = {
     "danger": "Refused: this element deletes, withdraws or pays, which no tool does.",
     "card_field": "Refused: a payment card field is never filled nor clicked.",
     "credential": "Refused: a password, a one time code or a sign in's user name is the person's.",
+    "submit_permit": "Refused: this may submit the form, and the app's emergency stop is on.",
     "bad_selector": "Refused: a submit selector of this lease is not valid, so nothing is clicked.",
     "unreadable": "Refused: the element could not be read, so nothing is clicked.",
     "stale_ref": "This ref is not on the page any more: take a new snapshot.",
@@ -198,6 +214,13 @@ class Tab:
     # B20: the person holds the input of this lease now (live.Live.person_holds): the request
     # floor of a discovery does not apply. None, or a call that raises, is the agent's turn.
     person_holds: Callable[[], bool] | None = None
+    # A19: this call acted on a submit element with the capability (the result says so).
+    submitted: bool = False
+
+    @property
+    def agent(self) -> bool:
+        """One click Apply's agent lease (A19)."""
+        return getattr(self.request, "purpose", None) == AGENT_PURPOSE
 
     def require_input(self) -> None:
         if self.input_allowed is not None and not self.input_allowed():
@@ -219,7 +242,7 @@ class Tab:
         refuses a private one)."""
         if url == ABOUT_BLANK:
             return True
-        if self.state.discovery:
+        if self.state.discovery or self.agent:
             return discovery.public_url(url)
         return policy.url_verdict(url, self.hosts) is None
 
@@ -404,10 +427,13 @@ class Tab:
             await context.route("**/*", self._guard)
             context.on("request", self._hop)
             hosts, tag = self.hosts, self.lease_tag
-            context.on(
-                "page",
-                lambda tab: asyncio.ensure_future(close_off_list(tab, hosts, tag)),
-            )
+            if self.agent:  # A19: a tab of any public address stays, at most TABS_MAX
+                context.on("page", lambda tab: asyncio.ensure_future(self.agent_page(tab)))
+            else:
+                context.on(
+                    "page",
+                    lambda tab: asyncio.ensure_future(close_off_list(tab, hosts, tag)),
+                )
             if self.request.purpose == "apply_manual":
                 # A listener makes Playwright intercept every chooser: no dialog over a folder.
                 for tab in context.pages:
@@ -415,6 +441,13 @@ class Tab:
                 context.on("page", lambda tab: tab.on("filechooser", self._chosen))
             self.state.guarded = context
         return context
+
+    async def agent_page(self, page: Any) -> None:
+        """A19: a tab the page opened on the agent's lease stays (a posting's Apply often opens
+        one), closed past TABS_MAX; one off a public address is closed as settle() closes it."""
+        with contextlib.suppress(Exception):
+            if len(page.context.pages) > discovery.TABS_MAX:
+                await asyncio.wait_for(page.close(), ACTION_S)
 
     def _chosen(self, chooser: Any) -> None:
         self.state.chooser = chooser
@@ -500,6 +533,22 @@ class Tab:
     def judge(
         self, facts: Any, action: str, tool: str, args: dict | None = None
     ) -> dict[str, Any] | None:
+        if self.agent:
+            code = detect.agent_verdict(facts, action=action)
+            if code is None:
+                return None
+            if code != "credential" and self.gate:
+                # The capability: the api read the emergency stop off just before this call.
+                self.submitted = True
+                log.info("lease %s: %s on a submit element, permitted", self.lease_tag, tool)
+                return None
+            if code == "credential":
+                log.warning("lease %s: %s refused: %s", self.lease_tag, tool, code)
+                return refused(code)
+            # Expected before every send: the api reads the emergency stop, then sends the act
+            # again with the capability. Info, so a WARNING still means a real refusal.
+            log.info("lease %s: %s refused: submit_permit rule=%s", self.lease_tag, tool, code)
+            return refused("submit_permit")
         if self.discovery:
             code = line.control(facts, "key" if action == "key" else action)
             if not code:
@@ -593,6 +642,8 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
             return await tab.settle(refused("host_not_allowed"))
         except PersonInput:
             return failure("person_input", "Refused: the person holds the input.")
+        if tab.submitted and result.get("ok"):
+            result = {**result, "submit_clicked": True}
         return await tab.settle(result) if result.get("ok") else result
     except RefusalRecoveryError as exc:
         # The original still propagates; its note tells routes.call_tool to answer guard_failed,
@@ -665,8 +716,12 @@ async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     url = args.get("url")
     code = policy.url_verdict(url, tab.hosts)
-    if tab.state.discovery and code == "host_not_allowed" and discovery.public_url(url):
-        code = None  # B20: any public address (the egress proxy refuses a private one)
+    if (
+        (tab.state.discovery or tab.agent)
+        and code == "host_not_allowed"
+        and discovery.public_url(url)
+    ):
+        code = None  # B20, A19: any public address (the egress proxy refuses a private one)
     if code:
         log.warning(
             "lease %s: browser_navigate refused: %s host=%s", tab.lease_tag, code, host_of(url)
@@ -1140,7 +1195,7 @@ async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             if closing is tab.state.page:  # the tab acted on is gone: the first one then
                 tab.state.page = next(p for p in context.pages)
         found = list(context.pages)
-    elif action == "new" and tab.discovery:
+    elif action == "new" and (tab.discovery or tab.agent):
         # B20: a discovery opens a tab of its own, at most TABS_MAX, blank until it navigates.
         if len(found) >= discovery.TABS_MAX:
             return failure("too_many_tabs", f"At most {discovery.TABS_MAX} tabs are open.")
@@ -1264,6 +1319,13 @@ async def scroll(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 
 
 SCRIPT_MAX = 10_000  # characters of the agent's script
+# A19: the apply agent's script, `() => ...` as text, run as the page's own and its result as
+# JSON text (a value JSON cannot hold answers its String form).
+AGENT_SCRIPT_JS = """async (source) => {
+  const value = await (0, eval)("(" + source + ")")();
+  try { return JSON.stringify(value === undefined ? null : value); }
+  catch (e) { return String(value); }
+}"""
 RESULT_MAX = 20_000  # characters of its result returned
 
 
@@ -1275,11 +1337,33 @@ async def evaluate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     of the line (a document POST that is no search, a POST to an apply, message or account
     address are refused). What browserd cannot see in a script: an event it builds and
     dispatches itself, a WebSocket, a worker it starts; the request floor holds what leaves."""
-    if not tab.discovery:
+    agent = tab.agent and not tab.discovery
+    if not tab.discovery and not agent:
         return failure("bad_args", "browser_evaluate runs in a website search only.")
     source = args.get("function")
     if not isinstance(source, str) or not 0 < len(source) <= SCRIPT_MAX:
         return failure("bad_args", f"function is a script of at most {SCRIPT_MAX} characters.")
+    if agent:
+        # A19: a script may submit the form, so it runs only with the capability (the
+        # emergency stop off), with no guard of the line; its result as JSON text.
+        if not tab.gate:
+            log.info("lease %s: browser_evaluate refused: submit_permit", tab.lease_tag)  # as judge
+            return refused("submit_permit")
+        page = await tab.page()
+        await tab.pacer.dwell()
+        tab.require_input()
+        try:
+            async with asyncio.timeout(policy.WAIT_MAX_S):
+                value = await page.evaluate(AGENT_SCRIPT_JS, source)
+        except TimeoutError:
+            return failure("timeout", f"The script ran past {policy.WAIT_MAX_S:g} seconds.")
+        except Exception as exc:
+            message = str(exc).splitlines()[0][:300] if str(exc) else type(exc).__name__
+            return failure("script_error", f"The script failed: {message}")
+        text = value if isinstance(value, str) else "null"
+        result = {"ok": True, "result": text[:RESULT_MAX], "cut": len(text) > RESULT_MAX}
+        settled = await tab.settle(await _here(tab))
+        return {**settled, **result} if settled.get("ok") else settled
     page = await tab.page()
     await tab.pacer.dwell()
     tab.require_input()

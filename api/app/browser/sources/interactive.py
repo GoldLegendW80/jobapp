@@ -735,30 +735,19 @@ async def _search(
 ASK_POLL_S = 2.0
 
 
-async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> str:
-    """browser_ask_person (B20, browserd/tools/ask_person.py): `nobody_watching` at once, or the
-    person is asked in the live view and this polls browserd until the lease is active again
-    (the person gave the browser back, or the ask's deadline passed) or it ended. The api's copy
-    of the lease waits with browserd's (`Leases.wait_person`), so it never ends it meanwhile.
-    The answer is the sentence the agent reads."""
+async def await_person(
+    tools: Any, left: int, monotonic: Callable[[], float], sleep: Callable[[float], Any]
+) -> str:
+    """After browserd's `waiting_person` answer to an ask (B20, and One click Apply's agent,
+    apply A19): polls browserd until the lease is active again (`back`: the person gave the
+    browser back, or the ask's deadline passed), another lease is current (`ended`), or `left`
+    and a grace went by (`timeout`). The api's copy of the lease waits with browserd's
+    (`Leases.wait_person`), so it never ends it meanwhile."""
     from app.browser.leases import MAX_GRACE_S
 
-    guarded = pages.tools
-    answer = await guarded.call(
-        "browser_ask_person",
-        {"reason": reason, "_discovery": "native_get", "_discovery_scope": tool_scope},
-    )
-    code = answer.get("error")
-    if code == "nobody_watching":
-        return "Nobody is watching the browser now: go on another way, or end the website."
-    if code != "waiting_person":
-        return "The person could not be asked here: go on another way."
-    tools = guarded.tools
-    left = answer.get("left_s")
-    left = left if isinstance(left, int) and not isinstance(left, bool) and left > 0 else 900
-    end_at = pages.monotonic() + left + MAX_GRACE_S
+    end_at = monotonic() + left + MAX_GRACE_S
     synced = False
-    while pages.monotonic() < end_at:
+    while monotonic() < end_at:
         try:
             found = await tools.client.current()
         except BrowserError:
@@ -766,7 +755,7 @@ async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> s
         lease = found.get("lease") if isinstance(found, dict) else None
         mine = isinstance(lease, dict) and lease.get("lease_id") == tools.lease_id
         if found is not None and not mine:
-            raise SourceError("lease_ended")
+            return "ended"
         if isinstance(lease, dict):
             try:
                 if lease.get("state") == "waiting_person" and not synced:
@@ -778,11 +767,37 @@ async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> s
                 elif lease.get("state") == "active":
                     if synced:
                         await tools.leases.resume(tools.user_id, tools.lease_id)
-                    guarded.helped = True
-                    # The page read before the ask is no longer the browser's (`_signed_out`).
-                    guarded.page = ("", "")
-                    return "The person had the browser: read the page again (browser_snapshot)."
+                    return "back"
             except StoreUnavailableError:
                 pass  # Redis away: the api's copy is set on the next round
-        await pages.sleep(ASK_POLL_S)
+        await sleep(ASK_POLL_S)
+    return "timeout"
+
+
+async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> str:
+    """browser_ask_person (B20, browserd/tools/ask_person.py): `nobody_watching` at once, or the
+    person is asked in the live view and this polls browserd until the lease is active again
+    (the person gave the browser back, or the ask's deadline passed) or it ended. The api's copy
+    of the lease waits with browserd's (`Leases.wait_person`), so it never ends it meanwhile.
+    The answer is the sentence the agent reads."""
+    guarded = pages.tools
+    answer = await guarded.call(
+        "browser_ask_person",
+        {"reason": reason, "_discovery": "native_get", "_discovery_scope": tool_scope},
+    )
+    code = answer.get("error")
+    if code == "nobody_watching":
+        return "Nobody is watching the browser now: go on another way, or end the website."
+    if code != "waiting_person":
+        return "The person could not be asked here: go on another way."
+    left = answer.get("left_s")
+    left = left if isinstance(left, int) and not isinstance(left, bool) and left > 0 else 900
+    outcome = await await_person(guarded.tools, left, pages.monotonic, pages.sleep)
+    if outcome == "ended":
+        raise SourceError("lease_ended")
+    if outcome == "back":
+        guarded.helped = True
+        # The page read before the ask is no longer the browser's (`_signed_out`).
+        guarded.page = ("", "")
+        return "The person had the browser: read the page again (browser_snapshot)."
     return "The person did not answer: go on another way, or end the website."

@@ -39,6 +39,14 @@ export const DECISIONS = {
     confirm: "Fill and approve again",
     call: retryApplication,
   },
+  // One click Apply's agent (A19): Try again is one more run of the agent, which sends.
+  retryAgent: {
+    title: "Apply again?",
+    sentence:
+      "The assistant applies again and sends it by itself. It looks on the site first for the earlier one, but if that one went through, the company may receive two applications.",
+    confirm: "Apply again",
+    call: retryApplication,
+  },
 } satisfies Record<
   string,
   Confirmation & { call: (applicationId: string) => Promise<Application> }

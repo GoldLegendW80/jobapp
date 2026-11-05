@@ -393,44 +393,15 @@ def _end(db: Session, application: Application, to: State, code: str, now: datet
     _event(db, application, "refused" if to is State.blocked else "ended", now, code=code)
 
 
-def prepare(
-    db: Session, application_id: uuid.UUID, now: datetime, *, manual: bool = False
-) -> Plan | str:
-    """Step 1 and 2: the plan of the fill, or the code of why there is none (the caller
-    commits either way). `manual`: the plan of an Apply myself session (A9, apply/manual.py),
-    which never apply only warns about (at the start) and which opens without a CV."""
-    found = _locked(db, application_id)
-    if found is None:
-        return "gone"
-    application, posting = found
-    if application.state is not State.queued:
-        return "not_queued"
-    if (application.mode is Mode.manual) is not manual:
-        return "manual" if not manual else "not_manual"
+def documents_of(
+    db: Session, application: Application, now: datetime, *, manual: bool = False
+) -> tuple[dict[str, bytes], str] | str:
+    """Step 2: the PDFs to send by file name and the letter's text, with the versions recorded
+    on the application (`document_versions`), or the code of why not yet or not at all
+    (`blocked`, `failed`, `waiting_documents`; the application is written as the code says).
+    Shared with One click Apply's agent (A19, applier.py)."""
     user_id = application.user_id
-    code = None
-    if not manual:
-        code = guardrails.never_apply(
-            posting,
-            _rules(db, user_id),
-            swept=guardrails.swept_never_apply(db, user_id, posting.id),
-            mode=full_auto.blocking_mode(application.mode),
-        )
-    if code is None:
-        code = caps.linkedin_refusal(db, application, now)
-    if code is not None:
-        _end(db, application, State.blocked, code, now)
-        return "blocked"
-
-    known_adapter = adapter_for(
-        application.form_url, stub_base=caps._setting("apply_stub_base_url")
-    )
-    if application.mode is Mode.full_auto and getattr(known_adapter, "review_only", False):
-        full_auto.hand_over(db, application, "unsupported_source", now)
-    if application.mode is Mode.direct and getattr(known_adapter, "review_only", False):
-        full_auto.hand_over(db, application, "review_only_site", now)
-
-    current = documents.current(db, user_id, posting.id)
+    current = documents.current(db, user_id, application.posting_id)
     if current.cv.version is None and current.cv.coming is None and not manual:
         _end(db, application, State.blocked, "no_documents", now)
         return "blocked"
@@ -471,6 +442,50 @@ def prepare(
         return "blocked"
     application.document_versions = versions
     application.updated_at = now
+    return pdfs, letter_text
+
+
+def prepare(
+    db: Session, application_id: uuid.UUID, now: datetime, *, manual: bool = False
+) -> Plan | str:
+    """Step 1 and 2: the plan of the fill, or the code of why there is none (the caller
+    commits either way). `manual`: the plan of an Apply myself session (A9, apply/manual.py),
+    which never apply only warns about (at the start) and which opens without a CV."""
+    found = _locked(db, application_id)
+    if found is None:
+        return "gone"
+    application, posting = found
+    if application.state is not State.queued:
+        return "not_queued"
+    if (application.mode is Mode.manual) is not manual:
+        return "manual" if not manual else "not_manual"
+    user_id = application.user_id
+    code = None
+    if not manual:
+        code = guardrails.never_apply(
+            posting,
+            _rules(db, user_id),
+            swept=guardrails.swept_never_apply(db, user_id, posting.id),
+            mode=full_auto.blocking_mode(application.mode),
+        )
+    if code is None:
+        code = caps.linkedin_refusal(db, application, now)
+    if code is not None:
+        _end(db, application, State.blocked, code, now)
+        return "blocked"
+
+    known_adapter = adapter_for(
+        application.form_url, stub_base=caps._setting("apply_stub_base_url")
+    )
+    if application.mode is Mode.full_auto and getattr(known_adapter, "review_only", False):
+        full_auto.hand_over(db, application, "unsupported_source", now)
+    if application.mode is Mode.direct and getattr(known_adapter, "review_only", False):
+        full_auto.hand_over(db, application, "review_only_site", now)
+
+    found_documents = documents_of(db, application, now, manual=manual)
+    if isinstance(found_documents, str):
+        return found_documents
+    pdfs, letter_text = found_documents
 
     profile = profile_service.get_profile(db, user_id, now)
     sections = {k: v for k, v in profile_service.sections_view(profile).items() if v}
@@ -930,7 +945,8 @@ def interrupt(
         return "superseded"
     waits = failures.retry_delays() if delays is None else delays
     to, retry = failures.after_failure(application, INTERRUPTED, now, waits)
-    if to is State.failed:
+    if to is State.failed or application.mode is Mode.direct:
+        # One click Apply (A19): one Apply click gives at most one run, never a retry.
         _end(db, application, State.failed, INTERRUPTED, now)
         return to.value
     states.move(application, to, now)
