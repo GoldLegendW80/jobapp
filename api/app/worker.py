@@ -946,12 +946,7 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     # its lease through the Apply wait of a step on the page (APPLY_WAIT_S), so a fill and a
     # submit outlive those pauses too.
     fill_timeout_s = (
-        # One click Apply's agent (A19) runs in this job too, on its own lease's hour.
-        max(table["apply_fill"], table["apply_agent"])
-        + session_max_s
-        + APPLY_WAIT_S
-        + TAKEOVER_WAIT_S
-        + APPLY_JOB_MARGIN_S
+        table["apply_fill"] + session_max_s + APPLY_WAIT_S + TAKEOVER_WAIT_S + APPLY_JOB_MARGIN_S
     )
     submit_timeout_s = table["apply_submit"] + TAKEOVER_WAIT_S + APPLY_JOB_MARGIN_S
     manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
