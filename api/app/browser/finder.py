@@ -1662,7 +1662,6 @@ def session_of(run_id: uuid.UUID | None) -> FinderSession | None:
         return _SESSIONS.get(run_id) if run_id is not None else None
 
 
-
 @dataclass(frozen=True)
 class FinderDefinition(definitions.AgentDefinition):
     """The definition; its first message names no person, site or page."""
