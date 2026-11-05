@@ -58,14 +58,17 @@ test.afterAll(async () => {
   clearAttempts([ADMIN]);
 });
 
-async function openAgent(target: Page) {
+async function openAgent(target: Page, shoot = false) {
   await target.goto("/admin/users");
   await target
     .getByRole("navigation", { name: "Admin" })
     .getByRole("link", { name: "Agents" })
     .click();
   await expect(target).toHaveURL(/\/admin\/agents$/);
-  const table = target.getByRole("table", { name: "Agents, by name" });
+  // The list is grouped by category (agents A8): the website search is in Finding jobs.
+  const table = target.getByRole("table", { name: "Finding jobs, by name" });
+  await expect(table).toBeVisible();
+  if (shoot) await shots(target, "agents-list");
   await table.getByRole("link", { name: AGENT, exact: true }).click();
   await expect(
     target.getByRole("heading", { name: AGENT, level: 1 }),
@@ -73,7 +76,7 @@ async function openAgent(target: Page) {
 }
 
 test("the admin sees everything that makes the website search agent", async () => {
-  await openAgent(page);
+  await openAgent(page, true);
   for (const title of [
     "Identity",
     "System prompt",
