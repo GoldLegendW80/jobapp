@@ -249,6 +249,21 @@ describe("the Chat view", () => {
     expect(within(chat).getByText("3 of 2000")).toBeVisible();
   });
 
+  it("describes the box with the keys that send, each shown as a key", async () => {
+    fakeChat();
+    const { chat } = await openChat({
+      accepted: true,
+      model: "claude-opus-5-5",
+    });
+    const box = within(chat).getByRole("textbox", { name: "Message" });
+    expect(box).toHaveAccessibleDescription(
+      /^Enter sends, Shift and Enter adds a line\.\s*0 of 2000$/,
+    );
+    expect(
+      [...chat.querySelectorAll("kbd")].map((key) => key.textContent),
+    ).toEqual(["Enter", "Shift", "Enter"]);
+  });
+
   it("stops the answer being written, and the document stays as it was", async () => {
     const state = fakeChat({ stoppable: true });
     const { user, chat } = await openChat({

@@ -4,7 +4,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import { ArrowLeft, LoaderCircle, Plus, RotateCw } from "lucide-react";
+import { ArrowLeft, FileText, Plus, RotateCw } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
@@ -28,8 +28,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Field,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Spinner } from "@/components/ui/spinner";
 import { getProfile, profileKey } from "@/features/profile/api";
 import { describeError } from "@/lib/api";
 
@@ -161,7 +178,7 @@ export function CvTab() {
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"
       >
-        <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+        <Spinner aria-hidden="true" role={undefined} />
         Loading your CVs
       </div>
     );
@@ -331,40 +348,51 @@ function Overview({
       </div>
 
       {cvs.length === 0 ? (
-        <section
+        <Empty
+          role="region"
           aria-labelledby="empty-heading"
-          className="flex flex-col items-start gap-3 rounded-lg border border-dashed p-4"
+          className="border md:p-8"
         >
-          <h3 id="empty-heading" className="font-semibold">
-            You have no CV yet
-          </h3>
-          <p className="text-sm text-muted-foreground">
-            The app can write one from your profile. It becomes the default and
-            every document for a posting starts from it.
-          </p>
-          {noExperience ? (
-            <p className="text-sm font-medium" data-testid="no-experience-line">
-              Add your CV or fill your experience to get documents for each
-              posting.
-            </p>
-          ) : null}
-          {consentMissing ? (
-            <p className="text-sm font-medium" data-testid="confirm-line">
-              Confirm what is sent to build your CV.
-            </p>
-          ) : null}
-          {consentError ? (
-            <p className="text-sm text-destructive">
-              What is sent could not be loaded. Reload the page to try again.
-            </p>
-          ) : null}
-          <Button disabled={building || !consentReady} onClick={onBuild}>
-            {building ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <FileText aria-hidden="true" />
+            </EmptyMedia>
+            <EmptyTitle className="text-base font-semibold">
+              <h3 id="empty-heading">You have no CV yet</h3>
+            </EmptyTitle>
+            <EmptyDescription>
+              The app can write one from your profile. It becomes the default
+              and every document for a posting starts from it.
+            </EmptyDescription>
+          </EmptyHeader>
+          <EmptyContent>
+            {noExperience ? (
+              <p
+                className="text-sm font-medium"
+                data-testid="no-experience-line"
+              >
+                Add your CV or fill your experience to get documents for each
+                posting.
+              </p>
             ) : null}
-            Build it from my profile
-          </Button>
-        </section>
+            {consentMissing ? (
+              <p className="text-sm font-medium" data-testid="confirm-line">
+                Confirm what is sent to build your CV.
+              </p>
+            ) : null}
+            {consentError ? (
+              <p className="text-sm text-destructive">
+                What is sent could not be loaded. Reload the page to try again.
+              </p>
+            ) : null}
+            <Button disabled={building || !consentReady} onClick={onBuild}>
+              {building ? (
+                <Spinner aria-hidden="true" role={undefined} />
+              ) : null}
+              Build it from my profile
+            </Button>
+          </EmptyContent>
+        </Empty>
       ) : (
         <ul className="flex flex-col gap-3" aria-label="Your CVs">
           {cvs.map((one) => (
@@ -444,7 +472,7 @@ function Row({ cv, only }: { cv: BaseCv; only: boolean }) {
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
           {isOpen(cv.generation) && cv.generation?.status !== "waiting" ? (
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
           ) : null}
           {line}
         </p>
@@ -677,10 +705,8 @@ function RenameDialog({
               posting.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={inputId} className="text-sm font-medium">
-              Name
-            </label>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={inputId}>Name</FieldLabel>
             <Input
               id={inputId}
               value={name}
@@ -691,11 +717,9 @@ function RenameDialog({
               }}
             />
             {save.isError ? (
-              <p role="alert" className="text-sm text-destructive">
-                {failureSentence(save.error)}
-              </p>
+              <FieldError>{failureSentence(save.error)}</FieldError>
             ) : null}
-          </div>
+          </Field>
           <DialogFooter>
             <Button
               type="button"
@@ -732,6 +756,7 @@ function NewCvDialog({
 }) {
   const nameId = useId();
   const copyId = useId();
+  const sourceId = useId();
   const [source, setSource] = useState<"profile" | "copy">("profile");
   const [copyOf, setCopyOf] = useState("");
   const [name, setName] = useState("");
@@ -765,38 +790,41 @@ function NewCvDialog({
               Start from your profile, or from a copy of a CV you already have.
             </DialogDescription>
           </DialogHeader>
-          <fieldset className="flex flex-col gap-2">
-            <legend className="mb-1 text-sm font-medium">Start from</legend>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="radio"
-                name="new-cv-source"
-                className="size-4 accent-primary"
-                checked={source === "profile"}
-                onChange={() => {
-                  setSource("profile");
-                }}
-              />
-              My profile
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="radio"
-                name="new-cv-source"
-                className="size-4 accent-primary"
-                checked={source === "copy"}
-                onChange={() => {
-                  setSource("copy");
-                }}
-              />
-              A copy of another CV
-            </label>
-          </fieldset>
+          <FieldSet className="gap-2">
+            <FieldLegend variant="label" className="mb-1">
+              Start from
+            </FieldLegend>
+            <RadioGroup
+              name="new-cv-source"
+              value={source}
+              onValueChange={(value) => {
+                setSource(value === "copy" ? "copy" : "profile");
+              }}
+              className="gap-2"
+            >
+              <Field orientation="horizontal" className="gap-2">
+                <RadioGroupItem value="profile" id={`${sourceId}-profile`} />
+                <FieldLabel
+                  htmlFor={`${sourceId}-profile`}
+                  className="font-normal"
+                >
+                  My profile
+                </FieldLabel>
+              </Field>
+              <Field orientation="horizontal" className="gap-2">
+                <RadioGroupItem value="copy" id={`${sourceId}-copy`} />
+                <FieldLabel
+                  htmlFor={`${sourceId}-copy`}
+                  className="font-normal"
+                >
+                  A copy of another CV
+                </FieldLabel>
+              </Field>
+            </RadioGroup>
+          </FieldSet>
           {source === "copy" ? (
-            <div className="flex flex-col gap-1.5">
-              <label htmlFor={copyId} className="text-sm font-medium">
-                CV to copy
-              </label>
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor={copyId}>CV to copy</FieldLabel>
               <NativeSelect
                 id={copyId}
                 value={chosen ?? ""}
@@ -810,12 +838,10 @@ function NewCvDialog({
                   </option>
                 ))}
               </NativeSelect>
-            </div>
+            </Field>
           ) : null}
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor={nameId} className="text-sm font-medium">
-              Name (optional)
-            </label>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={nameId}>Name (optional)</FieldLabel>
             <Input
               id={nameId}
               value={name}
@@ -825,7 +851,7 @@ function NewCvDialog({
                 setName(event.target.value);
               }}
             />
-          </div>
+          </Field>
           <DialogFooter>
             <Button
               type="button"
@@ -836,9 +862,7 @@ function NewCvDialog({
               Cancel
             </Button>
             <Button type="submit" disabled={busy}>
-              {busy ? (
-                <LoaderCircle aria-hidden="true" className="animate-spin" />
-              ) : null}
+              {busy ? <Spinner aria-hidden="true" role={undefined} /> : null}
               {source === "copy" ? "Make a copy" : "Build it"}
             </Button>
           </DialogFooter>

@@ -1,8 +1,8 @@
-import { LoaderCircle } from "lucide-react";
 import { useId, useState } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -11,11 +11,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Spinner } from "@/components/ui/spinner";
 
 import type { Consent, Estimate } from "./documents-api";
 import { money, tokenRange } from "./labels";
-
-const CHECKBOX = "mt-0.5 size-4 shrink-0 accent-primary";
 
 function figure(estimate: Estimate): string {
   const range = tokenRange(estimate.tokens);
@@ -105,22 +105,20 @@ export function ConsentDialog({
           </Alert>
         ) : null}
 
-        <label
-          htmlFor={boxId}
-          className="flex items-start gap-3 text-sm font-medium"
-        >
-          <input
+        <Field orientation="horizontal" className="items-start">
+          <Checkbox
             id={boxId}
-            type="checkbox"
-            className={CHECKBOX}
+            className="mt-0.5"
             checked={ticked}
             disabled={busy}
-            onChange={(event) => {
-              setTickedVersion(event.target.checked ? consent.version : null);
+            onCheckedChange={(checked) => {
+              setTickedVersion(checked === true ? consent.version : null);
             }}
           />
-          I have read this and I agree to send it
-        </label>
+          <FieldLabel htmlFor={boxId}>
+            I have read this and I agree to send it
+          </FieldLabel>
+        </Field>
 
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>
@@ -133,9 +131,7 @@ export function ConsentDialog({
               onAgree(consent.version);
             }}
           >
-            {busy ? (
-              <LoaderCircle aria-hidden="true" className="animate-spin" />
-            ) : null}
+            {busy ? <Spinner aria-hidden="true" role={undefined} /> : null}
             {agreeLabel}
           </Button>
         </DialogFooter>

@@ -8,10 +8,19 @@
  * error is named by `errorFieldId`: the section opens and that field takes the focus, and it
  * cannot be closed while `errorFieldId` is set. Pass `open` and `onOpenChange` instead to hold
  * the state from outside.
+ *
+ * Built on shadcn's Collapsible. Its region stays in the page while folded (hidden), so the
+ * button always names the region it controls; the children are left out unless `keepMounted`.
  */
 import { ChevronDown } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 
+import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 
 const STORAGE_PREFIX = "advanced:";
@@ -63,31 +72,35 @@ export function AdvancedSection({
   }, [errorFieldId]);
 
   return (
-    <div className={cn("flex flex-col gap-4", className)}>
-      <button
-        type="button"
-        aria-expanded={shown}
-        aria-controls={id}
-        // A form with an icon gutter (jobs/setup-grid.tsx) sets the two properties, so the
-        // chevron hangs in its gutter and the title starts at its text edge; else 0 and 0.25rem.
-        className="ms-[calc(-1*var(--advanced-hang,0px))] flex min-h-11 w-fit items-center gap-(--advanced-gap,0.25rem) rounded-md text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none sm:min-h-0"
-        onClick={() => {
-          const next = !shown;
-          setOwn(next);
-          writeStored(pageKey, next);
-          onOpenChange?.(next);
-        }}
-      >
-        <ChevronDown
-          aria-hidden="true"
-          className={cn(
-            "size-4 transition-transform motion-reduce:transition-none",
-            shown && "rotate-180",
-          )}
-        />
-        {title}
-      </button>
-      <div
+    <Collapsible
+      open={shown}
+      onOpenChange={(next) => {
+        setOwn(next);
+        writeStored(pageKey, next);
+        onOpenChange?.(next);
+      }}
+      className={cn("flex flex-col gap-4", className)}
+    >
+      <CollapsibleTrigger asChild aria-controls={id}>
+        <Button
+          variant="link"
+          // A form with an icon gutter (jobs/setup-grid.tsx) sets the two properties, so the
+          // chevron hangs in its gutter and the title starts at its text edge; else 0 and 0.25rem.
+          className="ms-[calc(-1*var(--advanced-hang,0px))] h-auto min-h-11 w-fit gap-(--advanced-gap,0.25rem) p-0 whitespace-normal has-[>svg]:px-0 sm:min-h-0"
+        >
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              "size-4 transition-transform motion-reduce:transition-none",
+              shown && "rotate-180",
+            )}
+          />
+          {title}
+        </Button>
+      </CollapsibleTrigger>
+      {/* Mounted while folded too (hidden), so `aria-controls` always names it. */}
+      <CollapsibleContent
+        forceMount
         id={id}
         role="region"
         aria-label={title}
@@ -95,7 +108,7 @@ export function AdvancedSection({
         className="flex flex-col gap-4"
       >
         {shown || keepMounted ? children : null}
-      </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

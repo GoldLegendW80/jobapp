@@ -91,6 +91,21 @@ describe("writing rules", () => {
     expect(profile.saves).toHaveLength(0);
   });
 
+  it("toggles the dash switch from the keyboard, described by its sentence", async () => {
+    const { user, rules } = await openRules();
+    expect(dashes()).toHaveAccessibleDescription(
+      /^An em dash, an en dash or a spaced hyphen used as a separator becomes a comma\./,
+    );
+    dashes().focus();
+    await user.keyboard(" ");
+    await screen.findByText("Writing rules saved.");
+    expect(rules.puts).toEqual([
+      { no_dash_separators: true, banned_phrases: [] },
+    ]);
+    expect(dashes()).toBeChecked();
+    expect(dashes()).toHaveFocus();
+  });
+
   it("adds a phrase with Enter or Add without saving the Search form, and removes one", async () => {
     const { user, rules, profile } = await openRules({
       banned_phrases: ["synergy"],

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { LoaderCircle, RotateCw } from "lucide-react";
-import { useState } from "react";
+import { RotateCw } from "lucide-react";
+import { Fragment, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { AdvancedSection } from "@/components/advanced-section";
@@ -16,6 +16,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemSeparator,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail } from "@/lib/api";
 
 import {
@@ -109,7 +119,7 @@ export function BrowserCard() {
         ) : null}
         {logins.isPending ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <LoaderCircle aria-hidden className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading your websites.
           </p>
         ) : logins.isError && !logins.data ? (
@@ -143,29 +153,34 @@ export function BrowserCard() {
             .
           </p>
         ) : (
-          <ul
+          <ItemGroup
             aria-labelledby="browser-card-title"
-            className="divide-y rounded-md border"
+            className="rounded-md border"
           >
-            {sites.map((site) => (
-              <li
-                key={site.host}
-                className="flex min-w-0 flex-col gap-2 p-3 text-sm sm:flex-row sm:items-start sm:justify-between"
-              >
-                <div className="flex min-w-0 flex-col">
-                  <span className="font-medium break-all">{site.host}</span>
-                  {site.state === "signed_in" ? (
-                    <span className="text-xs text-muted-foreground">
-                      Since {formatDate(site.signed_in_at)}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="flex min-w-0 sm:max-w-[60%] sm:justify-end">
-                  <SiteSignIn url={`https://${site.host}/`} forget={false} />
-                </div>
-              </li>
+            {sites.map((site, index) => (
+              <Fragment key={site.host}>
+                {index > 0 ? <ItemSeparator /> : null}
+                <Item
+                  role="listitem"
+                  className="min-w-0 flex-col items-stretch gap-2 rounded-none p-3 sm:flex-row sm:flex-nowrap sm:items-start sm:justify-between"
+                >
+                  <ItemContent className="min-w-0 flex-initial gap-0">
+                    <ItemTitle className="w-auto break-all">
+                      {site.host}
+                    </ItemTitle>
+                    {site.state === "signed_in" ? (
+                      <ItemDescription className="text-xs">
+                        Since {formatDate(site.signed_in_at)}
+                      </ItemDescription>
+                    ) : null}
+                  </ItemContent>
+                  <ItemActions className="min-w-0 sm:max-w-[60%] sm:justify-end">
+                    <SiteSignIn url={`https://${site.host}/`} forget={false} />
+                  </ItemActions>
+                </Item>
+              </Fragment>
             ))}
-          </ul>
+          </ItemGroup>
         )}
         {forgotten && (
           <p role="status" className="text-sm text-muted-foreground">
