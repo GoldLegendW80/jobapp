@@ -35,6 +35,14 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -627,54 +635,47 @@ function FieldDifferences({
           Only differences
         </label>
       </div>
-      <table
+      <Table
+        stacked={false}
         aria-label={`Revision ${String(revision)} and the current version`}
-        className="w-full table-fixed border-collapse text-xs sm:text-sm"
+        className="table-fixed border-collapse text-xs sm:text-sm"
       >
-        <thead>
-          <tr className="border-b text-left">
-            <th scope="col" className="w-[34%] py-2 pr-2 font-medium">
-              Field
-            </th>
-            <th scope="col" className="py-2 pr-2 font-medium">
-              Revision {revision}
-            </th>
-            <th scope="col" className="py-2 font-medium">
-              Current
-            </th>
-          </tr>
-        </thead>
-        <tbody>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-[34%]">Field</TableHead>
+            <TableHead>Revision {revision}</TableHead>
+            <TableHead>Current</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {shown.map((row) => (
-            <tr
+            <TableRow
               key={row.path}
               data-status={row.status}
               className={cn(
-                "border-b align-top",
-                row.status !== "same" && "bg-amber-50 dark:bg-amber-950/40",
+                "align-top",
+                row.status !== "same" &&
+                  "bg-amber-50 hover:bg-amber-50 dark:bg-amber-950/40 dark:hover:bg-amber-950/40",
               )}
             >
-              <th
-                scope="row"
-                className="py-2 pr-2 text-left font-normal [overflow-wrap:anywhere]"
-              >
+              <TableHead className="font-normal [overflow-wrap:anywhere]">
                 <span className="font-medium">{row.label}</span>
                 {row.status !== "same" ? (
                   <span className="mt-1 block text-xs font-medium text-amber-800 dark:text-amber-300">
                     {STATUS_TEXT[row.status]}
                   </span>
                 ) : null}
-              </th>
-              <td className="py-2 pr-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              </TableHead>
+              <TableCell className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                 <Value value={row.revision} />
-              </td>
-              <td className="py-2 whitespace-pre-wrap [overflow-wrap:anywhere]">
+              </TableCell>
+              <TableCell className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                 <Value value={row.current} />
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </section>
   );
 }

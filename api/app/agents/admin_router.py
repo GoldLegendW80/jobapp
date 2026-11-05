@@ -117,10 +117,20 @@ class AgentSummary(BaseModel):
     # The fields of that version whose code value changed since it was saved.
     code_changed: list[str]
     last_run_at: datetime | None
+    # The key of its group in the list (catalog.CATEGORIES, agents A8).
+    category: str
+
+
+class CategoryOut(BaseModel):
+    key: str
+    title: str
+    sentence: str
 
 
 class AgentList(BaseModel):
     items: list[AgentSummary]
+    # Every group of the list, in the order the list shows them (agents A8).
+    categories: list[CategoryOut]
 
 
 class AgentPage(BaseModel):
@@ -500,9 +510,14 @@ def list_agents(request: Request, response: Response, db: Db) -> AgentList:
                 overridden=bool(saved),
                 code_changed=overrides.code_changed(agents[name], found),
                 last_run_at=last.get(name),
+                category=catalog.category_of(agents[name]),
             )
         )
-    return AgentList(items=items)
+    categories = [
+        CategoryOut(key=category.key, title=category.title, sentence=category.sentence)
+        for category in catalog.CATEGORIES
+    ]
+    return AgentList(items=items, categories=categories)
 
 
 @router.get("/{name}", response_model=AgentPage, responses=_404)

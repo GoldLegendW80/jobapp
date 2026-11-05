@@ -41,6 +41,15 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { meQueryKey, useMe } from "@/features/auth/auth-context";
 import { isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -56,7 +65,6 @@ import {
 } from "./api";
 import { message } from "./errors";
 import { exactTime, relativeTime } from "./relative-time";
-import { cell } from "./table-cell";
 
 type Action = "promote" | "demote" | "disable" | "enable";
 
@@ -214,127 +222,102 @@ function UsersTable({
   onAction: (user: AdminUser, action: Action) => void;
 }) {
   return (
-    <div
-      className={cn(
-        "sm:overflow-x-auto sm:rounded-lg sm:border",
-        busy && "opacity-60",
-      )}
-      aria-busy={busy}
-    >
-      <table className="w-full text-sm max-sm:block">
-        <caption className="sr-only">Accounts, by name</caption>
-        <thead className="border-b bg-muted/50 text-left text-xs text-muted-foreground max-sm:sr-only">
-          <tr>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Name
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Role
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Status
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Last sign in
-            </th>
-            <th scope="col" className="px-3 py-2 font-medium">
-              Sessions
-            </th>
-            <th scope="col" className="px-3 py-2 text-right font-medium">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody className="max-sm:flex max-sm:flex-col max-sm:gap-3">
-          {items.map((user) => {
-            const self = user.id === meId;
-            const protectedAdmin =
-              lastAdmin && user.is_active && user.role === "admin";
-            return (
-              <tr
-                key={user.id}
-                data-disabled={!user.is_active || undefined}
-                className="border-b last:border-b-0 max-sm:flex max-sm:flex-col max-sm:rounded-lg max-sm:border max-sm:bg-card max-sm:p-3 max-sm:last:border-b data-disabled:text-muted-foreground"
-              >
-                <th
-                  scope="row"
-                  className={cn(
-                    "px-3 py-2 text-left font-medium max-sm:px-0 max-sm:pb-2 max-sm:text-base",
-                    !user.is_active && "opacity-70",
-                  )}
+    <Table busy={busy}>
+      <TableCaption className="sr-only">Accounts, by name</TableCaption>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Name</TableHead>
+          <TableHead>Role</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Last sign in</TableHead>
+          <TableHead>Sessions</TableHead>
+          <TableHead className="text-right">
+            <span className="sr-only">Actions</span>
+          </TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {items.map((user) => {
+          const self = user.id === meId;
+          const protectedAdmin =
+            lastAdmin && user.is_active && user.role === "admin";
+          return (
+            <TableRow
+              key={user.id}
+              data-disabled={!user.is_active || undefined}
+            >
+              <TableHead className={cn(!user.is_active && "opacity-70")}>
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1 break-words">
+                  {displayName(user)}
+                  {self ? (
+                    <Badge variant="secondary" aria-label="(you)">
+                      You
+                    </Badge>
+                  ) : null}
+                </span>
+                <span className="block text-xs font-normal break-all text-muted-foreground">
+                  {user.email}
+                </span>
+              </TableHead>
+              <TableCell label="Role">
+                <Badge
+                  variant="outline"
+                  className={
+                    user.role === "admin"
+                      ? "border-primary/30 bg-primary/10 text-primary"
+                      : "text-muted-foreground"
+                  }
                 >
-                  <span className="flex flex-wrap items-center gap-x-2 gap-y-1 break-words">
-                    {displayName(user)}
-                    {self ? (
-                      <Badge variant="secondary" aria-label="(you)">
-                        You
-                      </Badge>
-                    ) : null}
+                  {user.role === "admin" ? "Admin" : "Member"}
+                </Badge>
+              </TableCell>
+              <TableCell label="Status">
+                {user.is_active ? (
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className="size-2 rounded-full bg-success"
+                    />
+                    Active
                   </span>
-                  <span className="block text-xs font-normal break-all text-muted-foreground">
-                    {user.email}
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+                    <span
+                      aria-hidden="true"
+                      className="size-2 rounded-full border border-muted-foreground"
+                    />
+                    Disabled
                   </span>
-                </th>
-                <td {...cell("Role")}>
-                  <Badge
-                    variant="outline"
-                    className={
-                      user.role === "admin"
-                        ? "border-primary/30 bg-primary/10 text-primary"
-                        : "text-muted-foreground"
-                    }
+                )}
+              </TableCell>
+              <TableCell label="Last sign in">
+                {user.last_login_at ? (
+                  <time
+                    dateTime={user.last_login_at}
+                    title={exactTime(user.last_login_at)}
                   >
-                    {user.role === "admin" ? "Admin" : "Member"}
-                  </Badge>
-                </td>
-                <td {...cell("Status")}>
-                  {user.is_active ? (
-                    <span className="inline-flex items-center gap-1.5">
-                      <span
-                        aria-hidden="true"
-                        className="size-2 rounded-full bg-success"
-                      />
-                      Active
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                      <span
-                        aria-hidden="true"
-                        className="size-2 rounded-full border border-muted-foreground"
-                      />
-                      Disabled
-                    </span>
-                  )}
-                </td>
-                <td {...cell("Last sign in")}>
-                  {user.last_login_at ? (
-                    <time
-                      dateTime={user.last_login_at}
-                      title={exactTime(user.last_login_at)}
-                    >
-                      {relativeTime(user.last_login_at, now)}
-                    </time>
-                  ) : (
-                    <span className="text-muted-foreground">Never</span>
-                  )}
-                </td>
-                <td {...cell("Sessions")}>
-                  <span className="tabular-nums">{user.sessions}</span>
-                </td>
-                <td className="px-3 py-2 text-right max-sm:px-0 max-sm:pt-2 max-sm:text-left">
-                  <ActionsMenu
-                    user={user}
-                    self={self}
-                    protectedAdmin={protectedAdmin}
-                    onAction={onAction}
-                  />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+                    {relativeTime(user.last_login_at, now)}
+                  </time>
+                ) : (
+                  <span className="text-muted-foreground">Never</span>
+                )}
+              </TableCell>
+              <TableCell label="Sessions">
+                <span className="tabular-nums">{user.sessions}</span>
+              </TableCell>
+              <TableCell className="text-right max-sm:pt-2 max-sm:text-left">
+                <ActionsMenu
+                  user={user}
+                  self={self}
+                  protectedAdmin={protectedAdmin}
+                  onAction={onAction}
+                />
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
   );
 }
 

@@ -10,6 +10,7 @@ import { server } from "@/test/server";
 import {
   changesOf,
   REVERT_NOTE,
+  type AgentCategory,
   type AgentPage,
   type AgentSummary,
   type Editable,
@@ -151,7 +152,62 @@ const SUMMARY: AgentSummary = {
   overridden: false,
   code_changed: [],
   last_run_at: null,
+  category: "finding",
 };
+
+// The api's groups (catalog.CATEGORIES), in its order.
+const CATEGORIES: AgentCategory[] = [
+  {
+    key: "finding",
+    title: "Finding jobs",
+    sentence:
+      "These agents search job websites and company careers pages for postings.",
+  },
+  {
+    key: "applying",
+    title: "Applying",
+    sentence:
+      "These agents fill in application forms, answer their open questions and check the answers before anything is submitted.",
+  },
+  {
+    key: "documents",
+    title: "Documents",
+    sentence:
+      "These agents write and change the CVs, cover letters and proposals.",
+  },
+  {
+    key: "profile",
+    title: "Profile and import",
+    sentence:
+      "These agents read the documents a person uploads, transcribe their scanned pages and propose what goes into their profile.",
+  },
+  {
+    key: "jobs",
+    title: "Jobs and chat",
+    sentence:
+      "These agents assess a posting against the profile and answer questions about a job in its chat.",
+  },
+  {
+    key: "test",
+    title: "Test",
+    sentence:
+      "These agents exist for the dev run panel and the tests, and are never listed in production.",
+  },
+];
+
+const agent = (
+  name: string,
+  category: string,
+  extra: Partial<AgentSummary> = {},
+): AgentSummary => ({
+  ...SUMMARY,
+  name,
+  category,
+  description: `The ${name} agent.`,
+  internal: false,
+  private_io: false,
+  ...extra,
+});
 
 const noDashes = (text: string | null) => {
   expect(text ?? "").not.toMatch(/[–—]| - /);
@@ -161,12 +217,14 @@ const noDashes = (text: string | null) => {
 function fakeAgents(
   page: AgentPage = makePage(),
   save?: (body: Record<string, unknown>) => Response | undefined,
-  summary: AgentSummary = SUMMARY,
+  summary: AgentSummary | AgentSummary[] = SUMMARY,
+  categories: AgentCategory[] | null = CATEGORIES,
 ) {
   const state = { page, saves: [] as Array<Record<string, unknown>>, reads: 0 };
+  const items = Array.isArray(summary) ? summary : [summary];
   server.use(
     http.get("*/api/admin/agents", () =>
-      HttpResponse.json({ items: [summary] }),
+      HttpResponse.json(categories ? { items, categories } : { items }),
     ),
     http.get("*/api/admin/agents/:name", ({ params }) => {
       state.reads += 1;
@@ -213,7 +271,9 @@ describe("the list", () => {
     fakeSession(admin);
     fakeAgents();
     const { container } = renderApp("/admin/agents");
-    const table = await screen.findByRole("table", { name: "Agents, by name" });
+    const table = await screen.findByRole("table", {
+      name: "Finding jobs, by name",
+    });
     const row = within(table).getByRole("row", { name: /browser_discovery/ });
     expect(
       within(row).getByRole("link", { name: "browser_discovery" }),
@@ -242,13 +302,153 @@ describe("the list", () => {
       code_changed: ["system_prompt"],
     });
     renderApp("/admin/agents");
-    const table = await screen.findByRole("table", { name: "Agents, by name" });
+    const table = await screen.findByRole("table", {
+      name: "Finding jobs, by name",
+    });
     const row = within(table).getByRole("row", { name: /browser_discovery/ });
     expect(within(row).getByText("Version 2")).toBeInTheDocument();
-    expect(
-      within(row).getByText("The code's prompt changed since it was saved"),
-    ).toBeInTheDocument();
+    const notice = within(row).getByText(
+      "The code's prompt changed since it was saved",
+    );
+    // It wraps on a phone's card line instead of widening the page.
+    expect(notice.className).toContain("whitespace-normal");
     noDashes(table.textContent);
+  });
+
+  it("groups the agents by category: one section each, in order, with its count and sentence", async () => {
+    fakeSession(admin);
+    fakeAgents(makePage(), undefined, [
+      agent("apply_answer", "applying"),
+      agent("apply_form", "applying"),
+      SUMMARY,
+      agent("documents_letter", "documents"),
+      agent("documents_cv", "documents", {
+        version: 3,
+        overridden: true,
+        code_changed: ["model"],
+      }),
+      agent("echo", "test", { test_only: true }),
+      agent("triage", "jobs"),
+    ]);
+    const { container } = renderApp("/admin/agents");
+    await screen.findByRole("table", { name: "Finding jobs, by name" });
+    // In the api's order; Profile and import has no agent here, so it is not shown.
+    expect(
+      screen
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent),
+    ).toEqual([
+      "Finding jobs (1)",
+      "Applying (2)",
+      "Documents (2)",
+      "Jobs and chat (1)",
+      "Test (1)",
+    ]);
+    const applying = screen.getByRole("region", { name: "Applying (2)" });
+    expect(
+      within(applying).getByText(/^These agents fill in application forms/),
+    ).toBeVisible();
+    const table = within(applying).getByRole("table", {
+      name: "Applying, by name",
+    });
+    // Same columns as before the grouping, the agent's name its row header.
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((head) => head.textContent),
+    ).toEqual(["Agent", "Module", "Model", "Version", "Last run"]);
+    expect(
+      within(table)
+        .getAllByRole("rowheader")
+        .map((head) => within(head).getByRole("link").textContent),
+    ).toEqual(["apply_answer", "apply_form"]);
+    const documents = screen.getByRole("region", { name: "Documents (2)" });
+    expect(
+      within(documents).getByRole("link", { name: "documents_letter" }),
+    ).toBeInTheDocument();
+    // A saved version and a code change notice keep their badges in the section.
+    const cv = within(documents).getByRole("row", { name: /documents_cv/ });
+    expect(within(cv).getByText("Version 3")).toBeInTheDocument();
+    expect(
+      within(cv).getByText("The code changed since it was saved"),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Test (1)" })).getByText(
+        "Test only",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: /^Profile and import/ }),
+    ).toBeNull();
+    noDashes(container.textContent);
+  });
+
+  it("shows no Test section when the api lists no test agent, as in production", async () => {
+    fakeSession(admin);
+    fakeAgents(makePage(), undefined, [SUMMARY, agent("triage", "jobs")]);
+    renderApp("/admin/agents");
+    await screen.findByRole("table", { name: "Finding jobs, by name" });
+    expect(
+      screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+    ).toEqual(["Finding jobs (1)", "Jobs and chat (1)"]);
+    expect(screen.queryByRole("heading", { name: /^Test/ })).toBeNull();
+    expect(screen.queryByText("Test only")).toBeNull();
+  });
+
+  it("an agent of a category the answer does not list comes last, under Other", async () => {
+    fakeSession(admin);
+    // An api older than the page: no categories, and no category on the agents.
+    const old = { ...SUMMARY } as Partial<AgentSummary>;
+    delete old.category;
+    fakeAgents(
+      makePage(),
+      undefined,
+      [old as AgentSummary, agent("triage", "jobs")],
+      null,
+    );
+    renderApp("/admin/agents");
+    const table = await screen.findByRole("table", { name: "Other, by name" });
+    expect(
+      within(table).getByRole("link", { name: "browser_discovery" }),
+    ).toBeInTheDocument();
+    expect(
+      within(table).getByRole("link", { name: "triage" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent),
+    ).toEqual(["Other (2)"]);
+  });
+
+  it("gives every section's table the same fixed columns, one line for Model, Version and Last run", async () => {
+    fakeSession(admin);
+    fakeAgents(makePage(), undefined, [
+      agent("documents_letter", "documents"),
+      agent("triage", "jobs"),
+    ]);
+    renderApp("/admin/agents");
+    const widths: string[][] = [];
+    for (const name of ["Documents, by name", "Jobs and chat, by name"]) {
+      const table = await screen.findByRole("table", { name });
+      expect(table).toHaveClass("lg:table-fixed");
+      const heads = within(table).getAllByRole("columnheader");
+      widths.push(heads.map((head) => head.className));
+      for (const label of ["Model", "Version", "Last run"]) {
+        expect(
+          within(table).getByRole("columnheader", { name: label }),
+        ).toHaveClass("lg:whitespace-nowrap");
+      }
+    }
+    expect(widths[0]).toEqual(widths[1]);
+  });
+
+  it("says so when no agent is registered", async () => {
+    fakeSession(admin);
+    fakeAgents(makePage(), undefined, []);
+    renderApp("/admin/agents");
+    expect(
+      await screen.findByText("No agent is registered here."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("a member gets the not found page and the agents are never asked for", async () => {
