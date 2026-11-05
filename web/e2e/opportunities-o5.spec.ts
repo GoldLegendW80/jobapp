@@ -347,6 +347,10 @@ test("steps 2 to 5 by keyboard, and Back keeps every value", async () => {
   await expect(
     pageN.getByRole("button", { name: "Add LinkedIn", exact: true }),
   ).toBeVisible();
+  // One click for the known job websites and the two feeds (audit chapter 2, A1).
+  await expect(
+    pageN.getByRole("button", { name: "Add the recommended websites" }),
+  ).toBeVisible();
   await expect(pageN.getByText(/A company job board, like/)).toBeVisible();
   await noDash(pageN);
   await shots(pageN, "step-4");
