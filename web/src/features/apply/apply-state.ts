@@ -309,7 +309,8 @@ export function valueText(value: unknown): string {
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value))
     return value.map(valueText).filter(Boolean).join(", ");
-  if (typeof value === "object") return reportText(value) ?? JSON.stringify(value);
+  if (typeof value === "object")
+    return reportText(value) ?? JSON.stringify(value);
   if (typeof value === "string") return value;
   return typeof value === "number" ? String(value) : "";
 }
