@@ -49,6 +49,7 @@ export const AGENT_WORDS: Record<string, string> = {
   documents_chat_cv: "Chat about a CV",
   documents_chat_letter: "Chat about a cover letter",
   documents_chat_base: "Chat about a base CV",
+  profile_titles: "Job title ideas",
 };
 
 export function agentWord(id: string): string {
@@ -354,3 +355,27 @@ export const DECK_NO_SKILLS_HINT =
 export function deckEmpty(threshold: number): string {
   return `Nothing new above your threshold of ${threshold}.`;
 }
+
+/** The job title ideas under Job titles and the place idea under Places (profile/title-suggestions.tsx). */
+export const SUGGESTION_WORDS = {
+  heading: "Suggested for you",
+  needsKey: "Job title ideas from your profile need a model key.",
+  addKey: "Add a model key",
+  needsCv:
+    "Add your CV or your skills, and job title ideas from your profile show here.",
+  addCv: "Add your CV",
+  /** In a dialog, where a link would drop the draft: the page, named. */
+  needsKeyThere:
+    "Job title ideas from your profile need a model key, added on the Account page.",
+  needsCvThere:
+    "Job title ideas show here once your profile holds your CV or your skills.",
+  first: "Get job title ideas that fit your profile.",
+  suggest: "Suggest titles",
+  more: "More ideas",
+  retry: "Try again",
+  running: "Finding titles that fit your profile",
+  none: "No new title to suggest.",
+  askedEnough: (perDay: number) =>
+    `You asked for more ideas ${perDay} times today. More tomorrow.`,
+  fromProfile: "from your profile",
+} as const;

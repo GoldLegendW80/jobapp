@@ -78,7 +78,24 @@ export const onboardingDone = {
   show_card: false,
 };
 
+/** GET /api/profile/title-suggestions of an account without a model key: no idea yet. */
+export const noTitleSuggestions = {
+  status: "idle",
+  needs: "model_key",
+  suggestions: [],
+  refreshed_at: null,
+  error: null,
+  asks_left: 3,
+  asks_per_day: 3,
+  estimate: null,
+  cost_note: null,
+};
+
 export const handlers = [
+  // The job title ideas under Job titles (profile/title-suggestions.tsx): none without a key.
+  http.get("*/api/profile/title-suggestions", () =>
+    HttpResponse.json(noTitleSuggestions),
+  ),
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
   // The job feeds, no Adzuna key stored (Find jobs and the Account page's Adzuna key card).

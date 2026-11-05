@@ -34,12 +34,17 @@ import {
   SENIORITIES,
   type Search,
 } from "@/features/profile/api";
+import {
+  PlaceSuggestion,
+  TitleSuggestions,
+} from "@/features/profile/title-suggestions";
 import { cn } from "@/lib/utils";
 import { contractWord, WORDING } from "@/lib/wording";
 
 import { ModelKeyForm } from "./model-key-form";
 import {
   readPay,
+  splitTerms,
   STEP_IDS,
   STEP_NAMES,
   type Draft,
@@ -287,7 +292,18 @@ export function StepLooking({ draft, change, patterns, problem }: PanelProps) {
           {WORDING.savedPatternHint}
         </p>
       ) : (
-        roles
+        <div className="flex flex-col gap-3">
+          {roles}
+          {/* The job titles agent's ideas, once there is a key and something to read. */}
+          <TitleSuggestions
+            quiet
+            label={WORDING.roles}
+            current={splitTerms(draft.roles)}
+            onAdd={(title) => {
+              change({ roles: [...splitTerms(draft.roles), title].join(", ") });
+            }}
+          />
+        </div>
       )}
       <AdvancedSection
         pageKey="welcome-looking"
@@ -377,7 +393,18 @@ export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
           </Link>
         </AdvancedSection>
       ) : (
-        places
+        <div className="flex flex-col gap-3">
+          {places}
+          <PlaceSuggestion
+            label={WORDING.places}
+            current={splitTerms(draft.locations)}
+            onAdd={(place) => {
+              change({
+                locations: [...splitTerms(draft.locations), place].join(", "),
+              });
+            }}
+          />
+        </div>
       )}
       <Radios
         legend={WORDING.remoteHybridOnSite}
