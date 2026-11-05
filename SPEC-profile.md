@@ -35,6 +35,17 @@ One row per user in `profiles`, one JSONB document per section, validated by Pyd
 
 Search terms are plain words or phrases, matched as whole words, case-insensitive; an "advanced" toggle accepts a regular expression, which is compiled and checked on save (bad pattern: 422 with the error position).
 
+## Job title suggestions
+
+Owner, 2026-11-05: "I want an agent to find the best job titles according to the profile", and "The job titles agent refreshes by itself after a profile fill or a skills change, at most once a day." Code in `api/app/profile/titles.py` (rules, store, triggers), `agents.py` (the agent), `titles_router.py`; the chips in `web/src/features/profile/title-suggestions.tsx`.
+
+- **The agent**, `profile_titles`: internal, private (its events hold sizes, never a title), on the model the documents writers use for each kind of credential, 3 turns, 60 s, a token budget of twice the high estimate, one tool `submit_titles` taking at most 8 `{title, reason, language}`. It reads the fit summary (`fit_summary.py`: skills, years, recent titles, languages, seniority, industries, company types; never a name, contact detail or employer), the wanted and unwanted titles, the places (it answers in their language: French titles for French places) and the never apply rules, as one JSON block in its first message. The run executes in the worker (job `profile_titles` of the agents queue), its input holding a random key and the budget only. Tests run it on the fake streams `profile_titles*`.
+- **The checks, by code**, before a title is stored and again on every read against the search saved then, first failing wins: the app's cybersecurity rule (`jobs.never_apply.CYBER_RULE`) on the title or its reason; a dash used as a separator in the title; not plain words (`plain_terms.PLAIN`), over 80 characters or 6 words; a language that is not a two letter code; a reason that is empty, over 120 characters or not plain (its dashes become commas first); already a wanted title (case, accents, plural aside); caught by an unwanted title (`profile.matching`) or a never apply rule (`jobs.never_apply`); twice in the answer; past 8 kept, or a full wanted list. A search section that no longer validates gets no idea.
+- **Runs and bounds.** A run needs a model credential and skills or past roles to read. A cron of the agents queue (every minute) starts one after a skills save or an accepted Fill my profile item, at most once a day per person and only when what the agent reads changed since the stored answer; a trigger inside the day waits for the day to pass. "More ideas" asks again on a click, 3 times a UTC day. One run at a time per person. About 20,000 to 39,000 tokens a run by the app's estimate (USD 0.03 to 0.09 on an API key at the prices of `ingestion/pricing.py`), shown before the click on an API key; nothing about money on a subscription.
+- **The store**, `profile_title_suggestions` (migration 0031): one row per person, the last kept suggestions with their time, so a page never costs a call.
+- **The chips** under Job titles in the Search tab, Find jobs "What you want" and the wizard step "What you are looking for": "+ Analytics engineer" with its reason under it; a click adds it to the list being edited (the person still saves), and it leaves the suggestions; "More ideas". States: nothing yet with the one link that makes ideas possible (Add a model key, Add your CV; in the Find jobs dialog the same words without a link, which would drop the draft; in the wizard nothing until a key and something to read exist), on its way, failed with its reason and Try again, "No new title to suggest". A list of regular expressions gets no idea.
+- **The place chip** under Places (Search tab, Find jobs, the wizard step "Where"): the profile's city, else its country, "+ Lyon, from your profile", while the list does not hold it. No model.
+
 ## Data model
 
 ```
@@ -42,6 +53,9 @@ profiles(user_id pk fk users, sections jsonb, photo bytea null, photo_mime text 
          revision int, updated_at)
 profile_revisions(id bigserial, user_id fk, revision int, section text, data jsonb,
                   created_at, unique(user_id, revision))
+profile_title_suggestions(user_id pk fk users, suggestions jsonb, refreshed_at, basis text,
+                          run_id fk agent_runs null, asked_at, auto_at, seen_at, asks_on date,
+                          asks int, error text)
 ```
 
 Every save of a section increments `revision` and appends one `profile_revisions` row; restoring an old version is a save of its data. Optimistic concurrency: a save sends the `revision` it was based on, and a stale one gets 409 with the current data (two tabs editing at once).
@@ -60,6 +74,8 @@ All require a session and act on the caller's own profile only.
 | GET /api/profile/photo | the image, `Cache-Control: private` |
 | GET /api/profile/export | the whole profile as one JSON file |
 | POST /api/profile/import | that same JSON format back (all sections replaced, one revision each) |
+| GET /api/profile/title-suggestions | the job titles agent's last ideas, checked against the saved search, what a run needs, the clicks left, the estimate; never calls a model |
+| POST /api/profile/title-suggestions | "More ideas": one run; 409 while one runs, without a key or anything to read; 429 past 3 a day; 503 when the queue is down |
 
 Importer for Harald: `./deploy.sh profile import <email>` runs on the Mac, converts `../profile/facts.md`, `../profile/skills.json`, the title and location regexes of `../engine/boards.json` (its boards are no longer imported, 2026-10-28) and the `assemble.py` constants into the export format, and posts it for that user through a CLI in the api container. Conversion is a pure function with its own tests.
 
@@ -75,10 +91,11 @@ As platform, plus `./deploy.sh profile import <email>`.
 
 ```
 api/app/profile/  models.py schemas.py router.py service.py importer.py cli.py
-api/alembic/versions/0003_profile.py
+                  titles.py agents.py titles_tools.py titles_router.py prompts/titles.md
+api/alembic/versions/0003_profile.py 0031_profile_title_suggestions.py
 api/tests/profile/
 web/src/features/profile/
-web/e2e/profile.spec.ts
+web/e2e/profile.spec.ts profile-titles.spec.ts
 ```
 
 ## Testing strategy
