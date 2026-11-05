@@ -542,8 +542,13 @@ class Tab:
                 self.submitted = True
                 log.info("lease %s: %s on a submit element, permitted", self.lease_tag, tool)
                 return None
-            log.warning("lease %s: %s refused: %s", self.lease_tag, tool, code)
-            return refused(code if code == "credential" else "submit_permit")
+            if code == "credential":
+                log.warning("lease %s: %s refused: %s", self.lease_tag, tool, code)
+                return refused(code)
+            # Expected before every send: the api reads the emergency stop, then sends the act
+            # again with the capability. Info, so a WARNING still means a real refusal.
+            log.info("lease %s: %s refused: submit_permit rule=%s", self.lease_tag, tool, code)
+            return refused("submit_permit")
         if self.discovery:
             code = line.control(facts, "key" if action == "key" else action)
             if not code:
@@ -1342,7 +1347,7 @@ async def evaluate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         # A19: a script may submit the form, so it runs only with the capability (the
         # emergency stop off), with no guard of the line; its result as JSON text.
         if not tab.gate:
-            log.warning("lease %s: browser_evaluate refused: submit_permit", tab.lease_tag)
+            log.info("lease %s: browser_evaluate refused: submit_permit", tab.lease_tag)  # as judge
             return refused("submit_permit")
         page = await tab.page()
         await tab.pacer.dwell()

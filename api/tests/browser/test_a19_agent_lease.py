@@ -4,6 +4,8 @@ password or one time code box, no host list, and every other purpose unchanged."
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -170,3 +172,29 @@ def test_the_capability_is_issued_to_the_agent_lease() -> None:
     lease = SimpleNamespace(request=SimpleNamespace(purpose="apply_agent"), gate_hash=b"")
     assert routes.issue_capability(lease)
     assert lease.gate_hash
+
+
+def test_the_expected_first_refusal_of_a_submit_is_logged_at_info(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """On the agent's lease the first `submit_permit` of every send is expected (the api reads
+    the emergency stop, then sends the act again with the capability): info, so a WARNING still
+    means a real refusal, as it does on every other lease (the apply journeys, 2026-11-05)."""
+    with caplog.at_level(logging.INFO, logger="browserd"):
+        tab("apply_agent", gate=False).judge(SUBMIT, "click", "browser_click")
+        asyncio.run(actions.evaluate(tab("apply_agent", gate=False), {"function": "() => 1"}))
+        tab("apply_agent", gate=True).judge({**FIELD, "secret": True}, "type", "browser_type")
+        tab("apply_agent", gate=False).judge(None, "type", "browser_type")
+        tab("apply_fill", gate=False).judge(SUBMIT, "click", "browser_click")
+    refusals = [
+        (r.levelname, r.getMessage().split(" refused: ")[1].split()[0])
+        for r in caplog.records
+        if " refused: " in r.getMessage()
+    ]
+    assert refusals == [
+        ("INFO", "submit_permit"),
+        ("INFO", "submit_permit"),
+        ("WARNING", "credential"),
+        ("WARNING", "credential"),
+        ("WARNING", "submit"),
+    ]
