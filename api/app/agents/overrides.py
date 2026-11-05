@@ -9,8 +9,9 @@ editable fields that differ from the code when it is saved (`check`):
   wall_time_s, tools (the code's tools switched off: never one the code did not give the agent).
 
 A wall time may be lowered or raised (A7, owner 2026-11-04), from WALL_TIME_MIN_S up to the
-ceiling (`ceiling_s`): the longest wall time any agent has in code, which the agents queue's job
-timeout and the reaper's stale bound already cover, so a raised run is never cut by them first.
+ceiling (`ceiling_s`): the longest wall time any agent has in code. The worker's bounds are per
+run: the job of a raised run ends at its wall time plus a margin (worker.run_job_timeout_s), the
+reaper waits as long (runs.reap_stale), and a run nobody raised keeps the queue's bounds.
 
 Everything else stays the code's: the input model, the flags (internal, private_io, bind, chat,
 needs_job, bind_job, test_only, live_text), the tools' code and schemas, and what the runner
@@ -129,8 +130,7 @@ class Changes(BaseModel):
 
 def ceiling_s() -> float:
     """The longest wall time a saved version may give a run: the longest the agents queue lets
-    any run take (catalog.longest_wall_time_s, the function the worker computes its job timeout
-    and stale bound from)."""
+    any run take (catalog.longest_wall_time_s; worker.RUN_AGENT_MAX_S gives arq room for it)."""
     return catalog.longest_wall_time_s()
 
 
@@ -351,6 +351,28 @@ def for_run(
         return definition, None
     version, changes = found
     return apply(definition, changes), version
+
+
+def run_wall_time_s(sessions: sessionmaker[Session], run_id: uuid.UUID) -> float | None:
+    """The wall time a run would get if it started now (A7, the bound of its job in the worker):
+    its agent's code definition with the latest saved version on top. None when the run or its
+    agent is not known here, or the read fails (a warning names the error's type only)."""
+    try:
+        with sessions() as db:
+            agent = db.scalar(sa.select(AgentRun.agent).where(AgentRun.id == run_id))
+            found = latest(db, agent) if agent is not None else None
+            changes = dict(found.changes or {}) if found is not None else {}
+            db.rollback()
+    except Exception as exc:
+        logger.warning(
+            "agent run's wall time not read, the queue's job timeout is used",
+            extra={"run_id": str(run_id), "error": type(exc).__name__},
+        )
+        return None
+    definition = definitions.AGENTS.get(agent) if agent is not None else None
+    if definition is None:
+        return None
+    return apply(definition, changes).wall_time_s
 
 
 def effective(

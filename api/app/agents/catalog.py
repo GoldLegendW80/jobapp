@@ -114,10 +114,10 @@ def load() -> dict[str, definitions.AgentDefinition]:
 
 
 def longest_wall_time_s() -> float:
-    """The longest wall time any agent of the app has in code (`load`): what the agents queue's
-    job timeout and the reaper's stale bound are computed from (worker.longest_agent_s), and so
-    the ceiling of a saved wall time (overrides.py, agents A7). One function for the worker, the
-    check of a save, the page and the runner, so none of them allows a run longer than another."""
+    """The longest wall time any agent of the app has in code (`load`): the ceiling of a saved
+    wall time (overrides.py, agents A7), read by the check of a save, the page and the runner.
+    The worker gives arq's timeout of run_agent room for it (worker.RUN_AGENT_MAX_S, compared
+    with it by a test) and ends each run's job at that run's own bound."""
     return max(agent.wall_time_s for agent in load().values())
 
 

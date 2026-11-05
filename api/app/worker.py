@@ -143,6 +143,12 @@ MAX_AGENT_RUNS = 2
 # only catches a runner stuck beyond that.
 AGENT_JOB_MARGIN_S = 120
 AGENT_STALE_MARGIN_S = 300
+# arq 0.28 takes a timeout per function, never per job (the keywords of enqueue_job go to the
+# function). So run_agent ends each job at its own bound (run_job_timeout_s: the queue's job
+# timeout, or a wall time raised on the Agents tab plus the margin, agents A7), and arq's timeout
+# of run_agent is only the outer one: the longest wall time a save may give (the ceiling, the
+# website search's day of B20) plus the margin. A test compares it with overrides.ceiling_s().
+RUN_AGENT_MAX_S = sweep.BROWSER_SEARCH_MAX_S + AGENT_JOB_MARGIN_S
 AGENT_STALE_QUEUED = timedelta(hours=6)
 # What a stop waits, in all, for the cancelled jobs, the job ends being written and the threads
 # of asyncio.to_thread, before it disposes of the engine and returns whatever is left. Compose
@@ -193,12 +199,9 @@ def register_modules() -> None:
 
 
 def longest_agent_s() -> float:
-    """The longest wall time of any agent of the app (agent_catalog.longest_wall_time_s, which
-    imports every module that registers one). Computed when it is asked, never as a module
-    constant: an agent registered after this file was imported counts too. It is also the
-    ceiling of a wall time saved on the Agents tab (agents A7), so a raised run fits the job
-    timeout and the stale bound below."""
-    return agent_catalog.longest_wall_time_s()
+    """The longest wall time of any registered agent. Computed when it is asked, never as a
+    module constant: an agent registered after this file was imported counts too."""
+    return max(agent.wall_time_s for agent in definitions.AGENTS.values())
 
 
 def agent_job_timeout_s() -> float:
@@ -399,11 +402,40 @@ def agent_context(ctx: dict[str, Any]) -> Any:
     )
 
 
-async def run_agent(ctx: dict[str, Any], run_id: str) -> str | None:
-    from app.agents import runner
+def run_job_timeout_s(wall_time_s: float | None, default_s: float) -> float:
+    """How long one run_agent job may take (A7): the queue's job timeout, or longer for a run
+    whose wall time was raised past it, that wall time plus the margin; never above arq's own
+    timeout of run_agent. None (the run or its agent not known): the queue's."""
+    if wall_time_s is None:
+        return default_s
+    return min(max(default_s, wall_time_s + AGENT_JOB_MARGIN_S), RUN_AGENT_MAX_S)
 
-    status = await runner.execute(agent_context(ctx), uuid.UUID(run_id))
+
+async def run_agent(
+    ctx: dict[str, Any], run_id: str, default_timeout_s: float | None = None
+) -> str | None:
+    """One run, ended at its own bound (run_job_timeout_s) as arq ends a job at its timeout: the
+    task is cancelled. The bound is read from the version the run would use if it started now;
+    the runner reads that version again when it starts, so it is given the bound's wall time as
+    its most (a version saved in between cannot outlive the job). `default_timeout_s` is the
+    queue's job timeout of when it was built (agents_queue)."""
+    from app.agents import overrides, runner
+
+    run = uuid.UUID(run_id)
+    default_s = default_timeout_s if default_timeout_s is not None else agent_job_timeout_s()
+    wall = await asyncio.to_thread(overrides.run_wall_time_s, sessions_of(ctx), run)
+    bound = run_job_timeout_s(wall, default_s)
+    async with asyncio.timeout(bound):
+        status = await runner.execute(
+            agent_context(ctx), run, wall_time_max_s=bound - AGENT_JOB_MARGIN_S
+        )
     return status.value if status is not None else None
+
+
+def own_stale_after(saved_wall_time_s: float) -> timedelta:
+    """When a run whose version raised its wall time is stale (A7): past that wall time plus the
+    stale margin, if that is later than the queue's own bound."""
+    return timedelta(seconds=saved_wall_time_s + AGENT_STALE_MARGIN_S)
 
 
 def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: bool) -> int:
@@ -411,7 +443,9 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
         if at_start:
             count = agent_runs.reap_orphans(db, now)
         else:
-            count = agent_runs.reap_stale(db, now, agent_stale_running(), AGENT_STALE_QUEUED)
+            count = agent_runs.reap_stale(
+                db, now, agent_stale_running(), AGENT_STALE_QUEUED, own_stale_after
+            )
         db.commit()
     return count
 
@@ -472,15 +506,20 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
 
 
 def agents_queue() -> QueueSpec:
-    # The limits are computed here, after the imports that register the agents (those of the
-    # catalog included, the finder's): a 15 minute step of ingestion under a timeout computed
-    # before it would be cut at 12 minutes, and so would a wall time raised on the Agents tab.
+    # The limits are computed here, after the imports that register the agents: a 15 minute
+    # step of ingestion under a timeout computed before it would be cut at 12 minutes.
     register_modules()
     job_timeout_s = agent_job_timeout_s()
     return QueueSpec(
         name=queue.AGENTS,
         functions=[
-            func(run_agent, name="run_agent", timeout=job_timeout_s, max_tries=1),
+            # Each job ends at its own bound (run_agent); arq's is the outer one (A7).
+            func(
+                functools.partial(run_agent, default_timeout_s=job_timeout_s),
+                name="run_agent",
+                timeout=max(job_timeout_s, RUN_AGENT_MAX_S),
+                max_tries=1,
+            ),
             func(
                 apply_decide,
                 name="apply_decide",

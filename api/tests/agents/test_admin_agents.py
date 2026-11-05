@@ -13,6 +13,7 @@ import sys
 import threading
 import typing
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from alembic import command
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
+from app import worker
 from app.agents import catalog, definitions, overrides, runner
 from app.agents.crypto import Keyring
 from app.agents.models import AgentEvent, AgentOverride, AgentRun, CredentialKind, RunStatus
@@ -497,6 +499,15 @@ def test_a_raised_wall_time_reaches_the_runs_clock_and_its_time_limit(
     assert row.agent_version == 1
     # What the run says of its limit is the raised one, not the code's 10 minutes.
     assert row.error == "The run took longer than its limit of 1440 minutes and was stopped."
+    # Run by worker.run_agent, the job's bound is the most it gets (a version saved since it
+    # was read cannot outlive the job).
+    capped = new_run(factory, user, {"message": "x", "script": "stall"})
+    rc = context(settings, factory, keyring, Backends())
+    assert asyncio.run(runner.execute(rc, capped, wall_time_max_s=1200.0)) is RunStatus.failed
+    assert timeouts == [raised, 1200.0]
+    assert run_row(factory, capped).error == (
+        "The run took longer than its limit of 20 minutes and was stopped."
+    )
 
 
 def test_a_version_saved_above_a_lowered_ceiling_runs_at_the_ceiling(
@@ -524,11 +535,11 @@ def test_a_version_saved_above_a_lowered_ceiling_runs_at_the_ceiling(
     assert page["effective"]["wall_time_s"] == page["choices"]["wall_time_max_s"] == lowered
 
 
-def test_a_fresh_worker_lets_a_run_take_the_whole_ceiling() -> None:
-    """The agents queue a fresh worker builds covers the longest wall time a save may give, with
-    its margins: arq's job timeout never cuts such a run, nor does the reaper fail it as stale,
-    before its own clock stops it. The ceiling is computed as the api computes it, in another
-    fresh interpreter that never imports the worker."""
+def test_a_fresh_worker_keeps_the_queues_timeout_and_lets_a_raised_run_take_the_ceiling() -> None:
+    """The agents queue a fresh worker builds keeps its job timeout of before A7 (the longest
+    agent it registers, plus the margin), and arq's own timeout of run_agent, the outer bound
+    of a raised run (worker.run_agent ends each job at its own bound first), covers the ceiling
+    a fresh api computes, in another interpreter that never imports the worker."""
 
     def fresh(script: str) -> Any:
         ran = subprocess.run(
@@ -541,26 +552,98 @@ def test_a_fresh_worker_lets_a_run_take_the_whole_ceiling() -> None:
         assert ran.returncode == 0, ran.stderr[-2000:]
         return json.loads(ran.stdout.strip().splitlines()[-1])
 
-    worker = fresh(
+    built = fresh(
         "from app import worker\n"
         "spec = worker.agents_queue()\n"
         "timeouts = {one.name: one.timeout_s for one in spec.functions}\n"
         "print(json.dumps({'queue': spec.job_timeout_s, 'run_agent': timeouts['run_agent'],\n"
-        "    'apply_decide': timeouts['apply_decide'],\n"
-        "    'stale': worker.agent_stale_running().total_seconds(),\n"
-        "    'job_margin': worker.AGENT_JOB_MARGIN_S,\n"
-        "    'stale_margin': worker.AGENT_STALE_MARGIN_S}))\n"
+        "    'apply_decide': timeouts['apply_decide'], 'longest': worker.longest_agent_s(),\n"
+        "    'outer': worker.RUN_AGENT_MAX_S, 'margin': worker.AGENT_JOB_MARGIN_S}))\n"
     )
     api = fresh(
-        "from app.agents import definitions, overrides\n"
-        "used = overrides.apply(definitions.ECHO, {'wall_time_s': 10.0**9})\n"
-        "print(json.dumps({'ceiling': overrides.ceiling_s(), 'used': used.wall_time_s}))\n"
+        "from app.agents import overrides\nprint(json.dumps({'ceiling': overrides.ceiling_s()}))\n"
     )
-    ceiling = api["ceiling"]
-    assert api["used"] == ceiling == 86_400
-    assert worker["queue"] == worker["run_agent"] == worker["apply_decide"]
-    assert worker["run_agent"] == ceiling + worker["job_margin"]
-    assert worker["stale"] == ceiling + worker["stale_margin"]
+    assert built["queue"] == built["apply_decide"] == built["longest"] + built["margin"] == 3720
+    assert built["run_agent"] == built["outer"] == api["ceiling"] + built["margin"] == 86_520
+    # The bound of one job: the queue's, unless the run's wall time was raised past it.
+    assert worker.run_job_timeout_s(None, 3720) == 3720
+    assert worker.run_job_timeout_s(definitions.TRIAGE.wall_time_s, 3720) == 3720
+    assert worker.run_job_timeout_s(7200, 3720) == 7320
+    assert worker.run_job_timeout_s(api["ceiling"], 3720) == built["outer"]
+    assert worker.run_job_timeout_s(10.0**9, 3720) == built["outer"]  # never above arq's
+
+
+def test_a_raised_run_gets_its_own_job_bound_and_another_keeps_the_queues(
+    api: Api,
+    admin: str,
+    factory: sessionmaker[Session],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raised = overrides.ceiling_s()
+    assert save(api, admin, "echo", {"wall_time_s": raised}).status_code == 201
+    user = add_user(factory, f"e2e-{secrets.token_hex(3)}@example.org")
+    echo_run = new_run(factory, user)
+    triage_run = new_run(factory, user, agent="triage")
+    gone_run = new_run(factory, user, agent="g7_no_such_agent")
+    assert overrides.run_wall_time_s(factory, echo_run) == raised
+    assert overrides.run_wall_time_s(factory, triage_run) == definitions.TRIAGE.wall_time_s
+    assert overrides.run_wall_time_s(factory, gone_run) is None
+    assert overrides.run_wall_time_s(factory, uuid.uuid4()) is None
+
+    bounds: list[float] = []
+    capped: list[float | None] = []
+    timeout = asyncio.timeout
+
+    def recorded(delay: float | None) -> Any:
+        bounds.append(typing.cast(float, delay))
+        return timeout(delay)
+
+    async def fake_execute(
+        context: Any, run_id: uuid.UUID, *, wall_time_max_s: float | None = None
+    ) -> RunStatus:
+        capped.append(wall_time_max_s)
+        return RunStatus.done
+
+    monkeypatch.setattr(worker.asyncio, "timeout", recorded)
+    monkeypatch.setattr(runner, "execute", fake_execute)
+    monkeypatch.setattr(worker, "agent_context", lambda ctx: None)
+    ctx = {"sessions": factory}
+    for run_id in (echo_run, triage_run, gone_run):
+        assert asyncio.run(worker.run_agent(ctx, str(run_id), default_timeout_s=3720)) == "done"
+    assert bounds == [raised + worker.AGENT_JOB_MARGIN_S, 3720, 3720]
+    assert capped == [raised, 3720 - worker.AGENT_JOB_MARGIN_S, 3720 - worker.AGENT_JOB_MARGIN_S]
+
+
+def test_the_reaper_waits_for_a_raised_runs_own_bound_and_reaps_a_normal_run_at_the_queues(
+    api: Api, admin: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raised = overrides.ceiling_s()
+    assert save(api, admin, "echo", {"wall_time_s": raised}).status_code == 201
+    assert save(api, admin, "echo", {"effort": "high"}, base_version=1).status_code == 201
+    user = add_user(factory, f"e2e-{secrets.token_hex(3)}@example.org")
+    queue_bound = timedelta(seconds=3900)
+    started = now() - queue_bound - timedelta(seconds=100)
+    on_raised, on_code, on_other = (new_run(factory, user) for _ in range(3))
+    for run_id, version in ((on_raised, 1), (on_code, None), (on_other, 2)):
+        with factory() as db, db.begin():
+            db.execute(
+                sa.update(AgentRun)
+                .where(AgentRun.id == run_id)
+                .values(status=RunStatus.running, started_at=started, agent_version=version)
+            )
+    monkeypatch.setattr(worker, "agent_stale_running", lambda: queue_bound)
+    # Past the queue's bound: the runs of the code's wall time and of a version that does not
+    # change it are failed; the raised one is not, its own clock has a day to go.
+    assert worker._reap_agent_runs(factory, now(), at_start=False) == 2
+    assert run_row(factory, on_code).status is RunStatus.failed
+    assert run_row(factory, on_other).status is RunStatus.failed
+    assert run_row(factory, on_raised).status is RunStatus.running
+    own = worker.own_stale_after(raised)
+    assert own == timedelta(seconds=raised + worker.AGENT_STALE_MARGIN_S)
+    assert worker._reap_agent_runs(factory, started + own, at_start=False) == 0  # at the limit
+    later = started + own + timedelta(seconds=1)
+    assert worker._reap_agent_runs(factory, later, at_start=False) == 1
+    assert run_row(factory, on_raised).status is RunStatus.failed
 
 
 def test_the_recent_runs_name_the_person_of_each_run_to_an_admin_only(
