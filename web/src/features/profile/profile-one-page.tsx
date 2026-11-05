@@ -254,7 +254,7 @@ function Who({ profile }: { profile: Profile }) {
   const identity = profile.sections.identity;
   const name = identity.full_name ?? "Your name";
   const initials =
-    name
+    (identity.full_name ?? "")
       .split(/\s+/)
       .map((word) => word[0] ?? "")
       .join("")

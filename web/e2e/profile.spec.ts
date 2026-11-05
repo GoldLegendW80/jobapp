@@ -256,7 +256,7 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
   await expect(page.getByRole("list", { name: "Ready for" })).toContainText(
     "Scoring postings",
   );
-  await page.getByRole("button", { name: "More" }).click();
+  await page.getByRole("button", { name: "More", exact: true }).click();
   await page.getByRole("menuitem", { name: "Classic editor" }).click();
   await expect(page).toHaveURL(/\/profile\?tab=identity$/);
   await expect(
