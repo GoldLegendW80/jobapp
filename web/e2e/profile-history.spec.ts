@@ -99,7 +99,7 @@ test.afterAll(async () => {
 test("a new account fills its profile from empty to 100% in the browser", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await expect(completeness(page)).toHaveAttribute("aria-valuenow", "0");
 
   // Identity
@@ -177,7 +177,7 @@ test("a new account fills its profile from empty to 100% in the browser", async 
   await setup.getByLabel("Remote preference").selectOption("hybrid");
   await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await expect(tab(page, "Search")).toHaveAccessibleName(
     "Search, 100% complete",
   );

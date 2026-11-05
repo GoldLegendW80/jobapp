@@ -153,9 +153,7 @@ test("a new user opens Fill my profile on the prompt, filled with their name", a
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   await page.goto("/profile");
-  await page
-    .getByRole("link", { name: "Fill my profile with an agent" })
-    .click();
+  await page.getByRole("link", { name: "Add other documents" }).click();
   await expect(page).toHaveURL(/\/profile\/fill$/);
   await expect(
     page.getByRole("heading", {
