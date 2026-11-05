@@ -253,7 +253,8 @@ function CropDialog({
         <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
           <div
             ref={frame}
-            className="relative w-full max-w-64 touch-none select-none"
+            // The square dims the rest of the picture with a wide shadow: the frame clips it.
+            className="relative w-full max-w-64 touch-none overflow-hidden rounded-md select-none"
             onPointerDown={(event) => {
               drag.current = { x: event.clientX, y: event.clientY };
               try {
