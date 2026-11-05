@@ -539,7 +539,10 @@ test("B, with roles and no website, ends the wizard without a sweep", async () =
     name: "Your Anthropic API key (optional)",
   });
   await expect(key).toBeVisible();
-  await expect(key.getByLabel("API key", { exact: true })).toHaveAttribute("type", "password");
+  await expect(key.getByLabel("API key", { exact: true })).toHaveAttribute(
+    "type",
+    "password",
+  );
   await noDash(pageB);
   await shots(pageB, "summary-key");
   await press(pageB.getByRole("button", { name: "Start" }), "Enter");
