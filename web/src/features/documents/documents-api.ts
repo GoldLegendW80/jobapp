@@ -324,6 +324,20 @@ export const spendSchema = z.object({
 });
 export type Spend = z.infer<typeof spendSchema>;
 
+/** What saving a draft of the skills section would start (`POST /api/documents/spend/skills`). */
+export const skillsSpendSchema = z.object({
+  auto: z.boolean(),
+  min_fit: z.number(),
+  /** Automatic writing starts by itself: on, with the consent and a credential. */
+  writes: z.boolean(),
+  /** Postings the draft brings to the threshold that have no CV yet. */
+  newly: z.number(),
+  newly_estimate: estimateSchema,
+  priced: z.boolean(),
+  cost_note: z.string(),
+});
+export type SkillsSpend = z.infer<typeof skillsSpendSchema>;
+
 export const settingsSchema = z.object({
   no_dash_separators: z.boolean(),
   banned_phrases: z.array(z.string()),
@@ -611,6 +625,18 @@ export const acceptConsent = (version: number): Promise<Consent> =>
   send(`${ROOT}/consent`, "POST", consentSchema, { version });
 
 // Spend and settings
+
+export const getSkillsSpend = (
+  skills: unknown,
+  signal?: AbortSignal,
+): Promise<SkillsSpend> =>
+  request(`${ROOT}/spend/skills`, {
+    method: "POST",
+    body: { skills },
+    signal,
+    timeoutMs: TIMEOUT_MS,
+    validate: (answer) => skillsSpendSchema.parse(answer),
+  });
 
 export const getSpend = (
   minFit?: number,

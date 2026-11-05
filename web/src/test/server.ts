@@ -177,6 +177,28 @@ export const handlers = [
       last_30_days: { input: 0, output: 0, cost_usd: "0" },
     }),
   ),
+  // A skills draft that starts nothing (the line beside Save skills stays empty).
+  http.post("*/api/documents/spend/skills", () =>
+    HttpResponse.json({
+      auto: true,
+      min_fit: 70,
+      writes: false,
+      newly: 0,
+      newly_estimate: { tokens: { low: 0, high: 0 }, cost: null },
+      priced: false,
+      cost_note: "",
+    }),
+  ),
+  // No skills change rescored yet (the line after Save skills).
+  http.get("*/api/jobs/rescore/status", () =>
+    HttpResponse.json({
+      state: "idle",
+      wanted_revision: null,
+      done_revision: 0,
+      finished_at: null,
+      outcome: null,
+    }),
+  ),
   // No writing rule yet, the default of a new user (the Search tab's Writing rules card).
   http.get("*/api/documents/settings", () =>
     HttpResponse.json({ no_dash_separators: false, banned_phrases: [] }),

@@ -31,10 +31,9 @@ import {
   failureSentence,
   getSpend,
   spendKey,
-  type Estimate,
   type Spend,
 } from "./documents-api";
-import { money, tokenRange, tokens } from "./labels";
+import { estimateSentence, money, tokens } from "./labels";
 import { WritingRulesCard } from "./writing-rules-card";
 
 /** How long the threshold rests before the count at that value is asked for. */
@@ -53,14 +52,6 @@ export function DocumentsSearchOptions({ form }: { form: Form }) {
 
 const postings = (count: number): string =>
   count === 1 ? "1 posting" : `${tokens(count)} postings`;
-
-/** "about 1,000 to 2,000 tokens, about USD 0.10 to USD 0.20" (the cost on an API key only). */
-function estimateSentence(estimate: Estimate): string {
-  const range = tokenRange(estimate.tokens);
-  if (estimate.cost === null) return range;
-  const { currency, low, high } = estimate.cost;
-  return `${range}, about ${money(currency, low)} to ${money(currency, high)}`;
-}
 
 function useSettled<T>(value: T): T {
   const [settled, setSettled] = useState(value);
