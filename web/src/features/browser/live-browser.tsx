@@ -266,19 +266,22 @@ export function LiveBrowser({
           </Button>
         )}
       </div>
-      {/* The on screen keyboard of a phone: what is typed here goes to the browser, key by key. */}
+      {/* The on screen keyboard of a phone: what is typed here goes to the browser, key by key.
+          Hidden by its box: the Textarea's own width and padding would win over `sr-only`. */}
       {watchOnly ? null : (
-        <Textarea
-          ref={keyboard}
-          aria-label="Type into your browser"
-          autoCapitalize="off"
-          autoComplete="off"
-          autoCorrect="off"
-          spellCheck={false}
-          onInput={typed}
-          onKeyDown={special}
-          className="sr-only min-h-0"
-        />
+        <div className="sr-only">
+          <Textarea
+            ref={keyboard}
+            aria-label="Type into your browser"
+            autoCapitalize="off"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onInput={typed}
+            onKeyDown={special}
+            className="min-h-0"
+          />
+        </div>
       )}
     </section>
   );
