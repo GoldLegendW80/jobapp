@@ -577,9 +577,9 @@ describe("list", () => {
     expect(
       await screen.findByText("No postings match these filters"),
     ).toBeInTheDocument();
-    const empty = screen.getByText(
-      "No postings match these filters",
-    ).parentElement!;
+    const empty = screen
+      .getByText("No postings match these filters")
+      .closest<HTMLElement>("[data-slot=empty]")!;
     await user.click(
       within(empty).getByRole("button", { name: "Clear filters" }),
     );

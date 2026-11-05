@@ -14,8 +14,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { describeError, errorDetail } from "@/lib/api";
 
 import { formatDateTime } from "./format";
@@ -158,8 +158,8 @@ export function AdzunaKeyCard() {
           </p>
         ) : null}
         <form noValidate onSubmit={submit} className="space-y-3">
-          <div className="space-y-1">
-            <Label htmlFor={`${id}-app-id`}>Application ID</Label>
+          <Field className="gap-1">
+            <FieldLabel htmlFor={`${id}-app-id`}>Application ID</FieldLabel>
             <Input
               id={`${id}-app-id`}
               autoComplete="off"
@@ -170,9 +170,9 @@ export function AdzunaKeyCard() {
                 setAppId(event.target.value);
               }}
             />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor={`${id}-app-key`}>Application key</Label>
+          </Field>
+          <Field className="gap-1">
+            <FieldLabel htmlFor={`${id}-app-key`}>Application key</FieldLabel>
             <Input
               id={`${id}-app-key`}
               type="password"
@@ -184,7 +184,7 @@ export function AdzunaKeyCard() {
                 setAppKey(event.target.value);
               }}
             />
-          </div>
+          </Field>
           <div className="flex flex-wrap gap-2">
             <Button type="submit" disabled={busy}>
               {save.isPending ? "Saving…" : "Save key"}

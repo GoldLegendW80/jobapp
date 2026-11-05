@@ -1,3 +1,5 @@
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 import { statusCounts } from "./api";
@@ -39,16 +41,18 @@ export function KpiTiles({
               : count.toLocaleString("en-GB");
           return (
             <li key={status} className="w-28 shrink-0 snap-start sm:w-auto">
-              <button
+              <Button
                 type="button"
+                variant="outline"
                 aria-pressed={pressed}
                 aria-label={`${STATUS_LABELS[status]}: ${value}`}
                 onClick={() => {
                   onSelect(status);
                 }}
                 className={cn(
-                  "flex w-full flex-col items-start gap-1 rounded-lg border bg-card px-3 py-2 text-left transition-colors hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
-                  pressed && "border-primary ring-1 ring-primary",
+                  "h-auto w-full flex-col items-start gap-1 rounded-lg bg-card px-3 py-2 text-left font-normal whitespace-normal shadow-none transition-colors hover:text-foreground dark:border-border dark:bg-card dark:hover:bg-accent",
+                  pressed &&
+                    "border-primary ring-1 ring-primary dark:border-primary",
                 )}
               >
                 <span className="flex max-w-full items-center gap-1.5 text-xs text-muted-foreground">
@@ -66,16 +70,16 @@ export function KpiTiles({
                     Unavailable
                   </span>
                 ) : loading ? (
-                  <span
+                  <Skeleton
                     aria-hidden="true"
-                    className="my-1 h-5 w-10 animate-pulse rounded bg-muted"
+                    className="my-1 h-5 w-10 rounded bg-muted"
                   />
                 ) : (
                   <span className="text-xl font-semibold tabular-nums">
                     {value}
                   </span>
                 )}
-              </button>
+              </Button>
             </li>
           );
         })}

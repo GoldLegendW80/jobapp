@@ -571,11 +571,14 @@ describe("job detail", () => {
       }),
     );
     await openDetail();
-    const summary = screen.getByText("Imported fields");
-    const details = summary.closest("details")!;
-    expect(details).not.toHaveAttribute("open");
-    await userEvent.setup().click(summary);
-    expect(details).toHaveAttribute("open");
+    const trigger = screen.getByRole("button", { name: "Imported fields" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("data/reports/x.html")).toBeNull();
+    await userEvent.setup().click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const details = document.getElementById(
+      trigger.getAttribute("aria-controls")!,
+    )!;
     expect(
       within(details).getByText("data/reports/x.html"),
     ).toBeInTheDocument();

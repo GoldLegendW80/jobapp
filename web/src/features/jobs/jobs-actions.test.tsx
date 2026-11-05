@@ -112,12 +112,8 @@ describe("multi-select", () => {
     await user.click(rowBoxes()[5]!);
     await user.keyboard("{/Shift}");
     expect(within(bar()).getByText("5 postings selected")).toBeVisible();
-    expect(
-      rowBoxes()
-        .slice(1, 6)
-        .every((b) => (b as HTMLInputElement).checked),
-    ).toBe(true);
-    expect((rowBoxes()[0] as HTMLInputElement).checked).toBe(false);
+    for (const box of rowBoxes().slice(1, 6)) expect(box).toBeChecked();
+    expect(rowBoxes()[0]).not.toBeChecked();
     // Shift again unselects a range from the last click.
     fireEvent.click(rowBoxes()[3]!, { shiftKey: true });
     expect(within(bar()).getByText("2 postings selected")).toBeVisible();

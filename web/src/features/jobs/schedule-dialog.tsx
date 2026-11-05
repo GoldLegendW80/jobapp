@@ -11,6 +11,7 @@ import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -19,9 +20,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Field,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -54,26 +66,32 @@ export function ScheduleButton() {
   const state = useSchedule();
   return (
     <>
-      <Button
-        variant="outline"
-        onClick={() => {
-          setOpen(true);
-        }}
-        title={scheduleLine(state)}
-      >
-        <CalendarClock aria-hidden="true" />
-        Schedule
-        <span
-          className={cn(
-            "rounded-full px-1.5 text-xs font-medium",
-            state?.enabled
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-muted-foreground",
-          )}
-        >
-          {state?.enabled ? "On" : "Off"}
-        </span>
-      </Button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setOpen(true);
+            }}
+          >
+            <CalendarClock aria-hidden="true" />
+            Schedule
+            <span
+              className={cn(
+                "rounded-full px-1.5 text-xs font-medium",
+                state?.enabled
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground",
+              )}
+            >
+              {state?.enabled ? "On" : "Off"}
+            </span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs motion-reduce:animate-none!">
+          {scheduleLine(state)}
+        </TooltipContent>
+      </Tooltip>
       {open ? (
         <ScheduleDialog
           state={state}
@@ -166,21 +184,24 @@ export function ScheduleDialog({
           </DialogDescription>
         </DialogHeader>
         <form id={`${id}-form`} onSubmit={submit} className="grid gap-4">
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <input
-              type="checkbox"
-              className="size-4 accent-primary"
+          <Field orientation="horizontal" className="gap-2">
+            <Checkbox
+              id={`${id}-enabled`}
               checked={draft.enabled}
-              onChange={(event) => {
-                const enabled = event.target.checked;
+              onCheckedChange={(checked) => {
+                const enabled = checked === true;
                 setDraft((old) => ({ ...old, enabled }));
               }}
             />
-            Search automatically
-          </label>
+            <FieldLabel htmlFor={`${id}-enabled`}>
+              Search automatically
+            </FieldLabel>
+          </Field>
 
-          <fieldset className="grid gap-1.5" disabled={!draft.enabled}>
-            <legend className="mb-1.5 text-sm font-medium">Days</legend>
+          <FieldSet className="gap-1.5" disabled={!draft.enabled}>
+            <FieldLegend variant="label" className="mb-1.5">
+              Days
+            </FieldLegend>
             <div className="flex flex-wrap gap-1.5">
               {WEEKDAYS.map((day) => {
                 const pressed = draft.days.includes(day);
@@ -208,13 +229,18 @@ export function ScheduleDialog({
                 );
               })}
             </div>
+            {/* No alert: the line under the form says it too, politely. */}
             {!draft.days.length ? (
-              <p className="text-xs text-destructive">Pick at least one day.</p>
+              <FieldError role={undefined} className="text-xs">
+                Pick at least one day.
+              </FieldError>
             ) : null}
-          </fieldset>
+          </FieldSet>
 
-          <fieldset className="grid gap-1.5" disabled={!draft.enabled}>
-            <legend className="mb-1.5 text-sm font-medium">Times</legend>
+          <FieldSet className="gap-1.5" disabled={!draft.enabled}>
+            <FieldLegend variant="label" className="mb-1.5">
+              Times
+            </FieldLegend>
             <div className="flex flex-wrap items-center gap-2">
               {draft.times.map((time, index) => (
                 <div key={index} className="flex items-center gap-1">
@@ -271,14 +297,14 @@ export function ScheduleDialog({
               ) : null}
             </div>
             {badTimes ? (
-              <p className="text-xs text-destructive">
+              <FieldError role={undefined} className="text-xs">
                 Every time needs hours and minutes.
-              </p>
+              </FieldError>
             ) : null}
-          </fieldset>
+          </FieldSet>
 
-          <div className="grid gap-1.5">
-            <Label htmlFor={`${id}-zone`}>Time zone</Label>
+          <Field className="gap-1.5">
+            <FieldLabel htmlFor={`${id}-zone`}>Time zone</FieldLabel>
             <NativeSelect
               id={`${id}-zone`}
               value={draft.timezone}
@@ -294,7 +320,7 @@ export function ScheduleDialog({
                 </option>
               ))}
             </NativeSelect>
-          </div>
+          </Field>
 
           <p role="status" aria-live="polite" className="text-sm">
             {!draft.enabled

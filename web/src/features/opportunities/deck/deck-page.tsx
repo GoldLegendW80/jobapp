@@ -1,11 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { Heart, LoaderCircle, Undo2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Heart, Undo2, X } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { AdvancedSection } from "@/components/advanced-section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Kbd } from "@/components/ui/kbd";
+import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 import { countJobs, jobCountKey } from "@/features/jobs/api";
@@ -31,7 +41,7 @@ function ignoredTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return Boolean(
     target.closest(
-      "input, textarea, select, [contenteditable='true'], [role='dialog'], [role='alertdialog']",
+      "input, textarea, select, [role='checkbox'], [contenteditable='true'], [role='dialog'], [role='alertdialog']",
     ),
   );
 }
@@ -136,7 +146,7 @@ export function DeckPage() {
 
       {deck.query.isPending ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading your deck
         </p>
       ) : deck.query.isError && !top ? (
@@ -192,7 +202,7 @@ export function DeckPage() {
         </Alert>
       ) : deck.query.isFetchingNextPage ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading more postings
         </p>
       ) : (
@@ -227,12 +237,12 @@ export function DeckPage() {
               >
                 <X aria-hidden="true" className="size-7" />
               </Button>
-              <label
+              <Label
                 htmlFor={passId}
-                className="cursor-pointer text-sm font-medium text-muted-foreground"
+                className="cursor-pointer leading-5 text-muted-foreground"
               >
                 {WORDING.pass}
-              </label>
+              </Label>
             </div>
           ) : null}
           <div className="flex h-16 items-center">
@@ -262,20 +272,21 @@ export function DeckPage() {
                 }}
               >
                 {busy ? (
-                  <LoaderCircle
+                  <Spinner
                     aria-hidden="true"
-                    className="size-7 animate-spin"
+                    role={undefined}
+                    className="size-7"
                   />
                 ) : (
                   <Heart aria-hidden="true" className="size-7" />
                 )}
               </Button>
-              <label
+              <Label
                 htmlFor={likeId}
-                className="cursor-pointer text-sm font-medium text-muted-foreground"
+                className="cursor-pointer leading-5 text-muted-foreground"
               >
                 {WORDING.like}
-              </label>
+              </Label>
             </div>
           ) : null}
         </div>
@@ -285,7 +296,17 @@ export function DeckPage() {
           data-testid="deck-keys"
           className="text-center text-xs text-muted-foreground"
         >
-          Keys: left arrow to pass, right arrow to like, U to undo the last one.
+          Keys:{" "}
+          <Kbd>
+            <ArrowLeft aria-hidden="true" />
+            <span className="sr-only">left arrow</span>
+          </Kbd>{" "}
+          to pass,{" "}
+          <Kbd>
+            <ArrowRight aria-hidden="true" />
+            <span className="sr-only">right arrow</span>
+          </Kbd>{" "}
+          to like, <Kbd>U</Kbd> to undo the last one.
         </p>
       ) : null}
     </div>
@@ -323,52 +344,50 @@ function DeckEmpty({
     profile.data.sections.skills.have.every(
       (category) => category.terms.length === 0,
     );
-  return (
-    <section
-      aria-label={WORDING.deck}
-      className="flex flex-col gap-3 rounded-2xl border border-dashed p-6"
-    >
-      {noPostings ? (
-        <>
-          <p className="font-medium">{WORDING.deckNoPostings}</p>
-          <p className="text-sm text-muted-foreground">
-            {WORDING.deckNoPostingsHint}
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild size="sm">
-              <Link to="/jobs?find=1">{WORDING.findJobs}</Link>
-            </Button>
-          </div>
-        </>
-      ) : noSkills ? (
-        <>
-          <p className="font-medium">{deckNoSkills(threshold)}</p>
-          <p className="text-sm text-muted-foreground">{DECK_NO_SKILLS_HINT}</p>
-          <div className="flex flex-wrap gap-2">
+  const [title, hint, actions] = noPostings
+    ? [
+        WORDING.deckNoPostings,
+        WORDING.deckNoPostingsHint,
+        <Button key="find" asChild size="sm">
+          <Link to="/jobs?find=1">{WORDING.findJobs}</Link>
+        </Button>,
+      ]
+    : noSkills
+      ? [
+          deckNoSkills(threshold),
+          DECK_NO_SKILLS_HINT,
+          <>
             <Button asChild size="sm">
               <Link to="/profile?tab=skills">{WORDING.addSkills}</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
               <Link to="/profile?tab=search">{WORDING.searchOptions}</Link>
             </Button>
-          </div>
-        </>
-      ) : (
-        <>
-          <p className="font-medium">{deckEmpty(threshold)}</p>
-          <p className="text-sm text-muted-foreground">
-            {WORDING.deckEmptyHint}
-          </p>
-          <div className="flex flex-wrap gap-2">
+          </>,
+        ]
+      : [
+          deckEmpty(threshold),
+          WORDING.deckEmptyHint,
+          <>
             <Button asChild size="sm">
               <Link to="/jobs?find=1">{WORDING.findNewPostings}</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
               <Link to="/profile?tab=search">{WORDING.searchOptions}</Link>
             </Button>
-          </div>
-        </>
-      )}
+          </>,
+        ];
+  return (
+    <section aria-label={WORDING.deck}>
+      <Empty className="gap-4 rounded-2xl border p-6 md:p-6">
+        <EmptyHeader className="gap-2">
+          <EmptyTitle className="text-base tracking-normal">{title}</EmptyTitle>
+          <EmptyDescription>{hint}</EmptyDescription>
+        </EmptyHeader>
+        <EmptyContent className="flex-row flex-wrap justify-center gap-2">
+          {actions}
+        </EmptyContent>
+      </Empty>
     </section>
   );
 }

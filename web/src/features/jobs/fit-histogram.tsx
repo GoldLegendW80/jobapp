@@ -1,3 +1,9 @@
+import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import type { FitBucket } from "./api";
@@ -56,34 +62,41 @@ export function FitHistogram({
             bucket.count === 0 ? 0 : Math.max(4, (bucket.count / max) * 100);
           return (
             <li key={bucket.low} className="flex h-full flex-col">
-              <button
-                type="button"
-                aria-pressed={pressed}
-                aria-label={`Fit ${bucket.low} to ${bucket.high}: ${count(bucket.count)} postings`}
-                title={`Fit ${bucket.low} to ${bucket.high}: ${count(bucket.count)}`}
-                onClick={() => {
-                  onSelect(bucket.low, bucket.high);
-                }}
-                className="group flex h-full w-full flex-col items-center justify-end gap-1 rounded-sm focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-              >
-                <span
-                  aria-hidden="true"
-                  className="text-[10px] leading-none tracking-tight whitespace-nowrap text-muted-foreground tabular-nums"
-                >
-                  {count(bucket.count)}
-                </span>
-                <span
-                  aria-hidden="true"
-                  style={{ height: `${height}%` }}
-                  className={cn(
-                    "w-full rounded-t-sm transition-opacity group-hover:opacity-80",
-                    bucketTone(bucket.low),
-                    rangeActive && !pressed && "opacity-35",
-                    pressed &&
-                      "ring-2 ring-primary ring-offset-1 ring-offset-card",
-                  )}
-                />
-              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    aria-pressed={pressed}
+                    aria-label={`Fit ${bucket.low} to ${bucket.high}: ${count(bucket.count)} postings`}
+                    onClick={() => {
+                      onSelect(bucket.low, bucket.high);
+                    }}
+                    className="group h-full w-full flex-col justify-end gap-1 rounded-sm p-0 font-normal hover:bg-transparent dark:hover:bg-transparent"
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="text-[10px] leading-none tracking-tight whitespace-nowrap text-muted-foreground tabular-nums"
+                    >
+                      {count(bucket.count)}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      style={{ height: `${height}%` }}
+                      className={cn(
+                        "w-full rounded-t-sm transition-opacity group-hover:opacity-80",
+                        bucketTone(bucket.low),
+                        rangeActive && !pressed && "opacity-35",
+                        pressed &&
+                          "ring-2 ring-primary ring-offset-1 ring-offset-card",
+                      )}
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="motion-reduce:animate-none!">
+                  {`Fit ${bucket.low} to ${bucket.high}: ${count(bucket.count)}`}
+                </TooltipContent>
+              </Tooltip>
             </li>
           );
         })}
