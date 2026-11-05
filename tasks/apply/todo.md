@@ -22,7 +22,7 @@ Task ids use the prefix `A`. Branches are `apply/a<n>-<slug>`. Every block's iss
 **Owner answer, taken on 2026-10-21** (issue #464): “no limit.” Likes have no per-click, session or daily cap. Application guardrails remain in force, including fit checks, company caps, pacing, holds and the safety ceiling.
 
 **Defaults decided by the planner (2026-10-14)**, which the owner may change.
-- No model ever clicks Submit. The one click path is `apply/gate.py`, through the browser's `gate_click` capability (B5), after a decision that writes its audit row first.
+- In Review first and Full auto no model clicks Submit (in One click Apply the apply agent clicks it itself, A19, owner 2026-11-05). Their one click path is `apply/gate.py`, through the browser's `gate_click` capability (B5), after a decision that writes its audit row first.
 - Review first refills from the approved answers in a fresh lease with no model call, reads each value back and refuses on a difference (`form_changed`).
 - `submit_unknown` is never resubmitted by the app; "It was submitted" or "Try again" (a new approval) are the person's.
 - Term boxes: the employer's privacy notice for this application and "the information is accurate" may be ticked; arbitration, marketing, talent pools, background check authorisations and anything else are the person's.
@@ -223,6 +223,13 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 **Playwright journey:** `apply-a17.spec.ts`: A's full Review first journey, then B tries each of A's addresses.
 **Scope:** S. **Depends on:** A7 to A13c, A15, A16, A18a, A18b and A18c. It does not wait for A14 (e-mail, paused with mail): while mail is paused A17 can run and covers every path but e-mail; mail's M21 covers the e-mail path, and A14 adds its own isolation test when it lands. **Migration:** none. **Owns:** `api/app/apply/privacy.py`, `api/tests/apply/test_isolation.py`, the module's privacy sentences.
 
+## A19: One click Apply works like Claude Code with Playwright CLI on the owner's Mac
+**Issue:** none (this session could not create issues). **Owner, 2026-11-05:** "do it exactly like Mac: Claude Code + Playwright CLI. no screenshot, no guardrails, submit without asking. only asking if the agent do not know what to fill"; "The agent clicks it"; "you can add a random pacing to feel more like human like between 3 to 8 seconds." ([decisions](../../docs/decisions.md)).
+**Acceptance:** one apply agent (`apply/applier.py`, `apply_agent`) for mode `direct`, with B20's Playwright CLI tools (shared through `browser/tool_sessions.py`), `browser_file_upload` and `apply_done`; its first message (the posting, the profile with contact details, Saved answers, the person's earlier answers, the letter's text, the PDFs on the lease); asking the person (`browser_ask_person` with `field` and `kind`; the live view when watched, else `needs_person` `agent_question` with the job page's fixed sentence, text box and "Remember this answer", `POST /api/applications/{id}/question`, then the next run); the recording (`submitted` on a confirmation read since the last submit act, `submit_unknown`, `failed`, `needs_person`; `applied` and the freeze through `submit.record`); browserd's lease purpose `apply_agent` (`detect.agent_verdict`, the capability, no host list, no password box); the emergency stop before the run and before each submit act; the pacing of 3 to 8 seconds between acts; CLAUDE.md hard rule 4 and the docs that quoted it.
+**Edge cases to test:** `api/tests/apply/test_a19_applier.py` (submitted, the question and the resume, never apply before the run, the emergency stop before the run and on the submit, `submit_unknown` after a submit act and no second run, a password box, e-mail untouched), `test_a19_pacing.py` (virtual clock), `api/tests/browser/test_a19_agent_lease.py` (the verdict, the capability, other purposes unchanged).
+**Left to do:** the docker marked real Chromium test of the `apply_agent` lease on a fake job site; the One click Apply journey on the recorded model stream of `apply_agent`; while the person watches, an answer typed in the app's box during a live ask (today the live view only); removing the 2026-11-01 direct fill path once no application filled by it is left (contract later).
+**Scope:** L. **Depends on:** none. **Migration:** none.
+
 ## Checkpoint A: the owner's real applications
 **Issue:** to create. Human steps on `https://jobapp.taild83d16.ts.net`, with the owner's own profile and documents, written on the issue with their date. No test or agent ever submits to a real company outside these steps.
 - **Stage A, after A7 (the first end to end slice on the Jetson):** he picks one real Greenhouse or Ashby posting he wants, clicks Apply, watches the fill on his phone or laptop, checks the answers and the screenshot, approves; the posting is `applied` and the documents are frozen (the confirmation mail and its link by the mail module are checked when mail is back, not here: with mail paused this stage does not need them). He writes what he had to correct.
@@ -259,6 +266,7 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 | A14 | to create | Applications by e-mail through the mail gate (waits for mail to resume) | M | A6, A13a, mail M12, M18, M23 | none | 13, or later when mail is back |
 | A18c | to create | Complete my profile on this site: the web | M | A18a, A18b, B4 | none | 14 |
 | A17 | to create | Privacy, retention and isolation over the module | S | A7 to A13c, A15, A16, A18a to A18c (not A14) | none | 15 |
+| A19 | none | One click Apply works like Claude Code with Playwright CLI on the owner's Mac | L | none | none | after 15 |
 | Checkpoint A | to create | The owner's real applications, stages A to E | human | A7, then A12, A13b, A16, A18c | none | after 5, 7, 9, 12 and 14 |
 
 **The first end to end slice**, in the order the orchestrator runs it across the three plans (documents, then browser, then apply; the groups are P0 to P8 and the tasks of one group run in parallel):

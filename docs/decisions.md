@@ -13,9 +13,10 @@ choice made by the build that stands until the owner says otherwise.
 - Never apply to a cybersecurity role, whatever the fit score.
 - Never send mail by itself: the person clicks Send (Full auto, when built, is the one opt in
   exception for forms and mails, with its guardrails, decided 2026-10-10).
-- Nothing is submitted without the person's approval: in Full auto, the Like the person gives
-  while Full auto is on is that approval (2026-10-10); no model ever clicks Submit; the one click
-  path is the apply gate.
+- Nothing is submitted without the person's approval: in One click Apply, the person's click on
+  Apply is that approval and the apply agent clicks Submit itself (2026-11-05); in Full auto,
+  the Like the person gives while Full auto is on is that approval (2026-10-10); in Review first
+  and Full auto no model clicks Submit, the apply gate does.
 - Tests use only `e2e-*@example.org` accounts and never touch real user data.
 - The owner types sudo, passwords and 2FA codes himself. Agents never read `.env` files or
   production credentials.
@@ -311,3 +312,4 @@ them ([tasks/apply/todo.md](../tasks/apply/todo.md), [tasks/browser/todo.md](../
 - Likes keep today's Full auto exactly as it is; only the Apply button of the job page changes.
 - Free text the assistant writes is sent without the person seeing it, after the check by model; it stays readable in the run report.
 - Built as the mode `direct` with the authorisation `apply_click` (the click is the approval, used once, 7 days at most) and the setting `apply_settings.review_before_send` (off by default). The global guards stay; the hold, the rehearsals, the fit threshold and the one per company rule do not apply to an explicit Apply click. The mode is fixed at the click (SPEC-apply, "Owner decision (taken on 2026-11-01)").
+- 2026-11-05 (A19), One click Apply works like Claude Code with Playwright CLI on the owner's Mac. Shown the Mac beside the Jetson, the owner answered: "do it exactly like Mac: Claude Code + Playwright CLI. no screenshot, no guardrails, submit without asking. only asking if the agent do not know what to fill". Asked which protections to keep (no cybersecurity roles; no double application; no payment, account, password or legal terms; the emergency stop), he gave no preference. Asked who presses Submit right after the fill, he chose "The agent clicks it" ("Exactly like your Mac. This changes hard rule 4 in CLAUDE.md, for you and your friends."). Then: "you can add a random pacing to feel more like human like between 3 to 8 seconds." Kept by the orchestrator, since each is a hard rule the owner did not change or adds no step for the person: hard rule 2 (never apply, read before the run, a match ends it `blocked`), the emergency stop (`APPLY_SUBMIT_ENABLED` and the administrator's pause, read before the run and before each act on a submit element), no second sending (`submit_unknown` is never sent again, one Apply click gives one run), hard rule 3 (an e-mail application stays the person's Send); a password or a one time code box stays the person's (hard rule 7). Built: one agent (`apply_agent`, `api/app/apply/applier.py`) with B20's Playwright CLI tools, the documents' upload and `apply_done`, on a browserd lease of purpose `apply_agent` (any public address, a submit element only with the lease's capability), a pause of 3 to 8 seconds between two of its acts on the page (no pace per host across applications). It replaces, for One click Apply only, the 2026-11-01 build above (adapters, answer resolver, form agent, read back, screenshots, the gate's decision, the check by model); Review first, Full auto, Apply myself and the e-mail strategy are unchanged.
