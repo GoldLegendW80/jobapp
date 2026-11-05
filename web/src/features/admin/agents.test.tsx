@@ -99,7 +99,10 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
         input_tokens: 900,
         output_tokens: 40,
         created_at: "2026-11-04T09:00:00Z",
+        started_at: "2026-11-04T09:00:05Z",
         finished_at: "2026-11-04T09:10:00Z",
+        user_name: "E2E Admin",
+        user_email: "e2e-admin@example.org",
         mine: true,
       },
       {
@@ -111,7 +114,10 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
         input_tokens: null,
         output_tokens: null,
         created_at: "2026-11-04T08:00:00Z",
+        started_at: null,
         finished_at: null,
+        user_name: "",
+        user_email: "e2e-friend-with-a-very-long-address-name@example.org",
         mine: false,
       },
     ],
@@ -122,6 +128,8 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
       turns_max: 10000,
       wall_time_min_s: 10,
       wall_time_max_s: 86400,
+      wall_time_where:
+        "It runs as its own job on the agents queue, which lets a run take this long.",
       prompt_max: 100000,
       description_max: 300,
       message_max: 4000,
@@ -482,7 +490,9 @@ describe("editing", () => {
     await user.clear(wall);
     await user.type(wall, "90000");
     expect(
-      screen.getByText(/never more than the code gives/),
+      screen.getByText(
+        "From 10 to 86,400 seconds: never more than the job this agent runs in allows.",
+      ),
     ).toBeInTheDocument();
     expect(save).toBeDisabled();
     await user.clear(wall);
@@ -621,6 +631,108 @@ describe("editing", () => {
     expect(
       await screen.findByRole("textbox", { name: "System prompt" }),
     ).toHaveValue(CODE.system_prompt);
+  });
+});
+
+describe("A7: the ceiling of a wall time and the person of each run", () => {
+  it("shows the ceiling by the field and saves a wall time raised above the code's", async () => {
+    fakeSession(admin);
+    const code = { ...CODE, wall_time_s: 600 };
+    const state = fakeAgents(makePage({ code, effective: code }));
+    const user = userEvent.setup();
+    const { container } = renderApp("/admin/agents/browser_discovery");
+    const wall = await screen.findByLabelText("Wall time, in seconds");
+    expect(wall).toHaveAttribute("max", "86400");
+    expect(wall).toHaveAccessibleDescription(
+      /At most 86,400 seconds \(24 hours\) for this agent\. It runs as its own job on the agents queue, which lets a run take this long\. Lower or raise it within that\./,
+    );
+    await user.clear(wall);
+    await user.type(wall, "86401");
+    expect(
+      screen.getByText(/never more than the job this agent runs in allows/),
+    ).toBeInTheDocument();
+    const save = screen.getByRole("button", { name: "Save as a new version" });
+    expect(save).toBeDisabled();
+    await user.clear(wall);
+    await user.type(wall, "7200");
+    expect(screen.getByText("The code's: 600")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/never more than the job this agent runs in/),
+    ).not.toBeInTheDocument();
+    await user.click(save);
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(1);
+    });
+    expect(state.saves[0]?.changes).toEqual({ wall_time_s: 7200 });
+    noDashes(container.textContent);
+  });
+
+  it("shows the ceiling of an agent that runs inside another job, and where it runs", async () => {
+    fakeSession(admin);
+    const page = makePage();
+    const where =
+      "It runs inside the decision of a Full auto item (apply_decide), whose job ends there.";
+    fakeAgents(
+      makePage({
+        choices: {
+          ...page.choices,
+          wall_time_max_s: 3600,
+          wall_time_where: where,
+        },
+      }),
+    );
+    const user = userEvent.setup();
+    const { container } = renderApp("/admin/agents/browser_discovery");
+    const wall = await screen.findByLabelText("Wall time, in seconds");
+    expect(wall).toHaveAttribute("max", "3600");
+    expect(wall).toHaveAccessibleDescription(
+      /At most 3,600 seconds \(1 hour\) for this agent\. It runs inside the decision of a Full auto item \(apply_decide\), whose job ends there\./,
+    );
+    await user.clear(wall);
+    await user.type(wall, "3601");
+    expect(
+      screen.getByText(
+        /From 10 to 3,600 seconds: never more than the job this agent runs in allows\./,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save as a new version" }),
+    ).toBeDisabled();
+    noDashes(container.textContent);
+  });
+
+  it("names the person of each run, as the Users page does, and says when a run has not started", async () => {
+    fakeSession(admin);
+    fakeAgents();
+    const { container } = renderApp("/admin/agents/browser_discovery");
+    const runs = await screen.findByRole("table", {
+      name: "Recent runs, newest first",
+    });
+    expect(
+      within(runs).getByRole("columnheader", { name: "Person" }),
+    ).toBeInTheDocument();
+    const [, own, theirs] = within(runs).getAllByRole("row");
+    if (!own || !theirs) throw new Error("the two runs of the page");
+    // The admin's own run: the name, the e-mail below it, and the link to its page.
+    expect(within(own).getByText("E2E Admin")).toBeInTheDocument();
+    expect(within(own).getByText("e2e-admin@example.org")).toBeInTheDocument();
+    expect(within(own).getByRole("link")).toHaveTextContent(/2026/);
+    // Another person's queued run of a private agent: no name, so the e-mail stands for it;
+    // no link; and not started yet.
+    expect(
+      within(theirs).getAllByText(
+        "e2e-friend-with-a-very-long-address-name@example.org",
+      ),
+    ).toHaveLength(2);
+    expect(within(theirs).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(theirs).getByText("Not started")).toBeInTheDocument();
+    // At phone width each row is a card and each cell a labelled line.
+    const person = container.querySelector('[data-label="Person"]');
+    expect(person).not.toBeNull();
+    expect(person?.className).toMatch(/max-sm:grid/);
+    expect(person?.innerHTML).toMatch(/break-all/);
+    noDashes(runs.textContent);
+    noDashes(container.textContent);
   });
 });
 

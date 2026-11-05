@@ -38,6 +38,7 @@ import {
   agentKey,
   agentsKey,
   changesOf,
+  duration,
   problemsOf,
   readAgent,
   REVERT_NOTE,
@@ -68,6 +69,10 @@ const FIELD_LABEL: Record<EditableField, string> = {
   wall_time_s: "wall time",
   tools: "tools",
 };
+
+/** When a run started, or that it has not yet (a queued run). */
+const started = (at: string | null) =>
+  at === null ? "Not started" : exactTime(at);
 
 /** A code's value in words, for the notice of a field the code changed. */
 function shown(value: Editable[EditableField]): string {
@@ -521,6 +526,7 @@ function AgentView({ page }: { page: AgentPage }) {
           <Field
             label="Wall time, in seconds"
             error={problems.wall_time_s}
+            hint={`At most ${page.choices.wall_time_max_s.toLocaleString("en")} seconds (${duration(page.choices.wall_time_max_s)}) for this agent. ${page.choices.wall_time_where} Lower or raise it within that.`}
             code={String(page.code.wall_time_s)}
             changed={draft.wall_time_s !== page.code.wall_time_s}
           >
@@ -665,6 +671,7 @@ function AgentView({ page }: { page: AgentPage }) {
               <tr className="border-b text-left text-muted-foreground">
                 {[
                   "Started",
+                  "Person",
                   "Status",
                   "Model",
                   "Version",
@@ -692,14 +699,24 @@ function AgentView({ page }: { page: AgentPage }) {
                         to={`/runs/${run.id}`}
                         className="text-primary underline-offset-4 hover:underline"
                       >
-                        {exactTime(run.created_at)}
+                        {started(run.started_at)}
                       </Link>
                     ) : (
                       <span title="Another person's run: its page is theirs">
-                        {exactTime(run.created_at)}
+                        {started(run.started_at)}
                       </span>
                     )}
                   </th>
+                  <td {...cell("Person")}>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="break-words">
+                        {run.user_name || run.user_email}
+                      </span>
+                      <span className="text-xs break-all text-muted-foreground">
+                        {run.user_email}
+                      </span>
+                    </span>
+                  </td>
                   <td {...cell("Status")}>{run.status}</td>
                   <td {...cell("Model")}>{run.model ?? "Not known"}</td>
                   <td {...cell("Version")}>

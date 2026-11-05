@@ -8,6 +8,14 @@ editable fields that differ from the code when it is saved (`check`):
   description, system_prompt, default_message, model, model_by_credential, effort, max_turns,
   wall_time_s, tools (the code's tools switched off: never one the code did not give the agent).
 
+A wall time may be lowered or raised (A7, owner 2026-11-04), from WALL_TIME_MIN_S up to the
+agent's own ceiling (`ceiling_s`, catalog.ceiling_of): the bound of the job that runs it, the
+longest the agents queue lets a run take for an agent run as its own run_agent job, the other
+module's job for one that runs inside it (a sweep, a fill, a Full auto decision, a profile
+import). The worker's bounds are per run: the job of a raised run ends at its wall time plus a
+margin (worker.run_job_timeout_s), the reaper waits as long (runs.reap_stale), and a run nobody
+raised keeps the queue's bounds.
+
 Everything else stays the code's: the input model, the flags (internal, private_io, bind, chat,
 needs_job, bind_job, test_only, live_text), the tools' code and schemas, and what the runner
 sets for every agent (sdk_options.py: the denied built-ins, the permission mode, no settings
@@ -43,7 +51,7 @@ import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import definitions
+from app.agents import catalog, definitions
 from app.agents.models import AgentOverride, AgentRun, CredentialKind
 
 logger = logging.getLogger("app.agents.overrides")
@@ -53,8 +61,7 @@ DESCRIPTION_MAX = 300
 MESSAGE_MAX = 4_000
 NOTE_MAX = 500
 TURNS_MAX = 10_000
-# A run gets at least this long; never more than the code's own wall time (`check`): the
-# queue's job timeout is computed from the code's limits when the worker starts.
+# A run gets at least this long, and never more than its agent's ceiling (`ceiling_s`).
 WALL_TIME_MIN_S = 10.0
 EDITABLE = (
     "description",
@@ -95,7 +102,7 @@ class Changes(BaseModel):
     model_by_credential: dict[CredentialKind, str] | None = None
     effort: str | None = None
     max_turns: int | None = Field(default=None, ge=1, le=TURNS_MAX)
-    wall_time_s: float | None = Field(default=None, ge=WALL_TIME_MIN_S)
+    wall_time_s: float | None = Field(default=None, ge=WALL_TIME_MIN_S, allow_inf_nan=False)
     tools: list[str] | None = Field(default=None, max_length=64)
 
     _blank = field_validator("description", "system_prompt", "default_message")(_not_blank)
@@ -121,6 +128,15 @@ class Changes(BaseModel):
         if value is not None and value not in definitions.EFFORTS:
             raise ValueError(f"must be one of {', '.join(definitions.EFFORTS)}")
         return value
+
+
+def ceiling_s(definition: definitions.AgentDefinition | None = None) -> float:
+    """The longest wall time a saved version may give a run of `definition` (catalog.ceiling_of).
+    None: the agents queue's, the longest it lets any run take (catalog.longest_wall_time_s;
+    worker.RUN_AGENT_MAX_S gives arq room for it)."""
+    if definition is None:
+        return catalog.longest_wall_time_s()
+    return catalog.ceiling_of(definition).seconds
 
 
 def code_values(definition: definitions.AgentDefinition) -> dict[str, Any]:
@@ -157,8 +173,11 @@ def check(definition: definitions.AgentDefinition, raw: Mapping[str, Any]) -> di
             raise OverrideError(f"tools: not a tool of this agent: {', '.join(unknown)}")
         # Kept in the code's order, each once.
         given["tools"] = [name for name in definition.tools if name in set(given["tools"])]
-    if "wall_time_s" in given and given["wall_time_s"] > definition.wall_time_s:
-        raise OverrideError(f"wall_time_s: at most the code's {definition.wall_time_s:g} seconds")
+    if (
+        "wall_time_s" in given
+        and given["wall_time_s"] > (ceiling := catalog.ceiling_of(definition)).seconds
+    ):
+        raise OverrideError(f"wall_time_s: at most {ceiling.seconds:g} seconds. {ceiling.where}")
     if "default_message" in given and not definition.uses_default_message:
         raise OverrideError("default_message: this agent builds its first message in code")
     return {name: value for name, value in given.items() if value != code[name]}
@@ -198,9 +217,9 @@ def apply(
 ) -> definitions.AgentDefinition:
     """The definition a run uses: the code's, with the saved changes on top. A version saved
     against an older code is read the same way, field by field: a field the agent cannot take
-    any more (a tool the code removed, a wall time above the code's new one, a default message
-    its first message no longer reads) falls back to the code's value, and the others still
-    apply."""
+    any more (a tool the code removed, a default message its first message no longer reads)
+    falls back to the code's value, a wall time above the agent's ceiling of now is that ceiling,
+    and the others still apply."""
     fields: dict[str, Any] = {}
     for name in EDITABLE:
         if name not in changes:
@@ -219,7 +238,7 @@ def apply(
         elif name == "model_by_credential":
             value = {str(kind.value): model for kind, model in value.items()}
         elif name == "wall_time_s":
-            value = min(value, definition.wall_time_s)
+            value = min(value, ceiling_s(definition))
         fields[name] = value
     return dataclasses.replace(definition, **fields) if fields else definition
 
@@ -337,6 +356,28 @@ def for_run(
         return definition, None
     version, changes = found
     return apply(definition, changes), version
+
+
+def run_wall_time_s(sessions: sessionmaker[Session], run_id: uuid.UUID) -> float | None:
+    """The wall time a run would get if it started now (A7, the bound of its job in the worker):
+    its agent's code definition with the latest saved version on top. None when the run or its
+    agent is not known here, or the read fails (a warning names the error's type only)."""
+    try:
+        with sessions() as db:
+            agent = db.scalar(sa.select(AgentRun.agent).where(AgentRun.id == run_id))
+            found = latest(db, agent) if agent is not None else None
+            changes = dict(found.changes or {}) if found is not None else {}
+            db.rollback()
+    except Exception as exc:
+        logger.warning(
+            "agent run's wall time not read, the queue's job timeout is used",
+            extra={"run_id": str(run_id), "error": type(exc).__name__},
+        )
+        return None
+    definition = definitions.AGENTS.get(agent) if agent is not None else None
+    if definition is None:
+        return None
+    return apply(definition, changes).wall_time_s
 
 
 def effective(

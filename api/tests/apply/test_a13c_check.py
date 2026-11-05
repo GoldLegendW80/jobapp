@@ -7,6 +7,7 @@ Postgres, real Redis for the tick; the submit form is A6's fake."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import secrets
@@ -17,7 +18,12 @@ from typing import Any
 import pytest
 import sqlalchemy as sa
 from arq.connections import create_pool
-from arq.constants import job_key_prefix, result_key_prefix
+from arq.constants import (
+    in_progress_key_prefix,
+    job_key_prefix,
+    result_key_prefix,
+    retry_key_prefix,
+)
 from arq.worker import Worker
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -48,7 +54,7 @@ from tests.apply.test_a6_recheck import at
 from tests.apply.test_a13_full_auto import HOLD, HOUR, WHY_TEXT, filled, reviewed, run_job, turn_on
 from tests.conftest import make_settings
 from tests.identity.api_helpers import Api
-from tests.jobs.test_worker import flush_redis, redis_url
+from tests.jobs.test_worker import flush_redis, redis_url, wait_for
 from tests.profile.conftest import full
 
 __all__ = ["api_app", "redis_url", "stub"]
@@ -904,6 +910,80 @@ def test_a_decision_cut_by_a_worker_stop_is_queued_again_at_the_next_tick(
     kept, refused, queued = asyncio.run(scenario())
     assert kept > 3000
     assert refused
+    assert queued == 1
+    flush_redis(redis_url)
+
+
+def test_a_decision_a_killed_worker_left_in_progress_is_queued_again_once_the_next_starts(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    redis_url: str,
+    migrated_url: str,
+) -> None:
+    """Review of agents A7: arq gives the in progress key of every job of a Worker the longest
+    timeout of its functions, a day on the agents queue (run_agent's outer bound). A worker
+    killed hard during a decision (a power cut, an OOM kill) leaves the job, its place in the
+    queue and that key, and the tick could not queue the decision again for a day. The next
+    agents Worker clears the in progress keys of its own queue before its first poll (one
+    worker process consumes it), takes the job and drops it past max_tries, and the next tick
+    queues the decision again. The key of a job of another queue stays."""
+    app_id = item(db, factory, person_a, stub, TRUE_TEXT)
+    job_id = queues.apply_decide_job_id(app_id)
+    elsewhere = in_progress_key_prefix + queues.apply_fill_job_id(app_id)
+    flush_redis(redis_url)
+    settings = make_settings(migrated_url, redis_url=redis_url)
+    # The agents queue as the worker builds it, without its reaper's cron and start hook.
+    spec = dataclasses.replace(worker.agents_queue(), cron_jobs=(), on_start=None)
+    codec: dict[str, Any] = {
+        "job_serializer": queues.serialize,
+        "job_deserializer": queues.deserialize,
+    }
+
+    async def scenario() -> tuple[int, bool, bool, bool, int]:
+        pool = await create_pool(queues.redis_settings(redis_url), **codec)
+        try:
+            # What the killed worker left: the job, its try begun, and its in progress key for
+            # as long as an agents Worker sets it.
+            await pool.enqueue_job(
+                "apply_decide", str(app_id), _job_id=job_id, _queue_name=queues.AGENTS
+            )
+            await pool.incr(retry_key_prefix + job_id)
+            kept_ms = int(worker.build_worker(spec, settings, {}).in_progress_timeout_s * 1000)
+            await pool.psetex(in_progress_key_prefix + job_id, kept_ms, b"1")
+            await pool.psetex(elsewhere, kept_ms, b"1")
+            await worker.apply_tick({"sessions": factory, "redis": pool})
+            refused = await pool.zscore(queues.AGENTS, job_id) is not None
+            stop = asyncio.Event()
+            failure: list[BaseException] = []
+
+            async def ready(workers: list[Worker]) -> None:
+                async def play() -> None:
+                    try:
+                        await wait_for(lambda: workers[0].jobs_failed == 1)
+                    except BaseException as exc:
+                        failure.append(exc)
+                    finally:
+                        stop.set()
+
+                asyncio.get_running_loop().create_task(play())
+
+            await worker.serve(settings, [spec], stop=stop, ctx={}, on_ready=ready)
+            if failure:
+                raise failure[0]
+            cleared = not await pool.exists(in_progress_key_prefix + job_id)
+            stays = bool(await pool.exists(elsewhere))
+            await worker.apply_tick({"sessions": factory, "redis": pool})
+            return kept_ms, refused, cleared, stays, await pool.exists(job_key_prefix + job_id)
+        finally:
+            await pool.aclose()
+
+    kept_ms, refused, cleared, stays, queued = asyncio.run(scenario())
+    assert kept_ms == (worker.RUN_AGENT_MAX_S + 10) * 1000  # arq: its longest timeout plus 10 s
+    assert refused  # the job of the dead try is still there
+    assert cleared
+    assert stays
     assert queued == 1
     flush_redis(redis_url)
 

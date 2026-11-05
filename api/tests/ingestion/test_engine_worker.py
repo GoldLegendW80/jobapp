@@ -74,7 +74,10 @@ def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply
     assert spec.job_timeout_s == longest + worker.AGENT_JOB_MARGIN_S
     assert all(agent.wall_time_s <= spec.job_timeout_s for agent in definitions.AGENTS.values())
     (run_agent,) = [one for one in spec.functions if one.name == "run_agent"]
-    assert run_agent.timeout_s == spec.job_timeout_s == 3720
+    # Each run's job ends at its own bound, the queue's unless its wall time was raised (agents
+    # A7); arq's timeout of run_agent is only the outer one (arq 0.28 has no timeout per job).
+    assert run_agent.coroutine.keywords == {"default_timeout_s": spec.job_timeout_s}
+    assert run_agent.timeout_s == worker.RUN_AGENT_MAX_S == 86_520
     assert run_agent.max_tries == 1
     assert worker.agent_stale_running().total_seconds() == 3900  # 3600 plus 300 stale grace
     assert worker.agent_stale_running().total_seconds() == longest + worker.AGENT_STALE_MARGIN_S
@@ -95,7 +98,8 @@ def test_an_agent_longer_than_the_job_timeout_registered_when_the_queue_is_built
     updated = worker.agents_queue()
     assert updated.job_timeout_s == longer.wall_time_s + worker.AGENT_JOB_MARGIN_S
     (run_agent,) = [one for one in updated.functions if one.name == "run_agent"]
-    assert run_agent.timeout_s == updated.job_timeout_s
+    assert run_agent.coroutine.keywords == {"default_timeout_s": updated.job_timeout_s}
+    assert run_agent.timeout_s == max(updated.job_timeout_s, worker.RUN_AGENT_MAX_S)
     assert updated.max_jobs == 2
     assert worker.agent_stale_running().total_seconds() == (
         longer.wall_time_s + worker.AGENT_STALE_MARGIN_S

@@ -15,6 +15,8 @@ import inspect
 import logging
 import threading
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -113,6 +115,105 @@ def load() -> dict[str, definitions.AgentDefinition]:
     return dict(definitions.AGENTS)
 
 
+def longest_wall_time_s() -> float:
+    """The longest wall time any agent of the app has in code (`load`): the ceiling of a saved
+    wall time of an agent that runs as its own run_agent job (`ceiling_of`, agents A7). The
+    worker gives arq's timeout of run_agent room for it (worker.RUN_AGENT_MAX_S, compared with
+    it by a test) and ends each run's job at that run's own bound."""
+    return max(agent.wall_time_s for agent in load().values())
+
+
+@dataclass(frozen=True)
+class Ceiling:
+    """The longest a saved wall time may give a run of one agent (agents A7): the bound of the
+    job that actually runs it, and one sentence saying where it runs (the page, a refusal)."""
+
+    seconds: float
+    where: str
+
+
+ON_THE_QUEUE = "It runs as its own job on the agents queue, which lets a run take this long."
+# The agents of a sweep (app/browser/finder.py): a worker meets them only once a sweep imports
+# the finder, so the agents queue's job timeout, built at the worker's start, never counts them.
+SWEEP_AGENTS = ("browser_finder", "browser_discovery")
+
+
+def _in_a_sweep() -> Ceiling:
+    from app.browser import leases
+    from app.jobs import sweep
+
+    # The sweep's own bound from its start (B20), and its browser lease's most.
+    seconds = min(sweep.BROWSER_SEARCH_MAX_S, leases.LEASE_MAX_S["sweep"])
+    return Ceiling(float(seconds), "It runs inside a sweep, which ends there at the latest.")
+
+
+def _in_a_decision() -> Ceiling:
+    # apply_decide's job timeout is the agents queue's (worker.agents_queue): the longest wall
+    # time of the agents the worker registers when it starts, every agent but a sweep's, plus
+    # the margin the runner's end is given, as for a run of its own.
+    seconds = max(agent.wall_time_s for agent in load().values() if agent.name not in SWEEP_AGENTS)
+    return Ceiling(
+        seconds,
+        "It runs inside the decision of a Full auto item (apply_decide), whose job ends there.",
+    )
+
+
+def _in_a_fill_form() -> Ceiling:
+    from app.apply import form_agent
+
+    # The fill's form deadline is the code's wall time (apply/run.py form_deadline, the
+    # session's deadline of form_agent.py): a version cannot move it.
+    return Ceiling(
+        form_agent.APPLY_FORM.wall_time_s,
+        "It runs inside an application fill, whose form deadline is the code's wall time.",
+    )
+
+
+def _in_a_fill() -> Ceiling:
+    from app.browser import leases
+
+    # Asked while a fill (or a profile edit) holds its browser lease, which ends at its most.
+    return Ceiling(
+        float(leases.LEASE_MAX_S["apply_fill"]),
+        "It runs inside an application fill, whose browser lease ends there.",
+    )
+
+
+def _in_an_import() -> Ceiling:
+    from app.ingestion import plan
+
+    # Its own run_agent job, inside an ingestion run, which cancels it at the run's deadline
+    # (ingestion/engine.py RUN_TIME).
+    return Ceiling(
+        plan.RUN_MINUTES * 60.0,
+        "It runs as its own job on the agents queue, inside a profile import that stops it "
+        "at its deadline.",
+    )
+
+
+# The agents that run inside another module's job: the bound of that job, from its constants.
+_INSIDE: dict[str, Callable[[], Ceiling]] = {
+    "apply_answer": _in_a_fill,
+    "apply_check": _in_a_decision,
+    "apply_form": _in_a_fill_form,
+    "browser_discovery": _in_a_sweep,
+    "browser_finder": _in_a_sweep,
+    "document_transcribe": _in_an_import,
+    "profile_extract": _in_an_import,
+}
+
+
+def ceiling_of(definition: definitions.AgentDefinition) -> Ceiling:
+    """The ceiling of one agent's saved wall time (Ceiling): for an agent that runs inside
+    another module's job, that job's bound; for every other one, its own run_agent job's, the
+    longest the agents queue lets a run take (`longest_wall_time_s`).
+    tests/agents/test_admin_agents.py compares each with the job a fresh worker builds."""
+    inside = _INSIDE.get(definition.name)
+    if inside is not None:
+        return inside()
+    return Ceiling(longest_wall_time_s(), ON_THE_QUEUE)
+
+
 def package_of(definition: definitions.AgentDefinition) -> str:
     parts = definitions.module_of(definition.name).split(".")
     return parts[1] if len(parts) > 2 and parts[0] == "app" else ""
@@ -166,8 +267,8 @@ def publish(sessions: sessionmaker[Session], now: datetime) -> frozenset[str]:
     """Write every app tool this worker process knows, as the model sees it, to `agent_tools`, in
     one transaction. Worker only: it builds each tool with the SDK, for no run. A tool that
     cannot be built that way is skipped alone. Nothing is imported to find more tools: a module
-    that registers its own (the finder's, imported by the first sweep) is published once it is
-    there, and a row is never deleted here, so a tool another process described stays. Answers
+    that registers its own (the finder's, which `load` imports since agents A7) is published once
+    it is there, and a row is never deleted here, so a tool another process described stays. Answers
     the names written."""
     from app.agents import tools as app_tools
 

@@ -1308,18 +1308,23 @@ def _mark_verified(context: RunContext, user_id: uuid.UUID, secret: _Secret) -> 
             db.rollback()
 
 
-async def execute(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
+async def execute(
+    context: RunContext, run_id: uuid.UUID, *, wall_time_max_s: float | None = None
+) -> RunStatus | None:
     """Run one queued run to its end (module docstring). None when it was not queued.
 
     From the moment the credential is decrypted to the end of this call, it is replaced in
     every log record of the process, whoever logs (app/logging_config.py): the SDK, the HTTP
     client and the queue log on their own, outside the scrub of what the run stores."""
     with contextlib.ExitStack() as held:
-        return await _execute(context, run_id, held)
+        return await _execute(context, run_id, held, wall_time_max_s)
 
 
 async def _execute(
-    context: RunContext, run_id: uuid.UUID, held: contextlib.ExitStack
+    context: RunContext,
+    run_id: uuid.UUID,
+    held: contextlib.ExitStack,
+    wall_time_max_s: float | None = None,
 ) -> RunStatus | None:
     claimed = await asyncio.to_thread(_claim, context, run_id)
     if claimed is None:
@@ -1350,6 +1355,10 @@ async def _execute(
         definition, version = await asyncio.to_thread(
             overrides.for_run, context.sessions, run_id, definition
         )
+        if wall_time_max_s is not None and definition.wall_time_s > wall_time_max_s:
+            # The bound of the job this run executes in (worker.run_agent, A7), read before this
+            # version: one saved in between does not outlive the job.
+            definition = replace(definition, wall_time_s=wall_time_max_s)
         recorder.private = definition.private_io
         # The definition's model until the credential says which one the run uses.
         model = definition.model

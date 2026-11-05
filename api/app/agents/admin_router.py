@@ -7,9 +7,11 @@ its recent runs and the history of its versions. A save is a new version, used f
 run on.
 
 Every route runs `require_admin` (router dependency), which answers 404 to a member, as the
-other admin routes. The pages carry no secret, no environment value and no person's data: a
-run shows its numbers only (status, model, version, turns, tokens), never its input, output or
-error, and the link to its page only to the admin who ran it.
+other admin routes. The pages carry no secret and no environment value. A run shows its numbers
+only (status, model, version, turns, tokens, when it was queued, started and finished), never its
+input, output or error, a private run's included; of the person it ran for, only the name and
+e-mail the Users page of Admin shows (agents A7); and the link to its page only to the admin who
+ran it.
 """
 
 import uuid
@@ -93,8 +95,12 @@ class RunRow(BaseModel):
     turns: int | None
     input_tokens: int | None
     output_tokens: int | None
-    created_at: datetime
+    created_at: datetime  # queued
+    started_at: datetime | None  # None: not started yet
     finished_at: datetime | None
+    # The person the run is for, as the Users page shows them (A7): nothing else of the account.
+    user_name: str
+    user_email: str
     mine: bool
 
 
@@ -347,10 +353,14 @@ def _runs(db: Session, agent: str, admin_id: uuid.UUID) -> list[RunRow]:
             AgentRun.input_tokens,
             AgentRun.output_tokens,
             AgentRun.created_at,
+            AgentRun.started_at,
             AgentRun.finished_at,
             AgentRun.output["turns"].label("counted_turns"),
             usage_turns.label("usage_turns"),
+            User.name.label("user_name"),
+            User.email.label("user_email"),
         )
+        .join(User, User.id == AgentRun.user_id)
         .where(AgentRun.agent == agent)
         .order_by(AgentRun.created_at.desc())
         .limit(RUNS_SHOWN)
@@ -372,7 +382,10 @@ def _runs(db: Session, agent: str, admin_id: uuid.UUID) -> list[RunRow]:
             input_tokens=row.input_tokens,
             output_tokens=row.output_tokens,
             created_at=row.created_at,
+            started_at=row.started_at,
             finished_at=row.finished_at,
+            user_name=row.user_name,
+            user_email=row.user_email,
             mine=row.user_id == admin_id,
         )
         for row in rows
@@ -386,7 +399,9 @@ def _choices(agent: definitions.AgentDefinition) -> dict[str, Any]:
         "credential_kinds": [kind.value for kind in CredentialKind],
         "turns_max": overrides.TURNS_MAX,
         "wall_time_min_s": overrides.WALL_TIME_MIN_S,
-        "wall_time_max_s": agent.wall_time_s,
+        # The agent's own ceiling, the bound of the job that runs it, and where that is (A7).
+        "wall_time_max_s": (ceiling := catalog.ceiling_of(agent)).seconds,
+        "wall_time_where": ceiling.where,
         "prompt_max": overrides.PROMPT_MAX,
         "description_max": overrides.DESCRIPTION_MAX,
         "message_max": overrides.MESSAGE_MAX,

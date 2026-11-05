@@ -109,7 +109,7 @@ from typing import Any
 import sqlalchemy as sa
 from arq import cron, func
 from arq.connections import ArqRedis, create_pool
-from arq.constants import result_key_prefix
+from arq.constants import in_progress_key_prefix, result_key_prefix
 from arq.cron import CronJob
 from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
@@ -143,6 +143,12 @@ MAX_AGENT_RUNS = 2
 # only catches a runner stuck beyond that.
 AGENT_JOB_MARGIN_S = 120
 AGENT_STALE_MARGIN_S = 300
+# arq 0.28 takes a timeout per function, never per job (the keywords of enqueue_job go to the
+# function). So run_agent ends each job at its own bound (run_job_timeout_s: the queue's job
+# timeout, or a wall time raised on the Agents tab plus the margin, agents A7), and arq's timeout
+# of run_agent is only the outer one: the longest wall time a save may give (the ceiling, the
+# website search's day of B20) plus the margin. A test compares it with overrides.ceiling_s().
+RUN_AGENT_MAX_S = sweep.BROWSER_SEARCH_MAX_S + AGENT_JOB_MARGIN_S
 AGENT_STALE_QUEUED = timedelta(hours=6)
 # What a stop waits, in all, for the cancelled jobs, the job ends being written and the threads
 # of asyncio.to_thread, before it disposes of the engine and returns whatever is left. Compose
@@ -396,11 +402,41 @@ def agent_context(ctx: dict[str, Any]) -> Any:
     )
 
 
-async def run_agent(ctx: dict[str, Any], run_id: str) -> str | None:
-    from app.agents import runner
+def run_job_timeout_s(wall_time_s: float | None, default_s: float) -> float:
+    """How long one run_agent job may take (A7): the queue's job timeout, or longer for a run
+    whose wall time was raised past it, that wall time plus the margin; never above arq's own
+    timeout of run_agent, and never below the queue's (agents_queue gives arq the larger of the
+    two). None (the run or its agent not known): the queue's."""
+    if wall_time_s is None:
+        return default_s
+    return min(max(default_s, wall_time_s + AGENT_JOB_MARGIN_S), max(default_s, RUN_AGENT_MAX_S))
 
-    status = await runner.execute(agent_context(ctx), uuid.UUID(run_id))
+
+async def run_agent(
+    ctx: dict[str, Any], run_id: str, default_timeout_s: float | None = None
+) -> str | None:
+    """One run, ended at its own bound (run_job_timeout_s) as arq ends a job at its timeout: the
+    task is cancelled. The bound is read from the version the run would use if it started now;
+    the runner reads that version again when it starts, so it is given the bound's wall time as
+    its most (a version saved in between cannot outlive the job). `default_timeout_s` is the
+    queue's job timeout of when it was built (agents_queue)."""
+    from app.agents import overrides, runner
+
+    run = uuid.UUID(run_id)
+    default_s = default_timeout_s if default_timeout_s is not None else agent_job_timeout_s()
+    wall = await asyncio.to_thread(overrides.run_wall_time_s, sessions_of(ctx), run)
+    bound = run_job_timeout_s(wall, default_s)
+    async with asyncio.timeout(bound):
+        status = await runner.execute(
+            agent_context(ctx), run, wall_time_max_s=bound - AGENT_JOB_MARGIN_S
+        )
     return status.value if status is not None else None
+
+
+def own_stale_after(saved_wall_time_s: float) -> timedelta:
+    """When a run whose version raised its wall time is stale (A7): past that wall time plus the
+    stale margin, if that is later than the queue's own bound."""
+    return timedelta(seconds=saved_wall_time_s + AGENT_STALE_MARGIN_S)
 
 
 def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: bool) -> int:
@@ -408,7 +444,9 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
         if at_start:
             count = agent_runs.reap_orphans(db, now)
         else:
-            count = agent_runs.reap_stale(db, now, agent_stale_running(), AGENT_STALE_QUEUED)
+            count = agent_runs.reap_stale(
+                db, now, agent_stale_running(), AGENT_STALE_QUEUED, own_stale_after
+            )
         db.commit()
     return count
 
@@ -440,6 +478,9 @@ class QueueSpec:
     # Run once before the Workers start. A failure is logged and the worker starts anyway: the
     # database may not be migrated yet on a first deploy, and the crons catch up later.
     on_start: Callable[[dict[str, Any]], Awaitable[Any]] | None = None
+    # Its Worker deletes the in progress key of every job of its queue before its first poll
+    # (clear_in_progress): only for a queue this one worker process consumes alone.
+    clears_in_progress: bool = False
 
 
 def sweeps_queue(fast: bool = False) -> QueueSpec:
@@ -476,7 +517,13 @@ def agents_queue() -> QueueSpec:
     return QueueSpec(
         name=queue.AGENTS,
         functions=[
-            func(run_agent, name="run_agent", timeout=job_timeout_s, max_tries=1),
+            # Each job ends at its own bound (run_agent); arq's is the outer one (A7).
+            func(
+                functools.partial(run_agent, default_timeout_s=job_timeout_s),
+                name="run_agent",
+                timeout=max(job_timeout_s, RUN_AGENT_MAX_S),
+                max_tries=1,
+            ),
             func(
                 apply_decide,
                 name="apply_decide",
@@ -492,6 +539,11 @@ def agents_queue() -> QueueSpec:
         max_jobs=MAX_AGENT_RUNS,
         job_timeout_s=job_timeout_s,
         on_start=reap_agent_runs_at_start,
+        # arq keeps a job's in progress key for its Worker's longest function timeout plus 10 s,
+        # run_agent's day here (A7), and refuses the same id while it lives: a try a hard kill
+        # left (a power cut, an OOM kill, a stop past its bound) would hold a Full auto
+        # decision's id a day. The worker that starts next clears them (A7, review).
+        clears_in_progress=True,
     )
 
 
@@ -948,9 +1000,28 @@ class QueueWorker(Worker):
     reports "Unclosed client session" on whichever test or log line comes next (issue #104).
     An iteration is therefore not cancellable: it runs to its end as one of the `endings`."""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, clears_in_progress: bool = False, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.endings: set[asyncio.Task[Any]] = set()
+        if clears_in_progress:
+            # arq calls it once its pool exists, before the first poll (Worker.main).
+            self.on_startup = self._clear_in_progress
+
+    async def _clear_in_progress(self, ctx: dict[str, Any]) -> None:
+        try:
+            cleared = await clear_in_progress(self.pool, self.queue_name)
+        except Exception as exc:
+            # The keys then expire as arq set them; the worker starts all the same.
+            logger.warning(
+                "in progress keys not cleared at start",
+                extra={"queue": self.queue_name, "error_type": type(exc).__name__},
+            )
+            return
+        if cleared:
+            logger.warning(
+                "in progress keys of a dead worker cleared",
+                extra={"queue": self.queue_name, "count": cleared},
+            )
 
     async def _poll_iteration(self) -> None:
         # Registered when it is made, not when it first runs: a cancel of the poll at once
@@ -985,6 +1056,20 @@ class QueueWorker(Worker):
         await self._ending(super().finish_failed_job(*args, **kwargs))
 
 
+async def clear_in_progress(pool: ArqRedis, queue_name: str) -> int:
+    """Delete the in progress key of every job id still in `queue_name`, before its Worker first
+    polls: a key there is a try of a worker process that died without writing the job's end, if
+    the queue has one consumer, this process (the agents queue: `reap_orphans` assumes the same
+    of its runs). The Worker then takes each such job again: past its max_tries, arq drops it
+    (`apply_tick` then queues a decision again, as on main once its key had expired), and
+    `reap_orphans` has already failed its run. Answers how many keys were deleted."""
+    ids = await pool.zrange(queue_name, 0, -1)
+    if not ids:
+        return 0
+    prefix = in_progress_key_prefix.encode()
+    return int(await pool.delete(*(prefix + job_id for job_id in ids)))
+
+
 def checked_queues(settings: Settings | None = None) -> list[QueueSpec]:
     """The queues the worker serves, or `AgentTooLongError`: the worker refuses to start when an
     agent registered since the agents queue was built can outlive its job timeout."""
@@ -1011,6 +1096,7 @@ def build_worker(spec: QueueSpec, settings: Settings, ctx: dict[str, Any]) -> Qu
         poll_delay=0.5,
         health_check_interval=HEALTH_INTERVAL_S,
         ctx=ctx,
+        clears_in_progress=spec.clears_in_progress,
         job_serializer=queue.serialize,
         job_deserializer=queue.deserialize,
         timezone=sweep.SWEEP_TZ,  # type: ignore[arg-type]  # arq evaluates cron in this zone
