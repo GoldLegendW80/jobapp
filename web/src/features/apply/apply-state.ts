@@ -321,6 +321,13 @@ export const isOpenField = (answer: Answer) =>
 export const leftFields = (answers: readonly Answer[]) =>
   answers.filter(isOpenField);
 
+/** What the row says after the answer went to Saved answers, or did not. */
+export const REMEMBERED = {
+  saved:
+    "Saved for next forms: the next form with this question is filled with it.",
+  kept: "Your saved answers already hold an answer to this question: it was kept.",
+};
+
 /** The kinds the api takes no value for: a file and a list of choices (`set_answer` of A6). */
 const NOT_TYPED_KINDS = new Set(["file", "multi", "designated"]);
 

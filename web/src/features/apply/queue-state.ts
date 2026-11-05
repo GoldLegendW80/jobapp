@@ -5,8 +5,9 @@
  * and a reason without one gets a label here.
  * No dashes as separators.
  */
-import { documentLine } from "./apply-state";
-import type { DocumentCheck, Queue, QueueItem } from "./queue-api";
+import type { Approval } from "./apply-api";
+import { blockingFields, documentLine } from "./apply-state";
+import type { DocumentCheck, Queue, QueueItem, ReadyResult } from "./queue-api";
 
 export const QUEUE_POLL_MS = 3000;
 /** Pace expiry is not exposed by the api; keep following it without rapid polling. */
@@ -66,6 +67,48 @@ export function queuePoll(
 export const isReviewable = (item: QueueItem) =>
   (item.state === "ready" && !isDeciding(item)) ||
   item.state === "needs_person";
+
+/**
+ * An item "Approve all ready" may name (owner, 2026-11-05): a Review first form filled and
+ * waiting for the person's approval, with every required answer given and saved, its documents
+ * written and needing no look, read just now (`approval`, the form the confirmation shows). An
+ * e-mail application keeps its own Approve, where its recipient is confirmed; a rehearsal its
+ * own question.
+ */
+export function readyForAll(
+  item: QueueItem,
+  approval: Approval | undefined,
+  unsaved: number,
+): approval is Approval {
+  return (
+    approval !== undefined &&
+    item.state === "ready" &&
+    approval.state === "ready" &&
+    item.mode === "review" &&
+    !item.dry_run &&
+    !approval.dry_run &&
+    item.rehearsal !== true &&
+    item.ats !== "email" &&
+    item.required_left === 0 &&
+    blockingFields(approval.answers).length === 0 &&
+    unsaved === 0 &&
+    Object.keys(approval.documents).length > 0 &&
+    !item.documents_review
+  );
+}
+
+/** "Example Robotics, Data engineer: approved, it is being sent." for one result of the batch. */
+export function readyResultLine(
+  item: { company: string; title: string },
+  result: ReadyResult,
+): string {
+  const who = `${item.company}, ${item.title}`;
+  if (result.approved) return `${who}: approved, it is being sent.`;
+  return `${who}: left out. ${result.detail ?? OTHER_LEFT_OUT}`;
+}
+
+/** A refusal the api sent without a sentence. */
+export const OTHER_LEFT_OUT = "It was not approved: open it to see why.";
 
 /** Reject is the api's for a filled form not yet approved. */
 export const canReject = isReviewable;
