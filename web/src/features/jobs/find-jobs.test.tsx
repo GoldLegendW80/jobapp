@@ -1020,6 +1020,8 @@ describe("Find jobs with sources read side by side", () => {
 
 describe("Find jobs with job feeds", () => {
   it("counts the job feeds with the websites and lists them in the summary", async () => {
+    // Slow enough that the progress line is seen before the end, as in the first test.
+    sweepTiming.pollMs = 300;
     const feed = (
       kind: string,
       phase: string,

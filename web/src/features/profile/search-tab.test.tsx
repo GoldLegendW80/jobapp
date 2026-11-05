@@ -118,7 +118,9 @@ describe("search tab: terms and preferences", () => {
     expect(data.min_fit).toBe(82);
     expect(data.days).toBe(14);
     expect(data.never_apply).toEqual(haraldLike().search.never_apply);
-  });
+    // Much typing through user-event: about 4 to 5 s alone on the dev machine (4.7 s before
+    // chapter 2 too), past the 5 s default when the whole suite runs in parallel.
+  }, 15_000);
 
   it("refuses a days window outside 1 to 365 and accepts no stance", async () => {
     const { user, state } = await openSearch();
@@ -139,7 +141,9 @@ describe("search tab: terms and preferences", () => {
     await screen.findByText("Search saved.");
     expect(saved(state).remote_stance).toBeNull();
     expect(saved(state).days).toBe(365);
-  });
+    // Much typing through user-event: about 4 to 5 s alone on the dev machine (4.7 s before
+    // chapter 2 too), past the 5 s default when the whole suite runs in parallel.
+  }, 15_000);
 
   it("puts the server's regex error under the right title chip", async () => {
     const { user } = await openSearch();

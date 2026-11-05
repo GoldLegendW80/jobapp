@@ -103,7 +103,9 @@ describe("skills tab", () => {
     // Everything else went back as it came.
     expect(saved(state).gates).toEqual(haraldLike().skills.gates);
     expect(saved(state).years_experience).toBe(3.5);
-  });
+    // Much typing through user-event: about 4 to 5 s alone on the dev machine (4.7 s before
+    // chapter 2 too), past the 5 s default when the whole suite runs in parallel.
+  }, 15_000);
 
   it("checks a regular expression before adding it", async () => {
     const { user } = await openSkills();
