@@ -19,7 +19,8 @@
 # 'apt-get update -qq && apt-cache policy chromium'
 FROM debian:trixie-slim
 
-ARG CHROMIUM_VERSION=
+# The Jetson's build of 2026-11-05 installed this one from trixie-security (its dpkg-query line).
+ARG CHROMIUM_VERSION=156.0.8078.79-1~deb13u1
 ARG PLAYWRIGHT_VERSION=1.55.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
