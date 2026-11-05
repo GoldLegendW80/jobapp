@@ -81,6 +81,7 @@ CUT_ORDER = (
     ("skills", "gates"),
     ("skills", "lacks"),
     ("search", "industries"),
+    ("search", "places_to_avoid"),
     ("identity", "languages"),
     ("skills", "adjacent"),
     ("experience", "employers"),

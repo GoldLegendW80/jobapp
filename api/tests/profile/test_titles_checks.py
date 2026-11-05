@@ -468,6 +468,31 @@ def test_a_full_profile_fits_its_cap_and_keeps_the_skills_and_the_employers_long
     assert found["identity"]["city"] == "Lyon"
 
 
+def test_every_text_and_list_at_its_longest_still_fits_the_cap() -> None:
+    line, long = "l" * 200, "p" * 2_000
+    data = sections()
+    data["identity"].update(headline=line, city=line, country=line)
+    data["identity"]["languages"] = [{"name": f"{n}{line}"[:200], "level": line} for n in range(20)]
+    data["search"]["location_exclude"] = {"terms": [f"{n}{line}"[:200] for n in range(50)]}
+    data["search"]["industries"] = {"terms": [f"{n}{line}"[:200] for n in range(50)]}
+    data["answers"].update(
+        notice_period=long,
+        earliest_start=line,
+        salary_policy=long,
+        relocation=long,
+        travel=long,
+        motivation="m" * 10_000,
+        years_experience_stated=line,
+        highest_degree=line,
+    )
+    data["answers"]["work_authorization"] = [
+        {"country": f"{n}{line}"[:200], "answer": long} for n in range(50)
+    ]
+    found = titles_input.profile(data)
+    assert len(json.dumps(found, ensure_ascii=False)) <= titles_input.PROFILE_MAX
+    assert found["answers"]["motivation"] == "m" * titles_input.PARAGRAPH_MAX
+
+
 def test_the_first_message_fits_its_cap_the_documents_cut_first() -> None:
     data = sections()
     data["search"]["title_include"]["terms"] = [f"Role {n} " + "w" * 150 for n in range(200)]
