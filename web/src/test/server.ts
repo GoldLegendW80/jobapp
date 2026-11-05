@@ -94,7 +94,34 @@ export const noTitleSuggestions = {
   cost_note: null,
 };
 
+/** GET /api/profile/about of a new account without a model key: the four parts, empty. */
+export const emptyAbout = {
+  text: "## Experience\n\n## Education\n\n## Skills\n\n## Answers\n",
+  version: 0,
+  updated_at: "2026-11-05T09:00:00Z",
+  parts: ["Experience", "Education", "Skills", "Answers"].map((heading) => ({
+    heading,
+    key: heading.toLowerCase(),
+    kind: heading.toLowerCase(),
+    state: "in_step",
+    duplicate: false,
+    too_long: false,
+    estimate: null,
+  })),
+  reading: null,
+  undo: null,
+  needs: "model_key",
+  advanced: 0,
+  missing_blocks: [],
+  dones_left: 30,
+  part_max: 20000,
+  text_max: 300000,
+};
+
 export const handlers = [
+  // The profile's About you document (profile/about-document.tsx), before the profile's own
+  // routes: /api/profile/about is not a section.
+  http.get("*/api/profile/about", () => HttpResponse.json(emptyAbout)),
   // The job title ideas under Job titles (profile/title-suggestions.tsx): none without a key.
   http.get("*/api/profile/title-suggestions", () =>
     HttpResponse.json(noTitleSuggestions),

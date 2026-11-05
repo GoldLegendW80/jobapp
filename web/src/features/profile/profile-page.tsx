@@ -48,6 +48,7 @@ import { FactsTab } from "./facts-tab";
 import { HistoryDrawer } from "./history-drawer";
 import { IdentityTab } from "./identity-tab";
 import { missingLabel, SECTION_LABELS } from "./labels";
+import { OneProfilePage } from "./profile-one-page";
 import { ProfileFileMenu } from "./profile-file";
 import { SearchTab } from "./search-tab";
 import { SkillsTab } from "./skills-tab";
@@ -68,7 +69,21 @@ type TabName = TabSection | typeof CV_TAB;
  * the header an Export or import menu. A restore or an import remounts the open tab, so its form
  * reloads from the new current version.
  */
+/**
+ * /profile is the one page profile (profile-one-page.tsx); `?tab=` and the CV paths keep the
+ * classic editor below, reachable from More for one release so a rollback is a click.
+ */
 export function ProfilePage() {
+  const [params] = useSearchParams();
+  const onCv = /^\/profile\/cv(\/|$)/.test(useLocation().pathname);
+  return onCv || params.has("tab") ? (
+    <ClassicProfilePage />
+  ) : (
+    <OneProfilePage />
+  );
+}
+
+function ClassicProfilePage() {
   useTitle("Profile");
   const query = useQuery({
     queryKey: profileKey,
@@ -308,8 +323,14 @@ function Header({
         {actions}
       </div>
       <p className="text-sm text-muted-foreground">
-        Everything search and document generation read about you. Each section
-        saves on its own.
+        The classic editor: everything search and document generation read about
+        you, one tab per section. Each section saves on its own.{" "}
+        <Link
+          to="/profile"
+          className="font-medium text-foreground underline underline-offset-4"
+        >
+          Back to your profile page
+        </Link>
       </p>
       <div>
         <Button asChild variant="outline">

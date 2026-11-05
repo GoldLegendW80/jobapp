@@ -17,7 +17,7 @@ afterEach(() => {
   toast.dismiss();
 });
 
-async function openProfile(path = "/profile") {
+async function openProfile(path = "/profile?tab=identity") {
   const user = userEvent.setup();
   const app = renderApp(path);
   await screen.findByRole("heading", { level: 1, name: "Profile" });
@@ -107,7 +107,7 @@ describe("profile page", () => {
       }),
     );
     const user = userEvent.setup();
-    renderApp("/profile");
+    renderApp("/profile?tab=identity");
     expect(
       await screen.findByText("Your profile could not be loaded"),
     ).toBeVisible();
@@ -437,7 +437,7 @@ describe("unsaved changes guard", () => {
     await user.click(
       within(dialog).getByRole("button", { name: "Keep editing" }),
     );
-    expect(location()).toBe("/profile");
+    expect(location()).toBe("/profile?tab=identity");
     expect(screen.getByLabelText("Headline")).toHaveValue(
       "GenAI Engineer edited",
     );
