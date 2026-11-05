@@ -5,12 +5,19 @@ import {
   FileArchive,
   FileImage,
   FileText,
-  LoaderCircle,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Empty, EmptyDescription } from "@/components/ui/empty";
+import { Spinner } from "@/components/ui/spinner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { absoluteTime, relativeTime } from "@/features/profile/when";
 import { cn } from "@/lib/utils";
 
@@ -54,9 +61,11 @@ export function DocumentList({
 }) {
   if (documents.length === 0)
     return (
-      <p className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-        No document yet. Add a file or paste a text above.
-      </p>
+      <Empty className="border px-4 py-6 md:px-4 md:py-6">
+        <EmptyDescription>
+          No document yet. Add a file or paste a text above.
+        </EmptyDescription>
+      </Empty>
     );
   return (
     <ul aria-label="Your documents" className="flex flex-col gap-2">
@@ -113,25 +122,24 @@ function DocumentRow({
           </p>
           <p className="text-xs text-muted-foreground">
             {kindLabel(document)}, {sizeLabel(document.size)}, added{" "}
-            <time
-              dateTime={document.created_at}
-              title={absoluteTime(document.created_at)}
-            >
-              {relativeTime(document.created_at)}
-            </time>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <time dateTime={document.created_at}>
+                  {relativeTime(document.created_at)}
+                </time>
+              </TooltipTrigger>
+              <TooltipContent>
+                {absoluteTime(document.created_at)}
+              </TooltipContent>
+            </Tooltip>
           </p>
         </div>
-        <span
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
-            TONES[status.tone],
-          )}
-        >
+        <Badge variant="outline" className={TONES[status.tone]}>
           {status.tone === "working" ? (
-            <LoaderCircle aria-hidden="true" className="size-3 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
           ) : null}
           {status.label}
-        </span>
+        </Badge>
       </div>
       {status.detail ? (
         <p
@@ -244,7 +252,7 @@ function SecretWarning({
           }}
         >
           {confirm.isPending ? (
-            <LoaderCircle aria-hidden="true" className="animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
           ) : null}
           It is fine, keep it
         </Button>

@@ -1,5 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { LoaderCircle, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
 
 import {
   documentImageUrl,
@@ -85,7 +86,7 @@ function Preview({ document }: { document: IngestionDocument }) {
           role="status"
           className="flex items-center gap-2 text-sm text-muted-foreground"
         >
-          <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+          <Spinner aria-hidden="true" role={undefined} />
           Loading the text
         </p>
       ) : query.isError && pages.length === 0 ? (
@@ -133,7 +134,7 @@ function Preview({ document }: { document: IngestionDocument }) {
                 onClick={() => void query.fetchNextPage()}
               >
                 {query.isFetchingNextPage ? (
-                  <LoaderCircle aria-hidden="true" className="animate-spin" />
+                  <Spinner aria-hidden="true" role={undefined} />
                 ) : null}
                 Show more
               </Button>

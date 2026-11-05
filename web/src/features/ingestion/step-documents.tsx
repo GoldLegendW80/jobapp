@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Lock, RotateCw } from "lucide-react";
+import { Lock, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 
 import { AddFiles } from "./add-files";
 import { DeleteDocument } from "./delete-document";
@@ -110,7 +111,7 @@ export function StepDocuments() {
             role="status"
             className="flex items-center gap-2 text-sm text-muted-foreground"
           >
-            <LoaderCircle aria-hidden="true" className="size-4 animate-spin" />
+            <Spinner aria-hidden="true" role={undefined} />
             Loading your documents
           </p>
         ) : query.isError ? (
