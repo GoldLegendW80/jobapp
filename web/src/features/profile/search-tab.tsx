@@ -13,6 +13,7 @@ import { useFieldArray, type UseFormReturn } from "react-hook-form";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import {
   Form,
   FormControl,
@@ -153,18 +154,16 @@ function SearchForms({
                     </output>
                   </div>
                   <FormControl>
-                    <input
-                      type="range"
+                    <Slider
                       min={0}
                       max={100}
                       step={1}
-                      className="w-full accent-primary"
                       name={field.name}
-                      ref={field.ref}
-                      value={field.value}
+                      aria-label="Minimum fit"
+                      value={[field.value]}
                       onBlur={field.onBlur}
-                      onChange={(event) => {
-                        field.onChange(Number(event.target.value));
+                      onValueChange={([value]) => {
+                        if (value !== undefined) field.onChange(value);
                       }}
                     />
                   </FormControl>

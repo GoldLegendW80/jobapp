@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { setSlider } from "@/test/slider";
 
 afterEach(() => {
   toast.dismiss();
@@ -218,7 +219,7 @@ describe("documents for new postings: Advanced", () => {
         "3 postings of the last 30 days have a fit of 70 or more.",
       ),
     ).toBeVisible();
-    fireEvent.change(slider(), { target: { value: "60" } });
+    setSlider(slider(), 60);
     expect(
       within(card()).getByText("For postings with a fit of 60 or more."),
     ).toBeVisible();
@@ -254,11 +255,11 @@ describe("documents for new postings: Advanced", () => {
   it("gives the cost of what a lower threshold adds on an API key, and says when it adds none", async () => {
     const { user } = await openSearch({ fits: [90, 65], priced: true });
     await openAdvanced(user);
-    fireEvent.change(slider(), { target: { value: "65" } });
+    setSlider(slider(), 65);
     expect(await screen.findByTestId("documents-newly")).toHaveTextContent(
       "Lowering it to 65 adds 1 posting to write, about 1,000 to 2,000 tokens, about USD 0.10 to USD 0.20.",
     );
-    fireEvent.change(slider(), { target: { value: "66" } });
+    setSlider(slider(), 66);
     await waitFor(() => {
       expect(screen.getByTestId("documents-newly")).toHaveTextContent(
         "Lowering it to 66 adds no posting to write.",
@@ -270,7 +271,7 @@ describe("documents for new postings: Advanced", () => {
     const { user } = await openSearch({ fits: [100, 80, 5, 0] });
     await openAdvanced(user);
     const figures = screen.getByTestId("documents-threshold");
-    fireEvent.change(slider(), { target: { value: "0" } });
+    setSlider(slider(), 0);
     expect(
       await within(figures).findByText(
         "At 0 the threshold holds nothing back: 4 postings of the last 30 days have a fit score.",
@@ -279,7 +280,7 @@ describe("documents for new postings: Advanced", () => {
     expect(screen.getByTestId("documents-newly")).toHaveTextContent(
       "Lowering it to 0 adds 2 postings to write",
     );
-    fireEvent.change(slider(), { target: { value: "100" } });
+    setSlider(slider(), 100);
     expect(
       await within(figures).findByText(
         "1 posting of the last 30 days has a fit of 100 or more.",
@@ -298,7 +299,7 @@ describe("documents for new postings: Advanced", () => {
   it("at 0 with a single scored posting, says it has a fit score", async () => {
     const { user } = await openSearch({ fits: [40] });
     await openAdvanced(user);
-    fireEvent.change(slider(), { target: { value: "0" } });
+    setSlider(slider(), 0);
     expect(
       await within(screen.getByTestId("documents-threshold")).findByText(
         "At 0 the threshold holds nothing back: 1 posting of the last 30 days has a fit score.",
@@ -357,7 +358,7 @@ describe("documents for new postings: Advanced", () => {
   it("shows the profile's conflict dialog on a stale revision, and keeps the threshold", async () => {
     const { user, state } = await openSearch({ fits: [80, 60] });
     await openAdvanced(user);
-    fireEvent.change(slider(), { target: { value: "55" } });
+    setSlider(slider(), 55);
     state.revision = 12;
     await user.click(save());
     const dialog = await screen.findByRole("alertdialog", {
@@ -366,7 +367,7 @@ describe("documents for new postings: Advanced", () => {
     await user.click(
       within(dialog).getByRole("button", { name: "Keep editing" }),
     );
-    expect(slider()).toHaveValue("55");
+    expect(slider()).toHaveAttribute("aria-valuenow", "55");
     await user.click(save());
     await screen.findByText("Search saved.");
     expect(state.saves.map((s) => s.body.base_revision)).toEqual([6, 12]);

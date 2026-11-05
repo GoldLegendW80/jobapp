@@ -14,6 +14,7 @@ import { useWatch, type UseFormReturn } from "react-hook-form";
 
 import { AdvancedSection } from "@/components/advanced-section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Slider } from "@/components/ui/slider";
 import {
   FormControl,
   FormDescription,
@@ -263,18 +264,16 @@ function Threshold({
             </output>
           </div>
           <FormControl>
-            <input
-              type="range"
+            <Slider
               min={0}
               max={100}
               step={1}
-              className="w-full accent-primary"
               name={field.name}
-              ref={field.ref}
-              value={field.value}
+              aria-label="Fit score threshold"
+              value={[field.value]}
               onBlur={field.onBlur}
-              onChange={(event) => {
-                field.onChange(Number(event.target.value));
+              onValueChange={([value]) => {
+                if (value !== undefined) field.onChange(value);
               }}
             />
           </FormControl>

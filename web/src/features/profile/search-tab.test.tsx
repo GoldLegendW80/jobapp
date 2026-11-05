@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { setSlider } from "@/test/slider";
 
 import type { Search, Weekday } from "./api";
 
@@ -59,7 +60,10 @@ describe("search tab: terms and preferences", () => {
       "false",
     );
     expect(screen.getByLabelText("Remote stance")).toHaveValue("any");
-    expect(screen.getByLabelText("Minimum fit")).toHaveValue("70");
+    expect(screen.getByLabelText("Minimum fit")).toHaveAttribute(
+      "aria-valuenow",
+      "70",
+    );
     expect(screen.getByLabelText("Posting age window (days)")).toHaveValue(
       "30",
     );
@@ -91,9 +95,7 @@ describe("search tab: terms and preferences", () => {
       "true",
     );
     await user.selectOptions(screen.getByLabelText("Remote stance"), "hybrid");
-    fireEvent.change(screen.getByLabelText("Minimum fit"), {
-      target: { value: "82" },
-    });
+    setSlider(screen.getByLabelText("Minimum fit"), 82);
     expect(screen.getByText("82 / 100")).toBeVisible();
     const days = screen.getByLabelText("Posting age window (days)");
     await user.clear(days);
@@ -204,7 +206,10 @@ describe("search tab: terms and preferences", () => {
     // The four lists (job titles, unwanted titles, places, unwanted places), and the industries
     // kept mounted under Advanced.
     expect(screen.getAllByText("No term yet.")).toHaveLength(5);
-    expect(screen.getByLabelText("Minimum fit")).toHaveValue("70");
+    expect(screen.getByLabelText("Minimum fit")).toHaveAttribute(
+      "aria-valuenow",
+      "70",
+    );
     await user.type(
       screen.getByLabelText("New term for Job titles"),
       "ai engineer{enter}",

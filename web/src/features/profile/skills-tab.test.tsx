@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { setSlider } from "@/test/slider";
 
 import type { Skills } from "./api";
 
@@ -62,7 +63,7 @@ describe("skills tab", () => {
     expect(screen.getByLabelText("Name of requirement 1")).toHaveValue("phd");
     expect(
       screen.getByLabelText("Points taken off of requirement 1"),
-    ).toHaveValue("25");
+    ).toHaveAttribute("aria-valuenow", "25");
     expect(screen.getByText("25 points")).toBeVisible();
   });
 
@@ -330,12 +331,7 @@ describe("skills tab", () => {
       screen.getByLabelText("New term for clearance"),
       "security clearance{enter}",
     );
-    fireEvent.change(
-      screen.getByLabelText("Points taken off of requirement 2"),
-      {
-        target: { value: "40" },
-      },
-    );
+    setSlider(screen.getByLabelText("Points taken off of requirement 2"), 40);
     expect(screen.getByText("40 points")).toBeVisible();
     await user.click(save());
     await screen.findByText("Skills saved.");

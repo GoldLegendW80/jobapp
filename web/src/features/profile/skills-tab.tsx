@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import { useFieldArray, useWatch, type UseFormReturn } from "react-hook-form";
 
 import { Button } from "@/components/ui/button";
+import { Slider } from "@/components/ui/slider";
 import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Form,
@@ -338,18 +339,16 @@ function GateFields({
               </output>
             </div>
             <FormControl>
-              <input
-                type="range"
+              <Slider
                 min={0}
                 max={100}
                 step={5}
-                className="w-full accent-primary"
                 name={field.name}
-                ref={field.ref}
-                value={field.value}
+                aria-label={`${WORDING.pointsTakenOff} of requirement ${String(n)}`}
+                value={[field.value]}
                 onBlur={field.onBlur}
-                onChange={(event) => {
-                  field.onChange(Number(event.target.value));
+                onValueChange={([value]) => {
+                  if (value !== undefined) field.onChange(value);
                 }}
               />
             </FormControl>

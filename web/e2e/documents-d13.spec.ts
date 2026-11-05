@@ -152,7 +152,9 @@ test("the card shows today's count, and what a threshold of 60 adds before it is
   await expect(figures()).toContainText(
     "1 posting of the last 30 days has a fit of 70 or more.",
   );
-  await slider().fill("60");
+  // From 70, Page Down moves the slider ten points, as a person does with the keyboard.
+  await slider().focus();
+  await page.keyboard.press("PageDown");
   await expect(figures()).toContainText(
     "2 postings of the last 30 days have a fit of 60 or more.",
   );
@@ -178,7 +180,7 @@ test("after a reload the threshold is 60", async () => {
   await page.reload();
   await expect(card()).toContainText("For postings with a fit of 60 or more.");
   await advanced().click();
-  await expect(slider()).toHaveValue("60");
+  await expect(slider()).toHaveAttribute("aria-valuenow", "60");
   await expect(figures()).toContainText(
     "2 postings of the last 30 days have a fit of 60 or more.",
   );

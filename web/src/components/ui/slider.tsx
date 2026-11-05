@@ -6,7 +6,8 @@ import { Slider as SliderPrimitive } from "radix-ui";
  * shadcn's Slider (4.23.0), with one change of this project: the label and description props
  * (`aria-label`, `aria-labelledby`, `aria-describedby`, `aria-invalid`, `aria-valuetext`) go on
  * each thumb, the element with role="slider" that takes the focus, instead of the root, so a
- * screen reader names the slider and a `<label htmlFor>` can point at it through `aria-labelledby`.
+ * screen reader names the slider and a `<label htmlFor>` can point at it through `aria-labelledby`;
+ * a disabled slider's thumb says so with `aria-disabled`.
  */
 function Slider({
   className,
@@ -66,6 +67,7 @@ function Slider({
           aria-describedby={ariaDescribedBy}
           aria-invalid={ariaInvalid}
           aria-valuetext={ariaValueText}
+          aria-disabled={props.disabled ? true : undefined}
           className="block size-4 shrink-0 rounded-full border border-primary bg-white shadow-sm ring-ring/50 transition-[color,box-shadow] hover:ring-4 focus-visible:ring-4 focus-visible:outline-hidden disabled:pointer-events-none disabled:opacity-50"
         />
       ))}

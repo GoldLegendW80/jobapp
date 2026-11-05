@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { setSlider } from "@/test/slider";
 
 import * as crop from "./crop";
 
@@ -114,17 +115,14 @@ describe("photo", () => {
     expect(square.style.width).toBe("75%");
     expect(square.style.height).toBe("100%");
     expect(within(dialog).getByText("300 by 300 pixels")).toBeVisible();
-    expect(within(dialog).getByLabelText("Vertical position")).toBeDisabled();
+    expect(within(dialog).getByLabelText("Vertical position")).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
-    fireEvent.change(within(dialog).getByLabelText("Size"), {
-      target: { value: "0.5" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Horizontal position"), {
-      target: { value: "0" },
-    });
-    fireEvent.change(within(dialog).getByLabelText("Vertical position"), {
-      target: { value: "1" },
-    });
+    setSlider(within(dialog).getByLabelText("Size"), 0.5);
+    setSlider(within(dialog).getByLabelText("Horizontal position"), 0);
+    setSlider(within(dialog).getByLabelText("Vertical position"), 1);
     expect(within(dialog).getByText("150 by 150 pixels")).toBeVisible();
     await user.click(
       within(dialog).getByRole("button", { name: "Use this photo" }),

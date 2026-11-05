@@ -4,6 +4,7 @@ import { useId, useRef, useState, type PointerEvent } from "react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Slider } from "@/components/ui/slider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -306,7 +307,7 @@ function CropDialog({
           </div>
         </div>
         <div className="grid gap-3">
-          <Slider
+          <CropSlider
             id={`${ids}-size`}
             label="Size"
             value={crop.size}
@@ -315,7 +316,7 @@ function CropDialog({
               setCrop((c) => ({ ...c, size }));
             }}
           />
-          <Slider
+          <CropSlider
             id={`${ids}-x`}
             label="Horizontal position"
             value={crop.x}
@@ -324,7 +325,7 @@ function CropDialog({
               setCrop((c) => ({ ...c, x }));
             }}
           />
-          <Slider
+          <CropSlider
             id={`${ids}-y`}
             label="Vertical position"
             value={crop.y}
@@ -366,7 +367,7 @@ function CropDialog({
   );
 }
 
-function Slider({
+function CropSlider({
   id,
   label,
   value,
@@ -382,20 +383,19 @@ function Slider({
   onChange: (value: number) => void;
 }) {
   return (
-    <div className="grid gap-1">
-      <Label htmlFor={id}>{label}</Label>
-      <input
+    <div className="grid gap-2">
+      <Label id={`${id}-label`}>{label}</Label>
+      <Slider
         id={id}
-        type="range"
+        aria-labelledby={`${id}-label`}
         min={min}
         max={1}
         step={0.01}
-        value={value}
+        value={[value]}
         disabled={disabled}
-        onChange={(event) => {
-          onChange(Number(event.target.value));
+        onValueChange={([next]) => {
+          if (next !== undefined) onChange(next);
         }}
-        className="w-full accent-primary disabled:opacity-50"
       />
     </div>
   );
