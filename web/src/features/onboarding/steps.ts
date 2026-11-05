@@ -68,6 +68,11 @@ export interface Draft {
   tone: (typeof DOCUMENTS_TONES)[number];
   /** The mode after a Like the person picked here; null keeps apply's setting untouched. */
   mode: "review" | null;
+  /**
+   * "Let me review each filled form before it is sent" (apply_settings.review_before_send) as
+   * ticked here; null keeps apply's setting untouched.
+   */
+  review: boolean | null;
 }
 
 const join = (list: TermList): string => list.terms.join(", ");
@@ -115,6 +120,7 @@ export function draftOf(sections: SectionData): Draft {
     language: prefs.documents_language,
     tone: prefs.documents_tone,
     mode: null,
+    review: null,
   };
 }
 

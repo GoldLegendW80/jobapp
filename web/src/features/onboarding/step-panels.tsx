@@ -1,5 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
-import { KeyRound, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
 
@@ -9,10 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
-import {
-  getModelCredential,
-  modelCredentialQueryKey,
-} from "@/features/agents/api";
 import { holdText, type ApplySettings } from "@/features/apply/settings-api";
 import { UploadPanel } from "@/features/documents/upload-panel";
 import { RunProgress } from "@/features/ingestion/run-progress";
@@ -31,6 +26,7 @@ import {
 } from "@/features/profile/api";
 import { contractWord, WORDING } from "@/lib/wording";
 
+import { ModelKeyForm } from "./model-key-form";
 import {
   readPay,
   STEP_IDS,
@@ -188,48 +184,12 @@ function Radios<T extends string>({
   );
 }
 
-// --- the model key ------------------------------------------------------------------------------
-
-/**
- * Said once while no model credential is saved: reading the CV, the website search, the CV and
- * letter writers and applying all run on the person's own key (SPEC-agents, Credentials). Says
- * nothing while the credential loads or when it cannot be read.
- */
-export function ModelKeyNotice() {
-  const credential = useQuery({
-    queryKey: modelCredentialQueryKey,
-    queryFn: ({ signal }) => getModelCredential(signal),
-    retry: false,
-  });
-  if (credential.data !== null) return null;
-  return (
-    <Alert>
-      <KeyRound aria-hidden="true" />
-      <AlertDescription>
-        <p>
-          Reading your CV, searching websites, writing your CVs and letters and
-          applying use your own Anthropic API key, billed to your Anthropic
-          account. No key is saved yet.{" "}
-          <Link
-            className="font-medium underline underline-offset-4"
-            to="/account"
-          >
-            {WORDING.addModelKey}
-          </Link>
-          .
-        </p>
-      </AlertDescription>
-    </Alert>
-  );
-}
-
 // --- 1. Your profile ----------------------------------------------------------------------------
 
 export function StepProfile() {
   // The run part asks the api only once the person opens the disclosure.
   return (
     <div className="flex flex-col gap-6">
-      <ModelKeyNotice />
       <p className="text-sm text-muted-foreground">
         Upload your CV: the app keeps it as your base CV, and can fill your
         profile from it. You review every proposal before it is written. The
@@ -411,33 +371,32 @@ export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
 
 // --- 5. How you want to work --------------------------------------------------------------------
 
+/** The contracts, one group whose last box is Freelance mission; a code this build does not
+ * offer stays saved as it was. */
+const CONTRACT_ORDER: readonly string[] = [
+  ...CONTRACT_TYPES.filter((type) => type !== "Freelance"),
+  "Freelance",
+];
+
 export function StepWork({ draft, change }: PanelProps) {
   return (
     <div className="flex flex-col gap-4">
-      {[
-        CONTRACT_TYPES.filter((type) => type !== "Freelance"),
-        ["Freelance"],
-      ].map((options, index) => (
-        <Choices
-          key={index}
-          legend={
-            index === 0
-              ? WORDING.employmentContracts
-              : WORDING.freelanceContracts
-          }
-          options={options}
-          words={contractWord}
-          chosen={draft.contracts.filter((type) => options.includes(type))}
-          onChange={(chosen) => {
-            change({
-              contracts: [
-                ...draft.contracts.filter((type) => !options.includes(type)),
-                ...chosen,
-              ],
-            });
-          }}
-        />
-      ))}
+      <Choices
+        legend={WORDING.contractsChooseAny}
+        options={CONTRACT_ORDER}
+        words={contractWord}
+        chosen={draft.contracts.filter((type) => CONTRACT_ORDER.includes(type))}
+        onChange={(chosen) => {
+          change({
+            contracts: [
+              ...draft.contracts.filter(
+                (type) => !CONTRACT_ORDER.includes(type),
+              ),
+              ...chosen,
+            ],
+          });
+        }}
+      />
     </div>
   );
 }
@@ -569,6 +528,11 @@ export function StepPay({ draft, change, problem }: PanelProps) {
 
 // --- 7. How the app applies ---------------------------------------------------------------------
 
+/**
+ * Two choices, each kept in apply's own settings (A11, issue #738): the mode after a Like, and
+ * "Let me review each filled form before it is sent", which a click on Apply follows. Full auto
+ * is only shown here: it is turned on in Application settings, with its own checks.
+ */
 export function StepApply({
   draft,
   change,
@@ -578,15 +542,21 @@ export function StepApply({
   const fullAutoOn =
     settings?.mode_after_like === "full_auto" && draft.mode === null;
   const hold = holdText(settings?.hold_s ?? 900);
+  const review = draft.review ?? settings?.review_before_send ?? false;
   return (
     <div className="flex flex-col gap-6">
       <fieldset
         className="flex flex-col gap-2 rounded-md border p-4"
         data-simple-card
+        aria-describedby={`${id}-like`}
       >
         <legend className="mb-1 text-sm font-medium">
           {WORDING.afterLike}
         </legend>
+        <p id={`${id}-like`} className="text-sm text-muted-foreground">
+          A Like on a posting in Discover asks the app to write your CV and
+          letter for it and to prepare the application.
+        </p>
         <label
           htmlFor={`${id}-review`}
           className="flex min-h-11 items-start gap-2 rounded-md border px-3 py-2 text-sm"
@@ -604,7 +574,7 @@ export function StepApply({
           <span className="flex flex-col">
             <span className="font-medium">{WORDING.reviewFirst}</span>
             <span className="text-muted-foreground">
-              You approve every application.
+              You approve each application a Like prepares before it is sent.
             </span>
           </span>
         </label>
@@ -637,6 +607,35 @@ export function StepApply({
             </span>
           </span>
         </label>
+      </fieldset>
+      <fieldset
+        className="flex flex-col gap-2 rounded-md border p-4"
+        data-simple-card
+      >
+        <legend className="mb-1 text-sm font-medium">
+          {WORDING.whenYouClickApply}
+        </legend>
+        <div className="flex min-h-11 items-start gap-2 rounded-md border px-3 py-2 text-sm">
+          <input
+            id={`${id}-send`}
+            type="checkbox"
+            className="mt-0.5 size-4 shrink-0 accent-primary"
+            checked={review}
+            aria-describedby={`${id}-send-text`}
+            onChange={(event) => {
+              change({ review: event.target.checked });
+            }}
+          />
+          <span className="flex flex-col">
+            <label htmlFor={`${id}-send`} className="font-medium">
+              {WORDING.reviewEachForm}
+            </label>
+            <span id={`${id}-send-text`} className="text-muted-foreground">
+              When it is off, Apply fills the form and sends it for you. When it
+              is on, you check each filled form and send it yourself.
+            </span>
+          </span>
+        </div>
       </fieldset>
       <Radios
         legend={WORDING.documentsLanguage}
@@ -750,7 +749,7 @@ export function StepSummary({
           </AlertDescription>
         </Alert>
       )}
-      <ModelKeyNotice />
+      <ModelKeyForm />
     </div>
   );
 }

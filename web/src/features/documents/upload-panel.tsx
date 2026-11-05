@@ -22,6 +22,7 @@ import {
 } from "@/features/ingestion/documents-api";
 import { StartDialog } from "@/features/ingestion/run-start";
 import { cn } from "@/lib/utils";
+import { WORDING } from "@/lib/wording";
 
 import { ConsentDialog } from "./consent-dialog";
 import {
@@ -224,9 +225,7 @@ export function UploadPanel({
         )}
       >
         <p id={hintId} className="text-sm text-muted-foreground">
-          Drop a PDF or a Word document here, or choose it. Its text is sent to
-          the model of your credential and comes back as a CV you can edit; the
-          file stays in your documents.
+          {WORDING.uploadCvHint}
         </p>
         <input
           ref={input}
