@@ -533,9 +533,9 @@ describe("list", () => {
             buckets: Array.from({ length: 10 }, (_, i) => ({
               low: i * 10,
               high: i === 9 ? 100 : i * 10 + 9,
-              count: 0,
+              count: i === 5 ? 5100 : 0,
             })),
-            unscored: 0,
+            unscored: 1234,
           },
         }),
     });
@@ -544,6 +544,13 @@ describe("list", () => {
     expect(kpi("Found")).toHaveAccessibleName("Found: 12,840");
     expect(kpi("Found")).toHaveTextContent("12,840");
     expect(kpi("Applied")).toHaveTextContent("1,029");
+    const chart = screen.getByRole("region", { name: "Fit distribution" });
+    expect(
+      within(chart).getByRole("button", {
+        name: "Fit 50 to 59: 5,100 postings",
+      }),
+    ).toHaveTextContent("5,100");
+    expect(chart).toHaveTextContent("1,234 unscored");
   });
 
   it("shows the tiles as unavailable, not loading, when the list cannot be loaded", async () => {

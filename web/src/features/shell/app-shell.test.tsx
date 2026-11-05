@@ -162,9 +162,7 @@ describe("the shell on a phone", () => {
     for (let i = 0; i < 7; i += 1) {
       await user.tab();
       const focused = document.activeElement as HTMLElement;
-      order.push(
-        focused.getAttribute("aria-label") ?? focused.textContent ?? "",
-      );
+      order.push(focused.getAttribute("aria-label") ?? focused.textContent);
     }
     expect(order).toEqual([
       "Skip to content",

@@ -25,10 +25,11 @@ export const COLUMN =
 /** A line inside a column whose first cell is the gutter: a glyph, then the text at the edge. */
 export const HANG = "-ml-9 grid grid-cols-[2.25rem_minmax(0,1fr)]";
 
-/** A box inside a column that reaches 0.5rem past the gutter (its border or background stays
- * clear of the glyph), with its glyph in the gutter and its text at the edge. */
+/** A box with a 1px border inside a column, reaching 0.5rem past the gutter (its border stays
+ * clear of the glyph), with its glyph in the gutter and its text at the edge: its padding
+ * gives back the border's pixel. */
 export const BOX =
-  "-ml-11 grid grid-cols-[2.25rem_minmax(0,1fr)] pl-2 pr-3 rounded-lg";
+  "-ml-11 grid grid-cols-[2.25rem_minmax(0,1fr)] rounded-lg border pr-3 pl-[calc(0.5rem-1px)]";
 
 /** The vertical rhythm: between the blocks of a section, and inside one block. */
 export const BLOCKS = "flex flex-col gap-4";

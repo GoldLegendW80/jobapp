@@ -329,7 +329,7 @@ test("A adds websites to the list beside their risk sentences, sets criteria and
 
   // The progress names the website being read, never an internal id. Her website comes after
   // the four ticked job websites, one agent each (J17, J18).
-  const progress = page.getByRole("region", { name: "Sweep in progress" });
+  const progress = page.getByRole("region", { name: "Search in progress" });
   await expect(progress).toContainText(`Reading ${SITE_HOST}`, {
     timeout: 300_000,
   });

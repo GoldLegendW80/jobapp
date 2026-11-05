@@ -212,7 +212,7 @@ export function BulkBar({ selection }: { selection: Selection }) {
                 setStatus(event.target.value);
               }}
             >
-              <option value="">Choose a status</option>
+              <option value="">New status</option>
               {STATUSES.map((value) => (
                 <option key={value} value={value}>
                   {statusLabel(value)}
@@ -410,7 +410,7 @@ export function AddPostingButton({ asLink = false }: { asLink?: boolean }) {
     <>
       <Button
         variant={asLink ? "link" : "outline"}
-        className={asLink ? "h-auto px-0" : undefined}
+        className={asLink ? "h-auto px-0 underline" : undefined}
         onClick={() => {
           setOpen(true);
         }}

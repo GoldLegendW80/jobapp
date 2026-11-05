@@ -367,7 +367,7 @@ export function SourcesEditor({
           <div
             className={cn(
               BOX,
-              "rounded-xl border border-dashed py-3 text-sm text-muted-foreground",
+              "rounded-xl border-dashed py-3 text-sm text-muted-foreground",
             )}
           >
             <Glyph line="h-5">
@@ -510,8 +510,9 @@ function SourceLine({
     <li
       className={cn(
         // The line reaches 0.5rem past the gutter on each side, so its icon sits on the glyph
-        // axis and its text at the column's edge (setup-grid.tsx).
-        "-mr-2 -ml-11 grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)_auto] items-start rounded-xl border bg-card py-3 pr-2 pl-2 shadow-xs motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1",
+        // axis and its text at the column's edge; its padding gives back the border's pixel
+        // (setup-grid.tsx).
+        "-mr-2 -ml-11 grid min-w-0 grid-cols-[2.25rem_minmax(0,1fr)_auto] items-start rounded-xl border bg-card py-3 pr-[calc(0.5rem-1px)] pl-[calc(0.5rem-1px)] shadow-xs motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1",
         !row.enabled && "opacity-75",
       )}
     >
