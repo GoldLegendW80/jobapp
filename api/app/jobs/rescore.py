@@ -13,7 +13,7 @@ asked, one person after the other, and never two rescores of one person at once:
 
 1. `claim`: one UPDATE marks the row running (`running_revision`, the revision asked for, and
    `running_since`, the claim's time) only while nothing runs for the person, or while what runs
-   started more than STALE_AFTER ago (a worker killed under it). Two ticks claim it once.
+   started STALE_AFTER ago or more (a worker killed under it). Two ticks claim it once.
 2. `run`: every posting of the person, RESCORE_BATCH at a time, each batch committed, with the
    skills read when it starts (so at least the claimed revision): a fit set by hand is kept
    (`overwrite_manual` false), a posting another transaction holds is tried once more at the
@@ -85,7 +85,7 @@ profile_service.register_section_callback(on_sections)
 def _claimable(now: datetime) -> sa.ColumnElement[bool]:
     return sa.and_(
         JobRescore.wanted_revision > JobRescore.done_revision,
-        sa.or_(JobRescore.running_since.is_(None), JobRescore.running_since < now - STALE_AFTER),
+        sa.or_(JobRescore.running_since.is_(None), JobRescore.running_since <= now - STALE_AFTER),
     )
 
 
