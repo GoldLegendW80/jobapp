@@ -702,8 +702,10 @@ def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
     assert inside["profile_extract"] <= agents["apply_decide"] - margin  # its own job's bound
     # Every agent not inside another job is one the app starts as its own run.
     own = sorted(name for name in ceilings if name not in inside)
+    # profile_titles is its own profile_titles job on the agents queue, with the queue's timeout.
     assert all(
-        name in ("echo", "job_chat", "triage") or name.startswith("documents_") for name in own
+        name in ("echo", "job_chat", "profile_titles", "triage") or name.startswith("documents_")
+        for name in own
     )
     for name, (_, where) in found["ceilings"].items():
         assert where.startswith("It runs "), name

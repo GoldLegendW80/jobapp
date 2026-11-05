@@ -373,7 +373,12 @@ function SetupForm({
                 <StepNumber step={2} />
                 What you want
               </h3>
-              <SearchLists form={form} only={["title_include", "location"]} />
+              {/* The ideas say what is missing without a link: leaving would drop the draft. */}
+              <SearchLists
+                form={form}
+                only={["title_include", "location"]}
+                links={false}
+              />
               <AdvancedSection
                 title="More options"
                 keepMounted

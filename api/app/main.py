@@ -50,6 +50,7 @@ from app.mail import registry as mail_registry
 from app.mail import routers as mail_routers
 from app.opportunities import registry as opportunities_registry
 from app.profile.router import router as profile_router
+from app.profile.titles_router import router as profile_titles_router
 from app.queue import Queue
 
 logger = logging.getLogger("app")
@@ -306,6 +307,7 @@ def create_app(
     app.include_router(admin_router)
     app.include_router(agents_admin_router.router)
     app.include_router(profile_router)
+    app.include_router(profile_titles_router)
     # Before the jobs router: /api/jobs/sweeps, /api/jobs/boards and /api/jobs/feeds must not be
     # read as /api/jobs/{job_id}.
     app.include_router(sweeps_router)

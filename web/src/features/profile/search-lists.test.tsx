@@ -1,14 +1,13 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { TooltipProvider } from "@/components/ui/tooltip";
 import { WORDING } from "@/lib/wording";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeProfile, haraldLike } from "@/test/profile";
-import { renderApp } from "@/test/render";
+import { renderApp, renderWithQuery } from "@/test/render";
 
 import { EMPTY, type Search, type SectionData } from "./api";
 import { toSearchForm, type SearchForm } from "./editor-forms";
@@ -149,12 +148,9 @@ describe("a reload of the lists", () => {
       });
       return <SearchLists form={form} />;
     }
-    // The chips show a long term whole in a tooltip, as under the app's root.
-    render(
-      <TooltipProvider>
-        <Harness />
-      </TooltipProvider>,
-    );
+    // The chips show a long term whole in a tooltip, and the ideas read a query, as under the
+    // app's root.
+    renderWithQuery(<Harness />);
     expect(screen.queryByText(WORDING.listUsesRegularExpressions)).toBeNull();
     act(() => {
       form!.reset(

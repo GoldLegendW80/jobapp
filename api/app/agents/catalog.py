@@ -108,6 +108,7 @@ CATEGORY_OF: dict[str, str] = {
     "echo": "test",
     "job_chat": "jobs",
     "profile_extract": "profile",
+    "profile_titles": "profile",
     "triage": "jobs",
 }
 

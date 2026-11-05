@@ -1680,3 +1680,54 @@ it("opens as a sheet from the bottom on a phone, its footer in view too, and clo
   expect(starts).toEqual([]);
   expect(screen.getByRole("button", { name: "Find jobs" })).toHaveFocus();
 });
+
+it("What you want: a job title idea goes into the list in one click", async () => {
+  server.use(
+    http.get("*/api/profile/title-suggestions", () =>
+      HttpResponse.json({
+        status: "idle",
+        needs: null,
+        suggestions: [
+          {
+            title: "Analytics engineer",
+            reason: "Your SQL and dbt work matches this role.",
+            language: "en",
+          },
+        ],
+        refreshed_at: "2026-11-05T09:00:00+00:00",
+        error: null,
+        asks_left: 3,
+        asks_per_day: 3,
+        estimate: null,
+        cost_note: null,
+      }),
+    ),
+  );
+  const { dialog, user, profile } = await open();
+  await user.click(
+    await within(dialog).findByRole("button", {
+      name: "Add Analytics engineer to Job titles",
+    }),
+  );
+  expect(
+    within(
+      within(dialog).getByRole("list", { name: "Terms of Job titles" }),
+    ).getByText("Analytics engineer"),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).queryByRole("button", {
+      name: "Add Analytics engineer to Job titles",
+    }),
+  ).toBeNull();
+  expect(profile.saves).toEqual([]); // Save and start search stays the person's
+});
+
+it("What you want: without a model key, the ideas say where to add one, with no link out of the draft", async () => {
+  const { dialog } = await open();
+  expect(
+    await within(dialog).findByText(
+      "Job title ideas from your profile need a model key, added on the Account page.",
+    ),
+  ).toBeInTheDocument();
+  expect(within(dialog).queryAllByRole("link")).toEqual([]);
+});

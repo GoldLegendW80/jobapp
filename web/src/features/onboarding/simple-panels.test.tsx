@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { EMPTY } from "@/features/profile/api";
+import { renderWithQuery } from "@/test/render";
 
 import { StepLooking, StepPay, StepWhere, StepWork } from "./step-panels";
 import { draftOf, type Draft } from "./steps";
@@ -15,7 +16,7 @@ beforeEach(() => {
 
 describe("simple wizard panels (O10)", () => {
   it("starts with roles and keeps every targeting choice under Advanced", async () => {
-    render(<StepLooking draft={draftOf(EMPTY)} change={() => {}} />);
+    renderWithQuery(<StepLooking draft={draftOf(EMPTY)} change={() => {}} />);
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
@@ -141,7 +142,7 @@ describe("simple wizard panels (O10)", () => {
         </MemoryRouter>
       );
     }
-    render(<Where />);
+    renderWithQuery(<Where />);
     const stances = screen.getByRole("group", {
       name: "Remote, hybrid or on site",
     });
