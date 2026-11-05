@@ -42,14 +42,54 @@ describe("simple wizard panels (O10)", () => {
     ).toHaveAttribute("href", "/profile?tab=search");
   });
 
-  it("gives employment and freelance separate cards with at most five choices each", () => {
+  it("puts every contract in one group whose last box is Freelance mission", () => {
     render(<StepWork draft={draftOf(EMPTY)} change={() => {}} />);
     const cards = screen.getAllByRole("group");
-    expect(cards).toHaveLength(2);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveAccessibleName("Contracts (choose any)");
     expect(
-      cards.map((card) => within(card).getAllByRole("checkbox").length),
-    ).toEqual([5, 1]);
-    expect(screen.getAllByRole("checkbox")).toHaveLength(6);
+      within(cards[0]!)
+        .getAllByRole("checkbox")
+        .map((box) => box.parentElement?.textContent),
+    ).toEqual([
+      "Permanent",
+      "Fixed term",
+      "VIE",
+      "Internship",
+      "Apprenticeship",
+      "Freelance mission",
+    ]);
+    expect(screen.queryByText("Freelance work")).toBeNull();
+  });
+
+  it("saves the same codes as before, and keeps a code it does not offer", async () => {
+    function Work() {
+      const [draft, setDraft] = useState<Draft>({
+        ...draftOf(EMPTY),
+        contracts: ["Seasonal", "CDI"],
+      });
+      return (
+        <>
+          <StepWork
+            draft={draft}
+            change={(patch) => {
+              setDraft((old) => ({ ...old, ...patch }));
+            }}
+          />
+          <output data-testid="saved">{draft.contracts.join(",")}</output>
+        </>
+      );
+    }
+    render(<Work />);
+    expect(screen.getByRole("checkbox", { name: "Permanent" })).toBeChecked();
+    await userEvent.click(
+      screen.getByRole("checkbox", { name: "Freelance mission" }),
+    );
+    await userEvent.click(screen.getByRole("checkbox", { name: "VIE" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Permanent" }));
+    expect(screen.getByTestId("saved")).toHaveTextContent(
+      "Seasonal,Freelance,VIE",
+    );
   });
 
   it("folds pay figures without losing a typed value and restores the open preference", async () => {

@@ -37,7 +37,14 @@ export const EXPIRED =
  * browser kept the website's login. The searches then read that website signed in, in this
  * person's browser only. "Forget all logins" (B7) removes every website's login.
  */
-export function SiteSignIn({ url }: { url: string }) {
+export function SiteSignIn({
+  url,
+  forget = true,
+}: {
+  url: string;
+  /** false: no "Forget all logins" of its own (Account's list has one for every website). */
+  forget?: boolean;
+}) {
   const host = hostOf(url);
   const client = useQueryClient();
   const [opened, setOpened] = useState(false);
@@ -136,7 +143,7 @@ export function SiteSignIn({ url }: { url: string }) {
             {login?.state === "expired" ? "Sign in again" : "Sign in"}
           </Button>
         )}
-        {login ? (
+        {login && forget ? (
           <ForgetDialog
             profile={browser.data?.profile}
             onForgotten={() => {

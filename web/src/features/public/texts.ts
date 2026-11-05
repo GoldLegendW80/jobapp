@@ -117,7 +117,7 @@ export const BROWSER_WHERE =
   "That volume is not in the server's backups: losing it costs you your logins and nothing else.";
 
 export const BROWSER_FORGET =
-  "To forget, open Account, find the Your browser card and choose Forget all logins: the folder is deleted and the sites ask you to sign in again. " +
+  "To forget, open Account, find Websites you are signed in to and choose Forget all logins: the folder is deleted and the sites ask you to sign in again. " +
   "Deleting your account deletes the folder too.";
 
 export const BROWSER_DISK =

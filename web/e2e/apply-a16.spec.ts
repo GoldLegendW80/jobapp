@@ -128,7 +128,7 @@ test("without consent an external link starts no application, then the person op
   // This synthetic address is displayed only. No browser lease or site navigation starts.
   await address(review, "https://www.linkedin.com/jobs/view/4100000101/");
   await page.goto(`/jobs/${review}`);
-  await expect(page.getByText(/Turn on LinkedIn in Account/)).toBeVisible();
+  await expect(page.getByText(/To use Easy Apply, add LinkedIn/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Apply", exact: true }),
   ).toHaveCount(0);

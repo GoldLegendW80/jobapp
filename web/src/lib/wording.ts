@@ -120,12 +120,13 @@ export const WORDING = {
   companyTypesOptional: "Company types (optional)",
   places: "Places",
   remoteHybridOnSite: "Remote, hybrid or on site",
-  employmentContracts: "Employment contracts (choose several if you like)",
-  freelanceContracts: "Freelance work",
+  contractsChooseAny: "Contracts (choose any)",
   ratherNotSay: "Rather not say",
   yearlySalary: "Yearly salary",
   dailyRateFreelance: "Daily rate (freelance)",
   afterLike: "After a Like",
+  whenYouClickApply: "When you click Apply on a posting",
+  reviewEachForm: "Let me review each filled form before it is sent",
   documentsLanguage: "Language of your CV and letters",
   tone: "Tone",
   change: "Change",
@@ -165,7 +166,16 @@ export const WORDING = {
     "Add a few websites to your list in Find jobs and start a search: what the app finds shows up here.",
   findJobs: "Find jobs",
   addSkills: "Add your skills",
-  addModelKey: "Add it in Account, Model access",
+  // The summary's optional model key (welcome step 8), saved as Account's Model access does.
+  yourApiKeyOptional: "Your Anthropic API key (optional)",
+  apiKey: "API key",
+  showApiKey: "Show API key",
+  saveKey: "Save key",
+  verify: "Verify",
+  anthropicConsole: "Anthropic Console",
+  // The upload of a CV (documents/upload-panel.tsx): true with or without a model key.
+  uploadCvHint:
+    "Drop a PDF or a Word document here, or choose it. The app keeps the file in your documents and reads its text. Turning it into a CV you can edit uses your Anthropic API key: until one is saved, that part waits.",
   applicationSettings: "Application settings",
   addWebsites: "Add websites",
   // Opportunities O3.

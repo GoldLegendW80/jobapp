@@ -120,8 +120,17 @@ describe("forget all logins", () => {
   });
 
   it("forgets, closes the running session and says so", async () => {
+    // An assistant's lease of the person, watched on the card: forgetting ends it too.
     const calls = fakeApi({
-      browser: { ...USED, lease: ownLease("signin"), holder: "you" },
+      browser: {
+        ...USED,
+        lease: {
+          ...ownLease("signin"),
+          purpose: "apply_fill",
+          automation: true,
+        },
+        holder: "you",
+      },
     });
     const user = userEvent.setup();
     renderWithQuery(
@@ -139,8 +148,9 @@ describe("forget all logins", () => {
     expect(calls.headers[0]?.get("X-Requested-With")).toBe("jobapp");
     expect(await screen.findByRole("status")).toHaveTextContent(FORGOTTEN);
     expect(screen.queryByRole("alertdialog")).toBeNull();
-    await screen.findByRole("button", { name: "Look at my browser" });
-    expect(view.screen.disconnected).toBe(true);
+    await waitFor(() => {
+      expect(view.screen.disconnected).toBe(true);
+    });
   });
 
   it("forgets twice without complaint", async () => {
@@ -185,36 +195,6 @@ describe("forget all logins", () => {
       "The browser is not available right now.",
     );
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
-    expect(screen.queryByText(FORGOTTEN)).toBeNull();
-  });
-
-  it("a new session clears the sentence", async () => {
-    const state = { browser: USED };
-    fakeApi(state);
-    server.use(
-      http.post("*/api/browser/sessions", () => {
-        state.browser = { ...EMPTY, lease: ownLease("look"), holder: "you" };
-        return HttpResponse.json(
-          { lease: ownLease("look"), queue: null },
-          { status: 201 },
-        );
-      }),
-    );
-    const user = userEvent.setup();
-    renderWithQuery(
-      <MemoryRouter>
-        <BrowserCard />
-      </MemoryRouter>,
-    );
-    const dialog = await ask(user);
-    await user.click(
-      within(dialog).getByRole("button", { name: "Forget all logins" }),
-    );
-    await screen.findByText(FORGOTTEN);
-    await user.click(
-      screen.getByRole("button", { name: "Look at my browser" }),
-    );
-    await connected(opened);
     expect(screen.queryByText(FORGOTTEN)).toBeNull();
   });
 

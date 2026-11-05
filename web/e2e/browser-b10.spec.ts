@@ -210,13 +210,14 @@ test("C meets LinkedIn's security check: no pause is recorded, and LinkedIn is s
   expect(first?.found).toBe(0);
   expect(first?.error ?? "").not.toMatch(/paused|checkpoint/);
 
-  // No 7 day pause: nothing recorded, nothing on the LinkedIn card.
+  // No 7 day pause: nothing recorded, and nothing paused on LinkedIn's line in Find jobs (the
+  // LinkedIn card left Account in audit chapter 2: its permission is the line).
   const state = await linkedinOf(page);
   expect(state.paused_until).toBeNull();
   await page.goto("/account");
-  const card = page.getByRole("region", { name: "LinkedIn", exact: true });
-  await expect(card).toBeVisible();
-  await expect(card).not.toContainText(/security check|paused/);
+  await expect(
+    page.getByRole("region", { name: "LinkedIn", exact: true }),
+  ).toHaveCount(0);
   await shots(page, "linkedin-not-paused");
 
   // A second search the same day opens LinkedIn again.

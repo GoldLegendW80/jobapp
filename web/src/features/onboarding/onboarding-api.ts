@@ -68,10 +68,3 @@ export async function completeOnboarding(): Promise<
     throw error;
   }
 }
-
-/** Apply's own route (A11): the mode after a Like, only ever sent when the person changed it. */
-export const saveLikeMode = (mode: "review" | "full_auto"): Promise<unknown> =>
-  request("/apply/settings", {
-    method: "PUT",
-    body: { mode_after_like: mode },
-  });
