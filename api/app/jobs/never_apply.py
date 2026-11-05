@@ -80,11 +80,3 @@ def matching_rule(rules: Iterable[NeverApplyRule], *texts: str) -> NeverApplyRul
         if rule.pattern is not None and rule.pattern.search(folded) is not None:
             return rule
     return None
-
-
-# The app has no rule of its own about a kind of role (owner, 2026-11-05): a sweep, a source and
-# apply read the person's own never apply rules alone. This one is left only for the job title
-# ideas' check (profile/titles.py), whose own change removes that check and then this constant.
-CYBER_RULE = NeverApplyRule.parse(
-    "Never cybersecurity: cyber, cybersecurity, security, pentest, pentesting, threat"
-)
