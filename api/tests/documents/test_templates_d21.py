@@ -41,7 +41,7 @@ from tests.documents.test_templates_d19 import (
     contrast,
     top,
 )
-from tests.documents.test_templates_d22 import texts_of
+from tests.documents.test_templates_d22 import assert_read_in_order
 
 D21 = tuple(sorted(templates.registry()))  # D27: the three
 MM = 72 / 25.4  # points in a millimetre
@@ -302,9 +302,9 @@ def typical(slug: str, full: bool) -> c.CvContent:
 def test_the_pdf_text_follows_the_order_of_the_document(
     renderer: Any, slug: str, name: str
 ) -> None:
-    """Every text of the built page is found in the PDF text in the order of the document: no
-    part of the layout is painted, and so extracted, out of its place (a positioned marker once
-    sent the competencies of `cards` and the bullets of `bold` to the end of the page)."""
+    """The PDF text read as the layout lays it out (D27): the name first, every word in it, and
+    each block's own words in their order (a positioned marker once sent the competencies of
+    `cards` to the end of the page)."""
     if name == "cv-soft-limits":
         kind, language, content = "cv", "en", typical(slug, full=True)
     else:
@@ -313,12 +313,7 @@ def test_the_pdf_text_follows_the_order_of_the_document(
     result = fitted(renderer, found, kind, content, d1_view(), language)
     assert result.fit
     html = templates.build_html(found, kind, content, d1_view(), language, result.step, ON)
-    text = pages_text(result.pdf)[0]
-    at = 0
-    for chunk in texts_of(html, slug):  # the contact lines in the order the template prints them
-        place = text.find(chunk, at)
-        assert place >= 0, (chunk, text[at : at + 80])
-        at = place + len(chunk)
+    assert_read_in_order(html, pages_text(result.pdf)[0], d1_view().identity.full_name)
 
 
 LONG_CONTACT = Identity(

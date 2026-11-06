@@ -176,6 +176,53 @@ def pages_text(pdf: bytes) -> list[str]:
     return ["".join(text.replace("￾", "-").split()).casefold() for text in texts]
 
 
+# A block of the page: a heading, a paragraph, a list item, a section. The PDF text follows each
+# layout's own lines (D27, the orchestrator's decision): band's label column and body column, and
+# photo-columns' two columns, are read line by line side by side, so two blocks may interleave;
+# the words of one block never leave their order.
+BLOCKS = frozenset(("h1", "h2", "h3", "p", "li", "section", "header", "div"))
+
+
+def words_of(text: str) -> list[str]:
+    return [w for w in re.split(r"\s+", text.replace("\ufffe", "-").casefold()) if w]
+
+
+def in_order(flat: str, words: list[str]) -> bool:
+    at = 0
+    for word in words:
+        at = flat.find(word, at)
+        if at < 0:
+            return False
+        at += len(word)
+    return True
+
+
+def words_in(html: str, slug: str) -> list[list[str]]:
+    """The words of each text of texts_of(html, slug), in the same order."""
+    parser = Texts()
+    parser.feed(html)
+    by_text = dict(zip(parser.texts, parser.words, strict=False))
+    return [by_text[text] for text in texts_of(html, slug)]
+
+
+def assert_read_in_order(html: str, pdf_text: str, name: str) -> None:
+    """What an applicant tracking system reads: the name first; every word of the built page in
+    the PDF text; within each block (a heading, a line, a bullet), its words in order."""
+    parser = Texts()
+    parser.feed(html)
+    flat = "".join(words_of(pdf_text))
+    assert flat.startswith("".join(name.split()).casefold()), flat[:60]
+    by_block: dict[int, list[str]] = {}
+    for words, block in zip(parser.words, parser.blocks, strict=True):
+        by_block.setdefault(block, []).extend(words)
+    for words in by_block.values():
+        at = 0
+        for word in words:  # a word, not the whole block: a two line label wraps beside the body
+            place = flat.find(word, at)
+            assert place >= 0, (word, " ".join(words)[:80], flat[at : at + 80])
+            at = place + len(word)
+
+
 # The order each template prints its contact lines in (CSS `order`, the original's: the owner's
 # look, D27), which the PDF text follows rather than the order of the document.
 CONTACT_ORDER = {
@@ -193,23 +240,32 @@ class Texts(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.texts: list[str] = []
         self.kinds: list[str | None] = []
+        self.blocks: list[int] = []
+        self.words: list[list[str]] = []
         self._body = False
         self._kind: str | None = None
+        self._block = 0
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._body = self._body or tag == "body"
+        if tag in BLOCKS:
+            self._block += 1
         if tag == "li":
             kind = dict(attrs).get("class") or ""
             self._kind = kind if kind in ("email", "phone", "place", "link") else None
 
     def handle_endtag(self, tag: str) -> None:
+        if tag in BLOCKS:
+            self._block += 1
         if tag == "li":
             self._kind = None
 
     def handle_data(self, data: str) -> None:
         if self._body and data.strip():
             self.texts.append("".join(data.split()).casefold())
+            self.words.append(words_of(data))
             self.kinds.append(self._kind)
+            self.blocks.append(self._block)
 
 
 def texts_of(html: str, slug: str | None = None) -> list[str]:
@@ -251,9 +307,9 @@ def typical(slug: str, full: bool) -> c.CvContent:
 def test_the_pdf_text_follows_the_order_of_the_document(
     renderer: Any, slug: str, name: str
 ) -> None:
-    """Every text of the built page is found in the PDF text in the order of the document: no
-    part of the layout is painted, and so extracted, out of its place (the portrait's frame is
-    placed left of the name by the grid, and still read after it)."""
+    """The PDF text read as the layout lays it out (D27): the name first, every word of the built
+    page in it, and each block's own words in their order; two blocks side by side (a label
+    column, two columns) may interleave line by line."""
     if name == "cv-soft-limits":
         kind, language, content = "cv", "en", typical(slug, full=True)
     else:
@@ -262,12 +318,7 @@ def test_the_pdf_text_follows_the_order_of_the_document(
     result = fitted(renderer, found, kind, content, d1_view(), language)
     assert result.fit
     html = templates.build_html(found, kind, content, d1_view(), language, result.step, ON)
-    text = pages_text(result.pdf)[0]
-    at = 0
-    for chunk in texts_of(html, slug):
-        place = text.find(chunk, at)
-        assert place >= 0, (chunk, text[at : at + 80])
-        at = place + len(chunk)
+    assert_read_in_order(html, pages_text(result.pdf)[0], d1_view().identity.full_name)
 
 
 def baselines(pdf: bytes, needle: str) -> list[float]:
@@ -390,17 +441,16 @@ def images(pdf: bytes) -> list[tuple[float, float, float, float]]:
         document.close()
 
 
-def chunk_pages(html: str, pdf: bytes, slug: str) -> list[tuple[str, int]]:
-    """Each text of the built page with the page it is found on, in the order of the document."""
+def chunk_pages(html: str, pdf: bytes, slug: str) -> list[tuple[str, set[int]]]:
+    """Each text of the built page, in the order of the document, with the pages that hold its
+    words in their order. No order across texts is assumed: the PDF text follows each layout's
+    own lines (D27), so a label wrapped beside its body is read between the body's words."""
     pages = pages_text(pdf)
-    whole = "".join(pages)
-    ends = [sum(len(p) for p in pages[: i + 1]) for i in range(len(pages))]
-    out, at = [], 0
-    for chunk in texts_of(html, slug):
-        place = whole.find(chunk, at)
-        assert place >= 0, chunk
-        out.append((chunk, next(i for i, end in enumerate(ends) if place < end)))
-        at = place + len(chunk)
+    out = []
+    for chunk, words in zip(texts_of(html, slug), words_in(html, slug), strict=True):
+        found = {number for number, page in enumerate(pages) if in_order(page, words)}
+        assert found, chunk
+        out.append((chunk, found))
     return out
 
 
@@ -420,15 +470,15 @@ def test_a_page_end_never_leaves_a_heading_or_a_role_title_alone(
     rendered = renderer.render(html)
     assert rendered.pages == 2, rendered.pages
     placed = chunk_pages(html, rendered.pdf, slug)
-    assert {page for _, page in placed} == {0, 1}
+    assert set().union(*(pages for _, pages in placed)) == {0, 1}
     shared = templates.labels()[language] | found.labels.get(language, {})
     labels = {"".join(str(v).split()).casefold() for v in shared.values()}
     titles = {"".join(e.title.split()).casefold() for e in d1_view().employers}
     # a role's title prints with the comma that joins it to the organisation
     seen = 0
-    for (chunk, page), (_, following) in pairwise(placed):
+    for (chunk, pages), (_, following) in pairwise(placed):
         if chunk in labels or chunk.rstrip(",") in titles:
-            assert page == following, chunk
+            assert pages & following, (chunk, pages, following)  # on a page with what follows it
             seen += 1
     assert seen >= len(titles), seen
 
