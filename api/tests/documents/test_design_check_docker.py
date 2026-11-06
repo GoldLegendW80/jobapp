@@ -62,8 +62,6 @@ def probe(css: str = "", replace: tuple[tuple[str, str], ...] = ()) -> templates
     return templates.from_files(manifest, {**band.files, "style.css": style + css})
 
 
-
-
 @pytest.mark.parametrize("slug", sorted(templates.registry()))
 def test_every_bundled_template_shows_every_field(stack: Stack, slug: str) -> None:
     template = templates.registry()[slug]
