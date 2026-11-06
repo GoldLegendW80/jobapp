@@ -99,7 +99,7 @@ test("a base CV is built from the profile and rendered", async () => {
   expect(built.status()).toBe(202);
   const base = ((await built.json()) as { base_cv: BaseCv }).base_cv;
   expect(base).toEqual(
-    expect.objectContaining({ template_slug: "classic", is_default: true }),
+    expect.objectContaining({ template_slug: "band", is_default: true }),
   );
   firstId = base.id;
   await expect

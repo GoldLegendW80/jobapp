@@ -20,9 +20,11 @@ import { clearAttempts, newContext, root, watchErrors } from "./stack";
 /**
  * Documents D20 against the real stack through Caddy, the worker and the real renderer, through
  * the api only (no writer runs): an invented person's posting CV and letter, written by hand,
- * are switched to each of templates 9 to 12 (`accent`, `executive`, `grid`, `mono`); each switch
- * makes a new version whose PDF is one page and holds the invented name. The first page of each
- * PDF is kept as evidence (tasks/evidence/documents-d20/).
+ * are switched to each of the three bundled templates (D27: `ledger`, `photo-columns`, then back
+ * to `band`, the default they start on); each switch makes a new version whose PDF is one page,
+ * reads the invented name first and holds the whole e-mail address. The first page of each PDF is
+ * kept as evidence (tasks/evidence/documents-d20/). The journeys of D21 and D22 switched to their
+ * own four templates the same way; they went with those folders (D27).
  *
  * Locally, as documents-d6.spec.ts, then:
  *   E2E_CADDY_URL=http://127.0.0.1:8099 E2E_COMPOSE_PROJECT=jobapp-d20 \
@@ -32,7 +34,7 @@ test.describe.configure({ mode: "serial" });
 test.skip(!caddyUrl, "set E2E_CADDY_URL with the Compose stack running");
 
 const EVIDENCE = "documents-d20";
-const TEMPLATES = ["accent", "executive", "grid", "mono"];
+const TEMPLATES = ["ledger", "photo-columns", "band"];
 
 const POSTING_LETTER = `
 import json, sys, uuid
@@ -156,6 +158,9 @@ for (const slug of TEMPLATES) {
       const pdf = await pdfOf(page.request, ids[kind], latest[kind]);
       expect(pdf.pages).toBe(1);
       expect(pdf.text).toContain(person.name);
+      // applicant tracking systems read the name first; the address whole on its line
+      expect(pdf.text.trimStart().startsWith(person.name)).toBe(true);
+      expect(pdf.text).toContain(person.email);
       if (kind === "cv") expect(pdf.text).toContain(person.firstEmployer);
       const image = await page.request.get(
         `/api/documents/${ids[kind]}/versions/${latest[kind]}/page1.png`,

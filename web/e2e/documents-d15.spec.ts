@@ -277,7 +277,7 @@ test("the applied posting's CV and letter are frozen and serve the legacy PDFs",
   const documents = await documentsOf(page.request, appliedId);
   expect(documents.map((d) => d.kind).sort()).toEqual(["cv", "letter"]);
   for (const document of documents) {
-    expect(document.template_slug).toBe("classic");
+    expect(document.template_slug).toBe("band");
     expect(document.sent).toEqual([1]);
     const [only] = await versions(page.request, document.id);
     expect(only).toMatchObject({

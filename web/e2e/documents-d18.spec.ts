@@ -18,9 +18,9 @@ import { clearAttempts, newContext, root, watchErrors } from "./stack";
 
 /**
  * Documents D18 against the real stack through Caddy, driven through the page: the gallery with
- * its "no photo" filter and its grid of two on a phone; a posting's CV switched to `compact` from
- * the Template view, a new page drawn, its base CV unchanged; `sidebar` set on the base CV from
- * the gallery, then a posting added afterwards whose CV takes `sidebar`. No model runs: the base
+ * its "two columns" filter and its grid of two on a phone; a posting's CV switched to `ledger` from
+ * the Template view, a new page drawn, its base CV unchanged; `photo-columns` set on the base CV from
+ * the gallery, then a posting added afterwards whose CV takes `photo-columns`. No model runs: the base
  * CV and the documents are made in the api container (`seedDocuments`, and `postingCv` below) and
  * the CV draft is written by hand, so the real renderer draws every page.
  *
@@ -102,13 +102,13 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("an invented person with a base CV and a posting's CV drawn with classic", async () => {
+test("an invented person with a base CV and a posting's CV drawn with band", async () => {
   await signUp(page, person);
   posting = await addPosting(page.request, person);
   ({ base, cv } = seedDocuments(person, posting));
   await saveDraft(page.request, cv, person.cvDraft);
   const drawn = await waitForRender(page.request, cv, 1);
-  expect(drawn.latest?.template_slug).toBe("classic");
+  expect(drawn.latest?.template_slug).toBe("band");
 });
 
 test("the gallery lists the templates and filters those with no photo", async () => {
@@ -117,28 +117,28 @@ test("the gallery lists the templates and filters those with no photo", async ()
     page.getByRole("heading", { level: 1, name: "Templates" }),
   ).toBeVisible();
   const all = page.getByRole("region", { name: "All templates" });
-  await expect(all.getByRole("heading", { name: "Classic" })).toBeVisible();
+  await expect(all.getByRole("heading", { name: "Band" })).toBeVisible();
   const served = await all.getByRole("heading", { level: 3 }).count();
-  expect(served).toBeGreaterThanOrEqual(4);
+  expect(served).toBeGreaterThanOrEqual(3);
 
-  await page.getByLabel("Photo").selectOption({ label: "No photo" });
+  await page.getByLabel("Columns").selectOption({ label: "Two columns" });
   await expect(page.getByText(/ of \d+ templates match\./)).toBeVisible();
   const cards = all.locator("li[data-testid^=template-]");
   const shown = await cards.count();
   expect(shown).toBeGreaterThan(0);
   expect(shown).toBeLessThan(served);
   for (let index = 0; index < shown; index += 1)
-    await expect(cards.nth(index)).toContainText("no photo");
-  await expect(all.getByRole("heading", { name: "Classic" })).toHaveCount(0);
+    await expect(cards.nth(index)).toContainText("two columns");
+  await expect(all.getByRole("heading", { name: "Band" })).toHaveCount(0);
 
-  const compact = page.getByTestId("template-compact");
-  await compact.getByRole("button", { name: "See the letter" }).click();
+  const columns = page.getByTestId("template-photo-columns");
+  await columns.getByRole("button", { name: "See the letter" }).click();
   await expect(
-    compact.getByRole("img", { name: /, the letter$/ }),
+    columns.getByRole("img", { name: /, the letter$/ }),
   ).toBeVisible();
   keep(
     EVIDENCE,
-    "gallery-no-photo.png",
+    "gallery-two-columns.png",
     await page.screenshot({ fullPage: true }),
   );
 });
@@ -163,7 +163,7 @@ test("on a phone the gallery is a grid of two", async () => {
   await page.setViewportSize({ width: 1280, height: 900 });
 });
 
-test("a posting's CV switches to compact in the Template view, and its base CV is unchanged", async () => {
+test("a posting's CV switches to ledger in the Template view, and its base CV is unchanged", async () => {
   await page.goto(`/jobs/${posting}/documents/cv`);
   await page.getByRole("tab", { name: "Template" }).click();
   await expect(
@@ -172,7 +172,7 @@ test("a posting's CV switches to compact in the Template view, and its base CV i
     ),
   ).toBeVisible();
   const strip = page.getByRole("list", { name: "Templates" });
-  await expect(strip.getByRole("button", { name: /^Classic/ })).toHaveAttribute(
+  await expect(strip.getByRole("button", { name: /^Band/ })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -187,7 +187,7 @@ test("a posting's CV switches to compact in the Template view, and its base CV i
     expect.objectContaining({
       number: 2,
       origin: "template",
-      template_slug: "compact",
+      template_slug: "ledger",
       has_pdf: true,
     }),
   );
@@ -195,29 +195,29 @@ test("a posting's CV switches to compact in the Template view, and its base CV i
   await expect(
     page.getByRole("img", { name: "Page 1 of version 2" }),
   ).toBeVisible({ timeout: 30_000 });
-  keep(EVIDENCE, "cv-compact.png", await page.screenshot({ fullPage: true }));
+  keep(EVIDENCE, "cv-ledger.png", await page.screenshot({ fullPage: true }));
   expect((await readDocument(page.request, base)).template_slug).toBe(
-    "classic",
+    "band",
   );
 });
 
-test("sidebar set on the base CV from the gallery is taken by a posting's CV made afterwards", async () => {
+test("photo-columns set on the base CV from the gallery is taken by a posting's CV made afterwards", async () => {
   await page.goto(`/documents/templates?document=${base}`);
   await expect(
     page.getByText(/^Choose the look of the base CV /),
   ).toBeVisible();
   await page
-    .getByTestId("template-sidebar")
+    .getByTestId("template-photo-columns")
     .getByRole("button", { name: "Use for this document" })
     .click();
   await expect(
     page.getByText(/^Sidebar is now used for this document\./),
   ).toBeVisible();
   expect((await readDocument(page.request, base)).template_slug).toBe(
-    "sidebar",
+    "photo-columns",
   );
   // The CV written before keeps its own.
-  expect((await readDocument(page.request, cv)).template_slug).toBe("compact");
+  expect((await readDocument(page.request, cv)).template_slug).toBe("ledger");
 
   const later = await addPosting(page.request, {
     ...person,
@@ -225,7 +225,7 @@ test("sidebar set on the base CV from the gallery is taken by a posting's CV mad
   });
   const laterCv = postingCv(person, later);
   expect((await readDocument(page.request, laterCv)).template_slug).toBe(
-    "sidebar",
+    "photo-columns",
   );
   expect(errors).toEqual([]);
 });
