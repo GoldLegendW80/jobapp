@@ -84,11 +84,9 @@ describe("the CV tab", () => {
     );
     const estimates = within(dialog).getByTestId("consent-estimates");
     expect(estimates).toHaveTextContent(
-      "One posting: about 12,000 to 20,000 tokens.",
+      "One posting, its CV and letter read by the hiring panel: about 12,000 to 20,000 tokens.",
     );
-    expect(estimates).toHaveTextContent(
-      "A typical week at your threshold of 70: 5 postings, about 60,000 to 100,000 tokens.",
-    );
+    expect(estimates).not.toHaveTextContent("A typical week");
     expect(estimates).toHaveTextContent("tokens count against your quota");
     const agree = within(dialog).getByRole("button", {
       name: "Agree and build my CV",

@@ -97,10 +97,7 @@ describe("consent for an existing waiting capture", () => {
       );
       expect(within(dialog).getByText("Version 7")).toBeVisible();
       expect(within(dialog).getByTestId("consent-estimates")).toHaveTextContent(
-        "One posting:",
-      );
-      expect(within(dialog).getByTestId("consent-estimates")).toHaveTextContent(
-        "A typical week",
+        "One posting, its CV and letter read by the hiring panel:",
       );
       expect(agree()).toBeDisabled();
       expect(posts).toHaveLength(0);

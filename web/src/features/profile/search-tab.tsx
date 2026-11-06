@@ -24,6 +24,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { NativeSelect } from "@/components/ui/native-select";
+import { WritingRulesCard } from "@/features/documents/writing-rules-card";
 import { JobWebsitesSignIn } from "@/features/browser/site-signin";
 import { cn } from "@/lib/utils";
 import { REMOTE_WORDS, contractWord } from "@/lib/wording";
@@ -197,6 +198,7 @@ function SearchForms({
             )}
           />
           <NeverApply form={form} />
+          <WritingRulesCard />
           <SaveBar
             label="Search"
             saving={saving}
