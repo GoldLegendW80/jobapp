@@ -444,6 +444,46 @@ def agent_verdict(facts: Any, *, action: str = "click") -> str | None:
     return "submit" if any(_submits(f, action) for f in targets) else None
 
 
+# A20: the review lease (`apply_review`, Review first's apply agent) moves through a wizard
+# without the capability, so a model never sends the form there: a button (never a link, a key
+# or a script) whose every name, folded, is one of these whole phrases, a step's own word, and
+# no word of a send. Anything else that submits stays refused without the capability: the agent
+# names it to the app (`apply_ready`), and the gate clicks it after the person's Confirm.
+STEP_PHRASES = frozenset({
+    "next", "next step", "continue", "save and continue", "save continue", "continue to next step",
+    "go to next step", "review", "review application", "review my application",
+    "suivant", "etape suivante", "continuer", "valider et continuer", "enregistrer et continuer",
+    "weiter", "nachster schritt", "naechster schritt", "speichern und weiter",
+    "siguiente", "continuar", "avanti", "continua", "volgende", "verder",
+})  # fmt: skip
+
+
+def review_step(facts: Any, *, action: str = "click") -> bool:
+    """A wizard's step button on the review lease (A20): True only when the clicked element and
+    the element under the click point are buttons whose names are all step phrases (fail
+    closed: no name, an unreadable fact, a selector hit, a send word, a link: False)."""
+    if action != "click" or not isinstance(facts, dict):
+        return False
+    targets = [facts]
+    if "point" in facts:
+        targets.append(facts["point"])
+    for target in targets:
+        if not isinstance(target, dict) or not isinstance(target.get("names"), list):
+            return False
+        if target.get("selector_error") or target.get("selector_hit"):
+            return False
+        if target.get("tag") == "a" or target.get("role") == "link":
+            return False
+        names = [n for n in target["names"] if isinstance(n, str) and n.strip()]
+        if not names or len(names) > NAMES_MAX:
+            return False
+        for name in names:
+            folded = " ".join(words(name[:NAME_MAX], camel=False))
+            if folded not in STEP_PHRASES or says_agent_send([name]):
+                return False
+    return True
+
+
 # A19: what else marks a send on the agent's lease, read on a button (never a link): German
 # stems ("Bewerbung absenden", "Abschicken", "Einreichen"; "Senden" is SUBMIT_STEMS' "send"), and
 # the one word a wizard's last step says alone ("Finish", "Done", "Terminer", "Fertig"), as a

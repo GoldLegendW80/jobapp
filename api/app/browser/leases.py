@@ -109,6 +109,7 @@ LEASE_MAX_S = {
     "profile_edit": 900,
     "full_auto": 900,
     "apply_agent": 3600,  # A19: One click Apply's agent (browserd's config.py)
+    "apply_review": 3600,  # A20: Review first's apply agent (browserd's config.py)
     "sweep": 86_400,  # B20: as long as the search takes; the idle timer still ends a stuck one
 }
 PURPOSES = tuple(LEASE_MAX_S)
@@ -121,6 +122,7 @@ TIERS = {
     "profile_edit": 1,
     "full_auto": 2,
     "apply_agent": 1,
+    "apply_review": 1,
     "sweep": 3,
 }
 PREEMPTS_SWEEP = ("takeover", "signin")  # a person's own browser ends a sweep lease (B8)

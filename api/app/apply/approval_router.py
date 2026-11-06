@@ -67,6 +67,14 @@ Db = Annotated[Session, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(deps.current_user)]
 
 
+class ConfirmIn(BaseModel):
+    """A20: Confirm and send, with the hash of the list of filled fields the page showed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fields_hash: str = Field(min_length=gate.HASH_HEX, max_length=gate.HASH_HEX)
+
+
 class ApproveIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -422,6 +430,40 @@ def set_answer(
         db.rollback()
         return _refusal("busy")
     return read_approval(application_id, request, user, db)
+
+
+@router.post(
+    "/api/applications/{application_id}/confirm",
+    response_model=ApplicationOut,
+    responses={404: {"model": ErrorOut}, 409: {"model": GateRefusalOut}},
+)
+def confirm_and_send(
+    application_id: str, body: ConfirmIn, request: Request, user: CurrentUser, db: Db
+) -> ApplicationOut | JSONResponse:
+    """Confirm and send (A20): the list of what the apply agent filled, exactly as shown; the
+    held session's gate clicks the form's control that sends it."""
+    from app.apply import confirm
+
+    wanted = _uuid_or_404(application_id)
+    sent = gate.parse_hash(body.fields_hash)
+    if sent is None:
+        return _refusal("stale")
+    try:
+        application = confirm.confirm(db, user.id, wanted, sent, deps.clock(request))
+    except gate.NotFoundError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_APPLICATION) from None
+    except gate.RefusedError as exc:
+        if exc.code == "session_lost":
+            db.commit()  # the application is `failed`: the page offers Try again
+        else:
+            db.rollback()
+        return _refusal(exc.code)
+    except jobs_service.JobBusyError:
+        db.rollback()
+        return _refusal("busy")
+    db.commit()
+    return ApplicationOut.model_validate(application)
 
 
 def _person(

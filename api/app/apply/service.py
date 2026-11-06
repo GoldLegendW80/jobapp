@@ -111,6 +111,7 @@ def start(
     *,
     now: datetime,
     stub_base: str | None = None,
+    agent_review: bool = False,
 ) -> Started:
     """Create the application, or raise RefusedError or PostingNotFoundError. Commits on success;
     the caller rolls back on an error. Raises ValueError for a rehearsal in Apply myself."""
@@ -196,6 +197,12 @@ def start(
         _event(db, application, "apply_click", now)
     elif sent_to_review:
         _event(db, application, "sent_to_review", now, code=sent_to_review)
+    elif agent_review and mode is Mode.review and not dry_run and not email_application:
+        # A20: the Apply button with the review box ticked: the apply agent fills any site and
+        # the person confirms the list of what it filled (apply/confirm.py).
+        from app.apply import confirm
+
+        _event(db, application, confirm.EVENT, now)
     db.commit()
     logger.info(
         "apply.started",

@@ -101,6 +101,10 @@ SENTENCES = {
     "submit_disabled": "Submissions are switched off on this server for now. Nothing was sent.",
     "paused": "Submissions are paused by the administrator for now. Nothing was sent.",
     "not_ready": "This application is not waiting for your approval.",
+    "session_lost": (
+        "The browser session ended before you confirmed, so nothing was sent. Try again fills "
+        "the form again and shows you a new list."
+    ),
     "stale": (
         "The form or your documents changed since you looked. Check the answers shown now and "
         "approve again."
@@ -272,7 +276,8 @@ def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
     return [
         row
         for row in rows
-        if row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label)
+        if row.field_key != "agent:filled"  # A20: the list of confirm.py, shown on its own
+        and (row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label))
     ]
 
 
@@ -350,6 +355,10 @@ def authorise_approval(
         raise RefusedError("manual")
     if application.state is not State.ready:
         raise RefusedError("not_ready")
+    from app.apply import confirm
+
+    if confirm.review_agent(db, application):
+        raise RefusedError("not_ready")  # A20: its Confirm is the one approval (confirm.confirm)
     current = current_hash(db, application)
     if answers_hash_sent != current:
         raise StaleError(current)

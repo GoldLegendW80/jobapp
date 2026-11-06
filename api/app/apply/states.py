@@ -131,8 +131,12 @@ def move(
         application.mode is Mode.manual and to is S.submitted and current in MANUAL_SENT_FROM
     )
     no_click = click_refused and current is S.submitting and to in NO_CLICK_TO
+    # A20: in Review first's agent run only to record a send the site showed before any Confirm
+    # (applier._finish_review), never to click: that agent's lease has no capability.
     agent_click = (
-        by_agent and application.mode is Mode.direct and to in AGENT_MOVES.get(current, ())
+        by_agent
+        and application.mode in (Mode.direct, Mode.review)
+        and to in AGENT_MOVES.get(current, ())
     )
     person_retry = (
         retried_by_person

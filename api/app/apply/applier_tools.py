@@ -28,6 +28,19 @@ def _object(properties: dict[str, Any], required: tuple[str, ...] = ()) -> dict[
     }
 
 
+# A20: the answers the agent chose for the person (a required field the profile does not answer).
+CHOSEN = {
+    "type": "array",
+    "maxItems": applier.CHOSEN_MAX,
+    "items": _object(
+        {
+            "field": {"type": "string", "maxLength": applier.FIELD_MAX},
+            "value": {"type": "string", "maxLength": 300},
+            "why": {"type": "string", "maxLength": applier.WHY_MAX},
+        },
+        ("field", "why"),
+    ),
+}
 SCHEMAS: dict[str, dict[str, Any]] = {
     "browser_file_upload": _object(
         {
@@ -46,16 +59,23 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "outcome": {"type": "string", "enum": ["submitted", "failed"]},
             "summary": {"type": "string", "maxLength": applier.SUMMARY_MAX},
             "confirmation_url": {"type": "string", "maxLength": 2000},
+            "chosen": CHOSEN,
         },
         ("outcome", "summary"),
     ),
+    # A20: Review first names the control that sends the form; the gate clicks it on Confirm.
+    "apply_ready": _object({"submit_ref": REF, "chosen": CHOSEN}, ("submit_ref",)),
 }
 DESCRIPTIONS = {
     "browser_file_upload": "Upload documents placed on this browser (cv.pdf, letter.pdf) to the "
     "file input or the attach button of the last snapshot's ref.",
     "apply_done": "End the application once: submitted after the site showed its confirmation "
     "(confirmation_url: that page's address, read with browser_snapshot), or failed; summary: "
-    "what you filled and sent, or why it failed.",
+    "what you filled and sent, or why it failed; chosen: each answer you chose for a required "
+    "field the profile does not answer (field label, value, one line why).",
+    "apply_ready": "Review first only: on the last step, every field filled, name the control "
+    "that sends the application by its ref in your last snapshot instead of clicking it, with "
+    "chosen as for apply_done. The person checks the list and the app sends it.",
 }
 
 
@@ -69,9 +89,14 @@ def _factory(name: str) -> app_tools.Factory:
             args = scope.redact(args) if isinstance(args, dict) else {}
             if name == "browser_file_upload":
                 text, error = await session.upload(args)
+            elif name == "apply_ready":
+                text, error = session.ready_at(args.get("submit_ref"), args.get("chosen"))
             else:
                 text, error = session.finish(
-                    args.get("outcome"), args.get("summary"), args.get("confirmation_url")
+                    args.get("outcome"),
+                    args.get("summary"),
+                    args.get("confirmation_url"),
+                    args.get("chosen"),
                 )
             return app_tools.text_result(text, error=error)
 
