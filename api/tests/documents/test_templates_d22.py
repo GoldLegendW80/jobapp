@@ -176,26 +176,67 @@ def pages_text(pdf: bytes) -> list[str]:
     return ["".join(text.replace("￾", "-").split()).casefold() for text in texts]
 
 
+# The order each template prints its contact lines in (CSS `order`, the original's: the owner's
+# look, D27), which the PDF text follows rather than the order of the document.
+CONTACT_ORDER = {
+    "band": ("phone", "email", "place", "link"),
+    "photo-columns": ("email", "phone", "link", "place"),
+    "ledger": ("phone", "email", "place", "link"),
+}
+
+
 class Texts(HTMLParser):
-    """The text nodes of a built page's body, in the order of the document."""
+    """The text nodes of a built page's body, in the order of the document, each with the kind of
+    the contact line it belongs to (None outside the contact lines)."""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.texts: list[str] = []
+        self.kinds: list[str | None] = []
         self._body = False
+        self._kind: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self._body = self._body or tag == "body"
+        if tag == "li":
+            kind = dict(attrs).get("class") or ""
+            self._kind = kind if kind in ("email", "phone", "place", "link") else None
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "li":
+            self._kind = None
 
     def handle_data(self, data: str) -> None:
         if self._body and data.strip():
             self.texts.append("".join(data.split()).casefold())
+            self.kinds.append(self._kind)
 
 
-def texts_of(html: str) -> list[str]:
+def texts_of(html: str, slug: str | None = None) -> list[str]:
+    """The texts in the order the page prints them: the document's, but for the contact lines,
+    which take the order of CONTACT_ORDER[slug] (a sort that keeps two links in their order)."""
     parser = Texts()
     parser.feed(html)
-    return parser.texts
+    if slug is None:
+        return parser.texts
+    rank = {kind: index for index, kind in enumerate(CONTACT_ORDER[slug])}
+    lines = [i for i, kind in enumerate(parser.kinds) if kind is not None]
+    ordered = sorted(lines, key=lambda i: rank[parser.kinds[i] or ""])
+    texts = list(parser.texts)
+    for place, index in zip(lines, ordered, strict=True):
+        texts[place] = parser.texts[index]
+    return texts
+
+
+def test_the_contact_order_of_each_template_is_its_css_order() -> None:
+    """The table is what each style sheet says, so a change of either shows here."""
+    assert set(CONTACT_ORDER) == set(templates.registry())
+    for slug, kinds in CONTACT_ORDER.items():
+        css = template(slug).files["style.css"]
+        declared = {
+            kind: int(n) for kind, n in re.findall(r"\.contact \.(\w+) \{ order: (\d+); \}", css)
+        }
+        assert tuple(sorted(declared, key=declared.__getitem__)) == kinds, slug
 
 
 def typical(slug: str, full: bool) -> c.CvContent:
@@ -223,7 +264,7 @@ def test_the_pdf_text_follows_the_order_of_the_document(
     html = templates.build_html(found, kind, content, d1_view(), language, result.step, ON)
     text = pages_text(result.pdf)[0]
     at = 0
-    for chunk in texts_of(html):
+    for chunk in texts_of(html, slug):
         place = text.find(chunk, at)
         assert place >= 0, (chunk, text[at : at + 80])
         at = place + len(chunk)
@@ -349,13 +390,13 @@ def images(pdf: bytes) -> list[tuple[float, float, float, float]]:
         document.close()
 
 
-def chunk_pages(html: str, pdf: bytes) -> list[tuple[str, int]]:
+def chunk_pages(html: str, pdf: bytes, slug: str) -> list[tuple[str, int]]:
     """Each text of the built page with the page it is found on, in the order of the document."""
     pages = pages_text(pdf)
     whole = "".join(pages)
     ends = [sum(len(p) for p in pages[: i + 1]) for i in range(len(pages))]
     out, at = [], 0
-    for chunk in texts_of(html):
+    for chunk in texts_of(html, slug):
         place = whole.find(chunk, at)
         assert place >= 0, chunk
         out.append((chunk, next(i for i, end in enumerate(ends) if place < end)))
@@ -378,9 +419,10 @@ def test_a_page_end_never_leaves_a_heading_or_a_role_title_alone(
     html = templates.build_html(found, "cv", content, d1_view(), language, 0, ON)
     rendered = renderer.render(html)
     assert rendered.pages == 2, rendered.pages
-    placed = chunk_pages(html, rendered.pdf)
+    placed = chunk_pages(html, rendered.pdf, slug)
     assert {page for _, page in placed} == {0, 1}
-    labels = {"".join(str(v).split()).casefold() for v in templates.labels()[language].values()}
+    shared = templates.labels()[language] | found.labels.get(language, {})
+    labels = {"".join(str(v).split()).casefold() for v in shared.values()}
     titles = {"".join(e.title.split()).casefold() for e in d1_view().employers}
     # a role's title prints with the comma that joins it to the organisation
     seen = 0

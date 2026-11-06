@@ -41,6 +41,7 @@ from tests.documents.test_templates_d19 import (
     contrast,
     top,
 )
+from tests.documents.test_templates_d22 import texts_of
 
 D21 = tuple(sorted(templates.registry()))  # D27: the three
 MM = 72 / 25.4  # points in a millimetre
@@ -295,22 +296,6 @@ def typical(slug: str, full: bool) -> c.CvContent:
     return at_soft_limits(content, template(slug).kinds["cv"].soft_limits) if full else content
 
 
-class Texts(HTMLParser):
-    """The text nodes of a built page's body, in the order of the document."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.texts: list[str] = []
-        self._body = False
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._body = self._body or tag == "body"
-
-    def handle_data(self, data: str) -> None:
-        if self._body and data.strip():
-            self.texts.append("".join(data.split()).casefold())
-
-
 @docker
 @pytest.mark.parametrize("slug", D21)
 @pytest.mark.parametrize("name", ["cv-typical", "cv-soft-limits", "letter-en"])
@@ -328,11 +313,9 @@ def test_the_pdf_text_follows_the_order_of_the_document(
     result = fitted(renderer, found, kind, content, d1_view(), language)
     assert result.fit
     html = templates.build_html(found, kind, content, d1_view(), language, result.step, ON)
-    parser = Texts()
-    parser.feed(html)
     text = pages_text(result.pdf)[0]
     at = 0
-    for chunk in parser.texts:
+    for chunk in texts_of(html, slug):  # the contact lines in the order the template prints them
         place = text.find(chunk, at)
         assert place >= 0, (chunk, text[at : at + 80])
         at = place + len(chunk)

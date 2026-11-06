@@ -118,6 +118,7 @@ REPOSITORY = {
             "content.skills[].items is not printed, or only under another test",
         ),
         ("letter.html.j2", "attribute", "an attribute other than a class name"),
+        ("letter.html.j2", "construct", "the expression Compare"),
         ("letter.html.j2", "literal", "markup cut by a Jinja construct"),
         ("letter.html.j2", "name", "a field that contact[] has not"),
         ("letter.html.j2", "tag", "a tag outside the allowed list"),

@@ -34,6 +34,7 @@ li, p, h3 { overflow-wrap: anywhere; }
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+.name.long { font-size: 2.0em; }
 .headline {
   margin-top: 11.3pt;
   font-size: 1.205em;
@@ -41,7 +42,8 @@ li, p, h3 { overflow-wrap: anywhere; }
   text-transform: uppercase;
 }
 .contact {
-  flex: 0 0 158pt;
+  flex: 0 0 auto;
+  min-width: 158pt;
   display: flex;
   flex-direction: column;
   list-style: none;
