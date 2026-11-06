@@ -577,6 +577,8 @@ def _context(kind: str, full: bool, photo: str) -> dict[str, Any]:
     context = {p: value(p) for p in top}
     if full:
         context["contact"][1]["href"] = None
+    for at, line in enumerate(context.get("contact") or []):
+        line["kind"] = ("email", "phone")[at % 2]  # the class the macro prints (D28)
     context |= {
         "lang": "en",
         "kind": kind,

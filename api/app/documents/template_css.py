@@ -44,9 +44,9 @@ everything is held to allow lists:
 - the density: each property of DENSITY but `--margin` read (the page's margin is always the
   step's), `--body-size` by a `font-size`, `--line-height` by a `line-height`;
 - what a copy of a CV needs (D28), each in its one form: `@page` may set `background` (or
-  `background-color`) to one flat `#rrggbb`; a `font-size` may be in pt from FONT_PT; `order`
-  only on a contact line (a rule whose every selector's subject holds a class of CONTACT_KINDS,
-  the `kind` the macro prints on each line), within -20..20; an icon only as `background-image:
+  `background-color`) to one flat `#rrggbb`; a `font-size` may be in pt from FONT_PT; a contact
+  line holds its `kind` as a class (CONTACT_KINDS, printed by the macro), so `order` (-20..20,
+  as on any box) can put the lines in the original's order; an icon only as `background-image:
   var(--icon-<kind>)`, one of ICONS (custom properties the app sets: templates.icons), on a
   `::before` of a contact line, which then may also take a `width` and a `height` up to ICON_MAX,
   `background-size`, `background-repeat` and `background-position` of ICON_VALUES, and
@@ -903,8 +903,6 @@ def value_problem(
     icon = _icon_rule(selectors) and d.prop in ICON_PROPS
     if not d.prop.startswith("--") and d.prop not in PROPERTIES and not icon:
         return "property", "a property outside the allowed list"
-    if d.prop == "order" and not (selectors and all(map(contact_line, selectors))):
-        return "property", "order: only among the contact lines"
     if not icon and not d.prop.startswith("--") and (wrong := _target_problem(d.prop, targets)):
         return wrong
     if d.important and d.prop in dict(ENFORCED):

@@ -1257,10 +1257,22 @@ FAMILIES = {
     "raleway": "Raleway",
     "inter-tight": "Inter Tight",
     "gantari": "Gantari",
+    # the families CV makers use most (D28)
+    "figtree": "Figtree",
+    "lato": "Lato",
+    "libre-franklin": "Libre Franklin",
+    "merriweather": "Merriweather",
+    "montserrat": "Montserrat",
+    "open-sans": "Open Sans",
+    "poppins": "Poppins",
+    "pt-sans": "PT Sans",
+    "public-sans": "Public Sans",
+    "roboto": "Roboto",
+    "source-sans-3": "Source Sans 3",
 }
 
 
-def test_the_font_library_holds_the_seventeen_families_with_their_licences() -> None:
+def test_the_font_library_holds_the_twenty_eight_families_with_their_licences() -> None:
     library = templates.fonts()
     own = {key: family.name for key, family in library.items() if not family.fallback}
     assert own == FAMILIES
