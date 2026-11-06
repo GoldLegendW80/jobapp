@@ -89,13 +89,17 @@ PLACEHOLDER = "placeholder"
 # The family, in English and French: a square or curly bracket opened on a word that asks for a
 # fact ([ADD: ...], [À AJOUTER], [AJOUTER], [INSERT], [TBD], [TODO], [Your title], [Nom de
 # l'entreprise], [XX], ...), closed or not, case and accents as the writer typed them; and any
+# single word asking for a fact (the list below: [COMPANY], [Name], [DATE: start], ...); and any
 # bracket of two or more words in capitals ([COMPANY NAME], [NOMBRE D'ANNÉES]), which no CV
 # line holds; a bracketed acronym alone ([AWS], [SQL], [UX/UI]) is a fact and stays.
 _ASKING = (
     r"ADD|ADDS|ADDED|INSERT|FILL(?:\s+IN)?|TBD|TBC|TBA|TODO|TO\s+DO|PLACEHOLDER|MISSING|"
-    r"UNKNOWN|YOUR|X{2,}|(?:[AÀ]\s+)?AJOUTER|AJOUT|(?:[AÀ]\s+)?COMPL[EÉ]TER|INS[EÉ]RER|"
+    r"UNKNOWN|YOUR|(?:[AÀ]\s+)?AJOUTER|AJOUT|(?:[AÀ]\s+)?COMPL[EÉ]TER|INS[EÉ]RER|"
     r"[AÀ]\s+(?:D[EÉ]FINIR|PR[EÉ]CISER|CONFIRMER|RENSEIGNER)|PR[EÉ]CISER|MANQUANT|INCONNU|"
-    r"VOTRE|NOM\s+DE|NOMBRE\s+DE"
+    r"VOTRE|NOM\s+DE|NOMBRE\s+DE|"
+    r"COMPANY|(?:FIRST|LAST)\s*NAME|NAME|DATE|E-?MAIL|PHONE|ADDRESS|CITY|POSITION|TITLE|ROLE|JOB|"
+    r"MANAGER|RECRUITER|X{1,3}|ENTREPRISE|SOCI[EÉ]T[EÉ]|NOM|PR[EÉ]NOM|POSTE|VILLE|ADRESSE|"
+    r"T[EÉ]L[EÉ]PHONE"
 )
 _CAPS = r"[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9_/'\u2019.-]*"
 PLACEHOLDER_PATTERN = re.compile(
