@@ -74,6 +74,8 @@ from app.documents import (
     design_capture,
     estimate,
     generate,
+    panel,
+    panel_hold,
     profile_view,
     render_job,
     store,
@@ -111,10 +113,11 @@ MODEL = "claude-opus-5-5"
 MODEL_API_KEY = "claude-sonnet-5-5"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "base.md"
 TOOLS = ("read_profile_section", "get_upload_text", "submit_base")
-MODES = (GenerationMode.base_profile, GenerationMode.base_upload)
+MODES = (GenerationMode.base_profile, GenerationMode.base_upload, GenerationMode.panel)
 DEFAULT_SCRIPTS = {
     GenerationMode.base_profile: "documents_base_valid",
     GenerationMode.base_upload: "documents_base_upload_valid",
+    GenerationMode.panel: "documents_base_panel",
 }
 FIRST_NAME = "My CV"  # the name of the one the app builds on its own
 UPLOADED_NAME = "My uploaded CV"  # an upload whose file name leaves nothing
@@ -135,11 +138,13 @@ class BaseInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     generation_id: uuid.UUID = Field(strict=False)
-    mode: Literal["base_profile", "base_upload"] = "base_profile"
+    mode: Literal["base_profile", "base_upload", "panel"] = "base_profile"
     language: Literal["en", "fr"] = "en"
     limits: dict[str, int | None] = Field(default_factory=dict, max_length=12)
     token_budget: int = Field(ge=0)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
+    # `panel` only: the key of the hiring panel's instructions, held in this process (D29).
+    panel: str | None = Field(default=None, pattern=panel_hold.KEY_PATTERN)
 
 
 def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
@@ -195,6 +200,8 @@ class BaseWriter(definitions.AgentDefinition):
             if shown
             else ""
         )
+        if data.get("mode") == GenerationMode.panel.value:
+            return f"{panel_hold.read(data.get('panel'))}\n\nLanguage: {language}. {limits}".strip()
         if data.get("mode") == GenerationMode.base_upload.value:
             return (
                 "Convert the person's uploaded CV into their base CV: read it with "
@@ -238,12 +245,18 @@ async def _on_final(final: definitions.FinalRun) -> None:
     if final.agent != NAME:
         return
     prepared: uuid.UUID | None = None
+    reviewed: uuid.UUID | None = None
 
     def after_finish(db: Session, generation: DocumentGeneration) -> None:
-        nonlocal prepared
+        nonlocal prepared, reviewed
         if generation.mode is GenerationMode.base_upload:
             intent = design_capture.prepare_after_conversion(db, generation, at=final.clock())
             prepared = intent.id if intent is not None else None
+            # The hiring panel reviews the converted CV against the target roles (D29, item 9).
+            opened = panel.begin(
+                db, generation, at=final.clock(), enabled=final.settings.documents_panel_enabled
+            )
+            reviewed = opened.id if opened is not None else None
 
     taken = _with_fixed(submit.take(final.run_id), take_fixed(final.run_id))
     render = await asyncio.to_thread(
@@ -259,6 +272,8 @@ async def _on_final(final: definitions.FinalRun) -> None:
         await _queue_render(final, render)
     if prepared is not None:
         await design_capture.enqueue(final, prepared)
+    if reviewed is not None:
+        await generate.send_panel(final, reviewed)
 
 
 async def _queue_render(final: definitions.FinalRun, render: tuple[uuid.UUID, int]) -> None:
@@ -349,6 +364,22 @@ def wait_reason(db: Session, user_id: uuid.UUID) -> GenerationWait | None:
     if credentials.get(db, user_id) is None:
         return GenerationWait.credential
     return None
+
+
+def click_wait(db: Session, user_id: uuid.UUID, at: datetime) -> GenerationWait | None:
+    """Why a click's posting generation (Write, an Apply, a Like) cannot start now, None when it
+    can (D29). A person with no base CV and a profile with an employer gets one built from the
+    profile here, for that click (source `profile`, trigger `click`): the CV waits with
+    `base_cv` until it is written, then the letter follows the CV as always. The consent and the
+    credential come first: without them nothing is written, the base CV included."""
+    reason = wait_reason(db, user_id)
+    default = store.default_base(db, user_id)
+    if default is None and not store.base_cvs(db, user_id) and view_of(db, user_id, at).employers:
+        default = build_from_profile(
+            db, user_id, at=at, source=BaseSource.profile, trigger=GenerationTrigger.click
+        ).document
+    building = default is not None and store.open_generation(db, user_id, default.id) is not None
+    return GenerationWait.base_cv if reason is None and building else reason
 
 
 @dataclass(frozen=True)
@@ -574,6 +605,7 @@ def start(
     at: datetime,
     script: str | None = None,
     settings: Settings | None = None,
+    panel: str | None = None,
 ) -> AgentRun:
     """The writer run of a base generation, `queued`, and the generation `running`. The caller
     commits, then `generate.enqueue_run`. Raises agent_runs.ActiveRunsError when the person has
@@ -595,6 +627,8 @@ def start(
         "limits": asdict(template.kinds["cv"].soft_limits),
         "token_budget": generation.token_ceiling,
     }
+    if panel is not None:
+        data["panel"] = panel  # the hiring panel's rebuild (D29): its instructions' key
     chosen = _script(settings, generation.mode, script)
     if chosen is not None:
         data["script"] = chosen

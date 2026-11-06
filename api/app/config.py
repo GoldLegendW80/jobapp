@@ -134,9 +134,8 @@ class Settings(BaseSettings):
     # Automatic generation: runs at once per person, how far back a first base CV reaches, the
     # wait before the one retry, and the defaults of the person's Advanced settings (the fit
     # score threshold and the safety ceiling per day).
-    documents_auto_at_once: int = Field(default=1, ge=1, le=4)
-    documents_auto_lookback_days: int = Field(default=30, ge=1, le=365)
-    documents_auto_retry_after_s: int = Field(default=600, ge=60, le=86_400)
+    # The hiring panel of every CV and letter build and of an upload's conversion (D29).
+    documents_panel_enabled: bool = True
     documents_min_fit_default: int = Field(default=70, ge=0, le=100)
     documents_daily_ceiling_default: int = Field(default=100, ge=1, le=500)
     # Base CVs per person, and the passes of a design capture (one repair, one fidelity).
@@ -156,7 +155,7 @@ class Settings(BaseSettings):
     # submissions per day (no fixed daily number), the default fit threshold offered when the
     # person turns it on, one application per company in this many days, the rehearsals first.
     apply_full_auto_safety_ceiling: int = Field(default=30, ge=1, le=100)
-    apply_full_auto_min_fit_default: int = Field(default=80, ge=0, le=100)
+    apply_full_auto_min_fit_default: int = Field(default=70, ge=0, le=100)
     apply_full_auto_company_days: int = Field(default=30, ge=1, le=365)
     apply_rehearsals: int = Field(default=3, ge=1, le=20)
     # The pace per ATS host across all people (the Jetson's one address), and LinkedIn's own.

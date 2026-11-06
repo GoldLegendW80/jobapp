@@ -1,40 +1,27 @@
-""" "Write now", "Make it fit" and the spend of the automatic generation (tasks D10 and D18;
-SPEC-documents.md, "API", "Automatic generation", "Templates", "The spend"). Included by
-`routers.py` before D6's `/api/documents/{document_id}`.
+"""The clicks that write a posting's documents, "Write" and "Make it fit" (tasks D10, D18 and
+D29; SPEC-documents.md, "API", "Writing on a click", "Templates"). Included by `routers.py`
+before D6's `/api/documents/{document_id}`. Nothing in the app writes a CV or a letter without
+one of these clicks, an Apply or a Like (owner, 2026-11-06).
 
 - `POST /api/jobs/{id}/documents/write {kinds, base_document_id?}`: a click. It writes the
-  posting's CV, its letter, or both, whatever the fit, the threshold or today's safety ceiling.
-  An automatic generation of the same document that has not started gives way to it (cancelled,
-  never counted). Started at once when the consent and a credential are there, else `waiting`
-  with `consent` or `credential` (nothing spends without both; the tick starts it once they
-  exist). With both kinds, the CV is written now and the letter follows it once the new CV is
-  final (D8's chain, `generate.start_letter`), even when the letter has a version: it is never
-  written from the old CV. An automatic letter that has not started gives way the same.
-  `base_document_id` names another of the person's base CVs to write the CV from. 202 with the
-  generations; 404 for another person's posting or base CV; 409 while one is running.
+  posting's CV, its letter, or both, whatever the fit. A generation of trigger `auto` of the
+  same document left from before D29 that has not started gives way to it (cancelled). Started
+  at once when the consent and a credential are there, else `waiting` with `consent` or
+  `credential` (nothing spends without both; the tick starts it once they exist). A person with
+  no base CV gets one built from the profile first (`writer_base.click_wait`): the CV waits with
+  `base_cv` and the tick starts it once the base CV is written. With both kinds, the CV is
+  written now and the letter follows it once the new CV and its hiring panel are done (D8's
+  chain, `generate.start_letter`, D29's `panel`), even when the letter has a version: it is
+  never written from the old CV. `base_document_id` names another of the person's base CVs to
+  write the CV from. 202 with the generations; 404 for another person's posting or base CV;
+  409 while one is running.
 - `POST /api/documents/{id}/fit`: "Make it fit", a click. The `shorten` generation of a posting's
   CV whose latest version overflows, whoever made that version (a template switch included),
-  started at once (`generate.make_fit`). It needs what the automatic pass needs: the consent, a
-  credential, a write of the CV to draw on and a known ceiling left; each missing one is a 409
-  with the sentence of `FIT_REFUSED`, nothing created. A frozen latest version stays as it is:
-  the shorter one is a new version on top. 202 with the generation; 404 for another person's
-  document; 409 while one is open; 422 for a letter or a base CV.
-- `GET /api/documents/spend?min_fit=`: postings written today against the safety ceiling (in the
-  time zone of `sweep_schedule`), postings waiting, the postings of the last
-  `DOCUMENTS_AUTO_LOOKBACK_DAYS` (30) days at or
-  above the threshold (the one asked, else the person's) and how many of them have no CV yet
-  with the estimate of writing them, of those the ones under the person's own threshold (what
-  lowering it to the one asked would add, shown before the person saves it) with their estimate,
-  and the tokens and cost of the module's runs today and over the last 30 days, from
-  `agent_runs` joined through `document_generations.run_id`.
-- `POST /api/documents/spend/skills {skills}`: what saving this draft of the skills section would
-  start (audit chapter 2, owner answer 4: the cost said before saving, since the postings are
-  rescored by themselves after the save). The draft scores the person's open postings of the
-  window (`jobs.service.draft_fits`, storing nothing); the postings it brings to the threshold
-  that are not eligible now and have no CV yet are counted as the spend route counts `newly`,
-  with the same estimate. `writes` says whether automatic writing would start by itself
-  (automatic generation on, a consent and a credential). 422 for a draft the profile's Save
-  would refuse.
+  started at once (`generate.make_fit`). It needs the consent, a credential, a write of the CV
+  to draw on and a known ceiling left; each missing one is a 409 with the sentence of
+  `FIT_REFUSED`, nothing created. A frozen latest version stays as it is: the shorter one is a
+  new version on top. 202 with the generation; 404 for another person's document; 409 while one
+  is open; 422 for a letter or a base CV.
 Every route is the signed in person's. Every answer is `Cache-Control: private, no-store`.
 Logs carry ids and codes, never a text.
 """
@@ -43,23 +30,19 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime, time, timedelta
-from decimal import Decimal
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 import anyio.from_thread
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from fastapi.exceptions import RequestValidationError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app import queue as queues
 from app.agents import runs as agent_runs
-from app.agents.models import AgentRun
 from app.db import get_session
-from app.documents import consent, eligibility, estimate, generate, store, tick, writer_base
-from app.documents.base_router import EstimateOut, _estimate_out
+from app.documents import estimate, generate, store, writer_base
 from app.documents.models import (
     Document,
     DocumentGeneration,
@@ -72,10 +55,6 @@ from app.documents.models import (
 )
 from app.identity import deps
 from app.identity.models import User
-from app.ingestion import pricing
-from app.jobs import service as jobs_service
-from app.jobs import sweep
-from app.profile.schemas import SkillsSection
 
 logger = logging.getLogger("app.documents")
 
@@ -189,13 +168,14 @@ def write_now(
     at = deps.clock(request)
     kinds = [Kind(kind) for kind in dict.fromkeys(body.kinds)]
     made: list[tuple[Kind, DocumentGeneration]] = []
-    reason = writer_base.wait_reason(db, user.id)
     runs: list[uuid.UUID] = []
     both = Kind.cv in kinds and Kind.letter in kinds
     try:
         # Lock 2 before lock 3 (store.py), as a render storing this CV and a move to applied.
         if store.lock_posting(db, user.id, job_id) is None:
             raise _error(status.HTTP_404_NOT_FOUND, POSTING_NOT_FOUND)
+        # No base CV yet: one is built from the profile first, and the CV waits for it (D29).
+        reason = writer_base.click_wait(db, user.id, at)
         cv_base = body.base_document_id
         for kind in kinds:
             document = store.get_or_create(
@@ -246,7 +226,7 @@ def write_now(
                 try:
                     runs.append(generate.start(db, generation, at=at, script=script).id)
                 except agent_runs.ActiveRunsError:
-                    break  # stays queued: the tick starts it before anything automatic
+                    break  # stays queued: the tick starts it
         out = WriteOut(
             generations=[
                 WrittenOut(id=g.id, kind=k, status=g.status, wait_reason=g.wait_reason)
@@ -330,194 +310,3 @@ def make_it_fit(document_id: uuid.UUID, user: CurrentUser, request: Request, db:
     except queues.QueueUnavailableError:
         logger.warning("documents.fit.run_not_queued", extra={"run_id": str(run.id)})
     return out
-
-
-# --- the spend ----------------------------------------------------------------------------------
-
-
-class TokensSpent(BaseModel):
-    input: int
-    output: int
-    cost_usd: Decimal  # a cost on an API key, an estimate at API prices on a subscription
-
-
-class SpendOut(BaseModel):
-    day: str  # today, in the time zone of the sweep schedule (ISO date)
-    auto: bool
-    min_fit: int
-    daily_ceiling: int
-    written_today: int  # postings whose automatic CV started today
-    waiting: int  # postings with an automatic generation waiting
-    postings_30_days: int  # found in the last 30 days at or above `min_fit`
-    to_write: int  # of those, the eligible ones whose CV has no version yet
-    to_write_estimate: EstimateOut
-    newly: int  # of `to_write`, those under the person's own threshold
-    newly_estimate: EstimateOut
-    priced: bool  # an API key: the costs are costs, else estimates at API prices
-    cost_note: str
-    today: TokensSpent
-    last_30_days: TokensSpent
-
-
-def _spent(db: Session, user_id: uuid.UUID, since: datetime) -> TokensSpent:
-    row = db.execute(
-        sa.select(
-            sa.func.coalesce(sa.func.sum(AgentRun.input_tokens), 0),
-            sa.func.coalesce(sa.func.sum(AgentRun.output_tokens), 0),
-            sa.func.coalesce(sa.func.sum(AgentRun.cost_usd), 0),
-        )
-        .select_from(DocumentGeneration)
-        .join(
-            AgentRun,
-            sa.and_(
-                AgentRun.id == DocumentGeneration.run_id,
-                AgentRun.user_id == DocumentGeneration.user_id,
-            ),
-        )
-        .where(DocumentGeneration.user_id == user_id, AgentRun.created_at >= since)
-    ).one()
-    return TokensSpent(input=int(row[0]), output=int(row[1]), cost_usd=Decimal(row[2]))
-
-
-def _waiting(db: Session, user_id: uuid.UUID) -> int:
-    return int(
-        db.scalar(
-            sa.select(sa.func.count(sa.distinct(Document.posting_id)))
-            .select_from(DocumentGeneration)
-            .join(Document, Document.id == DocumentGeneration.document_id)
-            .where(
-                DocumentGeneration.user_id == user_id,
-                DocumentGeneration.trigger == GenerationTrigger.auto,
-                DocumentGeneration.status == GenerationStatus.waiting,
-            )
-        )
-        or 0
-    )
-
-
-@router.get("/api/documents/spend", response_model=SpendOut)
-def spend(
-    user: CurrentUser,
-    request: Request,
-    db: Db,
-    min_fit: Annotated[int | None, Query(ge=0, le=100)] = None,
-) -> SpendOut:
-    at = deps.clock(request)
-    try:
-        search = sweep.load_search(db, user.id)
-    except sweep.InvalidSearchError:
-        search = None
-    setting = tick.setting_of(search)
-    timezone = search.sweep_schedule.timezone if search is not None else None
-    today = eligibility.ceiling_day(at, timezone)
-    threshold = setting.min_fit if min_fit is None else min_fit
-    asked = eligibility.Setting(True, threshold, setting.daily_ceiling)
-    lookback = request.app.state.settings.documents_auto_lookback_days
-    found_day = eligibility.found_day(at)
-    candidates = tick.eligible(db, user.id, asked, search, found_day, lookback)
-    docs = tick.posting_docs(db, user.id)
-    unwritten = [
-        found for found in candidates if docs.ids.get((found.id, Kind.cv)) not in docs.written
-    ]
-    to_write = len(unwritten)
-    newly = sum(1 for found in unwritten if found.fit is not None and found.fit < setting.min_fit)
-    figures = consent.figures(db, user.id, found_day)
-    each = figures.posting
-    zone_start = datetime.combine(today, time(), tzinfo=eligibility.zone(timezone))
-    return SpendOut(
-        day=today.isoformat(),
-        auto=setting.auto,
-        min_fit=threshold,
-        daily_ceiling=setting.daily_ceiling,
-        written_today=tick.started_today(db, user.id, today),
-        waiting=_waiting(db, user.id),
-        postings_30_days=consent.postings_at_or_above(db, user.id, threshold, found_day, lookback),
-        to_write=to_write,
-        to_write_estimate=_estimate_out(
-            estimate.times(each, to_write), figures.model, figures.priced
-        ),
-        newly=newly,
-        newly_estimate=_estimate_out(estimate.times(each, newly), figures.model, figures.priced),
-        priced=figures.priced,
-        cost_note=pricing.ESTIMATE_NOTE if figures.priced else pricing.QUOTA_NOTE,
-        today=_spent(db, user.id, zone_start.astimezone(UTC)),
-        last_30_days=_spent(
-            db, user.id, (zone_start - timedelta(days=lookback - 1)).astimezone(UTC)
-        ),
-    )
-
-
-class SkillsDraftIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    # Free JSON validated as the profile's Save validates the section (`_draft_skills`), as
-    # PUT /api/profile/{section} takes it: its real bound is the 1 MiB default class
-    # (tests/identity/test_body_limit_api.py, UNBOUNDED_SCHEMAS).
-    skills: dict[str, Any]
-
-
-def _draft_skills(raw: dict[str, Any]) -> SkillsSection:
-    """The draft as a skills section, or the app's 422 for what Save would refuse."""
-    try:
-        return SkillsSection.model_validate(raw)
-    except ValidationError as invalid:
-        raise RequestValidationError(
-            [
-                {**error, "loc": ("body", "skills", *error["loc"])}
-                for error in invalid.errors(
-                    include_input=False, include_url=False, include_context=False
-                )
-            ]
-        ) from None
-
-
-class SkillsSpendOut(BaseModel):
-    auto: bool
-    min_fit: int
-    writes: bool  # automatic writing starts by itself: on, with a consent and a credential
-    newly: int  # postings the draft brings to the threshold, eligible then, with no CV yet
-    newly_estimate: EstimateOut
-    priced: bool
-    cost_note: str
-
-
-@router.post("/api/documents/spend/skills", response_model=SkillsSpendOut)
-def skills_spend(
-    body: SkillsDraftIn, user: CurrentUser, request: Request, db: Db
-) -> SkillsSpendOut:
-    skills = _draft_skills(body.skills)
-    at = deps.clock(request)
-    try:
-        search = sweep.load_search(db, user.id)
-    except sweep.InvalidSearchError:
-        search = None
-    setting = tick.setting_of(search)
-    lookback = request.app.state.settings.documents_auto_lookback_days
-    found_day = eligibility.found_day(at)
-    drafted = jobs_service.draft_fits(
-        db,
-        user.id,
-        skills,
-        search,
-        eligibility.OPEN_STATUSES,
-        eligibility.since(found_day, lookback),
-    )
-    today = {found.id for found in tick.eligible(db, user.id, setting, search, found_day, lookback)}
-    docs = tick.posting_docs(db, user.id)
-    newly = sum(
-        1
-        for found in tick.eligible(db, user.id, setting, search, found_day, lookback, fits=drafted)
-        if found.id not in today and docs.ids.get((found.id, Kind.cv)) not in docs.written
-    )
-    figures = consent.figures(db, user.id, found_day)
-    return SkillsSpendOut(
-        auto=setting.auto,
-        min_fit=setting.min_fit,
-        writes=setting.auto and writer_base.wait_reason(db, user.id) is None,
-        newly=newly,
-        newly_estimate=_estimate_out(
-            estimate.times(figures.posting, newly), figures.model, figures.priced
-        ),
-        priced=figures.priced,
-        cost_note=pricing.ESTIMATE_NOTE if figures.priced else pricing.QUOTA_NOTE,
-    )

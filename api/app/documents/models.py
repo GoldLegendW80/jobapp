@@ -92,6 +92,7 @@ class Origin(enum.StrEnum):
     template = "template"
     uploaded = "uploaded"
     legacy = "legacy"
+    panel = "panel"  # the hiring panel's rebuild (D29)
 
 
 class FitResult(enum.StrEnum):
@@ -114,6 +115,7 @@ class GenerationMode(enum.StrEnum):
     shorten = "shorten"
     template_capture = "template_capture"
     template_fix = "template_fix"
+    panel = "panel"  # the hiring panel's rebuild of a written version (D29)
 
 
 class GenerationTrigger(enum.StrEnum):
@@ -489,3 +491,58 @@ class DocumentUserTemplate(Base):
     base_document_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
     created_at: Mapped[datetime] = _now()
     updated_at: Mapped[datetime] = _now()
+
+
+class PanelStatus(enum.StrEnum):
+    running = "running"
+    done = "done"
+    failed = "failed"
+
+
+class DocumentPanel(Base):
+    """One run of the hiring panel over one version of a document (task D29, migration 0036):
+    the seven reviews, the merged mistakes, the screen before and after, the questions, and the
+    agent runs it spent (`run_ids`, so the spend counts them). Structured answers only: the
+    quoted lines are the document's own words, kept here and never logged."""
+
+    __tablename__ = "document_panels"
+    __table_args__ = (
+        _owned_by_document("document_panels"),
+        sa.CheckConstraint("reviewed_version >= 1", name="reviewed_version_positive"),
+        sa.CheckConstraint("status IN ('running', 'done', 'failed')", name="status_known"),
+        sa.Index("ix_document_panels_document_id", "document_id", "created_at"),
+        sa.Index("ix_document_panels_user_id_status", "user_id", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = _uuid()
+    document_id: Mapped[uuid.UUID] = _uuid()
+    kind: Mapped[str] = mapped_column(sa.Text, nullable=False)  # cv, letter or base
+    status: Mapped[str] = mapped_column(sa.Text, nullable=False, default=PanelStatus.running)
+    source_run_id: Mapped[uuid.UUID | None] = _set_null_fk("agent_runs.id")
+    reviewed_version: Mapped[int] = mapped_column(sa.Integer, nullable=False)
+    rebuilt_version: Mapped[int | None] = mapped_column(sa.Integer)
+    generation_id: Mapped[uuid.UUID | None] = _uuid(nullable=True)
+    reviews: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
+    mistakes: Mapped[list[Any]] = mapped_column(
+        pg.JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    questions: Mapped[list[Any]] = mapped_column(
+        pg.JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
+    )
+    closest: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
+    screen_before: Mapped[str | None] = mapped_column(sa.Text)
+    screen_after: Mapped[str | None] = mapped_column(sa.Text)
+    failed: Mapped[list[str]] = mapped_column(
+        pg.ARRAY(sa.Text), nullable=False, default=list, server_default=sa.text("'{}'::text[]")
+    )
+    run_ids: Mapped[list[uuid.UUID]] = mapped_column(
+        pg.ARRAY(pg.UUID(as_uuid=True)),
+        nullable=False,
+        default=list,
+        server_default=sa.text("'{}'::uuid[]"),
+    )
+    created_at: Mapped[datetime] = _now()
+    finished_at: Mapped[datetime | None] = _later()

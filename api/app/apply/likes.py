@@ -167,7 +167,8 @@ def ask_documents(
     stored: dict[str, object] = dict(estimate.as_json(figures))
     if len(kinds) == 2:
         stored[generate.LETTER_FOLLOWS] = True
-    reason = writer_base.wait_reason(db, user_id)
+    # No base CV yet: one is built from the profile first, and the CV waits for it (D29).
+    reason = writer_base.click_wait(db, user_id, at)
     generate.create(
         db,
         first,

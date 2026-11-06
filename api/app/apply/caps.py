@@ -296,10 +296,9 @@ def settings_of(db: Session, user_id: uuid.UUID) -> Values:
         search = sweep.load_search(db, user_id)
     except sweep.InvalidSearchError:
         search = None
-    write_from = search.documents.min_fit if search is not None else None
-    fit_default = (
-        write_from if write_from is not None else int(_setting("apply_full_auto_min_fit_default"))
-    )
+    # Full auto's own default (70, documents D29): no longer the documents threshold, since no
+    # document is written without a click; `search.documents` stays readable and unread here.
+    fit_default = int(_setting("apply_full_auto_min_fit_default"))
 
     def stored(value: int | None, name: str) -> int:
         return value if value is not None else int(_setting(name))
@@ -316,7 +315,7 @@ def settings_of(db: Session, user_id: uuid.UUID) -> Values:
         rehearsals_done=row.rehearsals_done if row else 0,
         timezone=(search.sweep_schedule if search else SweepSchedule()).timezone,
         show_postings_from=search.min_fit if search is not None else None,
-        write_documents_from=write_from,
+        write_documents_from=None,  # documents are written on a click only (D29)
         review_before_send=bool(row and row.review_before_send),
     )
 

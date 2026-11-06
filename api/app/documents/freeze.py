@@ -49,11 +49,13 @@ from sqlalchemy.orm import Session, undefer
 from app.documents import store
 from app.documents.models import (
     Document,
+    DocumentPanel,
     DocumentVersion,
     FitResult,
     FreezeReason,
     GenerationStatus,
     Kind,
+    PanelStatus,
     RenderState,
     Scope,
 )
@@ -158,6 +160,20 @@ def _coming(db: Session, user_id: uuid.UUID, document: Document) -> str | None:
     return None
 
 
+def _panel_running(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
+    return bool(
+        db.scalar(
+            sa.select(sa.func.count())
+            .select_from(DocumentPanel)
+            .where(
+                DocumentPanel.user_id == user_id,
+                DocumentPanel.document_id == document_id,
+                DocumentPanel.status == PanelStatus.running.value,
+            )
+        )
+    )
+
+
 def current(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> Current:
     """The posting's CV and letter as the apply module sends them. Reads the person's rows
     only: a posting of another person has no documents here. Reads and writes nothing else."""
@@ -165,9 +181,16 @@ def current(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> Current:
     for document in store.posting_documents(db, user_id, posting_id):
         versions = store.versions(db, user_id, document.id)
         picked = choose(versions)
+        coming = _coming(db, user_id, document)
+        if coming is None and _panel_running(db, user_id, document.id):
+            # The hiring panel is rebuilding the first version (D29): the apply module waits
+            # for it as for a writing, unless the person approved a version meanwhile.
+            coming = WRITING
+            if picked is not None and picked.approved_at is None:
+                picked = None
         slots[document.kind] = Slot(
             version=_sent(picked, document.kind) if picked is not None else None,
-            coming=_coming(db, user_id, document),
+            coming=coming,
             awaits_render=_awaits_render(document, versions),
         )
     return Current(cv=slots[Kind.cv], letter=slots[Kind.letter])

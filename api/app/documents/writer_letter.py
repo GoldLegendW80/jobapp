@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import definitions
 from app.agents.models import AgentRun, CredentialKind
-from app.documents import writer_cv
+from app.documents import panel_hold, writer_cv
 from app.documents.models import Kind
 
 if importlib.util.find_spec("claude_agent_sdk") is not None:
@@ -39,7 +39,14 @@ if importlib.util.find_spec("claude_agent_sdk") is not None:
 
 NAME = "documents_letter"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "letter.md"
-TOOLS = ("get_job", "read_profile_section", "get_base_cv", "get_document", "submit_letter")
+TOOLS = (
+    "get_job",
+    "get_job_brief",
+    "read_profile_section",
+    "get_base_cv",
+    "get_document",
+    "submit_letter",
+)
 
 
 class LetterInput(BaseModel):
@@ -48,11 +55,13 @@ class LetterInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     generation_id: uuid.UUID = Field(strict=False)
-    mode: Literal["posting"] = "posting"
+    mode: Literal["posting", "panel"] = "posting"
     language: Literal["en", "fr"] = "en"
     tone: Literal["plain", "formal", "warm"] = "plain"
     # The template's soft limits, in characters (rules.SoftLimits); null: no counter.
     limits: dict[str, int | None] = Field(default_factory=dict, max_length=12)
+    # `panel` only: the key of the hiring panel's instructions, held in this process (D29).
+    panel: str | None = Field(default=None, pattern=panel_hold.KEY_PATTERN)
     token_budget: int = Field(ge=0)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
 
@@ -70,11 +79,18 @@ class LetterWriter(definitions.AgentDefinition):
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         language = writer_cv.LANGUAGES.get(str(data.get("language")), "English")
         limits = writer_cv.limits_line(data.get("limits") or {})
-        text = (
-            "Write the cover letter for this posting, from the person's profile and base CV, "
-            "and from the CV already written for it when there is one. "
-            f"Language: {language}. {writer_cv.tone_line(data)} {limits}"
-        )
+        if data.get("mode") == "panel":
+            text = (
+                f"{panel_hold.read(data.get('panel'))}\n\n"
+                f"Language: {language}. {writer_cv.tone_line(data)} {limits}"
+            )
+        else:
+            text = (
+                "Write the cover letter for this posting, from the person's profile and base "
+                "CV, and from the CV already written for it when there is one. Read the job "
+                "brief with get_job_brief first: the posting, the company and the offer. "
+                f"Language: {language}. {writer_cv.tone_line(data)} {limits}"
+            )
         if job_id is not None:
             text += f"\n\nJob id: {job_id}"
         return text.strip()

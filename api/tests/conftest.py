@@ -103,6 +103,9 @@ def free_port() -> int:
 
 
 def make_settings(database_url: str, **overrides: object) -> Settings:
+    # The hiring panel (documents D29) is off unless a test asks for it: the writers' chain tests
+    # follow a CV straight to its letter; tests/documents/test_panel*.py turn it on.
+    overrides.setdefault("documents_panel_enabled", False)
     return Settings(database_url=database_url, app_env="test", **overrides)  # type: ignore[arg-type]
 
 
