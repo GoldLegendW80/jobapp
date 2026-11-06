@@ -41,7 +41,16 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * - the review box ticked: Apply stops at the filled Greenhouse form with "Approve and submit",
  *   and the fake holds no submission for that form (Review first is unchanged);
  * - the second person's profile lacks the notice period: the agent asks, the job page shows the
- *   question and its box, the answer is typed and remembered, the agent goes on and sends.
+ *   question and its box, the answer is typed and remembered, the agent goes on and sends;
+ * - the review box unticked, a posting with no CV nor letter, Apply on its Jobs list row (owner,
+ *   2026-11-05: "Apply with no documents writes them and then sends; Apply also appears on Jobs
+ *   list rows"): one click from the list, the CV and letter written by the documents pipeline's
+ *   default fake streams, then the agent fills the form and sends it, exactly once;
+ * - Apply to the selected postings (owner, 2026-11-06: "in the job list and map, i want being
+ *   able with the multi select to apply at all selected"): three postings ticked on the Jobs
+ *   list, one confirmation that names the two it applies to and leaves out the third, marked as
+ *   applied, with its reason; one click on "Apply to 2", the selection cleared, and the agent
+ *   sends each of the two exactly once, the third never.
  *
  * Locally, as apply-all.config.ts says (the fake forms compose file, AGENTS_FAKE_BACKEND=1 on
  * the worker, the stack's browser up with COMPOSE_PROFILES=browser), then:
@@ -58,7 +67,9 @@ const STACK_FORMS = "http://atsforms:8080";
 const KEY = `sk-ant-api03-e2egood${"Oc738".repeat(16)}Rn42`;
 const FILL_MS = 420_000;
 const SEND_MS = 600_000;
-/** The posting the recorded stream opens, and the answer it types once it was given. */
+/** The posting the recorded stream opens, and the answer it types once it was given. The
+ * stream opens this address whatever the posting's: a query (`?job=`) makes another form address
+ * for each posting of one person, so the duplicate rules see different forms. */
 const AGENT_SITE = `${STACK_FORMS}/forms/a19/posting.html`;
 const QUESTION = "What is your notice period?";
 const ANSWER = "Six weeks";
@@ -77,11 +88,15 @@ let second: Who;
 /** Everyone `ready` made, for the cleanup even when a later step failed. */
 const people: Who[] = [];
 
-/** A posting of `who` at `url`, with its CV and letter written. */
+/** A posting of `who` at `url`, with its CV and letter written unless `documents` is false.
+ * Under the threshold of 70 (`fit`), the documents tick writes nothing for it by itself, and one
+ * click Apply never reads the threshold. */
 async function postingOn(
   who: Who,
   url: string,
   suffix: string,
+  documents = true,
+  fit = 90,
 ): Promise<string> {
   const { page, person } = who;
   const job = await addPosting(page.request, {
@@ -92,9 +107,10 @@ async function postingOn(
   const { updated_at } = (await read.json()) as { updated_at: string };
   const patched = await page.request.patch(`/api/jobs/${job}`, {
     headers: CSRF,
-    data: { url, fit: 90, updated_at },
+    data: { url, fit, updated_at },
   });
   expect(patched.status()).toBe(200);
+  if (!documents) return job;
   const written = await page.request.post(`/api/jobs/${job}/documents/write`, {
     headers: CSRF,
     data: { kinds: ["cv", "letter"], script: "journey" },
@@ -278,6 +294,132 @@ test("the profile lacks an answer: the job page asks, the answer is typed, the a
   expect(await agentSent()).toHaveLength(2);
   const bank = await page.request.get("/api/apply/answer-bank");
   expect(JSON.stringify(await bank.json())).toContain(ANSWER);
+});
+
+test("box unticked, no documents: Apply on the Jobs list row writes them, then the agent sends", async () => {
+  const { page, person } = first;
+  await setReviewBeforeSend(page.request, false);
+  const sent = (await agentSent()).length;
+  const job = await postingOn(
+    first,
+    `${AGENT_SITE}?job=list`,
+    ", Simulation",
+    false,
+    40,
+  );
+  const title = person.posting.title + ", Simulation";
+  await page.goto("/jobs");
+  await page
+    .getByRole("button", {
+      name: `Apply to ${title} at ${person.posting.company}`,
+    })
+    .click();
+  // One click, still on the list: the row links to the application under way.
+  await expect(
+    page.getByRole("link", {
+      name: `Applying: the application to ${title} at ${person.posting.company}`,
+    }),
+  ).toBeVisible({ timeout: 30_000 });
+  const started = await latest(first, job);
+  expect(started.mode).toBe("direct");
+  const detail = await page.request.get(`/api/applications/${started.id}`);
+  const { events } = (await detail.json()) as {
+    events: { kind: string; data: Record<string, unknown> }[];
+  };
+  expect(events.find((one) => one.kind === "documents_asked")?.data).toEqual({
+    kinds: ["cv", "letter"],
+  });
+
+  await page.goto(`/jobs/${job}`);
+  const section = page.getByRole("region", { name: "Apply", exact: true });
+  await sentByTheAgent(first, job, section);
+  await waitForPostingDocuments(page.request, job);
+  expect(await agentSent()).toHaveLength(sent + 1);
+  await expect(section).not.toContainText(/[\u2013\u2014]| - /);
+});
+
+test("Apply to the selected postings: one confirmation, each sent once, one left out with its reason", async () => {
+  const { page, person } = first;
+  await setReviewBeforeSend(page.request, false);
+  const sent = (await agentSent()).length;
+  const suffixes = [", Bulk One", ", Bulk Two", ", Bulk Done"] as const;
+  const jobs = [
+    await postingOn(first, `${AGENT_SITE}?job=bulk1`, suffixes[0]),
+    await postingOn(first, `${AGENT_SITE}?job=bulk2`, suffixes[1]),
+  ];
+  const done = await postingOn(
+    first,
+    `${AGENT_SITE}?job=bulk3`,
+    suffixes[2],
+    false,
+    40,
+  );
+  // The third is marked as applied by hand: its own Apply would refuse it.
+  const read = await page.request.get(`/api/jobs/${done}`);
+  const { updated_at } = (await read.json()) as { updated_at: string };
+  const marked = await page.request.patch(`/api/jobs/${done}`, {
+    headers: CSRF,
+    data: { status: "applied", updated_at },
+  });
+  expect(marked.status()).toBe(200);
+  const titles = suffixes.map((suffix) => person.posting.title + suffix);
+  const company = person.posting.company;
+
+  await page.goto("/jobs");
+  for (const title of titles)
+    await page
+      .getByRole("checkbox", { name: `Select ${title} at ${company}` })
+      .check();
+  const bar = page.getByRole("region", { name: "Bulk actions" });
+  await expect(bar).toContainText("3 postings selected");
+  await bar.getByRole("button", { name: "Apply", exact: true }).click();
+  const dialog = page.getByRole("alertdialog", {
+    name: "Apply to 2 postings?",
+  });
+  await expect(dialog).toContainText(
+    "The assistant fills each form and sends it. Your click approves exactly the postings listed here.",
+  );
+  const listed = dialog.getByRole("list", { name: "Postings to apply to" });
+  await expect(listed.getByRole("listitem")).toHaveCount(2);
+  for (const title of titles.slice(0, 2))
+    await expect(listed).toContainText(
+      `${company}, ${title}CV and letter ready.`,
+    );
+  const left = dialog.getByRole("list", { name: "Not applied to (1)" });
+  await expect(left).toContainText(
+    `${company}, ${titles[2]}This posting is marked as applied.`,
+  );
+  await expect(dialog).not.toContainText(/[\u2013\u2014]| - /);
+  await dialog.getByRole("button", { name: "Apply to 2" }).click();
+
+  const summary = page.getByRole("alertdialog", {
+    name: "Applying to 2 postings",
+  });
+  await expect(summary.getByRole("status")).toContainText(
+    "Applying to 2 postings.",
+  );
+  await expect(
+    summary.getByRole("link", { name: "Open Applications" }),
+  ).toBeVisible();
+  await summary.getByRole("button", { name: "Close" }).click();
+  // The selection is cleared, and the rows show the applications under way.
+  await expect(bar).toHaveCount(0);
+  for (const title of titles.slice(0, 2))
+    await expect(
+      page.getByRole("link", {
+        name: `Applying: the application to ${title} at ${company}`,
+      }),
+    ).toBeVisible({ timeout: 30_000 });
+
+  // The fills go one after the other: each is sent by the agent, exactly once.
+  for (const job of jobs)
+    await expect
+      .poll(async () => (await latest(first, job)).state, {
+        timeout: 2 * (FILL_MS + SEND_MS),
+      })
+      .toBe("submitted");
+  expect(await agentSent()).toHaveLength(sent + 2);
+  expect(await latest(first, done)).toMatchObject({ state: "absent" });
 });
 
 test("no page error was logged", () => {

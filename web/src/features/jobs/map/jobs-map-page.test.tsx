@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
 import { fakeJobDetail, fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
+import { phoneScreen } from "@/test/media";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -518,5 +519,133 @@ describe("view tabs", () => {
     await user.click(within(mapViews).getByRole("link", { name: "List" }));
     await screen.findByRole("heading", { level: 1, name: "Jobs" });
     expect(app.location()).toBe("/jobs?status=found");
+  });
+});
+
+describe("the map's selection", () => {
+  const place = (name: string) =>
+    within(
+      screen.getByRole("list", { name: "Places, most postings first" }),
+    ).getByRole("button", { name: new RegExp(`^${name}: `) });
+  const bar = () => screen.getByRole("region", { name: "Bulk actions" });
+
+  /** The confirmation's read: every posting asked is one to apply to. */
+  function fakePreview() {
+    const asked: string[][] = [];
+    server.use(
+      http.post("*/api/apply/bulk/preview", async ({ request }) => {
+        const body = (await request.json()) as { posting_ids: string[] };
+        asked.push(body.posting_ids);
+        return HttpResponse.json({
+          review_before_send: false,
+          limit: 25,
+          items: body.posting_ids.map((one) => ({
+            posting_id: one,
+            company: MAP.jobs[one]?.company ?? null,
+            title: MAP.jobs[one]?.title ?? null,
+            documents: [],
+            estimate: null,
+            email: false,
+            seen: "d".repeat(64),
+          })),
+          left_out: [],
+          beyond: [],
+          estimate: null,
+          cost_note: "",
+        });
+      }),
+    );
+    return asked;
+  }
+
+  it("ticks a place's postings or all of a place, keeps them from place to place, and the bar applies to them", async () => {
+    fakePlaces();
+    const asked = fakePreview();
+    const user = userEvent.setup();
+    await openMap();
+    expect(screen.queryByRole("region", { name: "Bulk actions" })).toBeNull();
+    await user.click(place("Paris"));
+    const paris = screen.getByRole("list", { name: "Postings in Paris" });
+    // Each posting keeps its link to its page beside its box.
+    expect(
+      within(paris).getByRole("link", { name: /^Applied AI Engineer/ }),
+    ).toHaveAttribute("href", `/jobs/${id(1)}`);
+    await user.click(
+      within(paris).getByRole("checkbox", {
+        name: "Select Applied AI Engineer at Mistral AI",
+      }),
+    );
+    expect(within(bar()).getByText("1 posting selected")).toBeVisible();
+    const all = screen.getByRole("checkbox", {
+      name: "Select all of this place (2)",
+    });
+    expect(all).toBePartiallyChecked();
+    await user.click(all);
+    expect(all).toBeChecked();
+    expect(within(bar()).getByText("2 postings selected")).toBeVisible();
+    // Another place adds to the selection.
+    await user.click(screen.getByRole("button", { name: "All places" }));
+    await user.click(place("London"));
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Select Solutions Engineer at Anthropic",
+      }),
+    );
+    expect(within(bar()).getByText("3 postings selected")).toBeVisible();
+    // The Jobs list's bar: its Apply names the map's selection.
+    for (const name of ["Like", "Add note"])
+      expect(within(bar()).getByRole("button", { name })).toBeEnabled();
+    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Apply to 3 postings?",
+    });
+    expect(asked).toEqual([[id(1), id(2), id(3)]]);
+    expect(dialog).toHaveTextContent("Anthropic, Solutions Engineer");
+  });
+
+  it("unticks all of a place at once, and Clear empties the selection", async () => {
+    fakePlaces();
+    const user = userEvent.setup();
+    await openMap();
+    await user.click(place("United States"));
+    const all = screen.getByRole("checkbox", {
+      name: "Select all of this place (2)",
+    });
+    await user.click(all);
+    expect(within(bar()).getByText("2 postings selected")).toBeVisible();
+    await user.click(all);
+    expect(all).not.toBeChecked();
+    expect(screen.queryByRole("region", { name: "Bulk actions" })).toBeNull();
+    await user.click(all);
+    await user.click(within(bar()).getByRole("button", { name: "Clear" }));
+    expect(screen.queryByRole("region", { name: "Bulk actions" })).toBeNull();
+    expect(all).not.toBeChecked();
+  });
+
+  it("on a phone: the same boxes, and the bar sits above the bottom tab bar", async () => {
+    phoneScreen();
+    fakePlaces();
+    const user = userEvent.setup();
+    await openMap();
+    await user.click(place("Paris"));
+    await user.click(
+      screen.getByRole("checkbox", { name: "Select all of this place (2)" }),
+    );
+    const region = bar();
+    expect(within(region).getByText("2 postings selected")).toBeVisible();
+    expect(region).toHaveClass(
+      "sticky",
+      "bottom-[calc(var(--bottom-bar,0px)+0.75rem)]",
+    );
+    // The shell gives the bar the tab bar's height, safe area included.
+    const frame = region.closest<HTMLElement>("[style]");
+    expect(frame?.style.getPropertyValue("--bottom-bar")).toContain(
+      "safe-area-inset-bottom",
+    );
+    expect(
+      within(
+        screen.getByRole("list", { name: "Postings in Paris" }),
+      ).getAllByRole("link"),
+    ).toHaveLength(2);
   });
 });

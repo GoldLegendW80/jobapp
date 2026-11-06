@@ -81,6 +81,23 @@ CASES = (
         200,
         "owner-checked per item: another person's reads as not found (test_approve_all_ready)",
     ),
+    Case(
+        "POST",
+        "/api/apply/bulk/preview",
+        {"posting_ids": [str(uuid.UUID(int=1))]},
+        200,
+        "owner-checked per posting: another person's reads as gone (test_apply_bulk)",
+    ),
+    Case(
+        "POST",
+        "/api/apply/bulk",
+        {
+            "review_before_send": False,
+            "items": [{"posting_id": str(uuid.UUID(int=1)), "seen": "a" * 64, "documents": []}],
+        },
+        200,
+        "owner-checked per posting: another person's reads as gone (test_apply_bulk)",
+    ),
     Case("POST", "/api/applications/{application_id}/rehearsal", {"answer": "yes"}),
     Case("GET", "/api/apply/summary", foreign_status=200, exception="owner-filtered summary"),
     Case("GET", "/api/applications/{application_id}/manual"),
