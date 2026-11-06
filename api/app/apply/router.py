@@ -159,6 +159,7 @@ class ApplicationDetail(ApplicationOut):
     review_agent: bool = False
     filled: FilledOut | None = None
     chosen: list[ChosenOut] = []
+    summary: str | None = None  # the agent's own account, shown after a failed run
 
 
 class ApplicationList(BaseModel):
@@ -290,6 +291,8 @@ def _filled(db: Session, application: Application) -> dict[str, Any]:
     report = db.get(ApplicationAnswer, (application.id, applier.REPORT_KEY))
     if report is not None and report.user_id == application.user_id:
         rows = report.value.get("chosen") if isinstance(report.value, dict) else None
+        said = report.value.get("summary") if isinstance(report.value, dict) else None
+        out["summary"] = said if isinstance(said, str) and said else None
         if isinstance(rows, list):
             out["chosen"] = [ChosenOut.model_validate(r) for r in rows if isinstance(r, dict)]
     return out
