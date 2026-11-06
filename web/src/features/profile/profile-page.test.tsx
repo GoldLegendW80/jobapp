@@ -17,7 +17,7 @@ afterEach(() => {
   toast.dismiss();
 });
 
-async function openProfile(path = "/profile") {
+async function openProfile(path = "/profile?tab=identity") {
   const user = userEvent.setup();
   const app = renderApp(path);
   await screen.findByRole("heading", { level: 1, name: "Profile" });
@@ -53,8 +53,9 @@ describe("profile page", () => {
     // imported profile does not hold.
     expect(bar).toHaveAttribute("aria-valuenow", "97");
     expect(screen.getByText("97%")).toBeVisible();
-    // The CV tab (documents D11) comes first, then the six sections.
-    expect(screen.getAllByRole("tab")).toHaveLength(7);
+    // The CV tab (documents D11) comes first, then five sections: the search is in Settings,
+    // Search (owner, 2026-11-05).
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
     expect(screen.getAllByRole("tab")[0]).toHaveTextContent("CV");
     for (const name of [
       "Identity",
@@ -65,7 +66,7 @@ describe("profile page", () => {
     ]) {
       expect(tab(new RegExp(`^${name}, 100% complete$`))).toBeInTheDocument();
     }
-    expect(tab(/^Search, 80% complete$/)).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /^Search/ })).toBeNull();
     expect(tab(/Identity/)).toHaveAttribute("aria-selected", "true");
     expect(screen.getByLabelText("Full name")).toHaveValue("Harald Example");
     expect(screen.getByLabelText("Email")).toHaveValue("harald@example.org");
@@ -93,7 +94,16 @@ describe("profile page", () => {
     expect(await screen.findByText("No employer yet.")).toBeVisible();
     await user.click(tab(/Facts/));
     expect(await screen.findByText("No fact block yet.")).toBeVisible();
-    await user.click(tab(/Search/));
+  });
+
+  it("sends the old address of the Search tab to Settings, Search", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    const { location } = renderApp("/profile?tab=search");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Search settings" }),
+    ).toBeVisible();
+    expect(location()).toBe("/settings/search");
     expect(await screen.findByText("No rule yet.")).toBeVisible();
   });
 
@@ -107,7 +117,7 @@ describe("profile page", () => {
       }),
     );
     const user = userEvent.setup();
-    renderApp("/profile");
+    renderApp("/profile?tab=identity");
     expect(
       await screen.findByText("Your profile could not be loaded"),
     ).toBeVisible();
@@ -437,7 +447,7 @@ describe("unsaved changes guard", () => {
     await user.click(
       within(dialog).getByRole("button", { name: "Keep editing" }),
     );
-    expect(location()).toBe("/profile");
+    expect(location()).toBe("/profile?tab=identity");
     expect(screen.getByLabelText("Headline")).toHaveValue(
       "GenAI Engineer edited",
     );

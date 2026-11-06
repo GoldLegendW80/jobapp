@@ -158,7 +158,7 @@ test("A sets seniority, industries and a daily rate by keyboard at 375 px; the 4
   );
 
   await pageA.setViewportSize({ width: 375, height: 812 });
-  await pageA.goto("/profile?tab=search");
+  await pageA.goto("/settings/search");
   await expect(seniority(pageA, "Senior")).toHaveAttribute(
     "aria-pressed",
     "false",
@@ -355,7 +355,7 @@ test("a rescore adds 7 to the matching posting only, keeps the hand fit, and the
 });
 
 test("B sees none of A's fields", async () => {
-  await pageB.goto("/profile?tab=search");
+  await pageB.goto("/settings/search");
   await expect(seniority(pageB, "Senior")).toHaveAttribute(
     "aria-pressed",
     "false",

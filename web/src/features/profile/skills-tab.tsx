@@ -48,6 +48,7 @@ import {
   SaveBar,
   TextField,
 } from "./section-ui";
+import { RescoreLine, SkillsCostLine } from "./skills-rescore";
 import { TermChips } from "./term-chips";
 import { useSectionForm } from "./use-section-form";
 
@@ -80,6 +81,8 @@ export function SkillsTab({
   profile: Profile;
   onDirtyChange: (dirty: boolean) => void;
 }) {
+  // The revision of the last save here: the rescore the server runs after it is followed.
+  const [savedAt, setSavedAt] = useState<number | null>(null);
   const { form, onSubmit, saving, formError, conflict, keepEditing, reload } =
     useSectionForm({
       section: "skills",
@@ -89,7 +92,11 @@ export function SkillsTab({
       fromForm: fromSkillsForm,
       rules: { unique: { gates: "name" } },
       onDirtyChange,
+      onSaved: (saved) => {
+        setSavedAt(saved.revision);
+      },
     });
+  const dirty = form.formState.isDirty;
   const gates = useFieldArray({ control: form.control, name: "gates" });
 
   return (
@@ -161,7 +168,14 @@ export function SkillsTab({
           <SaveBar
             label="Skills"
             saving={saving}
-            dirty={form.formState.isDirty}
+            dirty={dirty}
+            note={
+              dirty ? (
+                <SkillsCostLine control={form.control} dirty={dirty} />
+              ) : savedAt !== null ? (
+                <RescoreLine revision={savedAt} />
+              ) : null
+            }
           />
         </form>
       </Form>

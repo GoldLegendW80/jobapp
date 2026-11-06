@@ -133,6 +133,50 @@ def accept_section(
     return _decided(result, section)
 
 
+@dataclass
+class Additions:
+    """What "Accept all additions" did: `decided` the proposals accepted, `skipped` the ids left
+    out with their reason, `failed` the sections one item stopped (nothing of them applied),
+    `revisions` the one profile revision made per section."""
+
+    decided: list[uuid.UUID]
+    skipped: dict[uuid.UUID, str]
+    failed: dict[str, item_proposals.SectionFailure]
+    revisions: dict[str, int]
+
+    @property
+    def left_out(self) -> dict[str, int]:
+        return dict(Counter(self.skipped.values()))
+
+
+def accept_additions(
+    db: Session,
+    user_id: uuid.UUID,
+    run_id: uuid.UUID,
+    proposal_ids: Sequence[uuid.UUID],
+    now: datetime,
+    *,
+    wait_ms: int = LOCK_WAIT_MS,
+) -> Additions:
+    """ "Accept all additions" (owner, 2026-11-05): the ids given that are pending items of this
+    run and that a bulk accept may take, in every section at once, one profile save per section
+    (`accept_many`: additions only, locked facts only where they fill an empty slot). A section
+    one item stops applies nothing and the others go on; an item that no longer fits is marked
+    `invalid` on the way. The caller commits. Raises ReviewBusyError when a lock is not free in
+    time."""
+    _wait_at_most(db, wait_ms)
+    try:
+        result = item_proposals.accept_many(
+            db, user_id, now, proposal_ids=proposal_ids, ingestion_run_id=run_id
+        )
+    except DBAPIError as exc:
+        if jobs_service.is_lock_timeout(exc):
+            raise ReviewBusyError from exc
+        raise
+    decided = _decided(result, "")
+    return Additions(decided.done, decided.skipped, dict(result.failed), dict(result.revisions))
+
+
 def reject_section(
     db: Session,
     user_id: uuid.UUID,

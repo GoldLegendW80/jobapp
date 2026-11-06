@@ -25,8 +25,8 @@ Both [implementer.md](implementer.md) and [reviewer.md](reviewer.md) start here.
 
 ## Safety
 
-The hard rules of CLAUDE.md hold (no cybersecurity feature work, tests on `e2e-*@example.org`
-accounts only, and the others). What they leave open:
+The hard rules of CLAUDE.md hold (tests on `e2e-*@example.org` accounts only, and the
+others). What they leave open:
 - Never read `.env` files (`.env`, `.env.jetson`, `.env.local`, `.env.*.local`, `.env.production`, `.env.prod`, `.env.mailsend`, `.env.redis`), the `.secrets/` folder or production credentials;
   never print, grep or log a secret. `.env.example` is the tracked template: read and edit it freely (add a new setting there).
 - Never contact a real Google host; never send mail.

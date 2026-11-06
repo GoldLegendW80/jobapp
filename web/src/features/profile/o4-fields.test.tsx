@@ -22,7 +22,7 @@ async function open(initial = haraldLike()) {
   fakeSession(admin);
   const state = fakeProfile(initial);
   const user = userEvent.setup();
-  renderApp("/profile?tab=search");
+  renderApp("/settings/search");
   await screen.findByRole("form", { name: "Search" });
   return { user, state };
 }

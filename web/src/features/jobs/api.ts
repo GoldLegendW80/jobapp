@@ -293,6 +293,35 @@ export function rescore(body: {
   });
 }
 
+/** The rescore that follows a change of the skills section (GET /api/jobs/rescore/status). */
+export const rescoreStatusSchema = z.object({
+  state: z.string(),
+  wanted_revision: z.number().int().nullable(),
+  done_revision: z.number().int(),
+  finished_at: z.string().nullable(),
+  outcome: z
+    .object({
+      scored: z.number().int(),
+      changed: z.number().int(),
+      up: z.number().int(),
+      down: z.number().int(),
+      threshold: z.number().int().nullable(),
+      no_skills: z.boolean(),
+      failed: z.boolean(),
+    })
+    .nullable(),
+});
+export type RescoreStatus = z.infer<typeof rescoreStatusSchema>;
+export const rescoreStatusKey = ["jobs", "rescore", "status"] as const;
+
+export function getRescoreStatus(signal?: AbortSignal): Promise<RescoreStatus> {
+  return request("/jobs/rescore/status", {
+    signal,
+    timeoutMs: 15_000,
+    validate: (data) => rescoreStatusSchema.parse(data),
+  });
+}
+
 /** Totals of a rescore that took several calls (the api stops after a time budget). */
 export async function rescoreAll(
   options: { ids?: string[]; overwriteManual: boolean },

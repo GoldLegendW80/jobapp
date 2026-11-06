@@ -69,7 +69,7 @@ async function openAnswers() {
 test("person A fills the new Answers fields and saves", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await openAnswers();
 
   await field("Preferred name").fill("Alex");
@@ -102,7 +102,7 @@ test("person A fills the new Answers fields and saves", async () => {
 });
 
 test("a reload shows every value", async () => {
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await openAnswers();
   await expect(field("Preferred name")).toHaveValue("Alex");
   await expect(field("Pronouns")).toHaveValue("they/them");

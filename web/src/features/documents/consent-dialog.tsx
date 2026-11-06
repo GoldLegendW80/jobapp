@@ -24,10 +24,21 @@ function figure(estimate: Estimate): string {
     : `${range}, about ${money(estimate.cost.currency, estimate.cost.low)} to ${money(estimate.cost.currency, estimate.cost.high)}`;
 }
 
+/** The consent of a Fill my profile run, asked in the same dialog (`run` below). */
+export interface RunConsent {
+  version: number;
+  text: string;
+}
+
 /**
  * What is sent, to whom, and what it costs, the first time a CV is built from the profile (and
  * again when the text changes). The box is ticked for the version shown, never a bare yes; the
  * button records exactly that version. Nothing is sent to a model before it.
+ *
+ * With `run`, the same dialog also asks the consent of the Fill my profile run that completes
+ * the profile from this CV (owner, 2026-11-05: one dialog, two boxes, one button). Each box is
+ * ticked for its own text and version; the run's box may stay empty, and the run asks again
+ * when it starts. The button hands both versions over: each consent is recorded on its own.
  */
 export function ConsentDialog({
   consent,
@@ -39,19 +50,24 @@ export function ConsentDialog({
   title = "What is sent to build your CV",
   agreeLabel = "Agree and build my CV",
   onCloseAutoFocus,
+  run,
 }: {
   consent: Consent;
   open: boolean;
   busy: boolean;
   error?: string;
-  /** Called with the version of the text on screen. */
-  onAgree: (version: number) => void;
+  /** Called with the version of the text on screen, and of the run's when its box is ticked. */
+  onAgree: (version: number, runVersion: number | null) => void;
   onClose: () => void;
   title?: string;
   agreeLabel?: string;
   onCloseAutoFocus?: (event: Event) => void;
+  run?: RunConsent;
 }) {
   const boxId = useId();
+  const runBoxId = useId();
+  const [runTicked, setRunTicked] = useState<number | null>(null);
+  const runAgreed = run !== undefined && runTicked === run.version;
   // The version the box was ticked for: a text that changed under the dialog needs a new tick.
   const [tickedVersion, setTickedVersion] = useState<number | null>(null);
   const ticked = tickedVersion === consent.version;
@@ -120,6 +136,35 @@ export function ConsentDialog({
           </FieldLabel>
         </Field>
 
+        {run ? (
+          <section
+            className="flex flex-col gap-2 border-t pt-4 text-sm"
+            data-testid="run-consent"
+          >
+            <h4 className="font-semibold">To complete your profile from it</h4>
+            <p data-testid="run-consent-text">{run.text}</p>
+            <p className="text-muted-foreground">Version {run.version}</p>
+            <Field orientation="horizontal" className="items-start">
+              <Checkbox
+                id={runBoxId}
+                className="mt-0.5"
+                checked={runAgreed}
+                disabled={busy}
+                onCheckedChange={(checked) => {
+                  setRunTicked(checked === true ? run.version : null);
+                }}
+              />
+              <FieldLabel htmlFor={runBoxId}>
+                I agree to send this CV to complete my profile
+              </FieldLabel>
+            </Field>
+            <p className="text-muted-foreground">
+              You may leave this one empty: the app asks again when you complete
+              your profile.
+            </p>
+          </section>
+        ) : null}
+
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={onClose}>
             Not now
@@ -128,7 +173,7 @@ export function ConsentDialog({
             className="whitespace-normal"
             disabled={!ticked || busy}
             onClick={() => {
-              onAgree(consent.version);
+              onAgree(consent.version, runAgreed ? run.version : null);
             }}
           >
             {busy ? <Spinner aria-hidden="true" role={undefined} /> : null}

@@ -172,6 +172,41 @@ export async function undoProposal(id: string): Promise<void> {
   });
 }
 
+const additionsSchema = z.object({
+  decided: z.array(z.string()),
+  skipped: z.array(z.object({ id: z.string(), reason: z.string() })),
+  stopped: z.array(
+    z.object({
+      section: z.string(),
+      proposal_id: z.string(),
+      reason: z.string(),
+      detail: z.string(),
+    }),
+  ),
+  pending: z.number().int(),
+});
+export type Additions = z.infer<typeof additionsSchema>;
+
+/**
+ * "Accept all additions" (owner, 2026-11-05), for the ids shown in every section: what adds to
+ * the profile, locked facts on an empty slot included, one revision per section. What replaces
+ * or changes a value the profile holds stays for the person, with its reason.
+ */
+export function acceptAdditions(
+  runId: string,
+  ids: string[],
+): Promise<Additions> {
+  return request(
+    `/ingestion/runs/${encodeURIComponent(runId)}/accept-additions`,
+    {
+      method: "POST",
+      body: { proposal_ids: ids },
+      timeoutMs: TIMEOUT_MS,
+      validate: (body) => additionsSchema.parse(body),
+    },
+  );
+}
+
 /** "Accept all in this section" and "Reject the rest of this section", for the ids shown. */
 export function decideSection(
   runId: string,

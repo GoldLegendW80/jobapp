@@ -5,13 +5,18 @@
  * saved as regular expressions by an earlier version keeps its terms and its mode, says so under
  * its chips, and still works (the search reads the words of each, app/profile/plain_terms.py).
  * Used by the profile's Search tab and by the Find jobs setup (jobs/search-setup.tsx).
+ *
+ * Under Job titles, the job titles agent's ideas, and under Places the place of the profile
+ * (title-suggestions.tsx): a click adds one to the list being edited, the save stays the
+ * person's. A list of regular expressions gets no idea (a plain word would change its meaning).
  */
-import type { UseFormReturn } from "react-hook-form";
+import { useWatch, type UseFormReturn } from "react-hook-form";
 
 import { WORDING } from "@/lib/wording";
 
-import type { SearchForm } from "./editor-forms";
+import { TERMS_MAX, type SearchForm } from "./editor-forms";
 import { TermChips } from "./term-chips";
+import { PlaceSuggestion, TitleSuggestions } from "./title-suggestions";
 
 const LISTS = [
   {
@@ -44,25 +49,71 @@ export function SearchLists({
   form,
   descriptions = true,
   only,
+  links = true,
 }: {
   form: UseFormReturn<SearchForm>;
   /** false in a dense dialog: the lists without their one line explanations */
   descriptions?: boolean;
   /** the lists to show, in their usual order; all four when absent */
   only?: readonly SearchListName[];
+  /** false in a dialog: the ideas name what is missing without a link (title-suggestions.tsx) */
+  links?: boolean;
 }) {
   return (
     <div className="flex flex-col gap-4">
       {LISTS.filter((list) => !only || only.includes(list.name)).map((list) => (
-        <TermChips
-          key={list.name}
-          form={form}
-          name={list.name}
-          label={list.label}
-          description={descriptions ? list.description : undefined}
-          regexSwitch={false}
-        />
+        <div key={list.name} className="flex min-w-0 flex-col gap-3">
+          <TermChips
+            form={form}
+            name={list.name}
+            label={list.label}
+            description={descriptions ? list.description : undefined}
+            regexSwitch={false}
+          />
+          {list.name === "title_include" || list.name === "location" ? (
+            <Ideas
+              form={form}
+              name={list.name}
+              label={list.label}
+              links={links}
+            />
+          ) : null}
+        </div>
       ))}
     </div>
+  );
+}
+
+/** The ideas of one list, added to the form's draft of that list. */
+function Ideas({
+  form,
+  name,
+  label,
+  links,
+}: {
+  form: UseFormReturn<SearchForm>;
+  name: "title_include" | "location";
+  label: string;
+  links: boolean;
+}) {
+  const list = useWatch({ control: form.control, name });
+  if (list.advanced_regex) return null;
+  const add = (term: string) => {
+    const terms = form.getValues(`${name}.terms`);
+    if (terms.length >= TERMS_MAX) return;
+    form.setValue(`${name}.terms`, [...terms, term], {
+      shouldDirty: true,
+      shouldValidate: form.formState.isSubmitted,
+    });
+  };
+  return name === "title_include" ? (
+    <TitleSuggestions
+      current={list.terms}
+      onAdd={add}
+      label={label}
+      links={links}
+    />
+  ) : (
+    <PlaceSuggestion current={list.terms} onAdd={add} label={label} />
   );
 }

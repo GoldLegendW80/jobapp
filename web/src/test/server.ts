@@ -78,7 +78,52 @@ export const onboardingDone = {
   show_card: false,
 };
 
+/** GET /api/profile/title-suggestions of an account without a model key: no idea yet. */
+export const noTitleSuggestions = {
+  status: "idle",
+  needs: "model_key",
+  suggestions: [],
+  refreshed_at: null,
+  error: null,
+  note: null,
+  messages: [],
+  message_max: 300,
+  estimate: null,
+  cost_note: null,
+};
+
+/** GET /api/profile/about of a new account without a model key: the four parts, empty. */
+export const emptyAbout = {
+  text: "## Skills\n\n## Answers\n",
+  version: 0,
+  updated_at: "2026-11-05T09:00:00Z",
+  parts: ["Skills", "Answers"].map((heading) => ({
+    heading,
+    key: heading.toLowerCase(),
+    kind: heading.toLowerCase(),
+    state: "in_step",
+    duplicate: false,
+    too_long: false,
+    estimate: null,
+  })),
+  reading: null,
+  undo: null,
+  needs: "model_key",
+  advanced: 0,
+  missing_blocks: [],
+  dones_left: 30,
+  part_max: 20000,
+  text_max: 300000,
+};
+
 export const handlers = [
+  // The profile's About you document (profile/about-document.tsx), before the profile's own
+  // routes: /api/profile/about is not a section.
+  http.get("*/api/profile/about", () => HttpResponse.json(emptyAbout)),
+  // The job title ideas under Job titles (profile/title-suggestions.tsx): none without a key.
+  http.get("*/api/profile/title-suggestions", () =>
+    HttpResponse.json(noTitleSuggestions),
+  ),
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
   // The job feeds, no Adzuna key stored (Find jobs and the Account page's Adzuna key card).
@@ -175,6 +220,28 @@ export const handlers = [
       cost_note: "",
       today: { input: 0, output: 0, cost_usd: "0" },
       last_30_days: { input: 0, output: 0, cost_usd: "0" },
+    }),
+  ),
+  // A skills draft that starts nothing (the line beside Save skills stays empty).
+  http.post("*/api/documents/spend/skills", () =>
+    HttpResponse.json({
+      auto: true,
+      min_fit: 70,
+      writes: false,
+      newly: 0,
+      newly_estimate: { tokens: { low: 0, high: 0 }, cost: null },
+      priced: false,
+      cost_note: "",
+    }),
+  ),
+  // No skills change rescored yet (the line after Save skills).
+  http.get("*/api/jobs/rescore/status", () =>
+    HttpResponse.json({
+      state: "idle",
+      wanted_revision: null,
+      done_revision: 0,
+      finished_at: null,
+      outcome: null,
     }),
   ),
   // No writing rule yet, the default of a new user (the Search tab's Writing rules card).

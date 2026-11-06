@@ -49,6 +49,7 @@ export const AGENT_WORDS: Record<string, string> = {
   documents_chat_cv: "Chat about a CV",
   documents_chat_letter: "Chat about a cover letter",
   documents_chat_base: "Chat about a base CV",
+  profile_titles: "Job title ideas",
 };
 
 export function agentWord(id: string): string {
@@ -337,6 +338,8 @@ export const WORDING = {
   // Ingestion: a run reads the documents.
   startReading: "Start reading",
   startAnotherReading: "Start another reading",
+  // The button that starts a run, before its token range.
+  completeProfile: "Complete my profile",
   readingPausedAtLimit: "The reading paused at the limit you agreed to.",
   serverUnreachable: "Server unreachable",
   checkServerAgain: "Check the server again",
@@ -354,3 +357,35 @@ export const DECK_NO_SKILLS_HINT =
 export function deckEmpty(threshold: number): string {
   return `Nothing new above your threshold of ${threshold}.`;
 }
+
+/** The job title ideas under Job titles and the place idea under Places (profile/title-suggestions.tsx). */
+export const SUGGESTION_WORDS = {
+  heading: "Suggested for you",
+  needsKey: "Job title ideas from your profile need a model key.",
+  addKey: "Add a model key",
+  needsInput:
+    "Add your CV, fill your profile or tell the assistant what you want to do, and job title ideas show here.",
+  addCv: "Add your CV",
+  /** In a dialog, where a link would drop the draft: the page, named. */
+  needsKeyThere:
+    "Job title ideas from your profile need a model key, added on the Account page.",
+  needsInputThere:
+    "Job title ideas show here once you add your CV, fill your profile or tell the assistant what you want to do.",
+  first: "Get job title ideas that fit your profile.",
+  suggest: "Suggest titles",
+  more: "More ideas",
+  retry: "Try again",
+  running: "Finding titles that fit your profile",
+  none: "No new title to suggest.",
+  notForMe: "Not for me",
+  chatLabel: "Tell the assistant what you want to do",
+  chatPlaceholder:
+    "For example: move into product, stay in data, work remotely",
+  send: "Send",
+  lastMessage: (text: string) => `You told the assistant: “${text}”`,
+  earlier: (count: number) =>
+    `It also reads your ${count} earlier ${count === 1 ? "message" : "messages"}.`,
+  clear: "Clear",
+  clearName: "Clear what you told the assistant",
+  fromProfile: "from your profile",
+} as const;

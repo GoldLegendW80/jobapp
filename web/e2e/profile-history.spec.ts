@@ -52,6 +52,15 @@ const tab = (page: Page, name: string) =>
   page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
 
 async function openTab(page: Page, name: string) {
+  // The search is in Settings, Search (owner, 2026-11-05); the other sections in the classic
+  // editor's tabs.
+  if (name === "Search") {
+    await page.goto("/settings/search");
+    await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
+    return;
+  }
+  if ((await tab(page, name).count()) === 0)
+    await page.goto(`/profile?tab=${name.toLowerCase()}`);
   await tab(page, name).click();
   await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
 }
@@ -99,7 +108,7 @@ test.afterAll(async () => {
 test("a new account fills its profile from empty to 100% in the browser", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await expect(completeness(page)).toHaveAttribute("aria-valuenow", "0");
 
   // Identity
@@ -177,10 +186,12 @@ test("a new account fills its profile from empty to 100% in the browser", async 
   await setup.getByLabel("Remote preference").selectOption("hybrid");
   await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
-  await page.goto("/profile");
-  await expect(tab(page, "Search")).toHaveAccessibleName(
-    "Search, 100% complete",
-  );
+  // The search is in Settings, Search now: its completeness is read from the api.
+  const searched = (await (await page.request.get("/api/profile")).json()) as {
+    completeness: { sections: { search: { percent: number } } };
+  };
+  expect(searched.completeness.sections.search.percent).toBe(100);
+  await page.goto("/profile?tab=identity");
 
   // Answers
   await openTab(page, "Answers");

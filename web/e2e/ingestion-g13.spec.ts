@@ -180,8 +180,13 @@ test("accept one proposal: the completeness bar rises", async () => {
   before = await completeness();
   await shots(page, "review");
 
+  // The name fills an empty slot of the new profile: a locked fact that joins the bulk
+  // accept (owner, 2026-11-05), offered with every addition at the top of the review.
+  await expect(
+    page.getByRole("button", { name: /^Accept all additions \(\d+\)$/ }),
+  ).toBeVisible();
   const name = proposal("full_name");
-  await expect(name).toContainText("Accepted one by one");
+  await expect(name).not.toContainText("Accepted one by one");
   await name.getByRole("button", { name: "Accept: Full name" }).click();
   await expect(name).toHaveAttribute("data-status", "accepted");
   await expect(name.getByRole("button", { name: /Accept|Reject/ })).toHaveCount(
@@ -241,7 +246,7 @@ test("accept a whole section: one revision in the History drawer of the profile"
     relocation: "Open to moving within France",
   });
 
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await page.getByRole("tab", { name: /^Answers,/ }).click();
   await page.getByRole("button", { name: "History of answers" }).click();
   const versions = page
@@ -256,10 +261,11 @@ test("accept a whole section: one revision in the History drawer of the profile"
 test("accept a locked employer on its own, and pick a value in a conflict", async () => {
   await openReview();
   const experience = section("Experience");
-  // Nothing here goes in bulk: both are locked facts, one of them a conflict.
+  // Example Post fills an empty slot, so the section offers a bulk accept; the conflict of
+  // Example Rail never goes in bulk. Each is still accepted on its own here.
   await expect(
-    experience.getByRole("button", { name: /Accept all/ }),
-  ).toHaveCount(0);
+    experience.getByRole("button", { name: /^Accept all in this section/ }),
+  ).toHaveCount(1);
   const post = proposal(POST);
   await post
     .getByRole("button", { name: "Accept: Employers: Example Post" })

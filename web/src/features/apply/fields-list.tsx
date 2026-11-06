@@ -3,14 +3,16 @@ import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { errorDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { AnswerEditor } from "./answer-editor";
-import type { Answer } from "./apply-api";
+import { rememberAnswer, type Answer } from "./apply-api";
 import {
   isEditable,
   isOpenField,
   leftFields,
+  REMEMBERED,
   sourceLabel,
   valueText,
 } from "./apply-state";
@@ -22,6 +24,11 @@ import {
  * answer can be corrected with Edit. A field the api takes no value for (a file, a list of
  * choices, a skipped widget) has no input: it keeps the frame and the banner line, and is
  * answered on the site. A value is always shown whole. One column on a phone.
+ *
+ * With `applicationId`, a field left for the person that the api offers to remember shows the
+ * box "Remember this answer for next forms" (ticked unless the question names the company):
+ * once the answer is saved on this form, a ticked box saves it to Saved answers too, and the
+ * row says what happened.
  */
 export function FieldsList({
   answers,
@@ -29,12 +36,14 @@ export function FieldsList({
   saving,
   onSave,
   onDirtyChange,
+  applicationId,
 }: {
   answers: readonly Answer[];
   editable: boolean;
   saving: boolean;
   onSave: (answer: Answer, value: string | boolean) => Promise<boolean>;
   onDirtyChange: (count: number) => void;
+  applicationId?: string;
 }) {
   const left = leftFields(answers);
   const [dirty, setDirty] = useState<ReadonlySet<string>>(new Set());
@@ -94,6 +103,7 @@ export function FieldsList({
             saving={saving}
             onSave={(value) => onSave(answer, value)}
             mark={mark}
+            applicationId={applicationId}
           />
         ))}
       </ul>
@@ -107,13 +117,16 @@ function FieldRow({
   saving,
   onSave,
   mark,
+  applicationId,
 }: {
   answer: Answer;
   editable: boolean;
   saving: boolean;
   onSave: (value: string | boolean) => Promise<boolean>;
   mark: (key: string, dirty: boolean) => void;
+  applicationId?: string;
 }) {
+  const [remembered, setRemembered] = useState<string | null>(null);
   const key = answer.field_key;
   const onDirtyChange = useCallback(
     (isDirty: boolean) => {
@@ -159,9 +172,29 @@ function FieldRow({
           key={`${answer.source}:${text}`}
           answer={answer}
           saving={saving}
-          onSave={async (value) => {
+          remember={
+            applicationId !== undefined && open
+              ? (answer.remember ?? null)
+              : null
+          }
+          onSave={async (value, remember) => {
+            setRemembered(null);
             const saved = await onSave(value);
             if (saved) setEditing(false);
+            if (saved && remember && applicationId !== undefined) {
+              try {
+                const done = await rememberAnswer(
+                  applicationId,
+                  answer.field_key,
+                  value,
+                );
+                setRemembered(REMEMBERED[done.outcome]);
+              } catch (error) {
+                setRemembered(
+                  `Saved on this form only. ${errorDetail(error) ?? "It could not be saved for next forms."}`,
+                );
+              }
+            }
             return saved;
           }}
           onDirtyChange={onDirtyChange}
@@ -183,6 +216,14 @@ function FieldRow({
           {text === "" ? "Left empty" : text}
         </span>
       )}
+      {remembered ? (
+        <p
+          role="status"
+          className="text-xs text-muted-foreground sm:col-span-3"
+        >
+          {remembered}
+        </p>
+      ) : null}
       <div className="flex items-center gap-2">
         {open ? (
           <Badge className="w-fit bg-amber-600 text-white hover:bg-amber-600 dark:bg-amber-500 dark:text-black">

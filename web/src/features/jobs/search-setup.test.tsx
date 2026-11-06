@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   EMPTY,
@@ -1679,4 +1679,129 @@ it("opens as a sheet from the bottom on a phone, its footer in view too, and clo
   expect(profile.saves).toEqual([]);
   expect(starts).toEqual([]);
   expect(screen.getByRole("button", { name: "Find jobs" })).toHaveFocus();
+});
+
+it("What you want: a job title idea goes into the list in one click", async () => {
+  server.use(
+    http.get("*/api/profile/title-suggestions", () =>
+      HttpResponse.json({
+        status: "idle",
+        needs: null,
+        suggestions: [
+          {
+            title: "Analytics engineer",
+            reason: "Your SQL and dbt work matches this role.",
+            language: "en",
+          },
+        ],
+        refreshed_at: "2026-11-05T09:00:00+00:00",
+        error: null,
+        note: null,
+        messages: [],
+        message_max: 300,
+        estimate: null,
+        cost_note: null,
+      }),
+    ),
+  );
+  const { dialog, user, profile } = await open();
+  await user.click(
+    await within(dialog).findByRole("button", {
+      name: "Add Analytics engineer to Job titles",
+    }),
+  );
+  expect(
+    within(
+      within(dialog).getByRole("list", { name: "Terms of Job titles" }),
+    ).getByText("Analytics engineer"),
+  ).toBeInTheDocument();
+  expect(
+    within(dialog).queryByRole("button", {
+      name: "Add Analytics engineer to Job titles",
+    }),
+  ).toBeNull();
+  expect(profile.saves).toEqual([]); // Save and start search stays the person's
+});
+
+it("What you want: without a model key, the ideas say where to add one, with no link out of the draft", async () => {
+  const { dialog } = await open();
+  expect(
+    await within(dialog).findByText(
+      "Job title ideas from your profile need a model key, added on the Account page.",
+    ),
+  ).toBeInTheDocument();
+  expect(within(dialog).queryAllByRole("link")).toEqual([]);
+});
+
+describe("Add the recommended websites", () => {
+  const RECOMMENDED_ROWS = [...Object.values(LABELS), "Arbeitnow", "Himalayas"];
+
+  it("adds the four job websites and the two feeds in one click, each website with its risk sentence, and Save gives their permissions", async () => {
+    const { profile, starts, writes, user, dialog } = await open();
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Add the recommended websites",
+      }),
+    );
+    for (const name of RECOMMENDED_ROWS)
+      expect(inList(dialog, name)).toBe(true);
+    for (const kind of PROTECTED)
+      expect(
+        (
+          await within(dialog).findAllByText(
+            `Current ${kind} risk sentence, version 4.`,
+          )
+        ).length,
+      ).toBeGreaterThan(0);
+    // The company board examples are ideas, never added by the button.
+    expect(inList(dialog, "Doctolib")).toBe(false);
+    expect(
+      within(dialog).getByRole("button", { name: "Add Doctolib on Ashby" }),
+    ).toBeVisible();
+    // All are listed now: the button is gone.
+    expect(
+      within(dialog).queryByRole("button", {
+        name: "Add the recommended websites",
+      }),
+    ).toBeNull();
+    expect(writes).toEqual([]); // no permission before Save
+    await saveAndStart(user, dialog);
+    await waitFor(() => {
+      expect(starts).toHaveLength(1);
+    });
+    expect(profile.saves[0]!.body.data).toMatchObject({
+      interactive_sites: PROTECTED.map((kind) => site(kind, PRESET_URLS[kind])),
+      job_feeds: ["arbeitnow", "himalayas"],
+    });
+    expect(writes.map((write) => write.kind).sort()).toEqual(
+      [...PROTECTED].sort(),
+    );
+    expect(dialog).not.toHaveTextContent(/[\u2013\u2014]| - /);
+  });
+
+  it("adds only what is missing, within the ten websites, and says what did not fit", async () => {
+    const own = Array.from({ length: 8 }, (_, index) =>
+      site("custom", `https://careers${String(index)}.example.org/`),
+    );
+    const { user, dialog } = await open({
+      ...EMPTY.search,
+      interactive_sites: [
+        site("custom", "https://fr.indeed.com/emplois"),
+        ...own,
+      ],
+      job_feeds: ["himalayas"],
+    });
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: "Add the recommended websites",
+      }),
+    );
+    // Indeed is there under an address of hers; one room was left among the ten.
+    expect(inList(dialog, "LinkedIn")).toBe(true);
+    expect(inList(dialog, "Arbeitnow")).toBe(true);
+    expect(inList(dialog, "Welcome to the Jungle")).toBe(false);
+    expect(dialog).toHaveTextContent(
+      "Keep at most 10 websites: Welcome to the Jungle and Free-Work were not added. Remove one to add another.",
+    );
+  });
 });

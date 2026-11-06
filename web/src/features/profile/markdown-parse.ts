@@ -6,6 +6,7 @@ export type Block =
   | { kind: "list"; ordered: boolean; items: string[] }
   | { kind: "quote"; text: string }
   | { kind: "code"; text: string }
+  | { kind: "table"; head: string[]; rows: string[][] }
   | { kind: "rule" };
 
 const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/;
@@ -13,6 +14,16 @@ const BULLET = /^\s*[-*+]\s+(.*)$/;
 const NUMBERED = /^\s*\d{1,9}[.)]\s+(.*)$/;
 const RULE = /^\s*([-*_])(\s*\1){2,}\s*$/;
 const FENCE = /^\s*(```|~~~)/;
+// A table: a row of cells between pipes, then a line of dashes under each cell.
+const TABLE_ROW = /^\s*\|.*\|\s*$/;
+const TABLE_RULE = /^\s*\|(\s*:?-+:?\s*\|)+\s*$/;
+
+const cells = (line: string) =>
+  line
+    .trim()
+    .replace(/^\||\|$/g, "")
+    .split("|")
+    .map((cell) => cell.trim());
 
 const isQuote = (line: string) => line.trimStart().startsWith(">");
 const isItem = (line: string) => BULLET.test(line) || NUMBERED.test(line);
@@ -49,6 +60,17 @@ export function parseBlocks(source: string): Block[] {
         text: heading[2] ?? "",
       });
       i += 1;
+      continue;
+    }
+    if (TABLE_ROW.test(line) && TABLE_RULE.test(at(i + 1))) {
+      const head = cells(line);
+      const rows: string[][] = [];
+      i += 2;
+      while (i < lines.length && TABLE_ROW.test(at(i))) {
+        rows.push(cells(at(i)));
+        i += 1;
+      }
+      blocks.push({ kind: "table", head, rows });
       continue;
     }
     if (RULE.test(line)) {

@@ -10,7 +10,9 @@ choice made by the build that stands until the owner says otherwise.
 
 - No dashes as separators in any outward text: no em dash, no en dash, no " - ". Hyphenated
   words are fine.
-- Never apply to a cybersecurity role, whatever the fit score.
+- Roles a person never wants are that person's own never apply rules, in their profile. The
+  app has no rule of its own about a kind of role (owner, 2026-11-05: the rule against
+  cybersecurity roles was the owner's alone, kept in his profile).
 - Never send mail by itself: the person clicks Send (Full auto, when built, is the one opt in
   exception for forms and mails, with its guardrails, decided 2026-10-10).
 - Nothing is submitted without the person's approval: in One click Apply, the person's click on
@@ -360,3 +362,37 @@ The owner's answers during the product audit, in the session that built them.
      and "Remember this answer for next forms".
   7. The CV editor's fixed facts save to the profile, and the base CV's own fixed block goes
      after a one time merge.
+- 2026-11-05, the job title ideas (X2), the owner's answers:
+  1. A run of about 20,000 to 39,000 tokens: "yes".
+  2. What the agent reads: "uploaded cv, the profile based on the computer or just a chat with
+     the agent to tell what we want to do is enough. ... he can read everything to help the user
+     find best jobs". The agent reads the whole profile, the documents the person uploaded and
+     what the person writes to it; any one of them is enough to start.
+  3. "security was only for me, for my profile, remove these from permanent memory bc its just
+     for me". The rule against cybersecurity roles is the owner's own never apply rule, in his
+     profile; it is not a rule of the app. CLAUDE.md's hard rule against it and the app's own
+     rule in code (`never_apply.CYBER_RULE`) are removed; every person's own never apply rules
+     still hold everywhere they did. This replaces the standing rule of 2026-10-06 and the
+     cybersecurity lines of the module sections below it.
+  4. "More ideas" adds to the ideas shown: "add to them".
+  5. In Find jobs, the line that names the Account page without a link: "yes".
+- 2026-11-05, the profile in Markdown narrowed (owner: "sorry, only facts and skills should be in
+  plain text or markdown. other fields remins on well structured inputs"). Only Facts and Skills
+  are written as plain text or Markdown; the model interprets the Skills text into the skills
+  section the fit reads (answer 1 above, for Skills). Experience, education, languages, the
+  answers, identity and the search stay structured inputs.
+- 2026-11-05, the Answers too (owner: "anwsers tab should be in the plain text/markdown too"):
+  Facts, Skills and Answers are written as plain text or Markdown; the model interprets the
+  Skills and the Answers texts. A change to a yes/no consent, an EEO answer, a work authorisation
+  or a salary figure is listed on its own line and applied only by the person's Apply click.
+- 2026-11-05, the search settings (owner: "search setting should be in the settings of the
+  user"): the Search tab leaves the profile for the user's Settings, beside the Applications
+  settings (`/settings/search` and `/settings/applications`); the user menu's Settings opens
+  Search first, and `/profile?tab=search` leads there.
+- 2026-11-06, Apply to a selection (owner: "in the job list and map, i want being able with the
+  multi select to apply at all selected"): the Jobs list's and the map's selection get Apply. One
+  confirmation names every posting it applies to and every one it leaves out with its reason;
+  its click is the approval of exactly those listed, each started as one Apply click.
+- 2026-11-06, the job title ideas: "I don't want day limit for more ideas". "More ideas" and the
+  messages to the assistant have no daily limit; one run at a time and five clicks a minute stay
+  as guards against repeated clicks.

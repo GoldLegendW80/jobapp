@@ -103,10 +103,11 @@ def test_the_proposals_of_a_run_are_grouped_by_section_with_their_citations(
     ]
     name = item_at(body, "full_name")
     assert (name["value"], name["before"], name["after"]) == ("Alice Martin", None, "Alice Martin")
+    # A locked fact on an empty slot of the profile joins accept all (owner, 2026-11-05).
     assert (name["stale"], name["locked"], name["bulk"], name["free_text"]) == (
         False,
         True,
-        "locked",
+        None,
         False,
     )
     # One item, two citations, each naming its document.

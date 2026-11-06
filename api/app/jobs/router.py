@@ -30,6 +30,10 @@ GET /api/jobs/{id}/files/{file_id}: the bytes with their stored type, `inline` f
 browser shows it) and `attachment` for anything else, `X-Content-Type-Options: nosniff`,
 `Cache-Control: private, no-cache` and a strong ETag (the SHA-256), 304 on If-None-Match.
 
+GET /api/jobs/rescore/status: the rescore that follows a change of the skills section
+(app/jobs/rescore.py): idle, waiting or running, the revision asked for and the one done, and
+the counts of the last one.
+
 POST /api/jobs/import: the import document as the JSON body, IMPORT_HTTP_MAX_BYTES (10 MiB, as
 Caddy) at most, 413 above. Larger imports (Harald's ~18 MB) go through the CLI inside the api
 container: `./deploy.sh jobs import <email>`.
@@ -54,6 +58,7 @@ from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
 from app.jobs import places, service
+from app.jobs import rescore as auto_rescore
 from app.jobs import undo as undo_tokens
 from app.jobs.importer import kind
 from app.jobs.models import ContractType, Job, JobFile, JobStatus
@@ -78,6 +83,8 @@ from app.jobs.schemas import (
     MissingOut,
     RescoreIn,
     RescoreOut,
+    RescoreOutcomeOut,
+    RescoreStatusOut,
     StaleOut,
     UndoIn,
     UndoOut,
@@ -635,4 +642,22 @@ def rescore(body: RescoreIn, user: CurrentUser, request: Request, db: Db) -> Any
         skipped_busy=outcome.skipped_busy,
         remaining=remaining,
         next_after=after if remaining else None,
+    )
+
+
+@router.get(
+    "/rescore/status",
+    response_model=RescoreStatusOut,
+    responses={**_401},
+    dependencies=[Depends(_no_store)],
+)
+def rescore_status(user: CurrentUser, db: Db) -> RescoreStatusOut:
+    """Where the rescore of the caller's last skills change stands (module docstring)."""
+    found = auto_rescore.status(db, user.id)
+    return RescoreStatusOut(
+        state=found.state,  # type: ignore[arg-type]
+        wanted_revision=found.wanted_revision,
+        done_revision=found.done_revision,
+        finished_at=found.finished_at,
+        outcome=RescoreOutcomeOut.model_validate(found.outcome) if found.outcome else None,
     )

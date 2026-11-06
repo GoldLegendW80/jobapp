@@ -414,7 +414,7 @@ function Overview({
         <p className="text-sm text-muted-foreground" data-testid="threshold">
           Documents are written for new postings with a fit of {minFit} or more.{" "}
           <Link
-            to="/profile?tab=search"
+            to="/settings/search"
             className="font-medium text-foreground underline underline-offset-4"
           >
             Change it in the Search options

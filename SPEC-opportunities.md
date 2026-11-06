@@ -20,8 +20,8 @@ User stories:
 3. **A Like in Full auto is the click** (2026-10-10, refined 2026-10-19): for a person who turned Full auto on, the Like given while Full auto is on is the approval for forms and e-mails alike, within the guardrails (CLAUDE.md rule 4, SPEC-apply "Modes"). It stays valid at most 7 days and only while Full auto stays on (planner default of 2026-10-19 that the owner may change).
 4. **Review first is the default.** Full auto is off until the person turns it on (SPEC-apply decision 1).
 5. **Freelance sources are a configurable list per person**, declared like the job boards, not a fixed short list (2026-10-10). Since 2026-10-28 (owner) that list is the job websites ticked in Find jobs; the feeds and the boards were deleted.
-6. **Everything stays free** (CLAUDE.md rule 11): no paid source, no paid alert subscription, no paid scraping service.
-7. **Never a cybersecurity role** (CLAUDE.md rule 2): the deck never shows one, a Like on one is refused (apply's `never_apply` guardrail), and no source is added for security work.
+6. **Everything stays free** (CLAUDE.md rule 2): no paid source, no paid alert subscription, no paid scraping service.
+7. **Never a role the person's own never apply rules exclude** (owner, 2026-11-05, replacing "never a cybersecurity role", which was the owner's own rule and stays in his profile): the deck never shows one and a Like on one is refused (apply's `never_apply` guardrail). The app has no rule of its own about a kind of role.
 8. **Mail sending is paused by the owner** (2026-10-14): outreach by e-mail to a freelance client is planned here but waits on the mail lane (#357) and apply A14.
 9. **Onboarding step 1 reuses ingestion**; the new profile fields are the ones the intent names: seniority, industries, company types, compensation, tone and language, application behaviour.
 10. **A Pass is stored only, for now** (owner, 2026-10-20): it hides the posting and is kept as an event; nothing reads it. Learning from Passes, lowering the fit of similar postings once enough exist, is a separate later task, not in the first slice.
@@ -37,7 +37,7 @@ Until the rename task, the table stays `jobs` and the jobs module keeps its code
 
 ## The swipe deck (#74)
 
-**What is in the deck.** The person's postings with status `found` or `shortlisted`, no live or ended application, fit at or above "Show postings from" (`search.min_fit`, default 70) or no fit yet when the posting has no text, not matched by a `never_apply` rule (the sweep marks those `skipped`; the deck checks again with apply's folded matcher, `apply.guardrails.never_apply`, so a Cybersecurity title the sweep's whole word match missed never shows). Order: fit, highest first, then the newest `found_on`, then the id (a stable order, so a reload shows the same card). A filter row, collapsed under "Advanced": contract types, remote or on site, source. An empty deck says why ("Nothing new above your threshold of 70. Find new postings, or lower the threshold in Search options.") with the two links.
+**What is in the deck.** The person's postings with status `found` or `shortlisted`, no live or ended application, fit at or above "Show postings from" (`search.min_fit`, default 70) or no fit yet when the posting has no text, not matched by a `never_apply` rule (the sweep marks those `skipped`; the deck checks again with apply's folded matcher, `apply.guardrails.never_apply`, so a title the sweep's whole word match missed never shows, such as a soft hyphen inside a word a rule names). Order: fit, highest first, then the newest `found_on`, then the id (a stable order, so a reload shows the same card). A filter row, collapsed under "Advanced": contract types, remote or on site, source. An empty deck says why ("Nothing new above your threshold of 70. Find new postings, or lower the threshold in Search options.") with the two links.
 
 The approved [interactive Find jobs contract (#626)](SPEC-jobs.md#interactive-search-626) creates findings before a Like; since 2026-10-28 it is the only search (the API boards and feeds were deleted). Its run summary distinguishes saved findings hidden by this display threshold from no jobs found; it changes neither Like/apply approval nor the existing seniority scoring and pay rules.
 
@@ -137,7 +137,7 @@ All require a session and act on the caller's own rows only (404 otherwise); a p
 
 ## Frontend
 
-`/discover`: the deck (one card, Like and Pass buttons named under them and gone without a card, Undo last (without a card, only while there is a swipe to undo), the keys hint for a precise pointer only, the mode badge "Like: Review first" or "Like: Full auto", the filter row under Advanced, the empty state), first in the navigation after the rename's wording, mobile first (a thumb's reach, 375px). `/welcome`: the wizard. The profile's Search options tab: the new target fields, the pay, the opt in platforms with their risk sentences, all through the shared Advanced section. Light and dark; no dashes as separators.
+`/discover`: the deck (one card, Like and Pass buttons named under them and gone without a card, Undo last (without a card, only while there is a swipe to undo), the keys hint for a precise pointer only, the mode badge "Like: Review first" or "Like: Full auto", the filter row under Advanced, the empty state), first in the navigation after the rename's wording, mobile first (a thumb's reach, 375px). `/welcome`: the wizard. Settings, Search (the profile's Search options tab until 2026-11-05): the new target fields, the pay, the opt in platforms with their risk sentences, all through the shared Advanced section. Light and dark; no dashes as separators.
 
 ## Testing strategy
 
@@ -150,7 +150,7 @@ All require a session and act on the caller's own rows only (404 otherwise); a p
 
 - **Always:** a Like goes through `apply.on_like`; a Pass through `set_status`; a source is read only when it is free and either its terms allow it or the person opted in to the risk of that platform (O7b), with its attribution shown; user scoping on every query.
 - **Ask first:** a new source not in the table above; asking a platform for an API key or written permission; letting a Pass change scores (a separate later task, decision 10); any change to apply's routes.
-- **Never:** read a platform whose terms forbid automated use for a person who has not accepted its risk sentence of the current version, or at more than a person's pace; sign in to a platform on the person's behalf (the person signs in himself, by the hand off of B12); pay for a source or an alert; send an outreach e-mail by itself in Review first, or at all while mail sending is paused; show or apply to a cybersecurity role.
+- **Never:** read a platform whose terms forbid automated use for a person who has not accepted its risk sentence of the current version, or at more than a person's pace; sign in to a platform on the person's behalf (the person signs in himself, by the hand off of B12); pay for a source or an alert; send an outreach e-mail by itself in Review first, or at all while mail sending is paused; show or apply to a role the person's never apply rules exclude.
 
 ## Success criteria
 

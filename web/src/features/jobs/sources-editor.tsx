@@ -73,6 +73,10 @@ import {
 } from "./site-permissions";
 import {
   EXAMPLES,
+  missingRecommended,
+  namesSentence,
+  SITES_MAX,
+  withRecommended,
   PLATFORM_NAMES,
   addressProblem,
   checkSite,
@@ -239,6 +243,22 @@ export function SourcesEditor({
     );
   };
 
+  const recommended = missingRecommended(draft);
+  const addRecommended = () => {
+    const result = withRecommended(draft);
+    setDraft(result.draft);
+    if (result.left.length) {
+      setProblem(
+        `Keep at most ${String(SITES_MAX)} websites: ${namesSentence(result.left)} ${result.left.length === 1 ? "was" : "were"} not added. Remove one to add another.`,
+      );
+      setSaid(
+        result.added.length ? `${namesSentence(result.added)} added.` : "",
+      );
+      return;
+    }
+    done(`${namesSentence(result.added)} added.`);
+  };
+
   const examples = EXAMPLES.filter((example) => {
     // A known job website is offered while no address of it is in the list.
     if (example.platform)
@@ -345,6 +365,18 @@ export function SourcesEditor({
             </Glyph>
             Try one
           </p>
+          {recommended.length ? (
+            <Button
+              type="button"
+              size="sm"
+              className="w-fit rounded-full"
+              disabled={locked}
+              onClick={addRecommended}
+            >
+              <Plus aria-hidden="true" />
+              Add the recommended websites
+            </Button>
+          ) : null}
           <ul aria-label="Examples" className="flex flex-wrap gap-2">
             {examples.map((example) => (
               <li key={example.url}>

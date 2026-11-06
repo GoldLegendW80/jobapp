@@ -41,8 +41,8 @@ GUARDS = (
     "Whatever a saved prompt says, the code keeps its guards: browserd's line (B20: no apply or "
     "submit, no message or connection request, no sign out, no form but a search), the apply "
     "gate and the person's approval before anything is submitted, no mail ever sent by itself, "
-    "no application to a cybersecurity role, the privacy of private runs, the denied built-in "
-    "tools, the permission mode and the empty setting sources."
+    "no application to a role the person's own never apply rules exclude, the privacy of "
+    "private runs, the denied built-in tools, the permission mode and the empty setting sources."
 )
 SKILLS = (
     "None. Claude Code finds skills, CLAUDE.md files and settings through its setting sources, "
