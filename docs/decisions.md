@@ -389,3 +389,7 @@ The owner's answers during the product audit, in the session that built them.
   user"): the Search tab leaves the profile for the user's Settings, beside the Applications
   settings (`/settings/search` and `/settings/applications`); the user menu's Settings opens
   Search first, and `/profile?tab=search` leads there.
+- 2026-11-06, Apply to a selection (owner: "in the job list and map, i want being able with the
+  multi select to apply at all selected"): the Jobs list's and the map's selection get Apply. One
+  confirmation names every posting it applies to and every one it leaves out with its reason;
+  its click is the approval of exactly those listed, each started as one Apply click.
