@@ -52,8 +52,8 @@ files added, replaced, unchanged and kept, and the warnings (slugs and file name
 Then the command line's CVs and letters become the postings' documents, once:
 `./deploy.sh documents import-legacy you@example.org --dry-run` prints what would be imported,
 the same without `--dry-run` imports it (`python -m app.documents.cli import-legacy` in the api
-container). Each cv.json and letter.json becomes version 1 of the posting's CV or letter, template
-classic; a sent posting keeps its cv.pdf and letter.pdf byte for byte, frozen; a JSON that does not
+container). Each cv.json and letter.json becomes version 1 of the posting's CV or letter, the default
+template (`band`); a sent posting keeps its cv.pdf and letter.pdf byte for byte, frozen; a JSON that does not
 validate is kept as a draft with notes. Running it again changes nothing.
 
 `GET /api/jobs` lists the caller's jobs with filters (`status` and `type` repeated, `company`,
