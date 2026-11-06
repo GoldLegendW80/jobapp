@@ -33,7 +33,7 @@ RUNS = (
     *(
         run(f"Built the planner of the fleet, part {n}", 2400 + 140 * n, 100, pitch=140)
         for n in range(6)
-    ),  # fmt: skip
+    ),
     run("EDUCATION", 3500, 110, font=0, caps=True, spacing=100),
     run("Example University", 3700, 100, font=0),
     run("2016 to 2020", 3850, 80, colour="#6b6b6b"),
