@@ -87,6 +87,10 @@ li, p, h3 { overflow-wrap: anywhere; }
 .cells .lines { margin-top: 3.8pt; }
 .cell { flex: 0 0 25%; padding-right: 10pt; }
 .cells .cell:nth-child(n+5) { margin-top: var(--item-gap); }
+/* A cell holding a text over 40 characters takes the whole row, so a long text wraps on the
+   width of the body rather than a quarter of it (D27); the original's cells hold short ones. */
+.cell.wide { flex-basis: 100%; }
+.cells .cell + .cell.wide, .cells .cell.wide + .cell { margin-top: var(--item-gap); }
 .lang { font-size: 0.8em; line-height: 1.34; padding-top: 1.9pt; }
 
 .letter-body { padding: 24pt 0 24pt 105.7pt; }

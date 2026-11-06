@@ -29,7 +29,8 @@
 </section>
 {% endif %}
 
-<div class="cols">
+{% set left = (content.competencies or []) + (schools|map(attribute="degree")|select|list) + (schools|map(attribute="school")|select|list) + (content.skills|map(attribute="items")|sum(start=[])) %}
+<div class="cols{% if left|map("length")|select(">", 60)|list %} long{% endif %}">
 <div class="col left">
 {% if schools %}
 <section class="block">

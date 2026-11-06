@@ -91,6 +91,9 @@ li, p, h3 { overflow-wrap: anywhere; }
 
 .cols { display: flex; margin-top: 3.5pt; padding-top: var(--section-gap); }
 .left { flex: 0 0 199.9pt; margin-right: 32.2pt; }
+/* A text over 60 characters in the left column widens it to half the page, so long texts wrap on
+   more room (D27); the original's left column holds short ones. */
+.cols.long .left { flex-basis: 48%; }
 .right { flex: 1 1 auto; min-width: 0; }
 .block { border-top: 0.75pt solid #1a1917; padding: 4.2pt 0 1.6pt; margin-bottom: var(--section-gap); }
 .block > .heading { margin-top: var(--section-gap); }

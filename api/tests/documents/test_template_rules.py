@@ -116,6 +116,7 @@ REPOSITORY = {
     },
     "photo-columns": {
         ("cv.html.j2", "attribute", "an attribute other than a class name"),
+        ("cv.html.j2", "construct", "the construct Assign"),
         ("cv.html.j2", "construct", "the expression Compare"),
         ("cv.html.j2", "construct", "the expression CondExpr"),
         ("cv.html.j2", "construct", "the expression Filter"),

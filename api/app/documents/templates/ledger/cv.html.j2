@@ -78,7 +78,7 @@
 <h2 class="label">{{ base.label("skills") }}</h2>
 <div class="body cells">
 {% for group in content.skills %}
-<div class="cell">
+<div class="cell{% if (group["items"] + [group.label])|map("length")|select(">", 40)|list %} wide{% endif %}">
 <h3 class="title">{{ group.label }}</h3>
 <ul class="lines">
 {% for item in group["items"] %}
@@ -96,7 +96,7 @@
 <h2 class="label">{{ base.label("education") }}</h2>
 <div class="body cells">
 {% for item in schools %}
-<div class="cell">
+<div class="cell{% if [item.degree or "", item.school or "", item.location or ""]|map("length")|select(">", 40)|list %} wide{% endif %}">
 <h3 class="title">{{ item.degree }}</h3>
 <ul class="lines">
 {% if item.school %}<li>{{ item.school }}</li>{% endif %}
@@ -113,7 +113,7 @@
 <h2 class="label">{{ base.label("languages") }}</h2>
 <div class="body cells">
 {% for item in languages %}
-<p class="cell lang">{{ item.name }}{% if item.level %}: {{ item.level }}{% endif %}</p>
+<p class="cell lang{% if (item.name ~ ": " ~ (item.level or ""))|length > 40 %} wide{% endif %}">{{ item.name }}{% if item.level %}: {{ item.level }}{% endif %}</p>
 {% endfor %}
 </div>
 </section>
