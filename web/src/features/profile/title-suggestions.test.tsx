@@ -619,7 +619,7 @@ describe("in the profile's Search tab", () => {
     const state = fakeProfile(sections);
     fakeIdeas(answer());
     const user = userEvent.setup();
-    renderApp("/profile?tab=search");
+    renderApp("/settings/search");
     await screen.findByRole("form", { name: "Search" });
     await user.click(
       await screen.findByRole("button", {
@@ -661,7 +661,7 @@ describe("in the profile's Search tab", () => {
     };
     fakeProfile(sections);
     fakeIdeas(answer());
-    renderApp("/profile?tab=search");
+    renderApp("/settings/search");
     await screen.findByRole("form", { name: "Search" });
     expect(screen.queryByRole("button", { name: /^Add Analytics/ })).toBeNull();
   });

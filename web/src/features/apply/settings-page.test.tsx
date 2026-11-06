@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
+import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -276,8 +277,8 @@ describe("the Applications page", () => {
       screen.getByText(/You have not chosen one yet, so 80 applies/),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: "Open Profile, Search" }),
-    ).toHaveAttribute("href", "/profile?tab=search");
+      screen.getByRole("link", { name: "Open Settings, Search" }),
+    ).toHaveAttribute("href", "/settings/search");
   });
 
   it("says Not set for a threshold the person has not set", async () => {
@@ -538,6 +539,7 @@ describe("the Applications page", () => {
   });
 
   it("is reached from the Settings item of the user menu", async () => {
+    fakeProfile();
     fakeSettings();
     fakeCaps([]);
     fakeBank([]);
@@ -547,6 +549,9 @@ describe("the Applications page", () => {
       await screen.findByRole("button", { name: /Account menu/ }),
     );
     await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
+    await screen.findByRole("heading", { level: 1, name: "Search settings" });
+    expect(app.location()).toBe("/settings/search");
+    await user.click(screen.getByRole("tab", { name: "Applications" }));
     await screen.findByRole("heading", { name: "Apply automatically from" });
     expect(app.location()).toBe(PATH);
   });

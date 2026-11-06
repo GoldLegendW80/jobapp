@@ -82,7 +82,7 @@ test("the CV tab opens first and asks what is sent before anything is built", as
   });
   expect(saved.status()).toBe(200);
 
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await page.getByRole("tab", { name: "CV" }).click();
   await expect(page).toHaveURL(/\/profile\/cv$/);
   await expect(page.getByText("You have no CV yet")).toBeVisible();

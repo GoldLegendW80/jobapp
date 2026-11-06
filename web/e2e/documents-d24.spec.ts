@@ -102,7 +102,7 @@ test("an invented CV dropped on the CV tab is read, then the consent is asked", 
   });
   expect(saved.status()).toBe(200);
 
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await page.getByRole("tab", { name: "CV" }).click();
   await expect(page).toHaveURL(/\/profile\/cv$/);
   const panel = page.getByTestId("upload-panel");

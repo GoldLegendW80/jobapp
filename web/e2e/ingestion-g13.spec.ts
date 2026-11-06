@@ -246,7 +246,7 @@ test("accept a whole section: one revision in the History drawer of the profile"
     relocation: "Open to moving within France",
   });
 
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await page.getByRole("tab", { name: /^Answers,/ }).click();
   await page.getByRole("button", { name: "History of answers" }).click();
   const versions = page

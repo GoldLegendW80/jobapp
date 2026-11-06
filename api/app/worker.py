@@ -38,6 +38,8 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   after a worker stop the next tick queues it again (it clears arq's failed result first).
 - profile_titles(run_id): one run of the job titles agent (profile, app/profile/agents.py), in
   this process like apply_decide, so it takes one of the MAX_AGENT_RUNS slots. Tried once.
+- profile_interpret(run_id): one reading of a part of the About you document (profile,
+  app/profile/about_agent.py), in this process like profile_titles. Tried once.
 - profile_titles_tick: cron every minute: starts the automatic job title suggestions due after
   a profile save, an accepted Fill my profile item, an upload or a base CV (titles.py `due`).
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
@@ -482,6 +484,13 @@ async def profile_titles(ctx: dict[str, Any], run_id: str) -> None:
     await profile_agents.execute(agent_context(ctx), uuid.UUID(run_id))
 
 
+async def profile_interpret(ctx: dict[str, Any], run_id: str) -> None:
+    """One reading of a part of the About you document (app/profile/about_agent.py)."""
+    from app.profile import about_agent
+
+    await about_agent.execute(agent_context(ctx), uuid.UUID(run_id))
+
+
 async def profile_titles_tick(ctx: dict[str, Any]) -> int:
     """Starts the automatic job title suggestions that are due (app/profile/titles.py `due`)."""
     from app.profile import agents as profile_agents
@@ -569,6 +578,7 @@ def agents_queue() -> QueueSpec:
             ),
             func(reap_agent_runs, name="reap_agent_runs", timeout=60, max_tries=1),
             func(profile_titles, name="profile_titles", timeout=job_timeout_s, max_tries=1),
+            func(profile_interpret, name="profile_interpret", timeout=job_timeout_s, max_tries=1),
             func(profile_titles_tick, name="profile_titles_tick", timeout=60, max_tries=1),
         ],
         cron_jobs=[

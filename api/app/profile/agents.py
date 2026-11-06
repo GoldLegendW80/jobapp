@@ -222,6 +222,9 @@ async def tick(sessions: sessionmaker[Session], now: datetime, redis: Any) -> in
     return started
 
 
+# The agent that reads a part of the About you document registers with this module.
+from app.profile import about_agent as _about  # noqa: E402, F401
+
 if importlib.util.find_spec("claude_agent_sdk") is not None:
     # The worker, which runs the tool: importing it registers it with the runner.
     from app.profile import titles_tools as _tools  # noqa: F401

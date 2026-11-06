@@ -6,8 +6,10 @@ search, answers), each validated by its Pydantic model in `schemas.py` before it
 section to `profile_revisions` under that number, so any past version can be shown or restored.
 The photo lives in its own columns, never in the JSON, and is not a section: storing or removing
 it adds no revision (see photo.py for what is stored). `profile_title_suggestions` keeps the job
-titles agent's last answer per person (titles.py).
-Migrations: alembic/versions/0003_profile.py and 0032_profile_title_suggestions.py, which must
+titles agent's last answer per person (titles.py), and `profile_about` the "About you" document
+of each person with its last reading by the model (about.py).
+Migrations: alembic/versions/0003_profile.py, 0032_profile_title_suggestions.py and
+0034_profile_about.py, which must
 stay in step with this file (`alembic check` in the tests compares them).
 """
 
@@ -132,3 +134,41 @@ class TitleSuggestions(Base):
     messages: Mapped[list[dict[str, Any]]] = mapped_column(
         pg.JSONB, nullable=False, server_default=sa.text("'[]'::jsonb")
     )
+
+
+class ProfileAbout(Base):
+    """The person's "About you" document, the Markdown they write, and what the model read in its
+    last part (app/profile/about.py). Not a section: no revision, never exported; what it changes
+    in the profile goes through the sections' own saves. Migration 0034."""
+
+    __tablename__ = "profile_about"
+    __table_args__ = (
+        sa.CheckConstraint("char_length(text) <= 300000", name="text_length"),
+        sa.CheckConstraint("version >= 0", name="version_not_negative"),
+        sa.CheckConstraint("jsonb_typeof(parts) = 'object'", name="parts_is_object"),
+        sa.CheckConstraint("dones >= 0", name="dones_not_negative"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    text: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    # Counts the saves of the text: a save sends the version it was based on (two tabs).
+    version: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
+    # By part key: {applied: the digest of the part last in step with the profile, basis: the
+    # digest of what the profile held of it then, blocks: the fact block titles it holds}.
+    parts: Mapped[dict[str, Any]] = mapped_column(
+        pg.JSONB, nullable=False, server_default=sa.text("'{}'::jsonb")
+    )
+    # The last Done: the part as it was sent, its run, and once read the checked changes.
+    interpretation: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
+    # The last Apply, until the next one: what each section held before, and after.
+    undo: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
+    run_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("agent_runs.id", ondelete="SET NULL")
+    )
+    # Done clicks that called the model on the UTC day `dones_on`.
+    dones_on: Mapped[date | None] = mapped_column(sa.Date)
+    dones: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)

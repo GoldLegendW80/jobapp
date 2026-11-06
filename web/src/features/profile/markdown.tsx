@@ -4,16 +4,26 @@
  * as the characters typed and never runs. Links keep only http, https and mailto addresses.
  *
  * Supported: ATX headings, paragraphs, unordered and ordered lists (one level, continuation
- * lines joined), blockquotes, fenced code, horizontal rules; inline code, bold, italic and links.
+ * lines joined), blockquotes, fenced code, tables (a header row and a line of dashes), horizontal
+ * rules; inline code, bold, italic and links. As in CommonMark, an underscore inside a word
+ * (`data_tools`) is a character, never the start of italics.
  */
 import type { ReactNode } from "react";
 
 import { Separator } from "@/components/ui/separator";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 import { parseBlocks } from "./markdown-parse";
 
 const INLINE =
-  /(`[^`]+`)|(\*\*[^*]+\*\*|__[^_]+__)|(\*[^*\s][^*]*\*|_[^_\s][^_]*_)|(\[[^\]]+\]\([^)\s]+\))/;
+  /(`[^`]+`)|(\*\*[^*]+\*\*|(?<![\p{L}\p{N}])__[^_]+__(?![\p{L}\p{N}]))|(\*[^*\s][^*]*\*|(?<![\p{L}\p{N}_])_[^_\s][^_]*_(?![\p{L}\p{N}_]))|(\[[^\]]+\]\([^)\s]+\))/u;
 const SAFE_HREF = /^(https?:\/\/|mailto:)/i;
 
 function renderInline(text: string, keyPrefix = "i"): ReactNode[] {
@@ -117,6 +127,34 @@ export function Markdown({ source }: { source: string }) {
               >
                 <code>{block.text}</code>
               </pre>
+            );
+          case "table":
+            return (
+              <Table key={key}>
+                <TableHeader>
+                  <TableRow>
+                    {block.head.map((cell, j) => (
+                      <TableHead key={`${key}-h${j}`} scope="col">
+                        {renderInline(cell, `${key}-h${j}`)}
+                      </TableHead>
+                    ))}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {block.rows.map((row, r) => (
+                    <TableRow key={`${key}-r${r}`}>
+                      {block.head.map((_, j) => (
+                        <TableCell
+                          key={`${key}-r${r}-${j}`}
+                          label={block.head[j]?.replace(/[*_`]/g, "")}
+                        >
+                          {renderInline(row[j] ?? "", `${key}-r${r}-${j}`)}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             );
           case "rule":
             // A thematic break, read as one by a screen reader.
