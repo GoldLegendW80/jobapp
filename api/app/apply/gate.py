@@ -574,8 +574,8 @@ def confirm_review(
     """Review first with the apply agent (A20, apply/confirm.py): the person's Confirm and send
     is this gate's decision, bound to the hash of the list the page showed (the caller
     commits). Raises NotFoundError, or RefusedError: `not_ready`, `stale` (the list changed
-    since the page read it) or `session_lost` (the held session is gone: the application is `failed`, committed by the
-    caller, and the page offers Try again)."""
+    since the page read it) or `session_lost` (the held session is gone: the application is
+    `failed`, committed by the caller, and the page offers Try again)."""
     from app.apply import confirm
 
     application, _ = lock(db, user_id, application_id)
