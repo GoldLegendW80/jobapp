@@ -112,3 +112,6 @@ li, p, h3 { overflow-wrap: anywhere; }
 .name { white-space: nowrap; }
 .name.long { white-space: normal; }
 .name .word { white-space: nowrap; }
+/* a word over 14 letters: smaller, and broken inside only when it cannot fit the line whole */
+.name.longword { font-size: 1.2em; }
+.name.longword .word { white-space: normal; }
