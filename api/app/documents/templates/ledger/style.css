@@ -37,7 +37,7 @@ li, p, h3 { overflow-wrap: anywhere; }
 .name.longword { font-size: 1.2em; }  /* a word over 14 letters stays whole on the line */
 .headline { margin-top: 0.8pt; font-weight: 700; letter-spacing: 0.01em; line-height: 1.3; }
 .contact {
-  flex: 0 1 auto;
+  flex: 0 0.001 auto;  /* gives way only once the name is at its narrowest */
   min-width: 211.2pt;
   display: grid;
   grid-template-columns: minmax(105.6pt, max-content) minmax(105.6pt, max-content);

@@ -43,7 +43,7 @@ li, p, h3 { overflow-wrap: anywhere; }
   text-transform: uppercase;
 }
 .contact {
-  flex: 0 1 auto;
+  flex: 0 0.001 auto;  /* gives way only once the name is at its narrowest */
   min-width: 158pt;
   display: flex;
   flex-direction: column;
