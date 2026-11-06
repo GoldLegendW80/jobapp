@@ -460,10 +460,8 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
         )
     assert letter_ceiling == left
     assert found.input["script"] == "documents_cv_shorten"
-    assert found.input["long_fields"][:2] in (
-        ["summary", "experience.0.bullets.0"],
-        ["experience.0.bullets.0", "summary"],
-    )
+    # band, the default, allows a summary of 420 characters: the bullet alone is too long
+    assert found.input["long_fields"][:2] == ["experience.0.bullets.0"]
     execute(alex, shorten_run)
     with alex.factory() as db:
         modes = db.execute(

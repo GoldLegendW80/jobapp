@@ -3,8 +3,8 @@
 is taken by the CVs written from it afterwards, not by those already written; one posting's switch
 leaves its base CV and its letter as they were; writing a CV again from another base CV takes that
 base CV's template unless the person switched it by hand since the last write; a template no
-longer served renders with `classic`, which its version records, is absent from the gallery,
-which is what the picker's note reads, and is no switch by hand."""
+longer served renders with the default (`band`), which its version records, is absent from the
+gallery, which is what the picker's note reads, and is no switch by hand."""
 
 from __future__ import annotations
 
@@ -181,7 +181,7 @@ def test_one_postings_switch_leaves_its_base_cv_and_its_letter_unchanged(
     assert _template(factory, cv) == "ledger"
 
 
-def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery(
+def test_a_template_no_longer_served_renders_with_the_default_and_leaves_the_gallery(
     factory: sessionmaker[Session], api: Api, clock: Any, queue: RecordingQueue
 ) -> None:
     alex, alex_id = _person(factory, api, ALEX, clock)
@@ -195,14 +195,14 @@ def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery
 
     assert _save(api, alex, cv, CV, 1).status_code == 200
     _render(factory, queue, clock)
-    classic = templates.registry()[templates.DEFAULT]
+    default = templates.registry()[templates.DEFAULT]
     with factory() as db:
         assert render_job.template_of(db, alex_id, retired).slug == "band"
         (version,) = db.execute(
             sa.select(DocumentVersion).where(DocumentVersion.document_id == cv)
         ).scalars()
-        # What printed it: `classic`, with its version, never the slug that is gone.
-        assert (version.template_slug, version.template_version) == ("band", classic.version)
+        # What printed it: the default, with its version, never the slug that is gone.
+        assert (version.template_slug, version.template_version) == ("band", default.version)
         assert version.pdf_sha256 is not None  # rendered, never refused
     # What the picker reads for its note: the document's slug, absent from the gallery.
     assert api.get(f"/api/documents/{cv}", token=alex).json()["template_slug"] == retired
@@ -217,22 +217,22 @@ def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery
     ("steps", "expected"),
     [
         (["write A", "write B"], "photo-columns"),
-        (["write A", "switch compact", "write B"], "ledger"),
-        (["write A", "switch compact", "write A"], "ledger"),
+        (["write A", "switch ledger", "write B"], "ledger"),
+        (["write A", "switch ledger", "write A"], "ledger"),
         # Switched before the last write: the next write from another base takes its template.
-        (["write A", "switch compact", "write B", "write C"], "ledger"),
-        (["write A", "switch compact", "switch classic", "write B"], "band"),
-        (["write A", "switch compact", "save", "prune", "write B"], "ledger"),
+        (["write A", "switch ledger", "write B", "write C"], "band"),
+        (["write A", "switch ledger", "switch band", "write B"], "band"),
+        (["write A", "switch ledger", "save", "prune", "write B"], "ledger"),
         (["write A", "save", "write B"], "photo-columns"),
-        (["save", "switch compact", "write B"], "ledger"),
+        (["save", "switch ledger", "write B"], "ledger"),
         (["save", "write B"], "photo-columns"),
         # A chat that switches the template with its new content is the person's switch too.
-        (["write A", "chat compact", "write B"], "ledger"),
-        (["write A", "chat compact", "chat classic", "write B"], "band"),
-        (["write A", "chat compact", "chat classic", "prune", "write B"], "band"),
-        (["write A", "chat compact", "write B", "write C"], "ledger"),
+        (["write A", "chat ledger", "write B"], "ledger"),
+        (["write A", "chat ledger", "chat band", "write B"], "band"),
+        (["write A", "chat ledger", "chat band", "prune", "write B"], "band"),
+        (["write A", "chat ledger", "write B", "write C"], "band"),
         (["write A", "chat", "write B"], "photo-columns"),
-        (["chat compact", "write B"], "ledger"),
+        (["chat ledger", "write B"], "ledger"),
     ],
 )
 def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_the_last_write(
@@ -245,7 +245,8 @@ def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_
 ) -> None:
     alex, alex_id = _person(factory, api, ALEX, clock)
     bases = {"A": _base_cv(factory, alex_id, clock)}
-    for name, slug in (("B", "photo-columns"), ("C", "ledger")):
+    # C on band, A's own: a fourth slug to switch to by hand is not served (D27)
+    for name, slug in (("B", "photo-columns"), ("C", "band")):
         bases[name] = _base_cv(factory, alex_id, clock)
         assert _patch(api, alex, bases[name], slug).status_code == 200
     cv = _posting_document(factory, alex_id, _posting(factory, alex_id), Kind.cv, clock)
@@ -278,11 +279,11 @@ def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_
     assert [_template(factory, bases[name]) for name in "ABC"] == [
         "band",
         "photo-columns",
-        "ledger",
+        "band",
     ]
 
 
-def test_a_writers_version_on_a_removed_template_records_classic_and_its_render_keeps_it(
+def test_a_writers_version_on_a_removed_template_records_the_default_and_its_render_keeps_it(
     factory: sessionmaker[Session], api: Api, clock: Any
 ) -> None:
     alex, alex_id = _person(factory, api, ALEX, clock)
@@ -343,7 +344,7 @@ def test_a_template_no_longer_served_is_never_read_as_a_switch_by_hand(
     assert _template(factory, cv) == "ledger"
 
 
-def test_a_chats_version_on_a_template_no_longer_served_records_classic_and_its_render_keeps_it(
+def test_a_chats_version_on_a_template_no_longer_served_records_the_default_and_its_render_keeps_it(
     factory: sessionmaker[Session], api: Api, clock: Any
 ) -> None:
     _, alex_id = _person(factory, api, ALEX, clock)
@@ -361,7 +362,7 @@ def test_a_chats_version_on_a_template_no_longer_served_records_classic_and_its_
         (version,) = db.execute(
             sa.select(DocumentVersion).where(DocumentVersion.document_id == cv)
         ).scalars()
-        # The render reused the chat's version: printed with `classic`, which it records.
+        # The render reused the chat's version: printed with the default, which it records.
         assert (version.number, version.template_slug) == (number, "band")
         assert version.pdf_sha256 is not None
         document = store.get(db, alex_id, cv)

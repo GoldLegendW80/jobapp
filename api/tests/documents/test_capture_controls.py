@@ -422,7 +422,7 @@ def test_an_unhandled_error_stays_out_of_the_server_log(
         ("/api/document-generations/anything/cancel", True),
         ("/api/document-generationsx", False),
         ("/api/document-templates", False),
-        ("/api/document-templates/classic/thumbnail", False),
+        ("/api/document-templates/band/thumbnail", False),
         ("/api/jobs", False),
         ("/", False),
     ],
@@ -458,7 +458,7 @@ def test_private_cache_rule_covers_only_the_documents_prefix(path: str, private:
 
 
 def test_bundled_thumbnail_stays_publicly_cached(world: Any) -> None:
-    answer = world.api.get("/api/document-templates/classic/thumbnail?kind=cv", token=world.token)
+    answer = world.api.get("/api/document-templates/band/thumbnail?kind=cv", token=world.token)
     assert answer.status_code == 200
     assert answer.content.startswith(b"\x89PNG")
     assert answer.headers["cache-control"].startswith("public, max-age=")

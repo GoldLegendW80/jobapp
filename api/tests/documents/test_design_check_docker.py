@@ -52,31 +52,23 @@ def checker(stack: Stack) -> design_check.Check:
 
 
 def probe(css: str = "", replace: tuple[tuple[str, str], ...] = ()) -> templates.Template:
-    """classic, with `css` appended and each `replace` applied to its style sheet."""
-    classic = templates.registry()["band"]
-    style = classic.files["style.css"]
+    """band, with `css` appended and each `replace` applied to its style sheet."""
+    band = templates.registry()["band"]
+    style = band.files["style.css"]
     for old, new in replace:
         style = re.sub(old, new, style)
-    manifest = json.loads((classic.folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((band.folder / "manifest.json").read_text(encoding="utf-8"))
     manifest["slug"] = "probe"
-    return templates.from_files(manifest, {**classic.files, "style.css": style + css})
+    return templates.from_files(manifest, {**band.files, "style.css": style + css})
 
 
-# elegant's double frame is a `position: fixed` box over the whole page, transparent inside: the
-# check takes any box over a field for a cover, and a user template cannot hold a fixed box
-# (template_css), so this bundled one is the only template to meet it.
-COVERED_BY_A_FRAME = frozenset(("elegant",))
 
 
 @pytest.mark.parametrize("slug", sorted(templates.registry()))
 def test_every_bundled_template_shows_every_field(stack: Stack, slug: str) -> None:
     template = templates.registry()[slug]
     found = asyncio.run(design_check.check_template(template, checker(stack)))
-    if slug in COVERED_BY_A_FRAME:
-        assert found
-        assert {p.code for p in found} == {"covered"}
-    else:
-        assert found == [], [(p.code, p.detail) for p in found]
+    assert found == [], [(p.code, p.detail) for p in found]
 
 
 HIDING = [

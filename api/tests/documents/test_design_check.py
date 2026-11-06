@@ -145,7 +145,7 @@ def _checked(
     return Checked(
         width=width,
         scroll_width=width if scroll_width is None else scroll_width,
-        height=10_000 // width,  # the tightest step, the wider page, is shorter
+        height=1_000_000 // width,  # the tightest step, the wider page, is shorter
         shown=shown,
         scale=1,
         found=tuple((seen,) for _ in range(needles)),

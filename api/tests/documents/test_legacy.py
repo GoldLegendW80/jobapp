@@ -245,7 +245,7 @@ def test_every_shape_of_posting_is_imported_as_the_plan_says(world: World) -> No
     sent = documents_of(world.factory, world.applied)
     assert set(sent) == {Kind.cv, Kind.letter}
     for kind, document in sent.items():
-        assert document.template_slug == store.CLASSIC
+        assert document.template_slug == store.DEFAULT_TEMPLATE
         assert document.draft_written_by is Author.import_
         assert document.base_document_id is None
         assert document.language.value == "en"

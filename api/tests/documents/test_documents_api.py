@@ -466,10 +466,10 @@ def test_template_and_language_switches(
 def test_templates_thumbnails_and_settings(two: dict[str, Any], api: Api) -> None:
     alex, blake = two["alex"], two["blake"]
     gallery = api.get("/api/document-templates", token=alex).json()["templates"]
-    classic = next(t for t in gallery if t["slug"] == "band")
-    assert classic["user"] is False
-    assert set(classic["name"]) == {"en", "fr"}
-    thumbnail = api.get(classic["thumbnails"]["cv"], token=blake)  # public data of the app
+    band = next(t for t in gallery if t["slug"] == "band")
+    assert band["user"] is False
+    assert set(band["name"]) == {"en", "fr"}
+    thumbnail = api.get(band["thumbnails"]["cv"], token=blake)  # public data of the app
     assert thumbnail.status_code == 200
     assert thumbnail.content.startswith(b"\x89PNG")
     assert thumbnail.headers["cache-control"].startswith("public, max-age=")
