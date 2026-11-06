@@ -32,7 +32,7 @@ def _document(conn: sa.Connection, user: str, posting: str, kind: str) -> str:
             sa.text(
                 "INSERT INTO documents (user_id, scope, posting_id, kind, language, "
                 "template_slug, draft, draft_schema, draft_written_by, draft_updated_at) "
-                "VALUES (:u, 'posting', :p, :k, 'en', 'classic', '{}'::jsonb, 1, 'writer', now()) "
+                "VALUES (:u, 'posting', :p, :k, 'en', 'band', '{}'::jsonb, 1, 'writer', now()) "
                 "RETURNING id"
             ),
             {"u": user, "p": posting, "k": kind},
@@ -45,7 +45,7 @@ def _version(conn: sa.Connection, user: str, document: str) -> None:
         sa.text(
             "INSERT INTO document_versions (document_id, user_id, number, content, "
             "content_schema, content_hash, language, template_slug, template_version, origin) "
-            "VALUES (:d, :u, 1, '{}'::jsonb, 1, :h, 'en', 'classic', 1, 'generated')"
+            "VALUES (:d, :u, 1, '{}'::jsonb, 1, :h, 'en', 'band', 1, 'generated')"
         ),
         {"d": document, "u": user, "h": b"\x00" * 32},
     )

@@ -556,11 +556,11 @@ def _bases(world: World, *slugs: str) -> list[uuid.UUID]:
     ("before", "named", "recorded", "again"),
     [
         # The default deleted while the CV waits: the tick names the oldest other one.
-        ("delete", "sidebar", "sidebar", "banner"),
+        ("delete", "photo-columns", "photo-columns", "band"),
         # No base CV when the CV's generation was created: the tick names the first one made.
-        ("none", "sidebar", "sidebar", "banner"),
+        ("none", "photo-columns", "photo-columns", "band"),
         # A switch by hand while it waits is kept, and still is one for the next write.
-        ("switch", "compact", "classic", "compact"),
+        ("switch", "ledger", "band", "ledger"),
     ],
 )
 def test_the_template_a_named_base_cv_gives_is_the_writes_never_a_switch_by_hand(
@@ -596,14 +596,14 @@ def test_the_template_a_named_base_cv_gives_is_the_writes_never_a_switch_by_hand
             sa.select(Document.id).where(Document.posting_id == posting, Document.kind == Kind.cv)
         )
         if before == "switch":
-            assert render_job.switch(db, who.user, cv, at=AT, template_slug="compact")
+            assert render_job.switch(db, who.user, cv, at=AT, template_slug="ledger")
         db.commit()
-    sidebar, banner = _bases(who, "sidebar", "banner")
+    columns, band = _bases(who, "photo-columns", "band")
     if before != "none":
         with factory() as db:
             default = store.delete_base(db, who.user, who.base, AT)
             assert default is not None
-            assert default.id == sidebar
+            assert default.id == columns
             db.commit()
     [waiting] = posting_cv(who.generations(posting))
     assert waiting["base_document_id"] is None
@@ -614,7 +614,7 @@ def test_the_template_a_named_base_cv_gives_is_the_writes_never_a_switch_by_hand
         document = store.get(db, who.user, cv)
         assert generation is not None
         assert document is not None
-        assert (generation.base_document_id, document.base_document_id) == (sidebar, sidebar)
+        assert (generation.base_document_id, document.base_document_id) == (columns, columns)
         assert (document.template_slug, generation.estimate[generate.WRITE_TEMPLATE]) == (
             named,
             recorded,
@@ -625,9 +625,9 @@ def test_the_template_a_named_base_cv_gives_is_the_writes_never_a_switch_by_hand
         document = store.get(db, who.user, cv)
         assert document is not None
         mode, trigger = GenerationMode.posting, GenerationTrigger.click
-        generate.create(db, document, mode, trigger, banner, {}, 1000, at=AT)
+        generate.create(db, document, mode, trigger, band, {}, 1000, at=AT)
         db.commit()
-        assert (document.template_slug, document.base_document_id) == (again, banner)
+        assert (document.template_slug, document.base_document_id) == (again, band)
 
 
 def test_a_pass_that_finds_the_person_held_does_nothing(world: World) -> None:

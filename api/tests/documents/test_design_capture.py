@@ -234,7 +234,7 @@ def test_two_refusals_keep_the_default_design_and_say_so(
     assert generation.status is GenerationStatus.failed
     assert generation.error == "invalid_output"
     assert own_templates(who.factory, who.user) == []
-    assert document_row(who.factory, base).template_slug == "classic"
+    assert document_row(who.factory, base).template_slug == "band"
     assert versions(who.factory, base) == []
     assert who.queue.jobs == []
 
@@ -321,7 +321,7 @@ def test_the_file_without_its_bytes_fails_the_capture_at_once_and_keeps_classic(
     assert run_id is None  # no model is called
     assert (generation.status, generation.error) == (GenerationStatus.failed, "binding_gone")
     assert services.asked == []
-    assert document_row(who.factory, base).template_slug == "classic"
+    assert document_row(who.factory, base).template_slug == "band"
 
 
 def test_a_capture_that_fails_after_the_conversion_leaves_the_cv_converted(
@@ -399,7 +399,7 @@ def test_a_persons_template_never_resolves_for_another(
     other = person(factory, migrated_url, USER_B)
     with factory() as db:
         assert template_system.resolve(db, other.user, row.slug) is None
-        assert render_job.template_of(db, other.user, row.slug).slug == "classic"
+        assert render_job.template_of(db, other.user, row.slug).slug == "band"
         with pytest.raises(store.TemplateUnknownError):
             render_job.switch(db, other.user, other.base, at=AT, template_slug=row.slug)
 
@@ -418,10 +418,10 @@ def test_a_row_that_breaks_the_rules_resolves_to_nothing(
         )
         db.commit()
         assert template_system.resolve(db, who.user, row.slug) is None
-        assert render_job.template_of(db, who.user, row.slug).slug == "classic"
+        assert render_job.template_of(db, who.user, row.slug).slug == "band"
         db.execute(sa.delete(DocumentUserTemplate).where(DocumentUserTemplate.id == row.id))
         db.commit()
-        assert render_job.template_of(db, who.user, row.slug).slug == "classic"
+        assert render_job.template_of(db, who.user, row.slug).slug == "band"
 
 
 def test_the_layouts_texts_go_through_the_secret_rules_one_and_two_at_a_time() -> None:

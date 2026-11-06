@@ -206,7 +206,7 @@ def test_the_checks_refuse_a_base_cv_that_is_not_one(
         "posting_id": posting,
         "kind": "cv",
         "language": "en",
-        "template_slug": "classic",
+        "template_slug": "band",
         "draft": {},
         "draft_schema": 1,
         "draft_written_by": "user",
@@ -219,16 +219,16 @@ def test_the_checks_refuse_a_base_cv_that_is_not_one(
 
 def test_deleting_a_base_cv_leaves_the_posting_cvs_written_from_it(db: Session) -> None:
     user = add_user(db, USER_A)
-    base = _base(db, user, template_slug="sidebar")
+    base = _base(db, user, template_slug="photo-columns")
     document = _posting_cv(db, user)
     assert document.base_document_id == base.id
-    assert document.template_slug == "sidebar"
+    assert document.template_slug == "photo-columns"
     store.delete_base(db, user, base.id, AT)
     db.expire_all()
     kept = store.get(db, user, document.id)
     assert kept is not None
     assert kept.base_document_id is None
-    assert kept.template_slug == "sidebar"
+    assert kept.template_slug == "photo-columns"
 
 
 def test_the_uploaded_file_deleted_leaves_the_base_cv(db: Session) -> None:
@@ -251,28 +251,28 @@ def test_get_or_create_takes_the_language_of_the_posting_and_the_template_it_inh
     db: Session,
 ) -> None:
     user = add_user(db, USER_A)
-    _base(db, user, "Default", template_slug="banner")
-    other = _base(db, user, "Other", template_slug="compact")
+    _base(db, user, "Default", template_slug="photo-columns")
+    other = _base(db, user, "Other", template_slug="ledger")
     english = _posting_cv(db, user, ENGLISH)
-    assert (english.language, english.template_slug) == (Language.en, "banner")
+    assert (english.language, english.template_slug) == (Language.en, "photo-columns")
     posting = add_posting(db, user, FRENCH)
     cv = store.get_or_create(db, user, posting, Kind.cv, at=AT, base_document_id=other.id)
     assert (cv.language, cv.template_slug, cv.base_document_id) == (
         Language.fr,
-        "compact",
+        "ledger",
         other.id,
     )
     letter = store.get_or_create(db, user, posting, Kind.letter, at=AT)
-    assert (letter.template_slug, letter.base_document_id) == ("compact", None)
+    assert (letter.template_slug, letter.base_document_id) == ("ledger", None)
     assert store.get_or_create(db, user, posting, Kind.cv, at=AT) == cv
     lone = add_posting(db, user, "")
-    assert store.get_or_create(db, user, lone, Kind.letter, at=AT).template_slug == "classic"
+    assert store.get_or_create(db, user, lone, Kind.letter, at=AT).template_slug == "band"
 
 
 def test_without_a_base_cv_a_posting_cv_is_classic(db: Session) -> None:
     user = add_user(db, USER_A)
     document = _posting_cv(db, user)
-    assert (document.template_slug, document.base_document_id) == ("classic", None)
+    assert (document.template_slug, document.base_document_id) == ("band", None)
     assert c.parse("cv", document.draft) == c.CvContent()
 
 
@@ -323,7 +323,7 @@ def test_the_composite_key_refuses_a_document_of_a_on_a_posting_of_b(db: Session
                 posting_id=posting_of_b,
                 kind="cv",
                 language="en",
-                template_slug="classic",
+                template_slug="band",
                 draft={},
                 draft_schema=1,
                 draft_written_by="user",
@@ -450,13 +450,13 @@ def test_a_snapshot_of_an_unchanged_draft_reuses_the_version_another_template_ma
     one = _version(db, document)
     again, made = store.snapshot(db, user, document.id, Origin.edited, at=AT)
     assert (again.number, made) == (one, False)
-    _switch(db, document, "sidebar")
+    _switch(db, document, "photo-columns")
     switched, made = store.snapshot(db, user, document.id, Origin.template, at=AT)
     assert (switched.number, made, switched.origin, switched.template_slug) == (
         2,
         True,
         Origin.template,
-        "sidebar",
+        "photo-columns",
     )
     newer, made = store.snapshot(db, user, document.id, Origin.edited, at=AT, template_version=2)
     assert (newer.number, made) == (3, True)
@@ -609,7 +609,7 @@ def test_every_store_function_leaves_a_frozen_version_as_it_was(db: Session) -> 
     reused, made = store.snapshot(db, user, document.id, Origin.edited, at=AT)
     assert made
     assert reused.number == number + 1
-    _switch(db, document, "banner")
+    _switch(db, document, "ledger")
     store.snapshot(db, user, document.id, Origin.template, at=AT)
     store.restore(db, user, document.id, number, at=AT)
     store.save_draft(
@@ -647,7 +647,7 @@ PROTECTED_CHANGES = {
     "content_hash": "decode(repeat('00', 32), 'hex')",
     "content_schema": "2",
     "language": "'fr'",
-    "template_slug": "'banner'",
+    "template_slug": "'ledger'",
     "template_version": "9",
     "pdf": "NULL",
     "pdf_sha256": "decode(repeat('11', 32), 'hex')",
@@ -1114,7 +1114,7 @@ def test_the_schema_refuses_a_version_under_another_persons_document(db: Session
                 "INSERT INTO document_versions (document_id, user_id, number, content, "
                 "content_schema, content_hash, language, template_slug, template_version, "
                 "origin) VALUES (:d, :u, 1, '{}', 1, decode(repeat('00', 32), 'hex'), 'en', "
-                "'classic', 1, 'edited')"
+                "'band', 1, 'edited')"
             ),
             {"d": document.id, "u": b},
         )
@@ -1146,7 +1146,7 @@ CROSS_USER = {
     "document_versions.legacy_file_id of a base CV": (
         "INSERT INTO document_versions (document_id, user_id, number, content, content_schema, "
         "content_hash, language, template_slug, template_version, origin, legacy_file_id) "
-        "VALUES (:a_base, :a, 1, '{}', 1, decode(repeat('00', 32), 'hex'), 'en', 'classic', 1, "
+        "VALUES (:a_base, :a, 1, '{}', 1, decode(repeat('00', 32), 'hex'), 'en', 'band', 1, "
         "'legacy', :a_file)",
         "document_version_legacy_file",
     ),

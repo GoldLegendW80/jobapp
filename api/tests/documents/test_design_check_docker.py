@@ -53,7 +53,7 @@ def checker(stack: Stack) -> design_check.Check:
 
 def probe(css: str = "", replace: tuple[tuple[str, str], ...] = ()) -> templates.Template:
     """classic, with `css` appended and each `replace` applied to its style sheet."""
-    classic = templates.registry()["classic"]
+    classic = templates.registry()["band"]
     style = classic.files["style.css"]
     for old, new in replace:
         style = re.sub(old, new, style)

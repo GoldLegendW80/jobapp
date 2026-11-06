@@ -138,23 +138,23 @@ def test_a_base_cvs_new_template_is_taken_by_the_cvs_written_afterwards_only(
     written = _posting_document(factory, alex_id, _posting(factory, alex_id), Kind.cv, clock)
     assert _save(api, alex, written, CV, 1).status_code == 200
     _render(factory, queue, clock)
-    assert _template(factory, written) == "classic"
+    assert _template(factory, written) == "band"
 
-    changed = _patch(api, alex, base, "sidebar")
+    changed = _patch(api, alex, base, "photo-columns")
     assert changed.status_code == 200
-    assert changed.json()["template_slug"] == "sidebar"
+    assert changed.json()["template_slug"] == "photo-columns"
     listed = api.get("/api/documents/base-cvs", token=alex).json()["base_cvs"]
-    assert [(one["id"], one["template_slug"]) for one in listed] == [(str(base), "sidebar")]
+    assert [(one["id"], one["template_slug"]) for one in listed] == [(str(base), "photo-columns")]
 
     # The CV already written keeps its template, even when it is written again from that base.
-    assert _write(factory, alex_id, written, clock) == "classic"
+    assert _write(factory, alex_id, written, clock) == "band"
     # A posting found afterwards: its CV and its letter take the base CV's new template.
     later = _posting(factory, alex_id, "Example Robotics")
     cv = _posting_document(factory, alex_id, later, Kind.cv, clock)
-    assert _template(factory, cv) == "sidebar"
-    assert _write(factory, alex_id, cv, clock) == "sidebar"
+    assert _template(factory, cv) == "photo-columns"
+    assert _write(factory, alex_id, cv, clock) == "photo-columns"
     letter = _posting_document(factory, alex_id, later, Kind.letter, clock)
-    assert _template(factory, letter) == "sidebar"
+    assert _template(factory, letter) == "photo-columns"
 
 
 def test_one_postings_switch_leaves_its_base_cv_and_its_letter_unchanged(
@@ -167,18 +167,18 @@ def test_one_postings_switch_leaves_its_base_cv_and_its_letter_unchanged(
     cv = _posting_document(factory, alex_id, posting, Kind.cv, clock)
     letter = _posting_document(factory, alex_id, posting, Kind.letter, clock)
 
-    switched = _patch(api, alex, cv, "compact")
+    switched = _patch(api, alex, cv, "ledger")
     assert switched.status_code == 200
-    assert switched.json()["template_slug"] == "compact"
+    assert switched.json()["template_slug"] == "ledger"
     assert (_template(factory, cv), _template(factory, base), _template(factory, letter)) == (
-        "compact",
-        "classic",
-        "classic",
+        "ledger",
+        "band",
+        "band",
     )
-    assert api.get(f"/api/documents/{base}", token=alex).json()["template_slug"] == "classic"
+    assert api.get(f"/api/documents/{base}", token=alex).json()["template_slug"] == "band"
     # Another person cannot switch it, nor learn that it exists.
-    assert _patch(api, blake, cv, "banner").status_code == 404
-    assert _template(factory, cv) == "compact"
+    assert _patch(api, blake, cv, "photo-columns").status_code == 404
+    assert _template(factory, cv) == "ledger"
 
 
 def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery(
@@ -197,42 +197,42 @@ def test_a_template_no_longer_served_renders_with_classic_and_leaves_the_gallery
     _render(factory, queue, clock)
     classic = templates.registry()[templates.DEFAULT]
     with factory() as db:
-        assert render_job.template_of(db, alex_id, retired).slug == "classic"
+        assert render_job.template_of(db, alex_id, retired).slug == "band"
         (version,) = db.execute(
             sa.select(DocumentVersion).where(DocumentVersion.document_id == cv)
         ).scalars()
         # What printed it: `classic`, with its version, never the slug that is gone.
-        assert (version.template_slug, version.template_version) == ("classic", classic.version)
+        assert (version.template_slug, version.template_version) == ("band", classic.version)
         assert version.pdf_sha256 is not None  # rendered, never refused
     # What the picker reads for its note: the document's slug, absent from the gallery.
     assert api.get(f"/api/documents/{cv}", token=alex).json()["template_slug"] == retired
     gallery = api.get("/api/document-templates", token=alex).json()["templates"]
     assert retired not in {one["slug"] for one in gallery}
-    assert "classic" in {one["slug"] for one in gallery}
+    assert "band" in {one["slug"] for one in gallery}
     # Choosing a served template again is an ordinary switch.
-    assert _patch(api, alex, cv, "compact").json()["template_slug"] == "compact"
+    assert _patch(api, alex, cv, "ledger").json()["template_slug"] == "ledger"
 
 
 @pytest.mark.parametrize(
     ("steps", "expected"),
     [
-        (["write A", "write B"], "sidebar"),
-        (["write A", "switch compact", "write B"], "compact"),
-        (["write A", "switch compact", "write A"], "compact"),
+        (["write A", "write B"], "photo-columns"),
+        (["write A", "switch compact", "write B"], "ledger"),
+        (["write A", "switch compact", "write A"], "ledger"),
         # Switched before the last write: the next write from another base takes its template.
-        (["write A", "switch compact", "write B", "write C"], "banner"),
-        (["write A", "switch compact", "switch classic", "write B"], "classic"),
-        (["write A", "switch compact", "save", "prune", "write B"], "compact"),
-        (["write A", "save", "write B"], "sidebar"),
-        (["save", "switch compact", "write B"], "compact"),
-        (["save", "write B"], "sidebar"),
+        (["write A", "switch compact", "write B", "write C"], "ledger"),
+        (["write A", "switch compact", "switch classic", "write B"], "band"),
+        (["write A", "switch compact", "save", "prune", "write B"], "ledger"),
+        (["write A", "save", "write B"], "photo-columns"),
+        (["save", "switch compact", "write B"], "ledger"),
+        (["save", "write B"], "photo-columns"),
         # A chat that switches the template with its new content is the person's switch too.
-        (["write A", "chat compact", "write B"], "compact"),
-        (["write A", "chat compact", "chat classic", "write B"], "classic"),
-        (["write A", "chat compact", "chat classic", "prune", "write B"], "classic"),
-        (["write A", "chat compact", "write B", "write C"], "banner"),
-        (["write A", "chat", "write B"], "sidebar"),
-        (["chat compact", "write B"], "compact"),
+        (["write A", "chat compact", "write B"], "ledger"),
+        (["write A", "chat compact", "chat classic", "write B"], "band"),
+        (["write A", "chat compact", "chat classic", "prune", "write B"], "band"),
+        (["write A", "chat compact", "write B", "write C"], "ledger"),
+        (["write A", "chat", "write B"], "photo-columns"),
+        (["chat compact", "write B"], "ledger"),
     ],
 )
 def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_the_last_write(
@@ -245,7 +245,7 @@ def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_
 ) -> None:
     alex, alex_id = _person(factory, api, ALEX, clock)
     bases = {"A": _base_cv(factory, alex_id, clock)}
-    for name, slug in (("B", "sidebar"), ("C", "banner")):
+    for name, slug in (("B", "photo-columns"), ("C", "ledger")):
         bases[name] = _base_cv(factory, alex_id, clock)
         assert _patch(api, alex, bases[name], slug).status_code == 200
     cv = _posting_document(factory, alex_id, _posting(factory, alex_id), Kind.cv, clock)
@@ -275,7 +275,11 @@ def test_a_rewrite_from_another_base_cv_keeps_a_template_switched_by_hand_since_
             last_base
         )
     # The base CVs keep their own templates whatever the posting's CV did.
-    assert [_template(factory, bases[name]) for name in "ABC"] == ["classic", "sidebar", "banner"]
+    assert [_template(factory, bases[name]) for name in "ABC"] == [
+        "band",
+        "photo-columns",
+        "ledger",
+    ]
 
 
 def test_a_writers_version_on_a_removed_template_records_classic_and_its_render_keeps_it(
@@ -302,7 +306,7 @@ def test_a_writers_version_on_a_removed_template_records_classic_and_its_render_
         # No third version: the render reused the writer's, so the overflow hook can follow it.
         assert first.generation_id != second.generation_id
         assert second.generation_id is not None
-        assert second.template_slug == "classic"
+        assert second.template_slug == "band"
         assert second.pdf_sha256 is not None
     assert api.get(f"/api/documents/{cv}", token=alex).json()["template_slug"] == retired
 
@@ -313,7 +317,7 @@ def test_a_template_no_longer_served_is_never_read_as_a_switch_by_hand(
     alex, alex_id = _person(factory, api, ALEX, clock)
     first = _base_cv(factory, alex_id, clock)
     other = _base_cv(factory, alex_id, clock)
-    assert _patch(api, alex, other, "banner").status_code == 200
+    assert _patch(api, alex, other, "ledger").status_code == 200
     # The first base CV's template was served when it got it, and is gone since.
     retired = f"retired-{uuid.uuid4().hex[:6]}"
     with factory() as db:
@@ -330,13 +334,13 @@ def test_a_template_no_longer_served_is_never_read_as_a_switch_by_hand(
         printed = db.scalars(
             sa.select(DocumentVersion.template_slug).where(DocumentVersion.document_id == cv)
         ).all()
-        assert printed == ["classic", "classic"]
+        assert printed == ["band", "band"]
         document = store.get(db, alex_id, cv)
         assert document is not None
         assert document.template_slug == retired
         assert not generate.switched_by_hand(db, document)
     _written(factory, alex_id, cv, clock, other)
-    assert _template(factory, cv) == "banner"
+    assert _template(factory, cv) == "ledger"
 
 
 def test_a_chats_version_on_a_template_no_longer_served_records_classic_and_its_render_keeps_it(
@@ -358,7 +362,7 @@ def test_a_chats_version_on_a_template_no_longer_served_records_classic_and_its_
             sa.select(DocumentVersion).where(DocumentVersion.document_id == cv)
         ).scalars()
         # The render reused the chat's version: printed with `classic`, which it records.
-        assert (version.number, version.template_slug) == (number, "classic")
+        assert (version.number, version.template_slug) == (number, "band")
         assert version.pdf_sha256 is not None
         document = store.get(db, alex_id, cv)
         assert document is not None

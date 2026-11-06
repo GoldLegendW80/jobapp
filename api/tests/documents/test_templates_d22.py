@@ -328,8 +328,6 @@ def test_a_long_name_stays_on_the_page_and_whole(
     glyphs = Glyphs(result.pdf)
     boxes = glyphs.find(name)
     left, right = step.margin * MM, A4[0] - step.margin * MM
-    if slug == "portrait":
-        left += (36 + 7) * MM  # the frame and the gap of the header
     assert min(box[0] for box in boxes) >= left - 0.5, (min(box[0] for box in boxes), left)
     assert max(box[2] for box in boxes) <= right + 0.5, (max(box[2] for box in boxes), right)
     for word in (word for word in name.split() if len(word) > 3):
@@ -391,13 +389,6 @@ def test_a_page_end_never_leaves_a_heading_or_a_role_title_alone(
             assert page == following, chunk
             seen += 1
     assert seen >= len(titles), seen
-    if slug == "plain":
-        by_key = {e.key: e for e in d1_view().employers}
-        for role in content.experience:
-            title = "".join(by_key[role.employer_key].title.split()).casefold()
-            last = "".join(role.bullets[-1].split()).casefold()
-            pages = {chunk.rstrip(","): page for chunk, page in reversed(placed)}
-            assert pages[title] == pages[last], title
 
 
 HYPHENATED = [

@@ -515,7 +515,7 @@ def test_every_glyph_of_every_page_stays_inside_the_frame(
         templates.build_html(found, kind, content, d1_view(), language, 0, ON)
     )
     assert rendered.pages == 2, rendered.pages
-    inset = (6 * MM + 2.8) if slug == "elegant" else step.margin * MM
+    inset = step.margin * MM
     pages = glyph_boxes(rendered.pdf)
     assert len(pages) == 2
     if kind == "letter":  # page 1 starts the letter, it does not hold the heading alone

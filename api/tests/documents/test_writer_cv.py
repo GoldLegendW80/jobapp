@@ -164,7 +164,7 @@ def test_a_valid_cv_replaces_the_draft_and_queues_its_render(alex: Person) -> No
     assert generation_row(alex.factory, generation).outcome is GenerationOutcome.draft_replaced
     # The first generation took the base CV's template and named the base CV.
     assert row.base_document_id == alex.base
-    assert row.template_slug == "classic"
+    assert row.template_slug == "band"
     assert row.render_state.value == "queued"
     assert row.render_revision == row.draft_revision
     assert _renders(alex) == [render_job.FUNCTION]

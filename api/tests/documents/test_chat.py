@@ -3,8 +3,8 @@ fake backend (`documents_chat_*` streams). Two e2e people; real Postgres at head
 
 A message makes a generation of mode chat whose result goes through D7's pipeline: "shorter
 summary" changes the summary only; "say I managed 20 people" is written, then corrected away, and
-the answer says so and suggests the profile; "use the sidebar template" switches with the content
-unchanged; an unknown template lists the gallery; a message while the person edits is kept as a
+the answer says so and suggests the profile; "use the photo columns template" switches with the
+content unchanged; an unknown template lists the gallery; a message while the person edits is kept as a
 version; a frozen version stays as it was; a base CV keeps its fixed block. Refused: an empty or
 too long message, the design channel, a second message while one runs, a message without the
 consent or a credential (nothing stored), another person's chat (404). The 201st message prunes
@@ -295,19 +295,24 @@ def test_say_i_managed_20_people_is_written_then_corrected_and_the_answer_sugges
     assert reply["text"].endswith("This is version 2.")
 
 
-def test_use_the_sidebar_template_switches_with_the_content_unchanged(
+def test_use_the_photo_columns_template_switches_with_the_content_unchanged(
     api: Api, app: FastAPI, factory: Any, queue: RecordingQueue, clock: Any, alex: Who
 ) -> None:
     before = alex.versions()[-1]
-    _, reply = _talk(api, app, factory, queue, clock, alex, "use the sidebar template", "sidebar")
+    _, reply = _talk(
+        api, app, factory, queue, clock, alex, "use the photo columns template", "photo_columns"
+    )
     document = alex.document()
-    assert document.template_slug == "sidebar"
+    assert document.template_slug == "photo-columns"
     assert c.parse("cv", document.draft) == c.parse("cv", VALID)
     latest = alex.versions()[-1]
     assert latest.origin is Origin.template
     assert latest.content_hash == before.content_hash
-    assert latest.template_slug == "sidebar"
-    assert reply["text"] == f"Switched the template to Sidebar.\nThis is version {latest.number}."
+    assert latest.template_slug == "photo-columns"
+    assert (
+        reply["text"]
+        == f"Switched the template to Photo and columns.\nThis is version {latest.number}."
+    )
     assert [job["function"] for job in queue.jobs] == ["render_document"]
 
 
@@ -315,7 +320,7 @@ def test_an_unknown_template_lists_the_gallery_and_changes_nothing(
     api: Api, app: FastAPI, factory: Any, queue: RecordingQueue, clock: Any, alex: Who
 ) -> None:
     sent, reply = _talk(api, app, factory, queue, clock, alex, "use the neon template", "unknown")
-    assert alex.document().template_slug == "classic"
+    assert alex.document().template_slug == "band"
     assert len(alex.versions()) == 1
     names = [t.name["en"] for t in templates.registry().values()]
     assert reply["text"].startswith("No template has that name. The gallery has ")
@@ -358,7 +363,7 @@ def test_a_chat_on_a_document_with_a_frozen_version_leaves_it_as_it_was(
         db.commit()
     frozen = alex.versions()[0]
     _talk(api, app, factory, queue, clock, alex, "shorter summary", "valid")
-    _talk(api, app, factory, queue, clock, alex, "use the sidebar template", "sidebar")
+    _talk(api, app, factory, queue, clock, alex, "use the photo columns template", "photo_columns")
     again = alex.versions()[0]
     assert (again.content_hash, again.template_slug, again.frozen_at) == (
         frozen.content_hash,
@@ -648,11 +653,11 @@ def test_an_answer_with_many_corrections_stays_under_the_cap_and_has_no_dash_sep
         before=c.parse("cv", VALID),
         after=c.parse("cv", VALID),
         records=records,
-        template="Sidebar",
+        template="Photo and columns",
         unknown=True,
         orgs={"example-corp": "Example Corp"},
     )
-    text = chat.answer(done, [("classic", "Classic"), ("sidebar", "Sidebar")])
+    text = chat.answer(done, [("band", "Band"), ("photo-columns", "Photo and columns")])
     assert len(text) <= 2000
     assert "And 25 more, listed with the version." in text
     assert '"0" was removed from your experience at Example Corp' in text
