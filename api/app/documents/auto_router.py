@@ -171,7 +171,9 @@ def write_now(
     runs: list[uuid.UUID] = []
     both = Kind.cv in kinds and Kind.letter in kinds
     try:
-        # Lock 2 before lock 3 (store.py), as a render storing this CV and a move to applied.
+        # Lock 1 before lock 2 (the base CV a click may build, `writer_base.click_wait`), lock 2
+        # before lock 3 (store.py), as a render storing this CV and a move to applied.
+        store.lock_person(db, user.id)
         if store.lock_posting(db, user.id, job_id) is None:
             raise _error(status.HTTP_404_NOT_FOUND, POSTING_NOT_FOUND)
         # No base CV yet: one is built from the profile first, and the CV waits for it (D29).

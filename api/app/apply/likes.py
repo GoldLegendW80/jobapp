@@ -193,6 +193,8 @@ def on_like(
     stub_base: str | None = None,
 ) -> Liked:
     """The person's Like on one of their postings (module docstring)."""
+    # The documents' lock 1 first: the click may build a base CV (writer_base.click_wait).
+    store.lock_person(db, user_id)
     posting = jobs_service.lock_job(db, user_id, posting_id)
     if posting is None:
         raise service.PostingNotFoundError(str(posting_id))
@@ -255,6 +257,8 @@ def on_apply(
     """The Apply button on one of the person's postings (module docstring). Commits on success
     (`service.start`); the caller rolls back on an error. `agent_review`: the button's Review
     first (the review box ticked) is the apply agent's (A20, apply/confirm.py)."""
+    # The documents' lock 1 first: the click may build a base CV (writer_base.click_wait).
+    store.lock_person(db, user_id)
     posting = jobs_service.lock_job(db, user_id, posting_id)
     if posting is None:
         raise service.PostingNotFoundError(str(posting_id))

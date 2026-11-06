@@ -20,12 +20,13 @@ held and leaves the person to the next tick, so two passes never start the same 
    runner's contract is that whoever chains runs also looks on a timer, and the tick is it.
    A hiring panel whose job died is closed the same way (`panel.recover`), and the letter its
    CV waited for is started.
-1. The base CV builds, uploads and design captures whose reason to wait is gone start
-   (`writer_base.start_ready`). Every one of them was asked for by a click.
-2. The person's clicks ("Write", an Apply, a Like) that waited for the consent, a credential, a
+1. A generation of trigger `auto` that has not started (left by D10 at the deploy of D29, a
+   posting's or the first base CV's) is cancelled, once, its document untouched: nothing creates
+   one any more, and nothing starts one (`writer_base.start_ready` skips them too).
+2. The base CV builds, uploads and design captures whose reason to wait is gone start
+   (`writer_base.start_ready`). Every one of them was asked for by a click or an upload.
+3. The person's clicks ("Write", an Apply, a Like) that waited for the consent, a credential, a
    base CV being built, or the person's limit of active runs start (`start_clicks`).
-3. A generation of trigger `auto` that has not started (left by D10 at the deploy of D29) is
-   cancelled, once, its document untouched: nothing creates one any more.
 
 **Never two starts.** A click cancels a generation that has not started, under its document's
 lock. So the pass writes nothing to a generation, and starts none, before it holds the
@@ -261,7 +262,7 @@ def start_clicks(
 
 
 def cancel_auto(db: Session, user_id: uuid.UUID, at: datetime) -> int:
-    """Step 3 of the module docstring: every generation of trigger `auto` that has not started
+    """Step 1 of the module docstring: every generation of trigger `auto` that has not started
     is cancelled, its document and its versions untouched. Returns how many."""
     found = db.scalars(
         sa.select(DocumentGeneration)
@@ -309,12 +310,16 @@ def person(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Settings)
     starts the letters of `letters_after`. None when another pass holds the person."""
     if not try_lock(db, user_id):
         return None
+    # Lock 1 before any posting's: `start_clicks` may build a base CV (writer_base.click_wait).
+    store.lock_person(db, user_id)
     out = Outcome()
     out.recovered = recover(db, user_id, at)
     out.letters_after = panel.recover(db, user_id, at)
-    out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings)
     lock_postings(db, user_id)
+    # Before any start: an `auto` generation left by D10 (a posting's or the first base CV's)
+    # is cancelled, never started (D29).
     out.cancelled = cancel_auto(db, user_id, at)
+    out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings)
     out.runs += start_clicks(db, user_id, at, settings)
     db.flush()
     return out

@@ -373,16 +373,49 @@ def click_wait(db: Session, user_id: uuid.UUID, at: datetime) -> GenerationWait 
     """Why a click's posting generation (Write, an Apply, a Like) cannot start now, None when it
     can (D29). A person with no base CV and a profile with an employer gets one built from the
     profile here, for that click (source `profile`, trigger `click`): the CV waits with
-    `base_cv` until it is written, then the letter follows the CV as always. The consent and the
-    credential come first: without them nothing is written, the base CV included."""
+    `base_cv` until it is written, then the letter follows the CV as always. A default base CV
+    built from the profile that was never written (no version, no open generation: D10's
+    automatic build cancelled at the deploy) counts as none: it is built for the click. The
+    consent and the credential come first: without them nothing is written, the base CV
+    included.
+
+    Two clicks at once (two Apply, a click and a Like, a click and the tick) build one base CV:
+    everything is read under lock 1 (`store.lock_person`), which every caller takes before its
+    posting's lock (lock 2), so the second click reads the first one's base CV here."""
+    store.lock_person(db, user_id)
     reason = wait_reason(db, user_id)
     default = store.default_base(db, user_id)
-    if default is None and not store.base_cvs(db, user_id) and view_of(db, user_id, at).employers:
-        default = build_from_profile(
-            db, user_id, at=at, source=BaseSource.profile, trigger=GenerationTrigger.click
-        ).document
+    if view_of(db, user_id, at).employers:
+        if default is None and not store.base_cvs(db, user_id):
+            default = build_from_profile(
+                db, user_id, at=at, source=BaseSource.profile, trigger=GenerationTrigger.click
+            ).document
+        elif default is not None and _never_written(db, user_id, default):
+            _profile_generation(db, user_id, default, at=at, trigger=GenerationTrigger.click)
     building = default is not None and store.open_generation(db, user_id, default.id) is not None
     return GenerationWait.base_cv if reason is None and building else reason
+
+
+def _never_written(db: Session, user_id: uuid.UUID, document: Document) -> bool:
+    """A base CV built from the profile whose builds all ended without writing it: its draft is
+    still the skeleton (revision 1, never edited), it has no version, nothing open, and a build
+    from the profile that never ended `done` (D10's automatic one, cancelled at the deploy)."""
+    if document.base_source not in (BaseSource.profile, BaseSource.built):
+        return False
+    if document.draft_revision != 1 or store.versions(db, user_id, document.id):
+        return False
+    if store.open_generation(db, user_id, document.id) is not None:
+        return False
+    statuses = set(
+        db.scalars(
+            sa.select(DocumentGeneration.status).where(
+                DocumentGeneration.user_id == user_id,
+                DocumentGeneration.document_id == document.id,
+                DocumentGeneration.mode == GenerationMode.base_profile,
+            )
+        )
+    )
+    return bool(statuses) and GenerationStatus.done not in statuses
 
 
 @dataclass(frozen=True)
@@ -418,9 +451,22 @@ def build_from_profile(
     if not view.employers:
         logger.info("documents.base.skeleton", extra={"document_id": str(document.id)})
         return Built(document, None)
+    return Built(document, _profile_generation(db, user_id, document, at=at, trigger=trigger))
+
+
+def _profile_generation(
+    db: Session,
+    user_id: uuid.UUID,
+    document: Document,
+    *,
+    at: datetime,
+    trigger: GenerationTrigger,
+) -> DocumentGeneration:
+    """The generation that writes `document` from the profile, queued or waiting for its
+    reason; started by `start_ready` after the caller's commit."""
     figures = estimate.for_base(db, user_id)
     reason = wait_reason(db, user_id)
-    generation = generate.create(
+    return generate.create(
         db,
         document,
         GenerationMode.base_profile,
@@ -432,7 +478,6 @@ def build_from_profile(
         status=GenerationStatus.waiting if reason is not None else GenerationStatus.queued,
         wait_reason=reason,
     )
-    return Built(document, generation)
 
 
 # --- an upload ----------------------------------------------------------------------------------
@@ -669,23 +714,22 @@ def start_ready(
     at: datetime,
     script: str | None = None,
     settings: Settings | None = None,
-    auto: bool = True,
 ) -> list[uuid.UUID]:
     """Start the person's open base generations that may start now, oldest first; the others
     keep (or get) their reason to wait. Returns the runs to enqueue after the caller's commit.
-    One that meets the person's limit of active runs stays `queued` for the next call. `auto`
-    False (the person turned automatic generation off): the automatic ones are left as they are."""
+    One that meets the person's limit of active runs stays `queued` for the next call. A
+    generation of trigger `auto` (the first base CV D10 built at the tick) is never started:
+    nothing is written without a click (D29), and the tick cancels it (`tick.cancel_auto`)."""
     query = (
         sa.select(DocumentGeneration.id)
         .where(
             DocumentGeneration.user_id == user_id,
             DocumentGeneration.mode.in_(MODES),
             DocumentGeneration.status.in_((GenerationStatus.waiting, GenerationStatus.queued)),
+            DocumentGeneration.trigger != GenerationTrigger.auto,
         )
         .order_by(DocumentGeneration.created_at, DocumentGeneration.id)
     )
-    if not auto:
-        query = query.where(DocumentGeneration.trigger != GenerationTrigger.auto)
     open_ids = list(db.scalars(query))
     started: list[uuid.UUID] = []
     reason = wait_reason(db, user_id)

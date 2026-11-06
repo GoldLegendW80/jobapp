@@ -176,6 +176,7 @@ class World:
                     DocumentGeneration.trigger,
                     DocumentGeneration.status,
                     DocumentGeneration.wait_reason,
+                    DocumentGeneration.document_id,
                     DocumentGeneration.ceiling_day,
                     DocumentGeneration.token_ceiling,
                     DocumentGeneration.base_document_id,
@@ -248,6 +249,7 @@ def click(who: World, posting: uuid.UUID, *, start: bool = True) -> uuid.UUID:
     from app.documents import writer_base
 
     with who.factory() as db:
+        store.lock_person(db, who.user)
         store.lock_posting(db, who.user, posting)
         reason = writer_base.click_wait(db, who.user, AT)
         document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
@@ -379,6 +381,108 @@ def test_a_click_with_no_base_cv_builds_it_first_then_the_cv_from_it(
         default = store.default_base(db, who.user)
         assert default is not None
         assert cv["base_document_id"] == default.id
+
+
+def _auto_base_build(who: World, status: GenerationStatus) -> uuid.UUID:
+    """The first base CV D10 built at the tick, left open at the deploy of D29: the skeleton
+    "My CV" as the default and its generation of trigger `auto`, not started."""
+    from app.documents import writer_base
+
+    with who.factory() as db:
+        built = writer_base.build_from_profile(
+            db, who.user, at=AT, source=BaseSource.profile, trigger=GenerationTrigger.auto
+        )
+        assert built.generation is not None
+        built.generation.status = status
+        store.commit(db)
+        return built.document.id
+
+
+@pytest.mark.parametrize("consent_later", [False, True])
+def test_an_automatic_base_cv_build_is_cancelled_never_started_by_the_tick(
+    factory: sessionmaker[Session], migrated_url: str, consent_later: bool
+) -> None:
+    """Review of D29, item 2 (a): a queued one, or one waiting for a consent given later."""
+    who = World(factory, migrated_url, USER_A, base=False, consent=not consent_later)
+    document = _auto_base_build(
+        who, GenerationStatus.waiting if consent_later else GenerationStatus.queued
+    )
+    if consent_later:
+        assert who.tick() == []
+        who.consent()
+    assert who.tick() == []
+    [found] = who.generations()
+    assert (found["document_id"], found["trigger"], found["status"], found["run_id"]) == (
+        document,
+        GenerationTrigger.auto,
+        GenerationStatus.cancelled,
+        None,
+    )
+    assert who.tick() == []
+
+
+def test_a_click_after_a_cancelled_automatic_base_cv_builds_that_base_cv_first(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    """Review of D29, item 2 (b): the never written skeleton is no base CV to write from."""
+    who = World(factory, migrated_url, USER_A, base=False)
+    document = _auto_base_build(who, GenerationStatus.queued)
+    assert who.tick() == []  # the automatic build is cancelled
+    posting = who.posting(55)
+    click(who, posting)
+    found = who.generations()
+    base = [g for g in found if g["mode"] is GenerationMode.base_profile]
+    assert [(g["document_id"], g["trigger"], g["status"]) for g in base] == [
+        (document, GenerationTrigger.auto, GenerationStatus.cancelled),
+        (document, GenerationTrigger.click, GenerationStatus.queued),
+    ]
+    [cv] = posting_cv(found)
+    assert (cv["status"], cv["wait_reason"]) == (GenerationStatus.waiting, GenerationWait.base_cv)
+    with who.factory() as db:
+        assert [b.id for b in store.base_cvs(db, who.user)] == [document]
+    first = who.tick()  # the base CV starts first, the CV waits for it
+    assert first == [
+        g["run_id"] for g in who.generations() if g["status"] is GenerationStatus.running
+    ]
+    assert posting_cv(who.generations())[0]["wait_reason"] is GenerationWait.base_cv
+
+
+def test_two_clicks_at_once_build_one_base_cv(
+    engine: sa.Engine, factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    """Review of D29, item 7: the second click waits for lock 1 and reads the first one's base
+    CV again under it, instead of building a second "My CV"."""
+    import threading
+
+    from app.documents import writer_base
+    from tests.documents.test_store import _wait_until_blocked
+
+    who = World(factory, migrated_url, USER_A, base=False)
+    outcome: dict[str, Any] = {}
+    with factory() as first, factory() as second:
+        assert writer_base.click_wait(first, who.user, AT) is GenerationWait.base_cv
+        pid = second.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+
+        def other_click() -> None:
+            try:
+                outcome["reason"] = writer_base.click_wait(second, who.user, AT)
+                store.commit(second)
+            except Exception as exc:  # the main thread asserts on it
+                outcome["error"] = exc
+                second.rollback()
+
+        thread = threading.Thread(target=other_click)
+        thread.start()
+        _wait_until_blocked(engine, pid, thread)
+        assert thread.is_alive()  # it waits for lock 1, before it reads the base CVs
+        store.commit(first)
+        thread.join(20)
+    assert "error" not in outcome
+    assert outcome["reason"] is GenerationWait.base_cv
+    with factory() as db:
+        assert len(store.base_cvs(db, who.user)) == 1
+    builds = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
+    assert len(builds) == 1
 
 
 def test_a_click_meeting_the_limit_of_active_runs_stays_queued_for_the_next_tick(
