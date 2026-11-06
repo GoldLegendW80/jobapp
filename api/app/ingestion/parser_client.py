@@ -62,8 +62,9 @@ import logging
 import re
 import sys
 import time
+from collections import Counter
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, NoReturn, TypeVar
 
@@ -835,9 +836,14 @@ def check_mail_html(answer: Any) -> MailHtml:
 
 # The caps of sandbox/design_pdf.py and design_docx.py, stated again (tests/ingestion/parser
 # keeps them in step): the child that read the file may be the process the file took over.
-# Together they hold an answer under DESIGN_MAX_ANSWER, the most a design call reads.
+# Together they hold an answer under DESIGN_MAX_ANSWER, the most a design call reads. Since D28
+# a design_pdf answer also carries the measures of each run (baseline, spacing, caps, pitch), of
+# each shape (radius), the dots, the page background, the round clips of images, and the word
+# samples (DESIGN_SAMPLES_PER_FONT a font, DESIGN_SAMPLE_BYTES of PNG crops in all, each crop
+# checked by its PNG header, DESIGN_SAMPLE_SIDE a side and DESIGN_SAMPLE_AREA in all, before the
+# worker's font measure decodes it).
 DESIGN_KINDS = ("design_pdf", "design_docx")
-DESIGN_MAX_ANSWER = 1_000_000
+DESIGN_MAX_ANSWER = 1_700_000  # D28: the word samples' crops (base64) and the run measures
 DESIGN_PAGES = 2
 DESIGN_RUNS = 1_500
 DESIGN_SHAPES = 400
@@ -852,12 +858,19 @@ DESIGN_SHOWN = 40
 DESIGN_NAME = 64
 DESIGN_LENGTH = 144_000  # tenths of a point: the 200 inches of pdf_render.PAGE_MAX_INCHES
 DESIGN_STROKE = 1_000  # tenths of a point: the widest stroke of a shape
+DESIGN_SPACING = (-500, 1_000)  # thousandths of an em: a run's letter spacing
+DESIGN_DOTS = 200
+DESIGN_SAMPLES_PER_FONT = 30
+DESIGN_SAMPLE_BYTES = 400_000  # PNG bytes of every crop together
+DESIGN_SAMPLE_SIDE = 2_400  # pixels: the widest or highest crop
+DESIGN_SAMPLE_AREA = 400_000  # pixels: the largest crop, so the font measure's work is bounded
+DESIGN_SAMPLE_TEXT = 40
 DESIGN_COUNT = 10_000_000
 DESIGN_NOTE_CODES = frozenset(
     {
         "time_limit", "text_limit", "runs_limit", "shapes_limit", "images_limit",
         "objects_limit", "chars_limit", "fonts_limit", "pages_not_read", "styles_limit",
-        "sections_limit", "formats_limit",
+        "sections_limit", "formats_limit", "dots_limit", "samples_limit",
     }
 )  # fmt: skip
 DESIGN_PROPS = (
@@ -905,6 +918,10 @@ class TextRun:
     font: int  # an index of DesignPdf.fonts
     size: int
     colour: str
+    baseline: int = 0  # from the top of the page
+    spacing: int = 0  # letter spacing, thousandths of an em
+    caps: bool = False  # its letters all capitals
+    pitch: int = 0  # to the next line of its font and size in its column, 0: none
 
 
 @dataclass(frozen=True)
@@ -913,6 +930,28 @@ class Shape:
     box: tuple[int, int, int, int]
     colour: str
     width: int
+    radius: int = 0  # of its corners
+
+
+@dataclass(frozen=True)
+class Dot:
+    """A small filled circle: a bullet."""
+
+    box: tuple[int, int, int, int]
+    colour: str
+
+
+@dataclass(frozen=True)
+class WordSample:
+    """A word of a font of the file, for the font measure (documents D28): its width is the sum
+    of its characters' advances, its crop a grey PNG of its ink. Never logged nor stored."""
+
+    font: int
+    page: int
+    text: str
+    size: int
+    width: int
+    crop: bytes = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -924,6 +963,9 @@ class DesignPage:
     runs: tuple[TextRun, ...]  # in reading order
     shapes: tuple[Shape, ...]
     images: tuple[tuple[int, int, int, int], ...]  # boxes only: no pixel is ever read
+    background: str | None = None  # a fill over the whole page
+    dots: tuple[Dot, ...] = ()
+    rounds: tuple[bool, ...] = ()  # per image: clipped to a circle
 
 
 @dataclass(frozen=True)
@@ -937,6 +979,7 @@ class DesignPdf:
     fonts: tuple[DesignFont, ...]
     read: tuple[DesignPage, ...]
     usage: Mapping[str, int] | None = None
+    samples: tuple[WordSample, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1020,12 +1063,18 @@ def _design_notes(value: Any) -> tuple[Note, ...]:
 
 
 _FONT_KEYS = frozenset({"name", "weight", "italic", "serif", "monospace", "symbolic", "embedded"})
-_PAGE_KEYS = frozenset({"index", "width", "height", "margins", "runs", "shapes", "images"})
-_RUN_KEYS = frozenset({"text", "box", "font", "size", "colour"})
-_SHAPE_KEYS = frozenset({"type", "box", "colour", "width"})
-_DESIGN_PDF_KEYS = frozenset(
-    {"ok", "kind", "pages", "scanned", "truncated", "notes", "fonts", "read", "usage"}
+_PAGE_KEYS = frozenset(
+    {"index", "width", "height", "margins", "background", "runs", "shapes", "dots", "images"}
 )
+_RUN_KEYS = frozenset(
+    {"text", "box", "font", "size", "colour", "baseline", "spacing", "caps", "pitch"}
+)
+_SHAPE_KEYS = frozenset({"type", "box", "colour", "width", "radius"})
+_SAMPLE_KEYS = frozenset({"font", "page", "text", "size", "width", "crop"})
+_DESIGN_PDF_KEYS = frozenset(
+    {"ok", "kind", "pages", "scanned", "truncated", "notes", "fonts", "read", "samples", "usage"}
+)
+_PNG = b"\x89PNG\r\n\x1a\n"
 
 
 def _font(item: Any) -> DesignFont:
@@ -1059,6 +1108,10 @@ def _page(item: Any, fonts: int, seen: set[int], total: int) -> DesignPage:
                 _integer(run["font"], 0, fonts - 1, "runs"),
                 _integer(run["size"], 0, DESIGN_LENGTH, "runs"),
                 _colour(run["colour"]),
+                _integer(run["baseline"], 0, height, "runs"),
+                _integer(run["spacing"], *DESIGN_SPACING, "runs"),
+                _flag(run["caps"], "runs"),
+                _integer(run["pitch"], 0, DESIGN_LENGTH, "runs"),
             )
         )
     shapes = []
@@ -1073,12 +1126,22 @@ def _page(item: Any, fonts: int, seen: set[int], total: int) -> DesignPage:
                 box,
                 _colour(shape["colour"]),
                 _integer(shape["width"], 0, DESIGN_STROKE, "shapes"),
+                _integer(shape["radius"], 0, min(box[2] - box[0], box[3] - box[1]), "shapes"),
             )
         )
-    images = tuple(
-        _box(_exact(image, {"box"}, "images")["box"], width, height)
-        for image in _list(item["images"], DESIGN_IMAGES, "images")
+    dots = tuple(
+        Dot(_box(dot["box"], width, height), _colour(dot["colour"]))
+        for dot in (
+            _exact(d, {"box", "colour"}, "dots") for d in _list(item["dots"], DESIGN_DOTS, "dots")
+        )
     )
+    found = [
+        _exact(image, {"box", "round"}, "images")
+        for image in _list(item["images"], DESIGN_IMAGES, "images")
+    ]
+    images = tuple(_box(image["box"], width, height) for image in found)
+    rounds = tuple(_flag(image["round"], "images") for image in found)
+    background = _optional(item["background"], _colour)
     margins = item["margins"]
     if margins is not None:
         if not isinstance(margins, list) or len(margins) != 4 or not runs:
@@ -1086,7 +1149,57 @@ def _page(item: Any, fonts: int, seen: set[int], total: int) -> DesignPage:
         margins = tuple(_integer(side, 0, max(width, height), "margins") for side in margins)
     elif runs:
         _bad("margins")
-    return DesignPage(index, width, height, margins, tuple(runs), tuple(shapes), images)
+    return DesignPage(
+        index, width, height, margins, tuple(runs), tuple(shapes), images, background, dots, rounds
+    )
+
+
+def _png_side(png: bytes) -> tuple[int, int]:
+    """The width and height a PNG's header states, or the error: the font measure decodes only
+    crops whose header passed this."""
+    if len(png) < 24 or not png.startswith(_PNG) or png[12:16] != b"IHDR":
+        _bad("samples")
+    return int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")
+
+
+def _samples(value: Any, fonts: int, pages: tuple[DesignPage, ...]) -> tuple[WordSample, ...]:
+    out, total, per_font = [], 0, Counter()
+    for item in _list(value, DESIGN_SAMPLES_PER_FONT * max(fonts, 1), "samples"):
+        item = _exact(item, _SAMPLE_KEYS, "samples")
+        font = _integer(item["font"], 0, fonts - 1, "samples")
+        per_font[font] += 1
+        if per_font[font] > DESIGN_SAMPLES_PER_FONT:
+            _bad("samples")
+        page = _integer(item["page"], 0, DESIGN_PAGES - 1, "samples")
+        if page not in {p.index for p in pages}:
+            _bad("samples")
+        text = _plain(item["text"], DESIGN_SAMPLE_TEXT, "samples")
+        crop = item["crop"]
+        if not isinstance(crop, str) or len(crop) > DESIGN_SAMPLE_BYTES * 4 // 3 + 4:
+            _bad("samples")
+        try:
+            png = base64.b64decode(crop, validate=True)
+        except (ValueError, binascii.Error):
+            _bad("samples")
+        total += len(png)
+        if total > DESIGN_SAMPLE_BYTES:
+            _bad("samples")
+        side = _png_side(png)
+        if not all(1 <= length <= DESIGN_SAMPLE_SIDE for length in side):
+            _bad("samples")
+        if side[0] * side[1] > DESIGN_SAMPLE_AREA:
+            _bad("samples")
+        out.append(
+            WordSample(
+                font,
+                page,
+                text,
+                _integer(item["size"], 1, DESIGN_LENGTH, "samples"),
+                _integer(item["width"], 1, DESIGN_LENGTH, "samples"),
+                png,
+            )
+        )
+    return tuple(out)
 
 
 def check_design_pdf(answer: Any) -> DesignPdf:
@@ -1121,6 +1234,7 @@ def check_design_pdf(answer: Any) -> DesignPdf:
         fonts=fonts,
         read=pages,
         usage=_usage(answer.get("usage")),
+        samples=_samples(answer["samples"], len(fonts), pages),
     )
 
 

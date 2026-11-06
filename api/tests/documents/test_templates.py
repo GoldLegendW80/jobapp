@@ -989,6 +989,21 @@ def test_a_manifest_without_labels_is_valid_as_a_person_s_own_template_is(tmp_pa
         ({"en": {"summary": "About \u2013 me"}}, "a dash"),
         ({"en": {"summary": "About\u2014me"}}, "a dash"),
         ({"en": {"summary": "About - me"}}, "a dash"),
+        ({"en": {"summary": "About\u2012me"}}, "a dash"),
+        ({"en": {"summary": "About\u2015me"}}, "a dash"),
+        ({"en": {"summary": "About \u2212 me"}}, "a dash"),
+        ({"en": {"summary": "-About me"}}, "a dash"),
+        ({"en": {"summary": "About me-"}}, "a dash"),
+        ({"en": {"summary": "About -me"}}, "a dash"),
+        ({"en": {"summary": "About ‐ me"}}, "a dash"),
+        ({"en": {"summary": "About‑ me"}}, "a dash"),
+        ({"en": {"summary": "About －me"}}, "a dash"),
+        ({"en": {"summary": "About﹣"}}, "a dash"),
+        ({"en": {"summary": "About﹘me"}}, "a dash"),
+        ({"en": {"summary": "About⸺me"}}, "a dash"),
+        ({"en": {"summary": "About⸻me"}}, "a dash"),
+        ({"en": {"summary": "About〜me"}}, "a dash"),
+        ({"en": {"summary": "About︱me"}}, "a dash"),
         ({"fr": {"summary": "<b>Profil"}}, "a <"),
     ],
 )
@@ -998,7 +1013,7 @@ def test_a_malformed_label_is_refused(tmp_path: Path, labels: Any, said: str) ->
 
 
 def test_a_hyphenated_label_of_forty_characters_is_accepted(tmp_path: Path) -> None:
-    labels = {"en": {"summary": "Self-taught", "experience": "x" * 40}}
+    labels = {"en": {"summary": "Self-taught", "experience": "x" * 40, "skills": "Full\u2010stack"}}
     edit_manifest(copy_default(tmp_path, "hyphen"), lambda m: m.update(labels=labels))
     assert templates.discover(tmp_path)["hyphen"].labels == labels
 
@@ -1257,10 +1272,22 @@ FAMILIES = {
     "raleway": "Raleway",
     "inter-tight": "Inter Tight",
     "gantari": "Gantari",
+    # the families CV makers use most (D28)
+    "figtree": "Figtree",
+    "lato": "Lato",
+    "libre-franklin": "Libre Franklin",
+    "merriweather": "Merriweather",
+    "montserrat": "Montserrat",
+    "open-sans": "Open Sans",
+    "poppins": "Poppins",
+    "pt-sans": "PT Sans",
+    "public-sans": "Public Sans",
+    "roboto": "Roboto",
+    "source-sans-3": "Source Sans 3",
 }
 
 
-def test_the_font_library_holds_the_seventeen_families_with_their_licences() -> None:
+def test_the_font_library_holds_the_twenty_eight_families_with_their_licences() -> None:
     library = templates.fonts()
     own = {key: family.name for key, family in library.items() if not family.fallback}
     assert own == FAMILIES
