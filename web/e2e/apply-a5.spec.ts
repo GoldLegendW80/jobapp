@@ -12,7 +12,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, newContext, watchErrors } from "./stack";
-import { reviewFirst } from "./apply-one-click-helpers";
+import { startReviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Apply A5, the answer agent, against the real stack through Caddy plus the fake ATS forms
@@ -113,8 +113,7 @@ test("an invented person has a credential, the consent, a base CV and an Ashby p
 test("the open question is answered by the agent, shown as its answer, and editable", async () => {
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply" });
-  await reviewFirst(page.request);
-  await section.getByRole("button", { name: "Apply", exact: true }).click();
+  await startReviewFirst(page);
 
   // The worker's tick starts the fill within 30 seconds; the answer agent runs inside it.
   await expect(
