@@ -259,6 +259,113 @@ describe("bulk actions", () => {
     expect(calls.bulk).toEqual([]);
   });
 
+  it("applies to the selected rows after one confirmation, then clears the selection and the rows say Applying", async () => {
+    const list = rows(3);
+    await openJobs(list);
+    const applied: string[] = [];
+    const calls = { previews: [] as unknown[], starts: [] as unknown[] };
+    server.use(
+      http.get("*/api/applications", () =>
+        HttpResponse.json({
+          items: applied.map((postingId, n) => ({
+            id: `00000000-0000-4000-a000-00000000000${String(n)}`,
+            posting_id: postingId,
+            mode: "direct",
+            dry_run: false,
+            state: "queued",
+            ats: "ashby",
+            form_url: "https://jobs.example.org/form",
+            attempt: 0,
+            needs: null,
+            error_code: null,
+            created_at: "2026-11-06T08:00:00Z",
+            updated_at: "2026-11-06T08:00:00Z",
+            submitted_at: null,
+          })),
+        }),
+      ),
+      http.post("*/api/apply/bulk/preview", async ({ request }) => {
+        const body = (await request.json()) as { posting_ids: string[] };
+        calls.previews.push(body);
+        return HttpResponse.json({
+          review_before_send: false,
+          limit: 25,
+          items: body.posting_ids.map((postingId) => {
+            const row = list.find((one) => one.id === postingId)!;
+            return {
+              posting_id: postingId,
+              company: row.company,
+              title: row.title,
+              documents: [],
+              estimate: null,
+              email: false,
+              seen: "c".repeat(64),
+            };
+          }),
+          left_out: [],
+          beyond: [],
+          estimate: null,
+          cost_note: "",
+        });
+      }),
+      http.post("*/api/apply/bulk", async ({ request }) => {
+        const body = (await request.json()) as {
+          items: { posting_id: string }[];
+        };
+        calls.starts.push(body);
+        applied.push(...body.items.map((one) => one.posting_id));
+        return HttpResponse.json({
+          results: body.items.map((one) => ({
+            posting_id: one.posting_id,
+            started: true,
+            mode: "direct",
+          })),
+          started: body.items.length,
+          left_out: 0,
+        });
+      }),
+    );
+    const user = userEvent.setup();
+    await user.click(rowBoxes()[0]!);
+    await user.click(rowBoxes()[2]!);
+    await user.click(within(bar()).getByRole("button", { name: "Apply" }));
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Apply to 2 postings?",
+    });
+    expect(calls.previews).toEqual([
+      { posting_ids: [list[0]!.id, list[2]!.id] },
+    ]);
+    expect(dialog).toHaveTextContent(
+      `${list[0]!.company}, ${list[0]!.title}CV and letter ready.`,
+    );
+    // One click for both: the confirmation's click is the approval.
+    await user.click(
+      within(dialog).getByRole("button", { name: "Apply to 2" }),
+    );
+    await within(dialog).findByRole("heading", {
+      name: "Applying to 2 postings",
+    });
+    expect(calls.starts).toHaveLength(1);
+    // The selection is cleared: the bar is gone, the summary stays until it is closed.
+    expect(
+      screen.queryByRole("region", { name: "Bulk actions", hidden: true }),
+    ).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    for (const box of rowBoxes()) expect(box).not.toBeChecked();
+    for (const row of [list[0]!, list[2]!]) {
+      expect(
+        await screen.findByRole("link", {
+          name: `Applying: the application to ${row.title} at ${row.company}`,
+        }),
+      ).toBeVisible();
+    }
+    expect(
+      screen.getByRole("button", {
+        name: `Apply to ${list[1]!.title} at ${list[1]!.company}`,
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("adds a note to the selected rows", async () => {
     const { api } = await openJobs(rows(3));
     const calls = fakeBulk(api);
