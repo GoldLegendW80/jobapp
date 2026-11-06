@@ -182,7 +182,7 @@ def current(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> Current:
         versions = store.versions(db, user_id, document.id)
         picked = choose(versions)
         coming = _coming(db, user_id, document)
-        if coming is None and _panel_running(db, user_id, document.id):
+        if coming in (None, RENDERING) and _panel_running(db, user_id, document.id):
             # The hiring panel is rebuilding the first version (D29): the apply module waits
             # for it as for a writing, unless the person approved a version meanwhile.
             coming = WRITING
