@@ -26,7 +26,7 @@ li, p, h3 { overflow-wrap: anywhere; }
   object-fit: cover;
   margin-right: 21.8pt;
 }
-.who { flex: 1 1 auto; padding-top: 16.3pt; min-width: 0; }
+.who { flex: 1 1 auto; padding-top: 16.3pt; min-width: min-content; }
 .name {
   font-size: 2.6em;
   font-weight: 700;
@@ -34,7 +34,8 @@ li, p, h3 { overflow-wrap: anywhere; }
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
-.name.long { font-size: 2.0em; }
+.name.long { font-size: 2.0em; }  /* a name over 22 characters */
+.name.longword { font-size: 1.2em; }  /* a word over 14 letters stays whole on the line */
 .headline {
   margin-top: 11.3pt;
   font-size: 1.205em;
@@ -42,7 +43,7 @@ li, p, h3 { overflow-wrap: anywhere; }
   text-transform: uppercase;
 }
 .contact {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 158pt;
   display: flex;
   flex-direction: column;

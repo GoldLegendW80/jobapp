@@ -33,7 +33,7 @@ li, p, h3 { overflow-wrap: anywhere; }
   border-radius: 50%;
   flex: 0 0 auto;
 }
-.who { flex: 1 1 0; min-width: 0; }
+.who { flex: 1 1 0; min-width: min-content; }
 .name { font-size: 1.8em; font-weight: 700; line-height: 1.1; }
 .headline { font-size: 1.3em; font-weight: 700; line-height: 1.15; }
 .contact {
