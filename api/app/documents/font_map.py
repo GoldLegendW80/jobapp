@@ -42,6 +42,7 @@ REGULAR, BOLD = 400, 700
 _FULL = frozenset({(400, False), (400, True), (600, False), (700, False), (700, True)})
 _FOUR = frozenset({(400, False), (400, True), (700, False), (700, True)})
 _SIX = _FULL | {(500, False)}  # the families of the three templates (D27) carry a medium too
+# The families CV makers use most, added by D28 so that more uploads are drawn in their own font.
 
 
 @dataclass(frozen=True)
@@ -59,15 +60,26 @@ FAMILIES = {
         Family("carlito", "Carlito", _FOUR),
         Family("dm-sans", "DM Sans", _FULL),
         Family("eb-garamond", "EB Garamond", _FULL),
+        Family("figtree", "Figtree", _SIX),
         Family("gantari", "Gantari", _SIX),
         Family("ibm-plex-mono", "IBM Plex Mono", _FULL),
         Family("ibm-plex-sans", "IBM Plex Sans", _FULL),
         Family("inter", "Inter", _FULL),
         Family("inter-tight", "Inter Tight", _SIX),
+        Family("lato", "Lato", _FOUR),
+        Family("libre-franklin", "Libre Franklin", _SIX),
         Family("lora", "Lora", _FULL),
+        Family("merriweather", "Merriweather", _SIX),
+        Family("montserrat", "Montserrat", _SIX),
         Family("nunito-sans", "Nunito Sans", _FULL),
+        Family("open-sans", "Open Sans", _SIX),
         Family("playfair-display", "Playfair Display", _FULL),
+        Family("poppins", "Poppins", _SIX),
+        Family("pt-sans", "PT Sans", _FOUR),
+        Family("public-sans", "Public Sans", _SIX),
         Family("raleway", "Raleway", _SIX),
+        Family("roboto", "Roboto", _SIX),
+        Family("source-sans-3", "Source Sans 3", _SIX),
         Family("source-serif-4", "Source Serif 4", _FULL),
         Family("tinos", "Tinos", _FOUR),
         Family("work-sans", "Work Sans", _FULL),
@@ -110,17 +122,19 @@ KNOWN: dict[str, str] = {
     **_names("eb-garamond", "garamond", "ebgaramond12"),
     **_names("inter-tight", "ttcommons", "ttcommonspro"),  # the stand in of the band template
     **_names("gantari", "tthazelnuts"),  # the stand in of the ledger template
-    **_names("ui", "roboto", "segoeui", "sfprotext", "sfprodisplay", "sanfrancisco", "aptos",
+    **_names("source-sans-3", "sourcesanspro", "sourcesans"),
+    **_names("open-sans", "opensanssemicondensed"),
+    **_names("libre-franklin", "franklingothic", "franklingothicbook", "itcfranklingothic"),
+    **_names("ui", "segoeui", "sfprotext", "sfprodisplay", "sanfrancisco", "aptos",
              "systemui", "notosansui"),
-    **_names("humanist", "opensans", "lato", "sourcesanspro", "sourcesans3", "notosans",
-             "firasans", "ptsans", "ubuntu", "myriadpro", "myriad", "frutiger", "verdana",
-             "tahoma", "trebuchetms", "trebuchet", "lucidagrande", "lucidasans", "gillsans",
-             "candara", "corbel", "dejavusans", "segoe", "optima", "seravek"),
+    **_names("humanist", "notosans", "firasans", "ubuntu", "myriadpro", "myriad", "frutiger",
+             "verdana", "tahoma", "trebuchetms", "trebuchet", "lucidagrande", "lucidasans",
+             "gillsans", "candara", "corbel", "dejavusans", "segoe", "optima", "seravek"),
     **_names("geometric", "futura", "centurygothic", "avantgarde", "itcavantgardegothic",
-             "montserrat", "poppins", "gotham", "proximanova", "questrial",
-             "quicksand", "comfortaa", "kumbhsans", "outfit", "urbanist", "manrope"),
-    **_names("serif", "georgia", "baskerville", "librebaskerville", "charter", "merriweather",
-             "ptserif", "notoserif", "constantia", "centuryschoolbook", "newcenturyschlbk",
+             "gotham", "proximanova", "questrial", "quicksand", "comfortaa", "kumbhsans", "outfit",
+             "urbanist", "manrope"),
+    **_names("serif", "georgia", "baskerville", "librebaskerville", "charter", "ptserif",
+             "notoserif", "constantia", "centuryschoolbook", "newcenturyschlbk",
              "utopia", "iowanoldstyle", "droidserif", "crimsontext", "crimson", "dejavuserif",
              "rockwell", "robotoslab", "zillaslab", "arvo", "bookmanoldstyle", "cochin",
              "sitkatext", "cambo", "libreserif"),
