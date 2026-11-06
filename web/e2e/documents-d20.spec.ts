@@ -157,9 +157,11 @@ for (const slug of TEMPLATES) {
       latest[kind] = version?.number ?? 0;
       const pdf = await pdfOf(page.request, ids[kind], latest[kind]);
       expect(pdf.pages).toBe(1);
-      expect(pdf.text).toContain(person.name);
+      // ledger and photo-columns set the name in capitals (CSS): the PDF text holds them so
+      const text = pdf.text.toLowerCase();
+      expect(text).toContain(person.name.toLowerCase());
       // applicant tracking systems read the name first; the address whole on its line
-      expect(pdf.text.trimStart().startsWith(person.name)).toBe(true);
+      expect(text.trimStart().startsWith(person.name.toLowerCase())).toBe(true);
       expect(pdf.text).toContain(person.email);
       if (kind === "cv") expect(pdf.text).toContain(person.firstEmployer);
       const image = await page.request.get(

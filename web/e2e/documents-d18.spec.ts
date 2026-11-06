@@ -111,7 +111,7 @@ test("an invented person with a base CV and a posting's CV drawn with band", asy
   expect(drawn.latest?.template_slug).toBe("band");
 });
 
-test("the gallery lists the templates and filters those with no photo", async () => {
+test("the gallery lists the templates and filters those with two columns", async () => {
   await page.goto("/documents/templates");
   await expect(
     page.getByRole("heading", { level: 1, name: "Templates" }),
@@ -176,8 +176,8 @@ test("a posting's CV switches to ledger in the Template view, and its base CV is
     "aria-pressed",
     "true",
   );
-  await strip.getByRole("button", { name: /^Compact/ }).click();
-  await expect(strip.getByRole("button", { name: /^Compact/ })).toHaveAttribute(
+  await strip.getByRole("button", { name: /^Ledger/ }).click();
+  await expect(strip.getByRole("button", { name: /^Ledger/ })).toHaveAttribute(
     "aria-pressed",
     "true",
   );
@@ -209,7 +209,7 @@ test("photo-columns set on the base CV from the gallery is taken by a posting's 
     .getByRole("button", { name: "Use for this document" })
     .click();
   await expect(
-    page.getByText(/^Sidebar is now used for this document\./),
+    page.getByText(/^Photo and columns is now used for this document\./),
   ).toBeVisible();
   expect((await readDocument(page.request, base)).template_slug).toBe(
     "photo-columns",

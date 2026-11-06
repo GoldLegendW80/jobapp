@@ -121,7 +121,8 @@ test("switching to photo-columns makes a new one page version, the first unchang
   );
   const pdf = await pdfOf(page.request, cvId, latest?.number ?? 0);
   expect(pdf.pages).toBe(1);
-  expect(pdf.text).toContain(person.name);
+  // photo-columns sets the name in capitals (CSS), and the PDF text holds them so
+  expect(pdf.text.toLowerCase()).toContain(person.name.toLowerCase());
   expect(pdf.text).toContain(person.firstEmployer);
   expect(pdf.bytes.equals(firstPdf)).toBe(false);
   keep(EVIDENCE, "photo-columns.pdf", pdf.bytes);
