@@ -139,6 +139,13 @@ const CASES: Case[] = [
     reply: document,
   },
   {
+    name: "getPanel",
+    run: () => api.getPanel("d1"),
+    method: "GET",
+    url: "/api/documents/d1/panel",
+    reply: { panel: null, input_tokens: 0, output_tokens: 0 },
+  },
+  {
     name: "saveDraft",
     run: () => api.saveDraft("d1", { headline: "x" }, 4),
     method: "PUT",
