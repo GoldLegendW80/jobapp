@@ -840,7 +840,8 @@ def check_mail_html(answer: Any) -> MailHtml:
 # a design_pdf answer also carries the measures of each run (baseline, spacing, caps, pitch), of
 # each shape (radius), the dots, the page background, the round clips of images, and the word
 # samples (DESIGN_SAMPLES_PER_FONT a font, DESIGN_SAMPLE_BYTES of PNG crops in all, each crop
-# checked by its PNG header before the worker's font measure decodes it).
+# checked by its PNG header, DESIGN_SAMPLE_SIDE a side and DESIGN_SAMPLE_AREA in all, before the
+# worker's font measure decodes it).
 DESIGN_KINDS = ("design_pdf", "design_docx")
 DESIGN_MAX_ANSWER = 1_700_000  # D28: the word samples' crops (base64) and the run measures
 DESIGN_PAGES = 2
@@ -862,6 +863,7 @@ DESIGN_DOTS = 200
 DESIGN_SAMPLES_PER_FONT = 30
 DESIGN_SAMPLE_BYTES = 400_000  # PNG bytes of every crop together
 DESIGN_SAMPLE_SIDE = 2_400  # pixels: the widest or highest crop
+DESIGN_SAMPLE_AREA = 400_000  # pixels: the largest crop, so the font measure's work is bounded
 DESIGN_SAMPLE_TEXT = 40
 DESIGN_COUNT = 10_000_000
 DESIGN_NOTE_CODES = frozenset(
@@ -1184,6 +1186,8 @@ def _samples(value: Any, fonts: int, pages: tuple[DesignPage, ...]) -> tuple[Wor
             _bad("samples")
         side = _png_side(png)
         if not all(1 <= length <= DESIGN_SAMPLE_SIDE for length in side):
+            _bad("samples")
+        if side[0] * side[1] > DESIGN_SAMPLE_AREA:
             _bad("samples")
         out.append(
             WordSample(

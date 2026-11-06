@@ -21,8 +21,8 @@ import sqlalchemy as sa
 from PIL import Image
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
-from app.agents import credentials
-from app.agents.models import CredentialKind
+from app.agents import credentials, failures
+from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.documents import (
     base_router,
     consent,
@@ -220,6 +220,87 @@ def test_a_capture_becomes_the_base_cvs_template_as_a_new_version(
         assert found is not None
         assert found.fonts == ("arimo",)
         assert render_job.template_of(db, who.user, row.slug).slug == row.slug
+
+
+# #757 round 1 (B4): a run that stops on its turn limit, wall time or token budget after an
+# accepted submit keeps the best accepted template; a cancel or an upload gone keeps nothing.
+def test_a_run_stopped_on_its_turn_limit_keeps_the_accepted_template(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_turn_limit"))
+    with who.factory() as db:
+        run = db.get(AgentRun, generation.run_id)
+        assert run is not None
+        assert (run.status, run.error) == (RunStatus.failed, failures.TURN_LIMIT.format(turns=14))
+    assert generation.status is GenerationStatus.done, generation.error
+    (row,) = own_templates(who.factory, who.user)
+    assert document_row(who.factory, base).template_slug == row.slug
+    (version,) = versions(who.factory, base)
+    assert (version.origin, version.template_slug) == (Origin.template, row.slug)
+    assert [job["function"] for job in who.queue.jobs] == [render_job.FUNCTION]
+
+
+@pytest.mark.parametrize("end", ["cancelled", "gone"])
+def test_a_cancelled_run_or_an_upload_gone_keeps_nothing_it_accepted(
+    who: Person, monkeypatch: pytest.MonkeyPatch, end: str
+) -> None:
+    """The same accepted submit, the run's end seen by settle as a cancel, or with the upload
+    gone (`found.gone`) on top of the turn limit."""
+    Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    real = design_capture.settle
+
+    def settle(sessions, run_id, status, found, at):
+        assert found.accepted is not None  # the stream's submit was accepted
+        if end == "cancelled":
+            status = RunStatus.cancelled
+        else:
+            found.gone = True
+        return real(sessions, run_id, status, found, at)
+
+    monkeypatch.setattr(design_capture, "settle", settle)
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_turn_limit"))
+    if end == "cancelled":
+        assert generation.status is GenerationStatus.cancelled
+    else:
+        assert (generation.status, generation.error) == (GenerationStatus.failed, "binding_gone")
+    assert own_templates(who.factory, who.user) == []
+    assert document_row(who.factory, base).template_slug == "band"
+    assert versions(who.factory, base) == []
+    assert who.queue.jobs == []
+
+
+STOPS = [
+    (RunStatus.failed, failures.TURN_LIMIT.format(turns=14), True),
+    (RunStatus.failed, failures.TURN_LIMIT.format(turns=20), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="15 minutes"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="1 minute"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="2.5 minutes"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="45 seconds"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="a while"), False),
+    (RunStatus.failed, failures.TOKEN_LIMIT, True),
+    (RunStatus.cancelled, failures.TURN_LIMIT.format(turns=14), False),
+    (RunStatus.cancelled, None, False),
+    (RunStatus.done, None, False),
+    (RunStatus.failed, None, False),
+    (RunStatus.failed, failures.BINDING_GONE, False),
+    (RunStatus.failed, failures.NO_RESULT, False),
+    (RunStatus.failed, failures.BUSY, False),
+    (RunStatus.failed, failures.INTERNAL, False),
+    (RunStatus.failed, failures.API_ERROR.format(status=500), False),
+    (RunStatus.failed, failures.FAILED.format(reason="error_during_execution"), False),
+    (RunStatus.failed, failures.TURN_LIMIT.format(turns=14) + " Then it failed.", False),
+    (RunStatus.failed, "The run reached its limit of turns.", False),
+]
+
+
+@pytest.mark.parametrize(("status", "error", "limit"), STOPS)
+def test_only_a_stop_on_a_limit_counts_as_one(status, error, limit) -> None:
+    run = AgentRun(status=status, error=error)
+    assert design_capture.stopped_on_a_limit(status, run) is limit
+    assert design_capture.stopped_on_a_limit(status, None) is False
 
 
 def test_a_refusal_is_repaired_once(who: Person, monkeypatch: pytest.MonkeyPatch) -> None:

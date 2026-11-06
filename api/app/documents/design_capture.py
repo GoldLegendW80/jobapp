@@ -33,7 +33,9 @@ model sees the base CV printed with it beside the original's page 1 and may subm
 correction that is refused leaves the accepted one in place. At most DOCUMENTS_DESIGN_PASSES
 passes after the first submit.
 
-**The result** (`settle`, from the run's final hook): the accepted files become the person's
+**The result** (`settle`, from the run's final hook, when the run ends or stops on its turn
+limit, wall time or token budget after an accepted submit: `stopped_on_a_limit`; never on a
+cancel or when the upload is gone): the best scoring accepted files become the person's
 user template (`document_user_templates`, `upload-` and 8 characters), or the next version of
 the one this base CV was captured to before (a capture run again replaces it, `previous` keeps
 the files before); the base CV takes it as a new version with origin `template`, and its render
@@ -56,6 +58,7 @@ import asyncio
 import io
 import json
 import logging
+import re
 import secrets
 import threading
 import uuid
@@ -890,6 +893,28 @@ def _error(run: AgentRun | None, status: RunStatus, found: RunState) -> str:
     return "run_failed"
 
 
+def _limit(pattern: str, name: str, value: str) -> re.Pattern[str]:
+    return re.compile(re.escape(pattern).replace(re.escape("{" + name + "}"), value))
+
+
+# The runner's stops on a limit (runner.py, `outcome_of`): its turns, its wall time (`_minutes`)
+# and, compared whole, its token budget.
+LIMITS = (
+    _limit(failures.TURN_LIMIT, "turns", r"\d+"),
+    _limit(failures.TIME_LIMIT, "minutes", r"\d+(?:\.\d+)? (?:seconds|minutes?)"),
+)
+
+
+def stopped_on_a_limit(status: RunStatus, run: AgentRun | None) -> bool:
+    """Whether a run failed only because it reached its turn limit, its wall time or its token
+    budget: what it accepted before still stands (B4 of #757). A cancel, a binding gone or any
+    other failure is not one."""
+    error = run.error if run is not None else None
+    if status is not RunStatus.failed or error is None:
+        return False
+    return error == failures.TOKEN_LIMIT or any(p.fullmatch(error) for p in LIMITS)
+
+
 def settle(
     sessions: sessionmaker[Session],
     run_id: uuid.UUID,
@@ -920,7 +945,12 @@ def settle(
         if generation.status is not GenerationStatus.running:
             return None
         render = None
-        if status is RunStatus.done and found.accepted is not None and found.inputs is not None:
+        # The best accepted version is kept when the run ends, or when it stopped on a limit
+        # after accepting one; never on a cancel, nor when the upload or the document is gone.
+        ended = status is RunStatus.done or (
+            not found.gone and stopped_on_a_limit(status, db.get(AgentRun, run_id))
+        )
+        if ended and found.accepted is not None and found.inputs is not None:
             row = store_template(
                 db, document, found.accepted, found.inputs, at, found.labels, found.measure
             )

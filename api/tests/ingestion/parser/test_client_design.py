@@ -118,6 +118,22 @@ PDF_BREAKS = [
         "samples",
     ),
     ("a sample crop not base64", lambda a: a.update(samples=[{**SAMPLE, "crop": "*%"}]), "samples"),
+    # #757 round 1 (B5): sides within 2,400 px, the area past 400,000 pixels
+    (
+        "a sample crop too large in area",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_400, 167)}]),
+        "samples",
+    ),
+    (
+        "a sample crop of the largest square sides",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_400, 2_400)}]),
+        "samples",
+    ),
+    (
+        "a sample crop one pixel past the area",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(4_001, 100)}]),
+        "samples",
+    ),
     (
         "samples past the byte cap",
         lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(10, 10, 200_001)}] * 2),
@@ -132,6 +148,13 @@ PDF_BREAKS = [
 @pytest.mark.parametrize(("name", "change", "rule"), PDF_BREAKS, ids=[r[0] for r in PDF_BREAKS])
 def test_a_pdf_answer_that_breaks_a_rule_is_refused(name: str, change: Any, rule: str) -> None:
     assert rule_of(pc.check_design_pdf, broken(PDF, change)) == rule, name
+
+
+def test_a_sample_crop_at_the_area_cap_is_accepted() -> None:
+    answer = broken(PDF, lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_000, 200)}]))
+    (sample,) = pc.check_design_pdf(answer).samples
+    assert pc._png_side(sample.crop) == (2_000, 200)
+    assert 2_000 * 200 == pc.DESIGN_SAMPLE_AREA
 
 
 def test_the_text_of_all_runs_together_is_capped() -> None:

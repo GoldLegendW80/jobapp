@@ -126,3 +126,55 @@ def test_each_family_is_measured_with_a_face_that_draws_latin_letters(family: st
     face = ImageFont.truetype(path, 100, layout_engine=ImageFont.Layout.BASIC)
     shapes = {bytes(face.getmask(letter)) for letter in "Iamo"}
     assert len(shapes) == 4, f"{family}: its letters are drawn alike"
+
+
+def _striped(width: int, height: int) -> bytes:
+    """A crop of one pixel stripes: as much ink as a crop can hold, in a few kilobytes."""
+    image = Image.new("L", (width, height), 255)
+    draw = ImageDraw.Draw(image)
+    for x in range(0, width, 2):
+        draw.line((x, 0, x, height), fill=0)
+    out = io.BytesIO()
+    image.save(out, format="PNG", optimize=True)
+    return out.getvalue()
+
+
+# #757 round 1 (B5): crops from a sandbox the file may have taken over held a worker core for
+# minutes (30 striped 2,400 px crops: 80 s of `rank`). By size, not by time: what is compared.
+def test_the_pixels_compared_are_bounded_whatever_the_crops(monkeypatch) -> None:
+    allowed = _striped(2_400, 166)  # sides and area within the client's caps
+    square = _striped(2_400, 2_400)  # the area past them: never decoded
+    assert 2_400 * 166 <= font_measure.CROP_AREA < 2_400 * 2_400
+    # claimed sizes and texts as large as the client lets through: 1,440pt, 40 wide letters
+    long = "W" * 40
+    samples = [WordSample(0, 0, "Example", 300, 1_200, allowed)] * 15
+    samples += [WordSample(0, 0, long, 14_400, 144_000, allowed)] * 15
+    samples += [WordSample(0, 0, "Robotics", 300, 1_200, square)] * 30
+    words = font_measure.words_of(samples, {0: SCALE})
+    assert [word.text for word in words] == ["Example"] * 15 + [long] * 15
+    for word in words:
+        assert word.ink.width <= font_measure.INK_WIDTH
+        assert word.ink.height <= font_measure.INK_HEIGHT
+        assert word.scale < SCALE  # drawn at the bounded ink's height
+    compared: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    real = font_measure._iou
+
+    def iou(first, second):
+        compared.append((first.size, second.size))
+        return real(first, second)
+
+    monkeypatch.setattr(font_measure, "_iou", iou)
+    assert font_measure.rank(words, 400, False)
+    assert len(compared) >= 30 * len(font_map.FAMILIES) // 2
+    drawn = font_measure.DRAWN_MAX
+    for (ink_width, ink_height), (drawn_width, drawn_height) in compared:
+        assert ink_width <= font_measure.INK_WIDTH and ink_height <= font_measure.INK_HEIGHT
+        assert drawn_width <= font_measure.DRAWN_WIDTH + 2 * drawn
+        assert drawn_height <= 3 * drawn
+
+
+def test_a_small_crop_keeps_its_ink_and_its_scale() -> None:
+    crop = sample("raleway", "Example")
+    (word,) = font_measure.words_of([crop], {0: SCALE})
+    assert word.ink.height <= font_measure.INK_HEIGHT
+    assert word.scale == SCALE

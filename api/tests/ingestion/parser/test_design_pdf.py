@@ -459,6 +459,7 @@ def test_the_caps_are_the_clients() -> None:
         (design_pdf.SAMPLES_PER_FONT, pc.DESIGN_SAMPLES_PER_FONT),
         (design_pdf.SAMPLE_BYTES, pc.DESIGN_SAMPLE_BYTES),
         (design_pdf.SAMPLE_SIDE_MAX, pc.DESIGN_SAMPLE_SIDE),
+        (design_pdf.SAMPLE_AREA_MAX, pc.DESIGN_SAMPLE_AREA),
         (design_pdf.SAMPLE_TEXT_MAX, pc.DESIGN_SAMPLE_TEXT),
     ]
     assert all(mine == theirs for mine, theirs in pairs), pairs
@@ -703,6 +704,24 @@ def test_word_samples_hold_the_longest_words_of_each_font_with_a_grey_crop() -> 
     assert body[0].text == "everything"  # the longest first
     # Times Roman at 10pt: the advances of "everything" are 4277 thousandths of an em, 42.8pt
     assert body[0].width == pytest.approx(428, abs=2)
+
+
+# #757 round 1 (B5): a crop is bounded in area too, so the font measure's work is
+def test_a_word_whose_crop_is_over_the_area_cap_is_not_drawn() -> None:
+    page = fx.text("ROBOTICS", 60, 600, font="F1", size=40) + fx.text(
+        "Planned everything", 60, 500, size=10
+    )
+    design = ask(fx.build([page]))
+    texts = {sample.text for sample in design.samples}
+    assert "everything" in texts
+    assert "ROBOTICS" not in texts
+    for sample in design.samples:
+        image = Image.open(io.BytesIO(sample.crop))
+        assert image.width * image.height <= design_pdf.SAMPLE_AREA_MAX
+        assert max(image.size) <= design_pdf.SAMPLE_SIDE_MAX
+    # the same word at 24pt, a heading's size, is still drawn
+    heading = fx.text("ROBOTICS", 60, 600, font="F1", size=24)
+    assert "ROBOTICS" in {sample.text for sample in ask(fx.build([heading])).samples}
 
 
 def test_the_samples_stop_at_their_byte_cap_with_a_note(monkeypatch: pytest.MonkeyPatch) -> None:

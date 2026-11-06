@@ -62,8 +62,9 @@ tenths of a point from the top left corner of the page, every number an integer:
 - `samples`: for each font (the fonts with most characters first), up to SAMPLES_PER_FONT words
   of SAMPLE_LETTERS letters or more, the longest of the upright runs, each with its size, its
   width (the sum of its characters' advances: kerning and spacing left out) and a grey PNG crop
-  of its ink drawn at SAMPLE_SCALE times the page image's scale, SAMPLE_BYTES for all of them
-  together (`samples_limit` past it). Only the worker's font measure reads them
+  of its ink drawn at SAMPLE_SCALE times the page image's scale (a word whose crop is over
+  SAMPLE_SIDE_MAX on a side or SAMPLE_AREA_MAX in area is not drawn), SAMPLE_BYTES for all of
+  them together (`samples_limit` past it). Only the worker's font measure reads them
   (documents/font_measure.py): they are never logged, stored or shown to a model.
 - `scanned` is true when no page read has a run and an image covers at least half of one of
   them: the design is then in the picture alone, and the extraction says so.
@@ -134,6 +135,7 @@ SAMPLE_LETTERS = 3  # letters of a sampled word at least
 SAMPLE_SCALE = 4  # times the scale of the page image (pdf_render.LONG_SIDE)
 SAMPLE_BYTES = 400_000  # PNG bytes of every crop of an answer together
 SAMPLE_SIDE_MAX = 2_400  # pixels: a word crop larger than this on a side is not drawn
+SAMPLE_AREA_MAX = 400_000  # pixels: nor one larger in area (a 24pt heading word fits)
 SAMPLE_PAD = 1.0  # points around a word's box
 SAMPLE_TEXT_MAX = 40  # characters of a sampled word
 # PDF font descriptor flags (ISO 32000, 9.8.2).
@@ -617,6 +619,8 @@ class _Page:
             left, top = max(left, 0), max(top, 0)
             right, bottom = min(right, full[0]), min(bottom, full[1])
             if not (0 < right - left <= SAMPLE_SIDE_MAX and 0 < bottom - top <= SAMPLE_SIDE_MAX):
+                continue
+            if (right - left) * (bottom - top) > SAMPLE_AREA_MAX:
                 continue
             drawn = pdf_render.draw_area(self.page, full, (left, top, right, bottom), self.budget)
             if isinstance(drawn, str):
