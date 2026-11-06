@@ -115,7 +115,7 @@ const terms = (list: string) =>
   page.getByRole("list", { name: `Terms of ${list}` });
 
 async function openSearch() {
-  await page.goto("/profile?tab=search");
+  await page.goto("/settings/search");
   await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
 }
 

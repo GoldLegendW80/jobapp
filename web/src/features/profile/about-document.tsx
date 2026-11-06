@@ -253,7 +253,9 @@ function Document({ about }: { about: About }) {
   const done = async (heading: string): Promise<boolean> => {
     const saved = await doc.flush();
     if (!saved) return false;
-    if (saved.needs === "model_key") return true;
+    // A fact part is saved by code, with or without a key; the others need one.
+    const kind = saved.parts.find((p) => p.key === keyOf(heading))?.kind;
+    if (saved.needs === "model_key" && kind !== "facts") return true;
     try {
       queryClient.setQueryData(
         aboutKey,
@@ -561,7 +563,8 @@ function NotApplied({
   onDone: (heading: string) => Promise<void>;
 }) {
   const [pending, setPending] = useState(false);
-  if (about.needs === "model_key")
+  const facts = shown.kind === "facts";
+  if (about.needs === "model_key" && !facts)
     return (
       <div className="flex flex-col gap-1">
         <p className="text-sm">{W.notApplied}</p>
@@ -584,7 +587,7 @@ function NotApplied({
         }}
       >
         {pending ? <Spinner aria-hidden="true" /> : null}
-        {W.update}
+        {facts ? W.saveFacts : W.update}
       </Button>
       {cost ? (
         <span className="text-xs text-muted-foreground">{cost}</span>
@@ -695,7 +698,7 @@ function PartEditor({
           <span className="text-xs text-muted-foreground">{cost}</span>
         ) : null}
       </div>
-      {about.needs === "model_key" ? <NoKey /> : null}
+      {about.needs === "model_key" && kind !== "facts" ? <NoKey /> : null}
     </div>
   );
 }

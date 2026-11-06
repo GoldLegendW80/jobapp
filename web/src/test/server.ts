@@ -96,10 +96,10 @@ export const noTitleSuggestions = {
 
 /** GET /api/profile/about of a new account without a model key: the four parts, empty. */
 export const emptyAbout = {
-  text: "## Experience\n\n## Education\n\n## Skills\n\n## Answers\n",
+  text: "## Skills\n\n## Answers\n",
   version: 0,
   updated_at: "2026-11-05T09:00:00Z",
-  parts: ["Experience", "Education", "Skills", "Answers"].map((heading) => ({
+  parts: ["Skills", "Answers"].map((heading) => ({
     heading,
     key: heading.toLowerCase(),
     kind: heading.toLowerCase(),

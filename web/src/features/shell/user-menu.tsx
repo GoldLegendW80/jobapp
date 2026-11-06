@@ -71,7 +71,7 @@ export function UserMenu({
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link to="/settings/applications">
+          <Link to="/settings/search">
             <Settings aria-hidden="true" />
             Settings
           </Link>

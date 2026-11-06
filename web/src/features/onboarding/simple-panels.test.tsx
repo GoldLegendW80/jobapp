@@ -40,7 +40,7 @@ describe("simple wizard panels (O10)", () => {
     expect(screen.getByLabelText("Roles")).toHaveAttribute("readonly");
     expect(
       screen.getByRole("link", { name: "Search options" }),
-    ).toHaveAttribute("href", "/profile?tab=search");
+    ).toHaveAttribute("href", "/settings/search");
   });
 
   it("puts every contract in one group whose last box is Freelance mission", () => {

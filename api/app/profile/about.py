@@ -568,7 +568,9 @@ def view(db: Session, user_id: uuid.UUID, now: datetime) -> dict[str, Any]:
                 "state": _state(row, part, sections),
                 "duplicate": keys.count(part.key) > 1,
                 "too_long": len(part.text) > about_text.PART_MAX,
-                "estimate": None if kind is None else estimate_out(kind, _estimate_of(request)),
+                "estimate": None
+                if kind is None or part.kind == "facts"
+                else estimate_out(kind, _estimate_of(request)),
             }
         )
     found = dict(row.interpretation or {})

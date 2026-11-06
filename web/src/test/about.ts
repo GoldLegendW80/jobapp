@@ -15,17 +15,7 @@ import {
 
 import { server } from "./server";
 
-export const ABOUT_TEXT = `## Experience
-
-### Data engineer, Example Robotics
-March 2021 to now · Lyon · CDI
-
-## Education
-
-### Master of data science, Example School
-2016 to 2018
-
-## Skills
+export const ABOUT_TEXT = `## Skills
 
 Years of experience: 5
 
@@ -42,11 +32,12 @@ Years of experience: 5
 
 ### Notice period
 Three months.
+
+### Background checks
+Yes, I consent to background checks.
 `;
 
 const KINDS: Record<string, PartKind> = {
-  experience: "experience",
-  education: "education",
   skills: "skills",
   answers: "answers",
 };
@@ -165,6 +156,26 @@ export function fakeAbout(
         version: number;
       };
       state.dones.push(body);
+      const kind = state.about.parts.find(
+        (part) => part.key === keyOf(body.heading),
+      )?.kind;
+      if (kind === "facts") {
+        // Read by code and applied at once, as the api does.
+        state.about = {
+          ...state.about,
+          reading: null,
+          undo: {
+            heading: body.heading,
+            lines: [`1 fact block updated: ${body.heading}`],
+          },
+          parts: state.about.parts.map((part) =>
+            part.key === keyOf(body.heading)
+              ? { ...part, state: "in_step" }
+              : part,
+          ),
+        };
+        return json();
+      }
       if (state.about.needs === "model_key")
         return HttpResponse.json(
           { detail: "Add a model key on the Account page first." },

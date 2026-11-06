@@ -23,7 +23,7 @@ async function openSearch(
   fakeSession(admin);
   const state = fakeProfile(initial);
   const user = userEvent.setup();
-  const app = renderApp("/profile?tab=search");
+  const app = renderApp("/settings/search");
   await screen.findByRole("form", { name: "Search" });
   return { user, state, ...app };
 }

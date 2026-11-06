@@ -38,13 +38,16 @@ describe("the one page profile", () => {
       .map((heading) => heading.textContent);
     expect(headings).toEqual([
       "Your CVs",
-      "What you look for",
+      "Experience and education",
       "About you",
       "Contact and links",
     ]);
     const ready = screen.getByRole("list", { name: "Ready for" });
-    const lines = within(ready).getAllByRole("listitem");
-    expect(lines.map((line) => line.textContent)).toEqual([
+    expect(
+      within(ready)
+        .getAllByRole("listitem")
+        .map((line) => line.textContent),
+    ).toEqual([
       "Scoring postings: ready",
       "Writing CVs: ready",
       "Filling forms: ready",
@@ -55,21 +58,23 @@ describe("the one page profile", () => {
       ),
     ).toBeVisible();
     expect(
-      screen.getByRole("link", { name: "Websites and more in Find jobs" }),
-    ).toHaveAttribute("href", "/jobs?find=1");
-    expect(
       screen.getByRole("link", { name: "Add other documents" }),
     ).toHaveAttribute("href", "/profile/fill");
-    // The identity form, and the search lists with their own save.
+    // The jobs and schools, and the identity with the languages, stay forms; the search is in
+    // Settings (owner, 2026-11-05).
+    expect(screen.getByRole("form", { name: "Experience" })).toBeVisible();
     expect(screen.getByLabelText("Full name")).toHaveValue("Harald Example");
-    expect(screen.getByRole("button", { name: "Save search" })).toBeVisible();
+    expect(screen.queryByRole("form", { name: "Search" })).toBeNull();
+    expect(
+      screen.getByRole("link", { name: "Settings, Search" }),
+    ).toHaveAttribute("href", "/settings/search");
   });
 
   it("names the one button that fixes what each use lacks", async () => {
     fakeSession(admin);
     fakeProfile(null);
     fakeDocuments();
-    fakeAbout({ text: "## Experience\n\n## Skills\n" });
+    fakeAbout({ text: "## Skills\n\n## Answers\n" });
     renderApp("/profile");
     const ready = await screen.findByRole("list", { name: "Ready for" });
     expect(
@@ -77,13 +82,14 @@ describe("the one page profile", () => {
     ).toHaveAttribute("href", "#about-skills");
     expect(
       within(ready).getByRole("link", { name: "Add your experience" }),
-    ).toHaveAttribute("href", "#about-experience");
+    ).toHaveAttribute("href", "#experience");
     expect(
       within(ready).getByRole("link", { name: "Add your contact details" }),
     ).toHaveAttribute("href", "#contact");
     // Empty parts say so, and the first of each kind is where Ready for sends the person.
     expect(await screen.findAllByText("Nothing here yet.")).toHaveLength(2);
     expect(document.getElementById("about-skills")).not.toBeNull();
+    expect(document.getElementById("experience")).not.toBeNull();
   });
 
   it("puts History, Export, Import and the classic editor under More", async () => {
@@ -111,7 +117,7 @@ describe("the one page profile", () => {
     await waitFor(() => {
       expect(location()).toBe("/profile?tab=identity");
     });
-    expect(screen.getAllByRole("tab")).toHaveLength(7);
+    expect(screen.getAllByRole("tab")).toHaveLength(6);
     await user.click(
       screen.getByRole("link", { name: "Back to your profile page" }),
     );
@@ -122,7 +128,7 @@ describe("the one page profile", () => {
 });
 
 describe("About you", () => {
-  it("renders each part, with a contents list and tables", async () => {
+  it("renders skills, facts and answers, with a contents list and tables", async () => {
     await openPage();
     const contents = screen.getByRole("navigation", {
       name: "Parts of About you",
@@ -131,14 +137,13 @@ describe("About you", () => {
       within(contents)
         .getAllByRole("link")
         .map((link) => link.textContent),
-    ).toEqual(["Experience", "Education", "Skills", "Projects", "Answers"]);
+    ).toEqual(["Skills", "Projects", "Answers"]);
     expect(
-      within(contents).getByRole("link", { name: "Skills" }),
+      within(contents).getByRole("link", { name: "Answers" }),
     ).toHaveAttribute("href", "#about-part-2");
-    const skills = part("Skills");
     // An underscore inside a word stays a character.
     expect(
-      within(skills).getByText("data_tools: Python, SQL, dbt"),
+      within(part("Skills")).getByText("data_tools: Python, SQL, dbt"),
     ).toBeVisible();
     const projects = part("Projects");
     expect(
@@ -146,6 +151,9 @@ describe("About you", () => {
     ).toBeVisible();
     expect(
       within(projects).getByRole("cell", { name: "Streaming platform" }),
+    ).toBeVisible();
+    expect(
+      within(part("Answers")).getByText("Yes, I consent to background checks."),
     ).toBeVisible();
   });
 
@@ -212,6 +220,34 @@ describe("About you", () => {
     });
   });
 
+  it("lists a consent change on its own line, applied only by Apply", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { user, about } = await openPage();
+    await user.click(screen.getByRole("button", { name: "Edit Answers" }));
+    const answers = part("Answers");
+    await user.click(within(answers).getByRole("button", { name: "Done" }));
+    expect(await within(answers).findByText("Reading this part")).toBeVisible();
+    about.read(
+      ["Background checks: no to yes"],
+      [
+        "Not changed: the text does not say clearly whether you can work hybrid. Start the line with Yes or No.",
+      ],
+    );
+    await act(() => vi.advanceTimersByTimeAsync(READING_POLL_MS));
+    const understood = await within(answers).findByRole("region", {
+      name: "What the app understood",
+    });
+    expect(
+      within(understood).getByText("Background checks: no to yes"),
+    ).toBeVisible();
+    expect(within(understood).getByText(/^Not changed: /)).toBeVisible();
+    expect(about.steps).toEqual([]);
+    await user.click(
+      within(understood).getByRole("button", { name: "Not now" }),
+    );
+    expect(about.steps).toEqual(["discard"]);
+  });
+
   it("without a model key the text still saves and a line under Done says what is missing", async () => {
     const { user, about } = await openPage({ key: null });
     await user.click(screen.getByRole("button", { name: "Edit Answers" }));
@@ -240,6 +276,25 @@ describe("About you", () => {
     ).toBeVisible();
   });
 
+  it("saves a fact part to the profile at Done, with or without a key, and Undo after it", async () => {
+    const { user, about } = await openPage({ key: null });
+    await user.click(screen.getByRole("button", { name: "Edit Projects" }));
+    const projects = part("Projects");
+    expect(within(projects).queryByText(/model key/)).toBeNull();
+    await user.type(within(projects).getByLabelText("Text"), "\n- Search");
+    await user.click(within(projects).getByRole("button", { name: "Done" }));
+    expect(about.dones).toEqual([{ heading: "Projects", version: 1 }]);
+    expect(
+      await within(projects).findByText("Applied to your profile:"),
+    ).toBeVisible();
+    expect(
+      within(projects).getByText("1 fact block updated: Projects"),
+    ).toBeVisible();
+    expect(
+      within(projects).getByRole("button", { name: "Undo" }),
+    ).toBeVisible();
+  });
+
   it("says nothing about money on a subscription", async () => {
     const { user } = await openPage({ key: "subscription" });
     await user.click(screen.getByRole("button", { name: "Edit Skills" }));
@@ -252,10 +307,10 @@ describe("About you", () => {
   it("asks before keeping a text another tab saved first", async () => {
     const { user, about } = await openPage();
     about.about = { ...about.about, version: 3 };
-    await user.click(screen.getByRole("button", { name: "Edit Experience" }));
-    const experience = part("Experience");
-    await user.type(within(experience).getByLabelText("Text"), "!");
-    await user.click(within(experience).getByRole("button", { name: "Done" }));
+    await user.click(screen.getByRole("button", { name: "Edit Skills" }));
+    const skills = part("Skills");
+    await user.type(within(skills).getByLabelText("Text"), "!");
+    await user.click(within(skills).getByRole("button", { name: "Done" }));
     expect(
       await screen.findByText("Changed in another tab", { selector: "div" }),
     ).toBeVisible();

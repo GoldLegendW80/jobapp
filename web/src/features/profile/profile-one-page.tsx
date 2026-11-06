@@ -2,9 +2,10 @@
  * /profile as one page, no tabs (product audit, chapter 2, analysis B6 and B7; owner: "Always
  * think about navigation and number of click"). Top to bottom: the photo, name and headline with
  * "Ready for" (in place of the completeness bar: three lines, each with the one button that fixes
- * it); Your CV; What you look for (the search lists with the job title ideas); About you (the
- * Markdown document, about-document.tsx); Contact and links (the identity form). History, Export,
- * Import and the classic editor (the old tabs, kept for one release) are under More.
+ * it); Your CV; Experience and education (its form); About you (the skills, the answers and the
+ * facts, as text, about-document.tsx); Contact and links (the identity form, with the languages).
+ * The search is in Settings, Search (owner, 2026-11-05). History, Export, Import and the classic
+ * editor (the old tabs, kept for one release) are under More.
  */
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import {
@@ -16,19 +17,11 @@ import {
   RotateCw,
   Upload,
 } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Link, useBlocker } from "react-router";
+import { useCallback, useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,7 +34,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Form } from "@/components/ui/form";
 import { Spinner } from "@/components/ui/spinner";
 import { CvTab } from "@/features/documents/cv-tab";
 import { describeError } from "@/lib/api";
@@ -59,16 +51,14 @@ import {
   type SectionName,
 } from "./api";
 import { downloadJson } from "./download";
-import { searchSchema, fromSearchForm, toSearchForm } from "./editor-forms";
 import { HistoryDrawer } from "./history-drawer";
 import { IdentityTab } from "./identity-tab";
+import { ExperienceTab } from "./experience-tab";
 import { exportFileName } from "./import-file";
 import { SECTION_LABELS } from "./labels";
 import { ImportDialog } from "./profile-file";
-import { SearchLists } from "./search-lists";
 import { readiness } from "./readiness";
-import { ConflictDialog, FormErrorAlert, SaveBar } from "./section-ui";
-import { useSectionForm } from "./use-section-form";
+import { UnsavedGuard } from "./unsaved-guard";
 
 const H2 = "text-lg font-semibold tracking-tight";
 const MUTED = "text-sm text-muted-foreground";
@@ -79,31 +69,15 @@ export function OneProfilePage() {
     queryKey: profileKey,
     queryFn: ({ signal }) => getProfile(signal),
   });
-  const [dirty, setDirty] = useState({ search: false, identity: false });
+  const [dirty, setDirty] = useState({ experience: false, identity: false });
   const [generation, setGeneration] = useState(0);
-  const onSearchDirty = useCallback((value: boolean) => {
-    setDirty((was) => ({ ...was, search: value }));
+  const onExperienceDirty = useCallback((value: boolean) => {
+    setDirty((was) => ({ ...was, experience: value }));
   }, []);
   const onIdentityDirty = useCallback((value: boolean) => {
     setDirty((was) => ({ ...was, identity: value }));
   }, []);
-  const anyDirty = dirty.search || dirty.identity;
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      anyDirty &&
-      currentLocation.pathname + currentLocation.search !==
-        nextLocation.pathname + nextLocation.search,
-  );
-  useEffect(() => {
-    if (!anyDirty) return;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", onBeforeUnload);
-    };
-  }, [anyDirty]);
+  const anyDirty = dirty.experience || dirty.identity;
 
   if (query.isPending)
     return (
@@ -138,7 +112,7 @@ export function OneProfilePage() {
 
   const profile = query.data;
   const reload = () => {
-    setDirty({ search: false, identity: false });
+    setDirty({ experience: false, identity: false });
     setGeneration((value) => value + 1);
   };
   return (
@@ -166,11 +140,15 @@ export function OneProfilePage() {
           </Link>
         </p>
       </section>
-      <Part id="looking-for" title="What you look for">
-        <LookingFor
+      <Part
+        id="experience"
+        title="Experience and education"
+        intro="Your jobs and schools, with their dates, as every CV prints them."
+      >
+        <ExperienceTab
           key={generation}
           profile={profile}
-          onDirtyChange={onSearchDirty}
+          onDirtyChange={onExperienceDirty}
         />
       </Part>
       <Part id="about-you" title={ABOUT_WORDS.title} intro={ABOUT_WORDS.intro}>
@@ -187,37 +165,23 @@ export function OneProfilePage() {
           onDirtyChange={onIdentityDirty}
         />
       </Part>
-      <AlertDialog
-        open={blocker.state === "blocked"}
-        onOpenChange={(open) => {
-          if (!open) blocker.reset?.();
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your changes to{" "}
-              {dirty.search ? "What you look for" : "Contact and links"} are not
-              saved. Keep editing to save them first, or discard them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <Button variant="outline" onClick={() => blocker.reset?.()}>
-              Keep editing
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setDirty({ search: false, identity: false });
-                blocker.proceed?.();
-              }}
-            >
-              Discard changes
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <p className={MUTED}>
+        What the search looks for is in{" "}
+        <Link
+          to="/settings/search"
+          className="font-medium text-foreground underline underline-offset-4"
+        >
+          Settings, Search
+        </Link>
+        .
+      </p>
+      <UnsavedGuard
+        dirty={anyDirty}
+        what={
+          dirty.experience ? "Experience and education" : "Contact and links"
+        }
+        onDiscard={reload}
+      />
     </div>
   );
 }
@@ -312,7 +276,11 @@ function Who({ profile }: { profile: Profile }) {
               </span>
               {line.fix ? (
                 <Button asChild variant="outline" size="sm">
-                  <a href={line.fix.href}>{line.fix.label}</a>
+                  {line.fix.href.startsWith("#") ? (
+                    <a href={line.fix.href}>{line.fix.label}</a>
+                  ) : (
+                    <Link to={line.fix.href}>{line.fix.label}</Link>
+                  )}
                 </Button>
               ) : null}
             </li>
@@ -320,60 +288,6 @@ function Who({ profile }: { profile: Profile }) {
         </ul>
       </div>
     </section>
-  );
-}
-
-function LookingFor({
-  profile,
-  onDirtyChange,
-}: {
-  profile: Profile;
-  onDirtyChange: (dirty: boolean) => void;
-}) {
-  const { form, onSubmit, saving, formError, conflict, keepEditing, reload } =
-    useSectionForm({
-      section: "search",
-      profile,
-      schema: searchSchema,
-      toForm: toSearchForm,
-      fromForm: fromSearchForm,
-      rules: { wrapped: ["never_apply"] },
-      onDirtyChange,
-    });
-  return (
-    <>
-      <Form {...form}>
-        <form
-          noValidate
-          aria-label="What you look for"
-          className="flex flex-col gap-4"
-          onSubmit={(event) => void onSubmit(event)}
-        >
-          <FormErrorAlert message={formError} />
-          <SearchLists form={form} />
-          <p className={MUTED}>
-            Websites, contracts, remote work and pay are set where you search.{" "}
-            <Link
-              to="/jobs?find=1"
-              className="font-medium text-foreground underline underline-offset-4"
-            >
-              Websites and more in Find jobs
-            </Link>
-          </p>
-          <SaveBar
-            label="Search"
-            saving={saving}
-            dirty={form.formState.isDirty}
-          />
-        </form>
-      </Form>
-      <ConflictDialog
-        open={conflict}
-        label="Search"
-        onKeepEditing={keepEditing}
-        onReload={reload}
-      />
-    </>
   );
 }
 

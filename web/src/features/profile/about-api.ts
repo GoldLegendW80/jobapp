@@ -22,13 +22,7 @@ const estimateSchema = z.object({
     .nullable(),
 });
 
-export const PART_KINDS = [
-  "experience",
-  "education",
-  "skills",
-  "answers",
-  "facts",
-] as const;
+export const PART_KINDS = ["skills", "answers", "facts"] as const;
 export type PartKind = (typeof PART_KINDS)[number];
 
 export const aboutSchema = z.object({

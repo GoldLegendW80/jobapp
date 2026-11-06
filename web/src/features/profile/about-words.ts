@@ -7,25 +7,21 @@ const plural = (count: number, one: string, more = `${one}s`) =>
 export const ABOUT_WORDS = {
   title: "About you",
   intro:
-    "Your experience, education, skills, facts and answers, in your own words. Edit a part, then click Done: the app reads it and shows what it would change in your profile.",
+    "Your skills, your answers to application forms and the facts about your work, in your own words. Edit a part, then click Done: the app reads your skills and answers and shows what it would change in your profile; a fact part is saved as written.",
   loading: "Loading your document",
   notLoaded: "Your document could not be loaded",
   contents: "Parts of About you",
   kinds: {
-    experience: "Your jobs and their dates.",
-    education: "Your schools and degrees.",
     skills: "What the fit of a posting reads.",
-    answers: "Your answers to application forms, in your own words.",
+    answers:
+      "Your answers to application forms. Start a yes or no answer with Yes or No.",
     facts: "Facts the CV and letter writers may quote.",
   } satisfies Record<PartKind, string>,
   placeholders: {
-    experience:
-      "### Your title, Company\nMarch 2021 to now · City · CDI\n\n### Earlier title, Earlier company\n2018 to 2021 · City",
-    education: "### Your degree, School\n2016 to 2018 · City",
     skills:
       "Years of experience: 5\n\n### What I have\n- Data tools: Python, SQL\n\n### What I do not have\n- Java",
     answers:
-      "### Notice period\nThree months.\n\n### Motivation\nIn your own words.",
+      "### Notice period\nThree months.\n\n### Background checks\nYes, I consent to background checks.",
     facts: "What you built, in your own words.",
   } satisfies Record<PartKind, string>,
   empty: "Nothing here yet.",
@@ -51,6 +47,7 @@ export const ABOUT_WORDS = {
     `Done reads this part with your model key: about ${low} to ${high}, at list prices.`,
   notApplied: "Your profile does not have this text yet.",
   update: "Update my profile",
+  saveFacts: "Save to my profile",
   reading: "Reading this part",
   notRead: "This part was not read",
   understood: "What the app understood",

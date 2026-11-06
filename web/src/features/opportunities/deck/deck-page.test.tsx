@@ -460,7 +460,7 @@ describe("pages and the empty deck", () => {
     ).toHaveAttribute("href", "/jobs?find=1");
     expect(
       screen.getByRole("link", { name: "Search options" }),
-    ).toHaveAttribute("href", "/profile?tab=search");
+    ).toHaveAttribute("href", "/settings/search");
   });
 
   it("shows no Pass, Like, Undo last or keys without a card", async () => {

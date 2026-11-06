@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   Link,
+  Navigate,
   useBlocker,
   useLocation,
   useNavigate,
@@ -50,11 +51,12 @@ import { IdentityTab } from "./identity-tab";
 import { missingLabel, SECTION_LABELS } from "./labels";
 import { OneProfilePage } from "./profile-one-page";
 import { ProfileFileMenu } from "./profile-file";
-import { SearchTab } from "./search-tab";
 import { SkillsTab } from "./skills-tab";
 
+/** The classic tabs: the search is in Settings, Search now. */
+const CLASSIC_SECTIONS = TAB_SECTIONS.filter((name) => name !== "search");
 const isSection = (value: string | null): value is TabSection =>
-  value !== null && (TAB_SECTIONS as readonly string[]).includes(value);
+  value !== null && (CLASSIC_SECTIONS as readonly string[]).includes(value);
 
 /** The CV tab is not a profile section: it lives at /profile/cv and /profile/cv/:id. */
 const CV_TAB = "cv";
@@ -76,6 +78,9 @@ type TabName = TabSection | typeof CV_TAB;
 export function ProfilePage() {
   const [params] = useSearchParams();
   const onCv = /^\/profile\/cv(\/|$)/.test(useLocation().pathname);
+  // The search moved to Settings (owner, 2026-11-05): old links and bookmarks go there.
+  if (params.get("tab") === "search")
+    return <Navigate to="/settings/search" replace />;
   return onCv || params.has("tab") ? (
     <ClassicProfilePage />
   ) : (
@@ -198,10 +203,10 @@ function ClassicProfilePage() {
       >
         <TabsList
           aria-label="Profile sections"
-          className="grid h-auto grid-cols-4 gap-1 sm:grid-cols-7"
+          className="grid h-auto grid-cols-3 gap-1 sm:grid-cols-6"
         >
           <TabsTrigger value={CV_TAB}>CV</TabsTrigger>
-          {TAB_SECTIONS.map((name) => {
+          {CLASSIC_SECTIONS.map((name) => {
             const percent = profile.completeness.sections[name]?.percent ?? 0;
             return (
               <TabsTrigger
@@ -218,7 +223,7 @@ function ClassicProfilePage() {
         <TabsContent value={CV_TAB} className="flex flex-col gap-4">
           <CvTab />
         </TabsContent>
-        {TAB_SECTIONS.map((name) => (
+        {CLASSIC_SECTIONS.map((name) => (
           <TabsContent key={name} value={name} className="flex flex-col gap-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <Missing
@@ -246,10 +251,8 @@ function ClassicProfilePage() {
                 <AnswersTab profile={profile} onDirtyChange={onDirtyChange} />
               ) : name === "facts" ? (
                 <FactsTab profile={profile} onDirtyChange={onDirtyChange} />
-              ) : name === "skills" ? (
-                <SkillsTab profile={profile} onDirtyChange={onDirtyChange} />
               ) : (
-                <SearchTab profile={profile} onDirtyChange={onDirtyChange} />
+                <SkillsTab profile={profile} onDirtyChange={onDirtyChange} />
               )}
             </Fragment>
           </TabsContent>

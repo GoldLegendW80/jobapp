@@ -316,7 +316,7 @@ export function StepLooking({ draft, change, patterns, problem }: PanelProps) {
         {patterns?.roles ? (
           <>
             {roles}
-            <Link className="text-sm underline" to="/profile?tab=search">
+            <Link className="text-sm underline" to="/settings/search">
               {WORDING.searchOptions}
             </Link>
           </>
@@ -388,7 +388,7 @@ export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
           }
         >
           {places}
-          <Link className="text-sm underline" to="/profile?tab=search">
+          <Link className="text-sm underline" to="/settings/search">
             {WORDING.searchOptions}
           </Link>
         </AdvancedSection>

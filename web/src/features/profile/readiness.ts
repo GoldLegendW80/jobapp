@@ -5,7 +5,7 @@ import type { Profile, SectionName } from "./api";
 export interface Readiness {
   name: string;
   ready: boolean;
-  /** the one button that fixes it */
+  /** the one button that fixes it: a place on the page (#...) or another page */
   fix?: { label: string; href: string };
 }
 
@@ -21,16 +21,12 @@ export function readiness(profile: Profile): Readiness[] {
     [missing("skills").length > 0, "Add your skills", "#about-skills"],
     [
       missing("search").includes("title_include"),
-      "Add a job title",
-      "#looking-for",
+      "Add a job title in Settings, Search",
+      "/settings/search",
     ],
   );
   const writing = first(
-    [
-      missing("experience").length > 0,
-      "Add your experience",
-      "#about-experience",
-    ],
+    [missing("experience").length > 0, "Add your experience", "#experience"],
     [missing("facts").length > 0, "Add facts about your work", "#about-you"],
   );
   const filling = first(

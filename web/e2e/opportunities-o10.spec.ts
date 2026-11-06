@@ -117,7 +117,7 @@ test("the product pages fold details, retain settings and restore the open choic
 
   // Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone, so the Search
   // tab no longer shows the freelance and project sources (what a profile holds stays saved).
-  await page.goto("/profile?tab=search");
+  await page.goto("/settings/search");
   await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Freelance and project sources" }),

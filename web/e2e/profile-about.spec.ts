@@ -17,12 +17,13 @@ const shots = makeShots("profile-about", "about");
 
 /**
  * The one page profile and its About you document (SPEC-profile, "About you") against the real
- * stack through Caddy: a fresh account gets a made up profile through the operator CLI, finds it
- * written once as a Markdown document, edits the Experience part in place (saved as typed), sees
- * without a key what is missing, saves a made up API key, clicks Done (the worker replays the
- * fake stream `profile_interpret`: no model is called), reads what the app understood (one job
- * added, one updated, one the text does not write refused), applies it in one click (the jobs
- * keep their keys) and undoes it.
+ * stack through Caddy: a fresh account gets a made up profile through the operator CLI, finds its
+ * skills, facts and answers written once as text (the jobs stay a form, the search is in
+ * Settings, Search), saves a fact part to the profile at Done without a key, edits the Skills
+ * part in place, sees without a key what is missing, saves a made up API key, clicks Update my
+ * profile (the worker replays the fake stream `profile_interpret`: no model is called), reads what
+ * the app understood (the years and two skills changed, one term the text does not write
+ * refused), applies it in one click and undoes it.
  *
  * Locally, on a scratch Compose project with the fake agent backend (as profile-titles):
  *   E2E_CADDY_URL=http://127.0.0.1:8095 E2E_COMPOSE_PROJECT=jobapp-p5 \
@@ -39,16 +40,15 @@ const PASSWORD = `about journey ${run} passphrase`;
 const tail = () => randomBytes(30).toString("base64url").replace(/[-_]/g, "x");
 const KEY = `sk-ant-api03-e2eabout${tail()}${tail()}Ab0u`;
 const CSRF = { "X-Requested-With": "jobapp" };
-// What the person types in the Experience part (the fake stream reads this text).
+// What the person types in the Skills part (the fake stream reads this text).
 const EDITED = [
-  "### Senior data engineer, Example Robotics",
-  "March 2021 to now · Lyon · CDI",
+  "Years of experience: 5",
   "",
-  "### Analyst, Example Data",
-  "2018 to 2021 · Paris",
+  "### What I have",
+  "- data: SQL, dbt, Airflow",
   "",
-  "### Intern, Example Labs",
-  "2017 to 2018 · Grenoble · internship",
+  "### What I do not have",
+  "- Java",
 ].join("\n");
 
 function fakeExport() {
@@ -81,22 +81,13 @@ function fakeExport() {
             location: "Lyon",
             contract: "CDI",
           },
-          {
-            key: "example-data",
-            organisation: "Example Data",
-            title: "Analyst",
-            start: "2018",
-            end: "2021",
-            location: "Paris",
-            contract: null,
-          },
         ],
         education: [],
       },
       facts: { blocks: [] },
       skills: {
-        years_experience: 5,
-        have: [{ name: "data", ...terms(["SQL", "dbt", "Python"]) }],
+        years_experience: 4,
+        have: [{ name: "data", ...terms(["SQL", "dbt"]) }],
         adjacent: [],
         none: [],
         gates: [],
@@ -130,15 +121,17 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 
-const experience = () => page.getByRole("region", { name: "Experience" });
+const skills = () => page.getByRole("region", { name: "Skills" });
 
-async function employers() {
+async function profile() {
   const response = await page.request.get("/api/profile");
   expect(response.status()).toBe(200);
-  const body = (await response.json()) as {
-    sections: { experience: { employers: { key: string; title: string }[] } };
+  return (await response.json()) as {
+    sections: {
+      skills: { years_experience: number; have: { terms: string[] }[] };
+      facts: { blocks: { title: string; body: string }[] };
+    };
   };
-  return body.sections.experience.employers.map((e) => [e.key, e.title]);
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -152,7 +145,7 @@ test.afterAll(async () => {
   clearAttempts([EMAIL]);
 });
 
-test("the profile is one page and About you is written once from it", async () => {
+test("the profile is one page and About you holds the skills, facts and answers as text", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   expect(cliImportProfile(EMAIL, fakeExport())).toMatch(/revision/i);
@@ -165,82 +158,89 @@ test("the profile is one page and About you is written once from it", async () =
     page
       .getByRole("navigation", { name: "Parts of About you" })
       .getByRole("link"),
-  ).toHaveText(["Experience", "Education", "Skills", "Answers"]);
-  await expect(experience()).toContainText("Data engineer, Example Robotics");
-  await expect(experience()).toContainText("March 2021 to now · Lyon · CDI");
+  ).toHaveText(["Skills", "Answers"]);
+  await expect(skills()).toContainText("data: SQL, dbt");
+  await expect(page.getByRole("region", { name: "Answers" })).toContainText(
+    "Three months.",
+  );
+  // The jobs stay a form; the search is in Settings, Search.
+  await expect(page.getByRole("form", { name: "Experience" })).toBeVisible();
+  await expect(page.getByRole("form", { name: "Search" })).toHaveCount(0);
   await shots(page, "one-page");
 });
 
-test("without a key the text saves and the line under Done says what is missing", async () => {
-  await experience().getByRole("button", { name: "Edit Experience" }).click();
+test("a fact part is saved to the profile at Done, without a key", async () => {
+  await page.getByRole("button", { name: "Add a part" }).click();
+  const added = page.getByRole("region", { name: "New part" });
+  await added.getByLabel("Heading").fill("Projects");
+  const projects = page.getByRole("region", { name: "Projects" });
+  await projects.getByLabel("Text").fill("- Built the streaming platform");
+  await projects.getByRole("button", { name: "Done" }).click();
+  await expect(projects.getByText("Applied to your profile:")).toBeVisible();
+  expect((await profile()).sections.facts.blocks).toEqual([
+    { title: "Projects", body: "- Built the streaming platform" },
+  ]);
+});
+
+test("without a key the skills text saves and the line under Done says what is missing", async () => {
+  await skills().getByRole("button", { name: "Edit Skills" }).click();
   await expect(
-    experience().getByText(
+    skills().getByText(
       "The app needs a model key to update your profile from this text.",
     ),
   ).toBeVisible();
   await expect(
-    experience().getByRole("link", { name: "Add one on the Account page" }),
+    skills().getByRole("link", { name: "Add one on the Account page" }),
   ).toHaveAttribute("href", "/account");
-  await experience().getByLabel("Text").fill(EDITED);
-  await expect(
-    experience().getByRole("region", { name: "Preview" }),
-  ).toContainText("Intern, Example Labs");
-  await expect(experience().getByText("Saved")).toBeVisible();
-  await experience().getByRole("button", { name: "Done" }).click();
-  await expect(experience().getByLabel("Text")).toHaveCount(0);
-  await expect(experience()).toContainText(
+  await skills().getByLabel("Text").fill(EDITED);
+  await expect(skills().getByRole("region", { name: "Preview" })).toContainText(
+    "Java",
+  );
+  await skills().getByRole("button", { name: "Done" }).click();
+  await expect(skills().getByLabel("Text")).toHaveCount(0);
+  await expect(skills()).toContainText(
     "Your profile does not have this text yet.",
   );
   // The text saved; the profile did not change.
-  expect(await employers()).toEqual([
-    ["example-robotics", "Data engineer"],
-    ["example-data", "Analyst"],
-  ]);
+  expect((await profile()).sections.skills.years_experience).toBe(4);
   await shots(page, "no-key");
 });
 
-test("with a key: Done shows what the app understood, Apply writes it, Undo puts it back", async () => {
+test("with a key: what the app understood, Apply writes it, Undo puts it back", async () => {
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
   await page.reload();
-  await expect(experience()).toContainText(/at list prices\./);
-  await experience().getByRole("button", { name: "Update my profile" }).click();
-  const understood = experience().getByRole("region", {
+  await expect(skills()).toContainText(/at list prices\./);
+  await skills().getByRole("button", { name: "Update my profile" }).click();
+  const understood = skills().getByRole("region", {
     name: "What the app understood",
   });
   await expect(understood).toBeVisible({ timeout: 90_000 });
+  await expect(understood).toContainText("Years of experience: 5");
   await expect(understood).toContainText(
-    "1 job added: Intern at Example Labs, 2017 to 2018",
+    "1 skill added to what I have: Airflow",
   );
   await expect(understood).toContainText(
-    "1 job updated: Senior data engineer at Example Robotics, March 2021 to now",
+    "1 skill added to what I do not have: Java",
   );
-  // A job the text does not write is not taken.
-  await expect(understood).toContainText("A job at Example Space");
+  // A term the text does not write is not taken.
+  await expect(understood).toContainText(
+    "1 term of data: not written in this part.",
+  );
   await expect(understood).not.toContainText(/[–—]| - /);
-  // Locked facts change only on Apply.
-  expect(await employers()).toHaveLength(2);
+  expect((await profile()).sections.skills.years_experience).toBe(4);
   await shots(page, "understood");
 
   await understood.getByRole("button", { name: "Apply" }).click();
-  await expect(
-    experience().getByText("Applied to your profile:"),
-  ).toBeVisible();
-  expect(await employers()).toEqual([
-    ["example-robotics", "Senior data engineer"],
-    ["example-data", "Analyst"],
-    ["example-labs", "Intern"],
-  ]);
-  await experience().getByRole("button", { name: "Undo" }).click();
-  await expect(experience().getByText("Applied to your profile:")).toHaveCount(
-    0,
-  );
-  expect(await employers()).toEqual([
-    ["example-robotics", "Data engineer"],
-    ["example-data", "Analyst"],
-  ]);
+  await expect(skills().getByText("Applied to your profile:")).toBeVisible();
+  const applied = (await profile()).sections.skills;
+  expect(applied.years_experience).toBe(5);
+  expect(applied.have[0]?.terms).toEqual(["SQL", "dbt", "Airflow"]);
+  await skills().getByRole("button", { name: "Undo" }).click();
+  await expect(skills().getByText("Applied to your profile:")).toHaveCount(0);
+  expect((await profile()).sections.skills.years_experience).toBe(4);
   expect(errors).toEqual([]);
 });

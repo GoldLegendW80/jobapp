@@ -206,11 +206,20 @@ function gradientPng(width = 600, height = 400): Buffer {
   ]);
 }
 
-const TABS = ["Identity", "Experience", "Facts", "Skills", "Search", "Answers"];
+const TABS = ["Identity", "Experience", "Facts", "Skills", "Answers"];
 const tab = (page: Page, name: string) =>
   page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
 
 async function openTab(page: Page, name: string) {
+  // The search is in Settings, Search (owner, 2026-11-05); the other sections in the classic
+  // editor's tabs.
+  if (name === "Search") {
+    await page.goto("/settings/search");
+    await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
+    return;
+  }
+  if ((await tab(page, name).count()) === 0)
+    await page.goto(`/profile?tab=${name.toLowerCase()}`);
   await tab(page, name).click();
   await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
 }

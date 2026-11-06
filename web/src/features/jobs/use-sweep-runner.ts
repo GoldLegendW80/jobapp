@@ -98,9 +98,9 @@ export function useSweepRunner(): SweepRunner {
             // detail says which).
             toast.error(errorDetail(error) ?? "No job website to search.", {
               action: {
-                label: "Open the profile",
+                label: "Open Settings, Search",
                 onClick: () => {
-                  void navigate("/profile?tab=search");
+                  void navigate("/settings/search");
                 },
               },
             });
