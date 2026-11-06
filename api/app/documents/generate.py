@@ -682,7 +682,9 @@ def start_letter(
             or cv.kind != Kind.cv
             or parent.mode is not GenerationMode.posting
             or parent.status is not GenerationStatus.done
-            or parent.trigger not in (GenerationTrigger.auto, GenerationTrigger.click)
+            # Only a click chains a letter: an `auto` CV left running across the deploy of D29
+            # writes no letter by itself.
+            or parent.trigger is not GenerationTrigger.click
         ):
             return None
         asked = parent.trigger is GenerationTrigger.click and bool(

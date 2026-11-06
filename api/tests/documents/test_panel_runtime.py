@@ -34,12 +34,22 @@ from app.documents.models import (
     DocumentPanel,
     DocumentVersion,
     GenerationMode,
+    GenerationStatus,
     Kind,
     Origin,
 )
+from tests.documents.canary import marker
+from tests.documents.render_support import CV
 from tests.documents.store_support import AT, USER_A, engine, factory, migrated_url
 from tests.documents.test_writer_base_upload import MORGAN, add_upload, convert
-from tests.documents.writer_support import Person, execute, person, start
+from tests.documents.writer_support import (
+    Person,
+    execute,
+    give_cv_text,
+    person,
+    start,
+    start_letter,
+)
 
 __all__ = ["engine", "factory", "migrated_url"]
 
@@ -205,3 +215,100 @@ def test_the_reviewers_brief_names_the_job_and_the_company(
     assert f"the CEO of {company}" in reader
     assert loaded.subject.brief["text"]
     assert Kind.cv.value == loaded.kind
+
+
+def test_an_uploads_rebuild_waits_for_its_design_capture_then_runs(
+    factory: sessionmaker[Session], migrated_url: str, no_capture: None
+) -> None:
+    """Review of D29, item 5: the capture is still open on the base CV when the rebuild is
+    due. The panel gives its slot away with its merge kept; once the capture's generation has
+    ended, the tick's turn queues it again and the rebuild runs."""
+    who = with_panel(person(factory, migrated_url, USER_A))
+    upload = add_upload(factory, who.user, MORGAN)
+    document, _ = convert(who, upload, "documents_base_upload_valid")
+    [job] = [job for job in who.queue.jobs if job["function"] == panel.FUNCTION]
+    panel_id = uuid.UUID(job["args"][0])
+    with factory() as db:
+        capture = db.scalar(
+            sa.select(DocumentGeneration).where(
+                DocumentGeneration.document_id == document,
+                DocumentGeneration.mode == GenerationMode.template_capture,
+            )
+        )
+        assert capture is not None
+        # Its passes still to come: the capture is queued, as with an upload's kept bytes.
+        capture.status, capture.error, capture.finished_at = GenerationStatus.queued, None, None
+        capture_id = capture.id
+        db.commit()
+    scripts = {**SCREEN_TWICE, "rebuild": "documents_base_panel"}
+    assert asyncio.run(panel.job(who.context(), panel_id, scripts=scripts)) == "waiting"
+    waiting = panel_of(factory, document)
+    assert (waiting.status, waiting.pending, waiting.started_at) == ("running", "rebuild", None)
+    assert waiting.mistakes  # the merge is kept for the rebuild
+    assert [v.origin for v in versions_of(factory, document)] == [Origin.generated]
+    assert panel.turns(factory, AT) == []  # the capture holds the base CV
+    with factory() as db:
+        db.execute(
+            sa.update(DocumentGeneration)
+            .where(DocumentGeneration.id == capture_id)
+            .values(status=GenerationStatus.done, finished_at=AT)
+        )
+        db.commit()
+    assert panel.turns(factory, AT) == [panel_id]
+    assert asyncio.run(panel.job(who.context(), panel_id, scripts=scripts)) == "done"
+    first, rebuilt = versions_of(factory, document)
+    assert (first.origin, rebuilt.origin) == (Origin.generated, Origin.panel)
+    assert rebuilt.content["fixed"] == first.content["fixed"]
+    assert panel_of(factory, document).rebuilt_version == 2
+
+
+def test_a_letter_goes_through_its_own_panel_with_the_cv_beside_it(
+    factory: sessionmaker[Session], migrated_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review of D29, item 8 (b): a panel of kind `letter`; its readers read the posting's CV
+    beside it (`cv_beside`), the screen does not; its rebuild is written by the letter writer,
+    from the letter the panel read."""
+    who = with_panel(person(factory, migrated_url, USER_A))
+    cv_text = marker()
+    give_cv_text(who, {**CV, "headline": f"Platform engineer {cv_text}"})
+    document, _, run = start_letter(who, "documents_letter_valid")
+    execute(who, run)
+    [job] = [job for job in who.queue.jobs if job["function"] == panel.FUNCTION]
+    held: list[str] = []
+    hold = panel.panel_hold.hold
+
+    def record(text: str) -> str:
+        held.append(text)
+        return hold(text)
+
+    monkeypatch.setattr(panel.panel_hold, "hold", record)
+    status = asyncio.run(panel.job(who.context(), uuid.UUID(job["args"][0]), scripts=SCREEN_TWICE))
+    assert status == "done"
+    found = panel_of(factory, document)
+    assert found.kind == "letter"
+    assert (found.reviewed_version, found.rebuilt_version) == (1, 2)
+    first, rebuilt = versions_of(factory, document)
+    assert (first.origin, rebuilt.origin) == (Origin.generated, Origin.panel)
+    screens = [t for t in held if "automated screening system" in t]
+    readers = [t for t in held if "<role>" in t and "automated screening system" not in t]
+    assert len(screens) == 2  # before and after
+    assert all("<cv_beside>" not in t and cv_text not in t for t in screens)
+    assert len(readers) == len(panel.ROLES) - 1
+    assert all("<cv_beside>" in t and cv_text in t for t in readers)
+    [instructions] = [t for t in held if "<reviewed>" in t]
+    assert "submit_letter" in instructions
+    assert "get_draft" not in instructions  # the letter writer has no such tool
+    words = [t for _, t in c.text_fields(c.parse("letter", first.content)) if len(t) > 40]
+    assert words
+    assert all(t[:40] in instructions for t in words)  # the letter the panel read
+    with factory() as db:
+        rebuild = db.scalar(
+            sa.select(DocumentGeneration).where(
+                DocumentGeneration.document_id == document,
+                DocumentGeneration.mode == GenerationMode.panel,
+            )
+        )
+        assert rebuild is not None
+        writer = db.get(AgentRun, rebuild.run_id)
+        assert writer is not None
+        assert writer.agent == "documents_letter"

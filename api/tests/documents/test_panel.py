@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -21,7 +23,19 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.models import AgentRun, RunStatus
-from app.documents import brief, corrections, estimate, freeze, generate, panel, store
+from app.documents import (
+    brief,
+    corrections,
+    estimate,
+    freeze,
+    generate,
+    panel,
+    panel_hold,
+    store,
+    writer_base,
+    writer_cv,
+    writer_letter,
+)
 from app.documents import content as c
 from app.documents.models import (
     DocumentGeneration,
@@ -83,12 +97,24 @@ FIXED_HEADLINE = "Platform engineer for payments teams"
 class Fakes:
     """The model calls and the rebuild of one panel, recorded."""
 
-    def __init__(self, world: World, *, fail: set[str] = frozenset(), merge: bool = True):
+    def __init__(
+        self,
+        world: World,
+        *,
+        fail: set[str] = frozenset(),
+        merge: bool = True,
+        cancel: str | None = None,
+        rebuild_lands: bool = True,
+    ):
         self.world = world
         self.fail = fail
         self.merge = merge
+        self.cancel = cancel  # the reviewer whose call is cancelled (arq's timeout, a deploy)
+        self.rebuild_lands = rebuild_lands
         self.prompts: dict[str, list[str]] = {}
         self.after: list[tuple[uuid.UUID | None, str]] = []
+        self.handovers: list[uuid.UUID] = []
+        self.instructions: list[str] = []  # the rebuild's held first message
         self.screens = iter(("REJECT", "PASS"))
 
     async def call(self, agent: str, user_id: uuid.UUID, prompt: str, budget: int) -> panel.Reply:
@@ -96,6 +122,8 @@ class Fakes:
         assert budget > 0
         self.prompts.setdefault(agent, []).append(prompt)
         key = agent.removeprefix("documents_panel_")
+        if key == self.cancel:
+            raise asyncio.CancelledError
         if key in self.fail:
             if key == "reader_ceo":
                 raise RuntimeError("the provider is down")
@@ -136,8 +164,12 @@ class Fakes:
                 )
                 assert made is not None
                 assert made.mode is GenerationMode.panel
-                content = c.parse(Kind.cv, {**CV, "headline": FIXED_HEADLINE})
-                generate.finish(db, made, content, [], at=AT)
+                held = db.get(AgentRun, run_id)
+                assert held is not None
+                self.instructions.append(panel_hold.read(held.input.get("panel")))
+                if self.rebuild_lands:
+                    content = c.parse(Kind.cv, {**CV, "headline": FIXED_HEADLINE})
+                    generate.finish(db, made, content, [], at=AT)
                 db.execute(
                     sa.update(AgentRun).where(AgentRun.id == run_id).values(status=RunStatus.done)
                 )
@@ -148,6 +180,9 @@ class Fakes:
     async def done(self, cv_run: uuid.UUID | None, status: str) -> None:
         self.after.append((cv_run, status))
 
+    async def handover(self, turn: uuid.UUID) -> None:
+        self.handovers.append(turn)
+
     def steps(self) -> panel.Steps:
         return panel.Steps(
             call=self.call,
@@ -156,6 +191,7 @@ class Fakes:
             clock=lambda: AT,
             settings=self.world.settings,
             after=self.done,
+            handover=self.handover,
         )
 
 
@@ -287,6 +323,10 @@ def test_a_stale_panel_is_closed_by_the_tick_and_its_letter_follows(world: World
     from datetime import timedelta
 
     _, panel_id, generation = written_cv(world, world.posting(70))
+    with world.factory() as db:
+        assert panel.recover(db, world.user, AT + timedelta(days=1)) == []  # never started
+        assert panel.claim(db, panel_id, AT) == ("run", world.user)  # its job took the slot
+        db.commit()
     with world.factory() as db:
         assert panel.recover(db, world.user, AT + timedelta(seconds=panel.STALE_S - 1)) == []
         letters = panel.recover(db, world.user, AT + timedelta(seconds=panel.STALE_S + 1))
@@ -452,3 +492,145 @@ def test_the_brief_names_what_the_posting_says_of_the_company_the_offer_and_the_
         "about_company": "Une entreprise de Lyon.",
         "benefits": "Tickets.",
     }
+
+
+# --- review of D29, round 1 ---------------------------------------------------------------------
+
+
+def test_a_cancelled_panel_job_still_starts_the_letter_through_the_tick(world: World) -> None:
+    """Item 3: arq cancels the job at its timeout (a worker stop or a deploy too). The panel
+    stays running, marked for the next tick, whose recover closes it and starts the letter."""
+    _, panel_id, generation = written_cv(world, world.posting(70))
+    fakes = Fakes(world, cancel="screen")
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(panel.run(fakes.steps(), panel_id))
+    found = row(world, panel_id)
+    assert (found.status, found.pending, found.failed) == ("running", panel.PENDING_CLOSE, [])
+    assert fakes.after == []
+    with world.factory() as db:
+        source = db.get(DocumentGeneration, generation)
+        assert source is not None
+        assert panel.recover(db, world.user, AT) == [source.run_id]
+        db.commit()
+    assert (row(world, panel_id).status, row(world, panel_id).failed) == ("failed", ["panel_error"])
+    # And through the tick itself, past STALE_S, for a job that died without its cancel landing.
+    second = world.posting(71)
+    _, lost, _ = written_cv(world, second)
+    with world.factory() as db:
+        assert panel.claim(db, lost, AT)[0] == "run"
+        db.commit()
+    world.tick(AT + timedelta(seconds=panel.STALE_S + 1))
+    assert row(world, lost).failed == ["panel_error"]
+    assert any(g["kind"] is Kind.letter for g in world.generations(second))  # the letter
+
+
+def test_the_rebuild_reads_the_reviewed_version_and_names_only_the_writers_tools(
+    world: World,
+) -> None:
+    """Item 4: the version the panel read is in the rebuild's first message, for every kind,
+    and every tool it names is one the writer of that kind has."""
+    _, panel_id, _ = written_cv(world, world.posting(70))
+    fakes = Fakes(world)
+    assert asyncio.run(panel.run(fakes.steps(), panel_id)) == "done"
+    [held] = fakes.instructions
+    assert "<reviewed>" in held
+    assert HEADLINE in held.split("<mistakes>")[0]
+    tools = {"cv": writer_cv.TOOLS, "letter": writer_letter.TOOLS, "base": writer_base.TOOLS}
+    for kind, has in tools.items():
+        planted = marker()
+        text = panel.rebuild_instructions(kind, 1, [{"number": 1}], {"body": planted})
+        assert planted in text.split("<mistakes>")[0]
+        named = set(re.findall(r"\b(?:get|read|submit)_[a-z_]+", text))
+        assert named, kind
+        assert named <= set(has), (kind, named - set(has))
+        assert "get_draft" not in text or "get_draft" in has
+
+
+def test_a_rebuild_that_fails_keeps_the_first_version_and_says_so(world: World) -> None:
+    """Item 8 (a), spec item 12: the rebuild never lands (`_rebuilt` is None), or cannot start
+    (`rebuild_busy`): version 1 stays the document, and `failed` names it."""
+    document, panel_id, _ = written_cv(world, world.posting(70))
+    fakes = Fakes(world, rebuild_lands=False)
+    assert asyncio.run(panel.run(fakes.steps(), panel_id)) == "failed"
+    found = row(world, panel_id)
+    assert (found.failed, found.rebuilt_version) == (["rebuild"], None)
+    assert versions(world, document) == [(1, Origin.generated)]
+    assert panel.view(found)["failed"] == ["rebuild"]
+    assert [status for _, status in fakes.after] == ["failed"]  # the letter still follows
+
+    posting = world.posting(72)
+    busy_document, busy_panel, _ = written_cv(world, posting)
+    with world.factory() as db:
+        store.lock_posting(db, world.user, posting)
+        held = store.get(db, world.user, busy_document)
+        assert held is not None
+        generate.create(  # a generation of the document is open when the rebuild is due
+            db, held, GenerationMode.posting, GenerationTrigger.click, None, {}, 1000, at=AT
+        )
+        store.commit(db)
+    assert asyncio.run(panel.run(Fakes(world).steps(), busy_panel)) == "failed"
+    assert row(world, busy_panel).failed == ["rebuild_busy"]
+    assert versions(world, busy_document) == [(1, Origin.generated)]
+
+
+def test_a_posting_applied_during_the_panel_gets_no_rebuild(world: World) -> None:
+    posting = world.posting(70)
+    document, panel_id, _ = written_cv(world, posting)
+    world.set_job(posting, status="applied")  # Apply myself, or Mark as sent
+    fakes = Fakes(world)
+    assert asyncio.run(panel.run(fakes.steps(), panel_id)) == "failed"
+    assert row(world, panel_id).failed == ["posting_applied"]
+    assert versions(world, document) == [(1, Origin.generated)]
+    assert fakes.instructions == []
+
+
+def test_a_second_panel_waits_its_turn_and_the_first_hands_the_slot_over(world: World) -> None:
+    """Two panels at once would need six runs of the person's four: the second waits, queued,
+    instead of running with its reviewers busy; the end of a panel queues the next one."""
+    _, first, _ = written_cv(world, world.posting(70))
+    _, second, _ = written_cv(world, world.posting(71))
+    with world.factory() as db:
+        assert panel.claim(db, first, AT) == ("run", world.user)
+        db.commit()
+    waiting = Fakes(world)
+    assert asyncio.run(panel.run(waiting.steps(), second)) == "queued"
+    assert waiting.prompts == {}
+    assert (row(world, second).status, row(world, second).started_at) == ("running", None)
+    with world.factory() as db:
+        assert panel.next_turn(db, world.user, AT) is None  # the first holds the slot
+        db.execute(sa.update(DocumentPanel).where(DocumentPanel.id == first).values(status="done"))
+        db.commit()
+    with world.factory() as db:
+        assert panel.next_turn(db, world.user, AT) == second
+        db.commit()
+    assert panel.turns(world.factory, AT) == [second]  # the tick queues a lost turn
+    _, third, _ = written_cv(world, world.posting(72))
+    fakes = Fakes(world)
+    assert asyncio.run(panel.run(fakes.steps(), second)) == "done"
+    assert len(fakes.prompts[panel.ROLE_OF["screen"].agent]) == 2
+    assert fakes.handovers == [third]  # its end queues the next one
+    assert asyncio.run(panel.run(Fakes(world).steps(), second)) == "gone"  # a second job
+
+
+def test_strong_only_when_no_reviewer_chose_its_rejecting_verdict() -> None:
+    good = {role.key: {"verdict": role.good} for role in panel.ROLES}
+    done = DocumentPanel(
+        id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        document_id=uuid.uuid4(),
+        kind="cv",
+        status="done",
+        reviewed_version=1,
+        reviews=good,
+        mistakes=[],
+        questions=[],
+        failed=[],
+        run_ids=[],
+        created_at=AT,
+    )
+    assert panel.view(done)["strong"] is True
+    for role in panel.ROLES:
+        done.reviews = {**good, role.key: {"verdict": role.rejects}}
+        assert panel.view(done)["strong"] is False, role.key
+    done.reviews = {**good, "reader_ceo": {"verdict": "MAYBE"}}
+    assert panel.view(done)["strong"] is True

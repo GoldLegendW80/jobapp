@@ -544,5 +544,11 @@ class DocumentPanel(Base):
         default=list,
         server_default=sa.text("'{}'::uuid[]"),
     )
+    # The person's panel slot: set when the job takes it (one panel runs at a time, the others
+    # wait their turn with it None). `pending` "rebuild": the reviews and the merge are stored,
+    # the rebuild waits for the document's open generation (an upload's design capture);
+    # "close": the job was cancelled, the next tick closes the panel (panel.recover).
+    started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    pending: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[datetime] = _now()
     finished_at: Mapped[datetime | None] = _later()

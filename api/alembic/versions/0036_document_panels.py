@@ -63,6 +63,9 @@ def upgrade() -> None:
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
+        # The person's panel slot (one panel at a time) and a rebuild left for later.
+        sa.Column("started_at", sa.DateTime(timezone=True)),
+        sa.Column("pending", sa.Text()),
         sa.Column("finished_at", sa.DateTime(timezone=True)),
         sa.ForeignKeyConstraint(
             ["document_id", "user_id"],

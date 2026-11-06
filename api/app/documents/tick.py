@@ -18,8 +18,9 @@ held and leaves the person to the next tick, so two passes never start the same 
    run the reaper failed, one lost by a queue that was down, one cancelled while queued) and
    finished over `HOOK_GRACE_S` ago are settled as the hook would have (`recover`): the
    runner's contract is that whoever chains runs also looks on a timer, and the tick is it.
-   A hiring panel whose job died is closed the same way (`panel.recover`), and the letter its
-   CV waited for is started.
+   A hiring panel whose job died, or was cancelled, is closed the same way (`panel.recover`),
+   and the letter its CV waited for is started. A panel waiting its turn whose job was lost is
+   queued again after the pass (`panel.turns`).
 1. A generation of trigger `auto` that has not started (left by D10 at the deploy of D29, a
    posting's or the first base CV's) is cancelled, once, its document untouched: nothing creates
    one any more, and nothing starts one (`writer_base.start_ready` skips them too).
@@ -401,9 +402,18 @@ async def run(ctx: dict[str, Any]) -> int:
     """The cron job: one pass, then the runs queued. Returns how many runs started."""
     clock: Callable[[], datetime] = ctx["clock"]
     runs = await asyncio.to_thread(tick, ctx["sessions"], clock(), ctx["settings"])
+    # The hiring panels waiting their turn whose job was lost, or whose rebuild waited for an
+    # upload's design capture that has ended (panel.py, "One panel at a time per person").
+    turns = await asyncio.to_thread(panel.turns, ctx["sessions"], clock())
     pool = ctx.get("redis")
     if pool is not None and runs:
         await send(render_job.PoolQueue(pool), runs)
+    if pool is not None:
+        for panel_id in turns:
+            try:
+                await panel.enqueue(render_job.PoolQueue(pool), panel_id, turn=True)
+            except queues.QueueUnavailableError:
+                logger.warning("documents.panel.not_queued", extra={"panel_id": str(panel_id)})
     return len(runs)
 
 

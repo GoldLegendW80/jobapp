@@ -7,7 +7,14 @@ list of mistakes, the writer rebuilds it with the same facts, and the screen run
 mode `posting`), or of an upload's conversion (`writer_base._on_final`, mode `base_upload`),
 opens a panel (`begin`, a row of `document_panels`, `running`) and queues the job
 `documents_panel` on the agents queue (`enqueue`). The letter of a CV follows the CV's panel:
-the job starts it at its end, whatever the outcome (`_finish`). Nothing else opens one.
+the job starts it at its end, whatever the outcome. Nothing else opens one.
+
+**One panel at a time per person** (the person's panel slot, `claim`). A panel needs up to
+`AT_ONCE` runs of the person's `runs.ACTIVE_PER_USER` (4), so two at once would find their
+reviewers busy. The job takes the slot (`started_at`) under the person's panel lock; a second
+panel's job finds it held and ends, the panel waiting its turn (`running`, `started_at` None).
+The end of a panel queues the next one (`next_turn`), and so does the documents tick for a turn
+whose job was lost (`turns`).
 
 **The job** (`run`), outside any transaction but its own short ones:
 1. The document's text in reading order (`document_text`: the content's printed fields, the
@@ -28,18 +35,25 @@ the job starts it at its end, whatever the outcome (`_finish`). Nothing else ope
    same quoted line, case and spaces folded), keeps only reviewers that answered, and numbers
    the list from 1 (`merged_mistakes`).
 4. The rebuild: a generation of mode `panel` of the same document, written by the document's
-   own writer with the mistakes as its instructions (held in process, `panel_hold`), through
+   own writer with the mistakes and the version the panel read as its instructions (held in
+   process, `panel_hold`; the letter and base writers have no `get_draft`), through
    `submit.handle` like every write: the fact check corrects any unsupported claim, and an
    `[ADD: ...]` never prints (`corrections.drop_placeholders`). Its version is the document's
-   new version (origin `panel`), the first draft stays in the history.
+   new version (origin `panel`), the first draft stays in the history. A posting applied
+   meanwhile (Apply myself, Mark as sent) gets no rebuild (`posting_applied`): version 1 is
+   what was sent. An upload's design capture still open on the base CV holds the rebuild back:
+   the panel gives its slot away (`pending` "rebuild") and the tick queues it again once the
+   capture's generation has ended, the reviews and the merge kept.
 5. The screen again on the rebuilt version: the before and after verdicts.
 
 **Correct, never block** (Decision 4). Every step that fails leaves the writer's first version
 as the document and says in `failed` what failed: no review at all (`reviews`), the merge
 (`merge`), the rebuild (`rebuild`, `rebuild_busy`), the screen after (`screen_after`), the job
 itself (`panel_error`). A panel nobody closes (its job lost) is closed by the documents tick
-after `STALE_S` (`recover`). The apply module waits for a running panel like for a writing
-(freeze.py `current`), within its own grace.
+after `STALE_S` (`recover`); one whose job was cancelled (arq's timeout, a worker stop, a deploy)
+is marked `pending` "close" and closed by the next tick; either way the CV's letter then
+starts. The apply module waits for a running panel like for a writing (freeze.py `current`),
+within its own grace.
 
 **Privacy.** The document, the brief and the reviews live in this process while the job runs
 and in the panel's row (the person's own data, shown to them); logs and events carry ids,
@@ -81,6 +95,7 @@ from app.documents.models import (
     PanelStatus,
     Scope,
 )
+from app.jobs.models import JobStatus
 from app.profile.models import Profile
 
 logger = logging.getLogger("app.documents.panel")
@@ -115,6 +130,11 @@ class Role:
     @property
     def agent(self) -> str:
         return f"documents_panel_{self.key}"
+
+    @property
+    def rejects(self) -> str:
+        """The verdict that turns the person away (REJECT, NO, PASS): the last of `verdicts`."""
+        return self.verdicts[-1]
 
 
 ROLES: tuple[Role, ...] = (
@@ -413,7 +433,7 @@ class Subject:
     kind: str
     text: str
     template: str
-    columns: int
+    columns: int | None  # None: a template whose layout the app cannot know (the person's own)
     contact_present: bool
     brief: dict[str, Any]
     cv_beside: str | None = None  # a letter's CV, read beside it
@@ -442,7 +462,7 @@ def review_prompt(role: Role, subject: Subject, text: str | None = None) -> str:
                 "kind": what,
                 "text": shown,
                 "template": subject.template,
-                "columns": subject.columns,
+                "columns": subject.columns if subject.columns is not None else "not known",
                 "contact_details_printed": subject.contact_present,
             },
         ),
@@ -483,19 +503,33 @@ def merge_prompt(subject: Subject, reviews: dict[str, Any]) -> str:
     )
 
 
-def rebuild_instructions(kind: str, number: int, mistakes: Sequence[dict[str, Any]]) -> str:
-    """The rebuild's first message (held in process; the writer's `prompt` reads it)."""
+REBUILD_READS = {
+    "cv": "the posting with get_job_brief, the profile with read_profile_section and the base CV "
+    "with get_base_cv",
+    "letter": "the posting with get_job_brief, the profile with read_profile_section and the CV "
+    "it goes with, with get_document",
+    "base": "the profile with read_profile_section",
+}
+REBUILD_SUBMIT = {"cv": "submit_cv", "letter": "submit_letter", "base": "submit_base"}
+
+
+def rebuild_instructions(
+    kind: str, number: int, mistakes: Sequence[dict[str, Any]], content: dict[str, Any]
+) -> str:
+    """The rebuild's first message (held in process; the writer's `prompt` reads it): the
+    mistakes, and the version the panel read in a data block, since the letter and base writers
+    have no tool that reads it. Names only tools the writer of `kind` has."""
     what = WHAT[kind]
-    tool = {"cv": "submit_cv", "letter": "submit_letter", "base": "submit_base"}[kind]
-    reads = "get_draft and get_job_brief" if kind != "base" else "get_draft"
     return "\n\n".join(
         (
-            f"A hiring panel read version {number} of this {what} and listed the mistakes "
-            f"below. Read the current {what} with {reads}, then rewrite it with every mistake "
-            "fixed and the same facts: add nothing that is not in the profile, the base CV or "
-            "the current draft. Where a fix needs a fact you do not have, leave that part as it "
-            "is: the person is asked for the fact elsewhere. Never write a placeholder such as "
-            f"[ADD]. Submit the whole {what} with {tool}.",
+            f"A hiring panel read version {number} of this {what}, given below in the block "
+            f"`reviewed`, and listed the mistakes below. Rewrite that {what} with every mistake "
+            "fixed and the same facts: add nothing that is not in it, the profile or the base "
+            f"CV. Read {REBUILD_READS[kind]} when a fix needs them. Where a fix needs a fact "
+            "you do not have, leave that part as it is: the person is asked for the fact "
+            f"elsewhere. Never write a placeholder such as [ADD]. Submit the whole {what} with "
+            f"{REBUILD_SUBMIT[kind]}.",
+            _block("reviewed", content),
             _block("mistakes", list(mistakes)),
         )
     )
@@ -579,7 +613,17 @@ class RuntimeCall:
             return made.id
 
         try:
-            created = await asyncio.to_thread(_in_db, context.sessions, create)
+            creating = asyncio.ensure_future(asyncio.to_thread(_in_db, context.sessions, create))
+            try:
+                created = await asyncio.shield(creating)
+            except asyncio.CancelledError:
+                # The row may be written while the job is cancelled: wait for it, then fail it,
+                # so no queued run holds a slot of ACTIVE_PER_USER (apply/model_check.py).
+                with contextlib.suppress(Exception):
+                    made = await asyncio.shield(creating)
+                    if isinstance(made, uuid.UUID):
+                        await _release(context, made)
+                raise
             if isinstance(created, str):
                 return Reply(None, None, created)
             _EXPECTS[created] = expects
@@ -596,6 +640,17 @@ class RuntimeCall:
         if reported is None:
             return Reply(None, created, stopped or "no_report")
         return Reply(reported, created, stopped)
+
+
+async def _release(context: Any, run_id: uuid.UUID) -> None:
+    """A run still queued when the panel is cancelled: failed, shielded from the cancellation
+    (apply/agents.py `_release`). A run the runner claimed is left to the runner."""
+
+    def fail(db: Session) -> bool:
+        return runs.fail_queued(db, run_id, runs.STOPPED, context.clock())
+
+    with contextlib.suppress(Exception):
+        await asyncio.shield(asyncio.to_thread(_in_db, context.sessions, fail))
 
 
 # --- the record ------------------------------------------------------------------------------
@@ -651,26 +706,33 @@ def begin(
     return made
 
 
-async def enqueue(queue: Any, panel_id: uuid.UUID) -> bool:
+async def enqueue(queue: Any, panel_id: uuid.UUID, *, turn: bool = False) -> bool:
+    """Queue the panel's job. `turn`: queued again for its turn (or its pending rebuild), under
+    a job id of its own, since arq keeps the first one's (two jobs of one panel are harmless:
+    the second finds the slot taken, `claim`)."""
     from app import queue as queues
 
-    return bool(
-        await queue.enqueue(
-            FUNCTION, str(panel_id), queue=queues.AGENTS, job_id=f"documents-panel-{panel_id}"
-        )
-    )
+    job_id = f"documents-panel-{panel_id}" + (f"-{uuid.uuid4().hex[:12]}" if turn else "")
+    return bool(await queue.enqueue(FUNCTION, str(panel_id), queue=queues.AGENTS, job_id=job_id))
 
 
 def recover(db: Session, user_id: uuid.UUID, at: datetime) -> list[uuid.UUID]:
-    """The person's panels still running `STALE_S` after they began (their job lost): failed
-    with `panel_error`, the first version kept. Returns the source runs of the CVs among them,
-    whose letter the caller starts after its commit."""
+    """The person's panels whose job is gone: one that took the slot `STALE_S` ago and is still
+    running (its job lost), and one whose job was cancelled (`pending` "close"). Failed with
+    `panel_error`, the first version kept. Returns the source runs of the CVs among them, whose
+    letter the caller starts after its commit."""
     found = db.scalars(
         sa.select(DocumentPanel)
         .where(
             DocumentPanel.user_id == user_id,
             DocumentPanel.status == PanelStatus.running.value,
-            DocumentPanel.created_at < at - timedelta(seconds=STALE_S),
+            sa.or_(
+                DocumentPanel.pending == PENDING_CLOSE,
+                sa.and_(
+                    DocumentPanel.pending.is_(None),
+                    DocumentPanel.started_at < at - timedelta(seconds=STALE_S),
+                ),
+            ),
         )
         .with_for_update(skip_locked=True)
     ).all()
@@ -678,11 +740,111 @@ def recover(db: Session, user_id: uuid.UUID, at: datetime) -> list[uuid.UUID]:
     for row in found:
         row.status = PanelStatus.failed.value
         row.failed = [*row.failed, "panel_error"]
+        row.pending = None
         row.finished_at = at
         if row.kind == "cv" and row.source_run_id is not None:
             letters.append(row.source_run_id)
         logger.info("documents.panel.recovered", extra={"panel_id": str(row.id)})
     return letters
+
+
+PENDING_REBUILD = "rebuild"  # the reviews and the merge stored, the rebuild waits
+PENDING_CLOSE = "close"  # the job was cancelled: the next tick closes it
+
+
+def _lock_slot(db: Session, user_id: uuid.UUID) -> None:
+    """The person's panel lock, until the transaction ends: the slot is read and taken under it."""
+    key = sa.func.hashtextextended(f"documents-panel:{user_id}", 0)
+    db.execute(sa.select(sa.func.pg_advisory_xact_lock(key)))
+
+
+def _slot_taken(db: Session, user_id: uuid.UUID, at: datetime, but: uuid.UUID | None) -> bool:
+    query = (
+        sa.select(sa.func.count())
+        .select_from(DocumentPanel)
+        .where(
+            DocumentPanel.user_id == user_id,
+            DocumentPanel.status == PanelStatus.running.value,
+            DocumentPanel.started_at.is_not(None),
+            DocumentPanel.started_at >= at - timedelta(seconds=STALE_S),
+            DocumentPanel.pending.is_(None),
+        )
+    )
+    if but is not None:
+        query = query.where(DocumentPanel.id != but)
+    return (db.scalar(query) or 0) > 0
+
+
+Claim = Literal["run", "rebuild", "wait", "gone"]
+
+
+def claim(db: Session, panel_id: uuid.UUID, at: datetime) -> tuple[Claim, uuid.UUID | None]:
+    """Take the person's panel slot for this panel: `run` (from the reviews) or `rebuild` (its
+    stored merge, the rebuild left pending); `wait` when another panel of the person holds the
+    slot (this one waits its turn); `gone` when it is no longer waiting (closed, or taken by
+    another job of the same panel). With the person's id."""
+    row = db.get(DocumentPanel, panel_id)
+    if row is None:
+        return "gone", None
+    user_id = row.user_id
+    _lock_slot(db, user_id)
+    db.refresh(row, with_for_update=True)
+    if row.status != PanelStatus.running.value or row.started_at is not None:
+        return "gone", user_id
+    if row.pending == PENDING_CLOSE:
+        return "gone", user_id
+    if _slot_taken(db, user_id, at, but=row.id):
+        return "wait", user_id
+    resume = row.pending == PENDING_REBUILD
+    if resume and store.open_generation(db, user_id, row.document_id) is not None:
+        return "wait", user_id
+    row.started_at = at
+    row.pending = None
+    return ("rebuild" if resume else "run"), user_id
+
+
+def next_turn(db: Session, user_id: uuid.UUID, at: datetime) -> uuid.UUID | None:
+    """The person's oldest panel waiting its turn when the slot is free, None otherwise (a
+    rebuild left pending only once its document has no open generation)."""
+    _lock_slot(db, user_id)
+    if _slot_taken(db, user_id, at, but=None):
+        return None
+    waiting = db.scalars(
+        sa.select(DocumentPanel)
+        .where(
+            DocumentPanel.user_id == user_id,
+            DocumentPanel.status == PanelStatus.running.value,
+            DocumentPanel.started_at.is_(None),
+            sa.or_(DocumentPanel.pending.is_(None), DocumentPanel.pending == PENDING_REBUILD),
+        )
+        .order_by(DocumentPanel.created_at, DocumentPanel.id)
+    ).all()
+    for row in waiting:
+        if row.pending is None or store.open_generation(db, user_id, row.document_id) is None:
+            return row.id
+    return None
+
+
+def turns(sessions: sessionmaker[Session], at: datetime) -> list[uuid.UUID]:
+    """For the documents tick: the next panel of every person with one waiting its turn whose
+    job was lost (or a rebuild whose capture has ended). The caller queues them."""
+    with sessions() as db:
+        people = list(
+            db.scalars(
+                sa.select(DocumentPanel.user_id)
+                .where(
+                    DocumentPanel.status == PanelStatus.running.value,
+                    DocumentPanel.started_at.is_(None),
+                )
+                .distinct()
+            )
+        )
+    found: list[uuid.UUID] = []
+    for user_id in people:
+        turn = _in_db(sessions, lambda db, who=user_id: next_turn(db, who, at))
+        if turn is not None:
+            found.append(turn)
+    return found
 
 
 def _contact_present(db: Session, user_id: uuid.UUID) -> bool:
@@ -691,8 +853,14 @@ def _contact_present(db: Session, user_id: uuid.UUID) -> bool:
     return bool(isinstance(identity, dict) and (identity.get("email") or identity.get("phone")))
 
 
-def _columns(slug: str) -> int:
-    return 2 if "columns" in slug else 1
+# The columns of the bundled templates' layouts (templates/<slug>/style.css: photo-columns
+# sets its sections in two columns under the profile; band and ledger read top to bottom). A
+# person's own template (a design capture) has no known count: the screen is told so.
+LAYOUT_COLUMNS = {"band": 1, "ledger": 1, "photo-columns": 2}
+
+
+def _columns(slug: str) -> int | None:
+    return LAYOUT_COLUMNS.get(slug)
 
 
 def _fixed_of(db: Session, user_id: uuid.UUID, document: Document) -> dict[str, Any] | None:
@@ -716,6 +884,7 @@ class Loaded:
     subject: Subject
     fixed: dict[str, Any] | None
     source_run_id: uuid.UUID | None
+    content: dict[str, Any] = field(default_factory=dict)  # the version the panel read
 
 
 def load(db: Session, panel_id: uuid.UUID) -> Loaded | None:
@@ -763,6 +932,7 @@ def load(db: Session, panel_id: uuid.UUID) -> Loaded | None:
         subject,
         fixed,
         row.source_run_id,
+        dict(version.content or {}),
     )
 
 
@@ -829,6 +999,12 @@ def _save(sessions: sessionmaker[Session], panel_id: uuid.UUID, **values: Any) -
 
 # --- the rebuild -----------------------------------------------------------------------------
 
+# A posting's document is rebuilt only before it is sent (freeze.py): not once applied (Apply
+# myself, Mark as sent), nor after it, nor set aside.
+REBUILD_STATUSES = frozenset(
+    {JobStatus.found, JobStatus.shortlisted, JobStatus.cv_ready, JobStatus.staged}
+)
+
 Execute = Callable[[uuid.UUID], Awaitable[None]]
 
 
@@ -836,13 +1012,21 @@ def _start_rebuild(
     db: Session, loaded: Loaded, key: str, at: datetime, settings: Any, script: str | None
 ) -> uuid.UUID | str:
     """The rebuild's generation (mode `panel`) and its writer run, started; a code when it
-    cannot start (`rebuild_busy`: a generation of the document is open, or the person's runs are
-    all busy). The caller commits."""
+    cannot start: `rebuild_busy` (a generation of the document is open, or the person's runs are
+    all busy), `posting_applied` (the posting moved on meanwhile: version 1 is what was sent),
+    `capture` (an upload's design capture is open on the base CV: the rebuild waits for it).
+    The caller commits."""
     from app.documents import generate, writer_base  # both import this module's callers
 
     if loaded.posting_id is not None:
-        store.lock_posting(db, loaded.user_id, loaded.posting_id)  # lock 2 before lock 3
+        posting_status = store.lock_posting(db, loaded.user_id, loaded.posting_id)  # lock 2
+        if posting_status not in REBUILD_STATUSES:
+            return "posting_applied"
     document = store.lock_document(db, loaded.user_id, loaded.document_id)
+    if document.scope == Scope.base:
+        open_one = store.open_generation(db, loaded.user_id, document.id)
+        if open_one is not None and open_one.mode is GenerationMode.template_capture:
+            return "capture"
     if document.scope == Scope.base:
         figures = estimate.writer(estimate.prompt_chars("base"), 2 * len(loaded.subject.text))
     else:
@@ -905,20 +1089,23 @@ class Steps:
     settings: Any
     rebuild_script: str | None = None
     after: Callable[[uuid.UUID | None, str], Awaitable[None]] | None = None
+    # Queue the person's next panel (its turn) once this one gives the slot away.
+    handover: Callable[[uuid.UUID], Awaitable[None]] | None = None
 
 
 async def _reviews(steps: Steps, loaded: Loaded) -> tuple[dict[str, Any], list[uuid.UUID]]:
     gate = asyncio.Semaphore(AT_ONCE)
-    reads = len(loaded.subject.text) + len(json.dumps(loaded.subject.brief, ensure_ascii=False))
 
     async def one(role: Role) -> tuple[Role, Reply]:
         async with gate:
             try:
+                # The budget reads what the prompt holds (the brief cut, the top third).
+                prompt = review_prompt(role, loaded.subject)
                 reply = await steps.call(
                     role.agent,
                     loaded.user_id,
-                    review_prompt(role, loaded.subject),
-                    review_budget(f"panel_{role.key}", reads),
+                    prompt,
+                    review_budget(f"panel_{role.key}", len(prompt)),
                 )
             except asyncio.CancelledError:
                 raise
@@ -941,8 +1128,18 @@ async def _reviews(steps: Steps, loaded: Loaded) -> tuple[dict[str, Any], list[u
 
 
 async def run(steps: Steps, panel_id: uuid.UUID) -> str:
-    """The whole panel (module docstring). Returns its final status. Never raises for a step
-    that fails: the panel says what failed, and the letter of a CV still follows."""
+    """The whole panel (module docstring). Returns its final status, `queued` when it waits its
+    turn, `waiting` when its rebuild waits for the document, `gone` when nothing is left to do.
+    Never raises for a step that fails: the panel says what failed, and the letter of a CV still
+    follows. A cancelled job leaves the panel to the tick (`pending` "close"), which closes it
+    and starts the letter (`recover`)."""
+    taken, user_id = await asyncio.to_thread(
+        _in_db, steps.sessions, lambda db: claim(db, panel_id, steps.clock())
+    )
+    if taken == "gone":
+        return "gone"
+    if taken == "wait":
+        return "queued"
     try:
         loaded = await asyncio.to_thread(_in_db, steps.sessions, lambda db: load(db, panel_id))
     except Exception as exc:
@@ -965,21 +1162,19 @@ async def run(steps: Steps, panel_id: uuid.UUID) -> str:
             )
             cv_run = row.source_run_id if row is not None and row.kind == "cv" else None
             await steps.after(cv_run, PanelStatus.failed.value)  # the letter still follows
+        await _hand_over(steps, user_id)
         return PanelStatus.failed.value
     if loaded is None:
         return "gone"
     status = PanelStatus.failed.value
     try:
-        status = await _run(steps, loaded)
+        status = await (_resume(steps, loaded) if taken == "rebuild" else _run(steps, loaded))
     except asyncio.CancelledError:
+        # arq's timeout, a worker stop or a deploy: the row stays running, marked for the next
+        # tick, which closes it and starts the CV's letter (`recover`).
         with contextlib.suppress(Exception):
-            await asyncio.to_thread(
-                _save,
-                steps.sessions,
-                panel_id,
-                status=PanelStatus.failed.value,
-                failed=["panel_error"],
-                finished_at=steps.clock(),
+            await asyncio.shield(
+                asyncio.to_thread(_save, steps.sessions, panel_id, pending=PENDING_CLOSE)
             )
         raise
     except Exception as exc:
@@ -995,9 +1190,21 @@ async def run(steps: Steps, panel_id: uuid.UUID) -> str:
             failed=["panel_error"],
             finished_at=steps.clock(),
         )
-    if steps.after is not None:
+    if status != "waiting" and steps.after is not None:
         await steps.after(loaded.source_run_id if loaded.kind == "cv" else None, status)
+    await _hand_over(steps, user_id)
     return status
+
+
+async def _hand_over(steps: Steps, user_id: uuid.UUID | None) -> None:
+    """The slot is free: queue the person's next panel waiting its turn, if any."""
+    if user_id is None or steps.handover is None:
+        return
+    turn = await asyncio.to_thread(
+        _in_db, steps.sessions, lambda db: next_turn(db, user_id, steps.clock())
+    )
+    if turn is not None:
+        await steps.handover(turn)
 
 
 async def _run(steps: Steps, loaded: Loaded) -> str:
@@ -1018,12 +1225,10 @@ async def _run(steps: Steps, loaded: Loaded) -> str:
     )
     if not answered:
         return await _close(steps, panel_id, ["reviews"])
+    prompt = merge_prompt(loaded.subject, reviews)
     try:
         merged_reply = await steps.call(
-            MERGE_AGENT,
-            loaded.user_id,
-            merge_prompt(loaded.subject, reviews),
-            review_budget("panel_merge", len(loaded.subject.text) + len(ROLES) * REVIEW_CHARS),
+            MERGE_AGENT, loaded.user_id, prompt, review_budget("panel_merge", len(prompt))
         )
     except Exception as exc:
         if isinstance(exc, asyncio.CancelledError):
@@ -1052,8 +1257,28 @@ async def _run(steps: Steps, loaded: Loaded) -> str:
     if not mistakes:
         await asyncio.to_thread(_save, steps.sessions, panel_id, screen_after=screen)
         return await _close(steps, panel_id, [])
-    # The rebuild, then the screen again on its version.
-    key = panel_hold.hold(rebuild_instructions(loaded.kind, loaded.reviewed, mistakes))
+    return await _rebuild(steps, loaded, mistakes)
+
+
+async def _resume(steps: Steps, loaded: Loaded) -> str:
+    """A rebuild left pending (its document's design capture was open): from the stored list."""
+
+    def stored(db: Session) -> list[dict[str, Any]]:
+        row = db.get(DocumentPanel, loaded.panel_id)
+        return list(row.mistakes or []) if row is not None else []
+
+    mistakes = await asyncio.to_thread(_in_db, steps.sessions, stored)
+    if not mistakes:
+        return await _close(steps, loaded.panel_id, ["rebuild"])
+    return await _rebuild(steps, loaded, mistakes)
+
+
+async def _rebuild(steps: Steps, loaded: Loaded, mistakes: list[dict[str, Any]]) -> str:
+    """The rebuild, then the screen again on its version."""
+    panel_id = loaded.panel_id
+    key = panel_hold.hold(
+        rebuild_instructions(loaded.kind, loaded.reviewed, mistakes, loaded.content)
+    )
     try:
         started = await asyncio.to_thread(
             _in_db,
@@ -1062,6 +1287,14 @@ async def _run(steps: Steps, loaded: Loaded) -> str:
                 db, loaded, key, steps.clock(), steps.settings, steps.rebuild_script
             ),
         )
+        if started == "capture":
+            # The upload's design capture holds the base CV: the slot is given away, and the
+            # tick queues the panel again once the capture's generation has ended (`turns`).
+            await asyncio.to_thread(
+                _save, steps.sessions, panel_id, pending=PENDING_REBUILD, started_at=None
+            )
+            logger.info("documents.panel.rebuild_pending", extra={"panel_id": str(panel_id)})
+            return "waiting"
         if isinstance(started, str):
             return await _close(steps, panel_id, [started])
         await steps.execute(started)
@@ -1082,12 +1315,10 @@ async def _run(steps: Steps, loaded: Loaded) -> str:
         loaded.subject.brief,
     )
     screen_role = ROLE_OF["screen"]
+    prompt = review_prompt(screen_role, again_subject)
     try:
         again = await steps.call(
-            screen_role.agent,
-            loaded.user_id,
-            review_prompt(screen_role, again_subject),
-            review_budget("panel_screen", len(again_subject.text)),
+            screen_role.agent, loaded.user_id, prompt, review_budget("panel_screen", len(prompt))
         )
     except Exception as exc:
         if isinstance(exc, asyncio.CancelledError):
@@ -1152,7 +1383,11 @@ def view(row: DocumentPanel) -> dict[str, Any]:
         "screen_after": row.screen_after,
         "readers_hire": hires,
         "readers_answered": len(readers),
-        "strong": row.status == PanelStatus.done.value and not row.mistakes,
+        # Strong only when nobody turned it away: no mistake left to fix, and no reviewer that
+        # answered chose its rejecting verdict (REJECT, NO, PASS).
+        "strong": row.status == PanelStatus.done.value
+        and not row.mistakes
+        and not any(r["verdict"] == ROLE_OF[r["role"]].rejects for r in reviews),
         "closest": (
             {
                 "role": closest.get("role"),
@@ -1233,6 +1468,12 @@ async def job(
         if cv_run is not None:
             await generate.start_letter_after(context, cv_run)
 
+    async def handover(turn: uuid.UUID) -> None:
+        async def send(queue: Any) -> None:
+            await enqueue(queue, turn, turn=True)
+
+        await generate._send(context, send, "documents.panel.not_queued", panel_id=str(turn))
+
     steps = Steps(
         call=RuntimeCall(context, dict(scripts or {})),
         execute=execute,
@@ -1241,6 +1482,7 @@ async def job(
         settings=context.settings,
         rebuild_script=_one((scripts or {}).get("rebuild")),
         after=after,
+        handover=handover,
     )
     return await run(steps, panel_id)
 
