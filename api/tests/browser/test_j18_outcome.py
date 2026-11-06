@@ -422,10 +422,12 @@ def test_the_prompt_states_every_criterion_the_tools_the_reasons_and_the_line():
         "Run a search for each wanted title",
         "load more, open the next pages, scroll",
         "When in doubt, report it",
-        "nor a cybersecurity role",
+        "the person's own never\napply rules exclude",
         "(best right\nafter reading it)",
     ):
         assert words in prompt, words
+    # The app has no rule of its own about a kind of role (owner, 2026-11-05).
+    assert "cyber" not in prompt.lower()
     assert not any(dash in prompt for dash in ("\u2013", "\u2014", " - "))
     assert "report_no_postings" in finder.INTERACTIVE_TOOLS
     assert interactive.outcome.__doc__

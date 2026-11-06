@@ -294,6 +294,22 @@ const CASES: Case[] = [
     reply: spend,
   },
   {
+    name: "getSkillsSpend",
+    run: () => api.getSkillsSpend({ years_experience: 4 }),
+    method: "POST",
+    url: "/api/documents/spend/skills",
+    body: { skills: { years_experience: 4 } },
+    reply: {
+      auto: true,
+      min_fit: 70,
+      writes: true,
+      newly: 2,
+      newly_estimate: { tokens: { low: 1, high: 2 }, cost: null },
+      priced: false,
+      cost_note: "",
+    },
+  },
+  {
     name: "getSettings",
     run: () => api.getSettings(),
     method: "GET",

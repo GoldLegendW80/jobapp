@@ -50,6 +50,7 @@ describe("the jobs list's pay, type and fit", () => {
       "Fit",
       "Status",
       "Found",
+      "Apply",
     ]);
   });
 

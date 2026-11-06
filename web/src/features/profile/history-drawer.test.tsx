@@ -34,8 +34,16 @@ function pushSave(state: FakeProfile, section: SectionName, data: unknown) {
 
 async function openHistory(section = "identity", path?: string) {
   const user = userEvent.setup();
-  renderApp(path ?? `/profile?tab=${section}`);
-  await screen.findByRole("heading", { level: 1, name: "Profile" });
+  // The search is in Settings, Search (owner, 2026-11-05), with its History.
+  const settings = section === "search";
+  renderApp(
+    path ?? (settings ? "/settings/search" : `/profile?tab=${section}`),
+  );
+  await screen.findByRole("heading", {
+    level: 1,
+    name: settings ? "Search settings" : "Profile",
+  });
+  if (settings) await screen.findByRole("form", { name: "Search" });
   await user.click(
     screen.getByRole("button", { name: `History of ${section}` }),
   );

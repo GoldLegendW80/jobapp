@@ -37,7 +37,7 @@ whole file.
 1. **No dashes as separators** in any text a person reads (UI, e-mails, generated CVs and
    letters, error messages, pull request bodies): no em dash, no en dash, no " - ". Use commas,
    colons or a new sentence. Hyphenated words are fine.
-2. **Never apply to a cybersecurity role**, and build no cybersecurity specific feature.
+2. **Everything stays free:** no paid service.
 3. **Never send mail by itself.** The person clicks Send.
 4. **Nothing is submitted without the person's approval.** In One click Apply, the person's
    click on Apply is that approval and the apply agent clicks Submit itself (owner, 2026-11-05);
@@ -55,7 +55,6 @@ whole file.
    main checkout; never push to `main`, never force push, never bypass hooks (`--no-verify`).
 10. **Machine:** no background processes or loops that outlive a command; no `docker * prune`
     beyond your own names; remove what you create.
-11. **Everything stays free:** no paid service.
 
 ## Daily commands
 

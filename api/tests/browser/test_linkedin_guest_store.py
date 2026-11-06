@@ -41,15 +41,17 @@ PAGE = "".join(
     [
         card("4100000021", "GenAI Engineer"),
         card("4100000022", "GenAI Engineer", company="Example Labs", place="Lyon, France"),
-        card("4100000023", "Cyber Security GenAI Engineer"),  # never fetched, never stored
+        # The person's own rule leaves it out: never fetched, never stored.
+        card("4100000023", "Cyber Security GenAI Engineer"),
     ]
 )
+OWNERS_RULE = "No cybersecurity roles: cyber, security, pentest, threat"
 
 
 def run_sweep(
-    sessions: sessionmaker[Session], user: uuid.UUID
+    sessions: sessionmaker[Session], user: uuid.UUID, rules: tuple[str, ...] = (OWNERS_RULE,)
 ) -> tuple[dict[str, Any], LinkedInFake]:
-    search = section()
+    search = section(never_apply=list(rules))
     with sessions() as database:
         row = Sweep(user_id=user, trigger=SweepTrigger.manual, status=SweepStatus.running,
                     stats={})  # fmt: skip
@@ -63,8 +65,8 @@ def run_sweep(
         datetime(2026, 10, 30, tzinfo=UTC),
     )
     stats = sweep.Stats(sources=sweep.initial_sources(scope))
-    plan = sweep.Plan(sweep_id=sweep_id, user_id=user, rules=[], skills=None, known=known,
-                      search=search, search_scope=scope)  # fmt: skip
+    plan = sweep.Plan(sweep_id=sweep_id, user_id=user, rules=sweep.never_apply_rules(search),
+                      skills=None, known=known, search=search, search_scope=scope)  # fmt: skip
     plan.commits = sweep.Commits(sessions, plan, stats, lambda: datetime.now(UTC))
     now = [0.0]
     fake = LinkedInFake(now, pages={0: PAGE})
@@ -134,6 +136,25 @@ def test_postings_are_stored_scored_and_dated_with_the_contract_linkedin_states(
     assert "Employment type: Internship" in texts[0]
     assert all(e["discovery"]["evidence"]["read_through"] == "linkedin_guest_api" for e in events)
     assert POSTING not in str(events)
+
+
+def test_without_a_rule_of_the_persons_a_security_role_is_fetched_and_stored_found(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+) -> None:
+    """The app has no rule of its own about a kind of role (owner, 2026-11-05)."""
+    entry, fake = run_sweep(factory, alice, rules=())
+    assert fake.paths() == ["search?start=0", "4100000021", "4100000022", "4100000023"]
+    assert (entry["found"], entry["postings"], entry.get("unwanted", 0)) == (3, 3, 0)
+    with factory() as database:
+        stored = database.scalars(
+            sa.select(Job).where(Job.url == "https://www.linkedin.com/jobs/view/4100000023/")
+        ).one()
+    assert (stored.title, stored.status, stored.notes) == (
+        "Cyber Security GenAI Engineer",
+        JobStatus.found,
+        "",
+    )
 
 
 def test_a_second_sweep_counts_the_same_postings_as_duplicates_without_fetching_them(

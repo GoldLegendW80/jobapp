@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { message } from "@/features/admin/errors";
+import { SettingsTabs } from "@/features/profile/settings-tabs";
 import { useTitle } from "@/lib/use-title";
 
 import { AnswerBank } from "./answer-bank";
@@ -64,6 +65,7 @@ export function ApplicationsSettingsPage() {
           answers.
         </p>
       </header>
+      <SettingsTabs />
       {query.isPending ? (
         <p role="status" className="text-sm text-muted-foreground">
           Loading your settings
@@ -92,7 +94,7 @@ export function ApplicationsSettingsPage() {
             heading="Show postings from"
             value={query.data.show_postings_from}
             sentence="Postings are listed from this fit score. You set it on your profile, Search, as Minimum fit."
-            link={{ to: "/profile?tab=search", text: "Open Profile, Search" }}
+            link={{ to: "/settings/search", text: "Open Settings, Search" }}
           />
           <ThresholdCard
             id="write-documents"

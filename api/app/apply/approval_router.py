@@ -33,24 +33,45 @@ held past its timeout answers 409 `busy`.
 import logging
 import uuid
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import anyio
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from sqlalchemy.dialects import postgresql as pg
 from sqlalchemy.orm import Session
 
 from app import queue as queues
-from app.apply import admin, gate, model_check, service, shots
-from app.apply.models import AnswerSource, Application, ApplicationAnswer, State
+from app.apply import (
+    admin,
+    answers,
+    bank,
+    gate,
+    model_check,
+    queue_router,
+    remember,
+    service,
+    shots,
+)
+from app.apply.models import (
+    AnswerBankEntry,
+    AnswerSource,
+    Application,
+    ApplicationAnswer,
+    ApplicationEvent,
+    State,
+)
 from app.apply.router import NO_APPLICATION, NO_STORE, ApplicationOut
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
 from app.jobs import service as jobs_service
+from app.jobs.models import Job
+from app.profile import service as profile_service
+from app.profile.models import Profile
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +117,24 @@ class AnswerOut(BaseModel):
     you_answer: bool  # left by the app: the person answers it on the site, or leaves it
     max_chars: int
     left_reason: str | None = None
+    # For a field left for the person: "Remember this answer for next forms" offered ticked
+    # ("on"), offered unticked because the question names the company ("off"), or not offered.
+    remember: Literal["on", "off"] | None = None
+
+
+class RememberIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    field_key: str = Field(min_length=1, max_length=500)
+    value: Annotated[str, Field(min_length=1, max_length=bank.VALUE_MAX)] | StrictBool
+
+
+class RememberOut(BaseModel):
+    """`saved`: the answer is now in Saved answers. `kept`: Saved answers already held an answer
+    to this question, and it was kept as it is."""
+
+    outcome: Literal["saved", "kept"]
+    question: str
 
 
 class ShotOut(BaseModel):
@@ -156,7 +195,47 @@ def _application(db: Session, user: User, application_id: str) -> Application:
     return found
 
 
+def _context(db: Session, application: Application) -> tuple[answers.Context, str | None]:
+    """What the resolver reads for this application's form, without the bank, and the company:
+    for the "Remember this answer" box (`remember.py`). Reads the profile, never creates it."""
+    profile = db.scalar(sa.select(Profile).where(Profile.user_id == application.user_id))
+    sections = (
+        {k: v for k, v in profile_service.sections_view(profile).items() if v} if profile else {}
+    )
+    posting = db.get(Job, application.posting_id)
+    return (
+        answers.Context(
+            application.user_id,
+            sections,
+            answers.Posting.at(posting.location, posting.title) if posting else None,
+        ),
+        posting.company if posting else None,
+    )
+
+
+def _field(row: ApplicationAnswer) -> answers.FormField:
+    return answers.FormField(
+        row.label,
+        row.kind,  # type: ignore[arg-type]
+        tuple(row.options or ()),
+        row.required,
+    )
+
+
+def _rememberable(row: ApplicationAnswer, email: bool) -> bool:
+    return not (
+        email or row.document_letter or row.field_key.startswith(("skipped:", "designated:"))
+    )
+
+
 def _answers(db: Session, application: Application) -> list[AnswerOut]:
+    email = application.ats == "email"
+    rows = gate.rows_of(db, application)
+    offer: dict[str, Literal["on", "off"] | None] = {}
+    left = [r for r in rows if r.source is AnswerSource.left and _rememberable(r, email)]
+    if left:
+        context, company = _context(db, application)
+        offer = {r.field_key: remember.offered(_field(r), context, company) for r in left}
     return [
         AnswerOut(
             field_key=row.field_key,
@@ -170,8 +249,9 @@ def _answers(db: Session, application: Application) -> list[AnswerOut]:
             you_answer=row.source is AnswerSource.left,
             max_chars=gate.answer_max(row, email=application.ats == "email"),
             left_reason=row.left_reason if row.source is AnswerSource.left else None,
+            remember=offer.get(row.field_key),
         )
-        for row in gate.rows_of(db, application)
+        for row in rows
         if not row.field_key.startswith("designated:shape:")
         and row.field_key not in {"designated:incomplete", "designated:strategy"}
     ]
@@ -191,8 +271,19 @@ def _documents(application: Application) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _refusal_out(code: str, **rest: Any) -> GateRefusalOut:
+    return GateRefusalOut(detail=gate.SENTENCES.get(code, code), code=code, **rest)
+
+
+def _status_refusal(status_code: int, code: str) -> JSONResponse:
+    out = _refusal_out(code)
+    return JSONResponse(
+        status_code=status_code, content=out.model_dump(mode="json"), headers=NO_STORE
+    )
+
+
 def _refusal(code: str, **rest: Any) -> JSONResponse:
-    out = GateRefusalOut(detail=gate.SENTENCES.get(code, code), code=code, **rest)
+    out = _refusal_out(code, **rest)
     return JSONResponse(status_code=409, content=out.model_dump(mode="json"), headers=NO_STORE)
 
 
@@ -305,19 +396,16 @@ def read_screenshot(application_id: str, shot_id: str, user: CurrentUser, db: Db
     return Response(content=data, media_type="image/jpeg", headers=NO_STORE)
 
 
-@router.post(
-    "/api/applications/{application_id}/approve",
-    response_model=ApplicationOut,
-    responses={**_404, **_409},
-)
-def approve(
-    application_id: str, body: ApproveIn, request: Request, user: CurrentUser, db: Db
-) -> ApplicationOut | JSONResponse:
-    """Approve and submit: the form exactly as shown, then the gate's decision."""
-    wanted = _uuid_or_404(application_id)
+def _approve(
+    request: Request, user: User, db: Session, wanted: uuid.UUID, body: ApproveIn
+) -> tuple[int, ApplicationOut | GateRefusalOut]:
+    """One approval, the same for the approve route and Approve all ready: the person's
+    authorisation bound to the hash they saw, then the gate's decision, committed before the
+    submit lease is queued. The status code and the body: 200 with the application, 404, 409 or
+    422 with the refusal (nothing approved)."""
     sent = gate.parse_hash(body.answers_hash)
     if sent is None:
-        return _refusal("stale")
+        return 409, _refusal_out("stale")
     settings = request.app.state.settings
     paused = anyio.from_thread.run(_paused, request)
     now = deps.clock(request)
@@ -330,7 +418,7 @@ def approve(
             recipient = db.get(ApplicationAnswer, (wanted, "email_to"))
             if recipient is None or body.confirmed_email_recipient != recipient.value:
                 db.rollback()
-                return _refusal("unconfirmed_recipient")
+                return 409, _refusal_out("unconfirmed_recipient")
             from app.apply.email import sync_draft
             from app.mail import drafts as mail_drafts
             from app.mail.draft_models import MailDraft
@@ -352,30 +440,31 @@ def approve(
         db.commit()
     except gate.NotFoundError:
         db.rollback()
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_APPLICATION) from None
+        return 404, GateRefusalOut(detail=NO_APPLICATION, code="not_found")
     except gate.StaleError as exc:
         db.rollback()
-        application = _application(db, user, application_id)
-        return _refusal(
+        found = service.get_application(db, user.id, wanted)
+        if found is None:
+            return 404, GateRefusalOut(detail=NO_APPLICATION, code="not_found")
+        return 409, _refusal_out(
             "stale",
-            state=application.state.value,
+            state=found.state.value,
             answers_hash=exc.current.hex(),
-            answers=_answers(db, application),
+            answers=_answers(db, found),
         )
     except gate.InvalidAnswerError as exc:
         db.rollback()
-        out = GateRefusalOut(detail=gate.SENTENCES[exc.code], code=exc.code)
-        return JSONResponse(status_code=422, content=out.model_dump(mode="json"), headers=NO_STORE)
+        return 422, GateRefusalOut(detail=gate.SENTENCES[exc.code], code=exc.code)
     except gate.RefusedError as exc:
         db.rollback()
-        return _refusal(exc.code)
+        return 409, _refusal_out(exc.code)
     except jobs_service.JobBusyError:
         db.rollback()
-        return _refusal("busy")
+        return 409, _refusal_out("busy")
     if not decision.passed:
-        return _refusal(decision.code or "refused", state=decision.state.value)
-    approved = _application(db, user, application_id)
-    if approved.ats == "email":
+        return 409, _refusal_out(decision.code or "refused", state=decision.state.value)
+    approved = db.get(Application, wanted)
+    if approved is not None and approved.ats == "email":
         from app.mail.dispatch import application as send_email_application
 
         db.commit()
@@ -383,7 +472,90 @@ def approve(
         db.expire_all()
     else:
         _enqueue_submit(request, wanted)
-    return ApplicationOut.model_validate(_application(db, user, application_id))
+    return 200, ApplicationOut.model_validate(_application(db, user, str(wanted)))
+
+
+@router.post(
+    "/api/applications/{application_id}/approve",
+    response_model=ApplicationOut,
+    responses={**_404, **_409},
+)
+def approve(
+    application_id: str, body: ApproveIn, request: Request, user: CurrentUser, db: Db
+) -> ApplicationOut | JSONResponse:
+    """Approve and submit: the form exactly as shown, then the gate's decision."""
+    code, out = _approve(request, user, db, _uuid_or_404(application_id), body)
+    if code == 404:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NO_APPLICATION)
+    if isinstance(out, ApplicationOut):
+        return out
+    return JSONResponse(status_code=code, content=out.model_dump(mode="json"), headers=NO_STORE)
+
+
+class ReadyItemIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_id: uuid.UUID
+    answers_hash: str = Field(min_length=gate.HASH_HEX, max_length=gate.HASH_HEX)
+
+
+class ApproveReadyIn(BaseModel):
+    """The items the confirmation named, each with the hash of the form it showed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ReadyItemIn] = Field(min_length=1, max_length=queue_router.QUEUE_MAX)
+
+    @field_validator("items")
+    @classmethod
+    def _once_each(cls, items: list[ReadyItemIn]) -> list[ReadyItemIn]:
+        if len({one.application_id for one in items}) != len(items):
+            raise ValueError("Name each application once.")
+        return items
+
+
+class ReadyResultOut(BaseModel):
+    application_id: uuid.UUID
+    approved: bool
+    state: str | None = None
+    code: str | None = None  # why it was left out: the gate's code, `stale`, `not_found`
+    detail: str | None = None
+
+
+class ApproveReadyOut(BaseModel):
+    results: list[ReadyResultOut]
+    approved: int
+    left_out: int
+
+
+@router.post("/api/apply/queue/approve", response_model=ApproveReadyOut)
+def approve_ready(
+    body: ApproveReadyIn, request: Request, user: CurrentUser, db: Db
+) -> ApproveReadyOut:
+    """Approve all ready: the person's approval of exactly the items the confirmation named,
+    each through the approve route's own path (`_approve`: its authorisation, the gate's
+    decision and its events), one transaction per item, in the order given. An item whose form
+    or documents changed since (`stale`), that is no longer waiting (`not_ready`) or that the
+    gate refuses is left out with its sentence; the others go on."""
+    results: list[ReadyResultOut] = []
+    for item in body.items:
+        _, out = _approve(
+            request, user, db, item.application_id, ApproveIn(answers_hash=item.answers_hash)
+        )
+        if isinstance(out, ApplicationOut):
+            results.append(ReadyResultOut(application_id=out.id, approved=True, state=out.state))
+        else:
+            results.append(
+                ReadyResultOut(
+                    application_id=item.application_id,
+                    approved=False,
+                    state=out.state,
+                    code=out.code,
+                    detail=out.detail,
+                )
+            )
+    approved = sum(one.approved for one in results)
+    return ApproveReadyOut(results=results, approved=approved, left_out=len(results) - approved)
 
 
 @router.put(
@@ -422,6 +594,61 @@ def set_answer(
         db.rollback()
         return _refusal("busy")
     return read_approval(application_id, request, user, db)
+
+
+@router.post(
+    "/api/applications/{application_id}/remember",
+    response_model=RememberOut,
+    responses={
+        **_404,
+        409: {"model": GateRefusalOut, "description": "Not your answer, or it changed"},
+        422: {"model": GateRefusalOut, "description": "An answer that is not remembered"},
+    },
+)
+def remember_answer(
+    application_id: str, body: RememberIn, request: Request, user: CurrentUser, db: Db
+) -> RememberOut | JSONResponse:
+    """Remember this answer for next forms: the person's own answer to one field of this form,
+    as saved here, goes to Saved answers under the field's question (owner, 2026-11-05). The
+    application does not change. 409 `not_answered` when the field does not hold that answer of
+    the person, 422 `not_rememberable` for a question the app never fills from Saved answers
+    (a sensitive one among them). An answer already saved to the same question is kept."""
+    application = _application(db, user, application_id)
+    row = db.get(ApplicationAnswer, (application.id, body.field_key))
+    if row is None or row.user_id != user.id or not _rememberable(row, application.ats == "email"):
+        return _status_refusal(422, "not_rememberable")
+    if row.source is not AnswerSource.person or row.value != body.value:
+        return _status_refusal(409, "not_answered")
+    context, _ = _context(db, application)
+    text = remember.check(_field(row), context, row.value)
+    if text is None:
+        return _status_refusal(422, "not_rememberable")
+    now = deps.clock(request)
+    question = row.label.strip()
+    inserted = db.execute(
+        pg.insert(AnswerBankEntry)
+        .values(
+            user_id=user.id,
+            question_key=bank.question_key(question),
+            question=question,
+            answer=text,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=["user_id", "question_key"])
+        .returning(AnswerBankEntry.question_key)
+    ).scalar_one_or_none()
+    outcome: Literal["saved", "kept"] = "saved" if inserted is not None else "kept"
+    db.add(
+        ApplicationEvent(
+            application_id=application.id,
+            user_id=user.id,
+            at=now,
+            kind="answer_remembered",
+            data={"field_key": row.field_key, "outcome": outcome},
+        )
+    )
+    db.commit()
+    return RememberOut(outcome=outcome, question=question)
 
 
 def _person(

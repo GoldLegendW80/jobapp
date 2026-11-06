@@ -1,4 +1,4 @@
-"""Documents D27: migration 0032, the documents of the twenty removed templates move to the
+"""Documents D27: migration 0035, the documents of the twenty removed templates move to the
 nearest of the three; a person's own template and the three stay; versions are not touched; the
 downgrade moves nothing back; the offline SQL names every removed slug."""
 
@@ -42,8 +42,8 @@ STAYS = ["band", "photo-columns", "ledger", "upload-abcd1234", "upload-zz99yy88"
 
 
 def _moves() -> dict[str, str]:
-    path = next(templates.ROOT.parents[2].glob("alembic/versions/0032_*.py"))
-    spec = importlib.util.spec_from_file_location("revision_0032", path)
+    path = next(templates.ROOT.parents[2].glob("alembic/versions/0035_*.py"))
+    spec = importlib.util.spec_from_file_location("revision_0035", path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -92,35 +92,35 @@ def _slugs(engine: sa.Engine, table: str) -> dict[str, str]:
         return {str(key): slug for key, slug in rows}
 
 
-def test_0032_moves_each_removed_slug_and_nothing_else(at_head: sa.Engine) -> None:
-    command.downgrade(alembic_config(), "0031")
+def test_0035_moves_each_removed_slug_and_nothing_else(at_head: sa.Engine) -> None:
+    command.downgrade(alembic_config(), "0034")
     with at_head.begin() as conn:
-        user = add_user(conn, "e2e-docs-0032@example.org")
+        user = add_user(conn, "e2e-docs-0035@example.org")
         made = {}
         for index, slug in enumerate([*REMOVED, *STAYS]):
             made[slug] = _base_cv(conn, user, slug)
             _version(conn, user, made[slug], slug, frozen=index % 2 == 0)
     versions = _slugs(at_head, "document_versions")
 
-    command.upgrade(alembic_config(), "0032")
-    assert current_revision(url(at_head)) == "0032"
+    command.upgrade(alembic_config(), "0035")
+    assert current_revision(url(at_head)) == "0035"
     after = _slugs(at_head, "documents")
     for slug, document in made.items():
         assert after[document] == REMOVED.get(slug, slug), slug
     assert _slugs(at_head, "document_versions") == versions  # every version as it was
 
-    command.downgrade(alembic_config(), "0031")  # moves nothing back
+    command.downgrade(alembic_config(), "0034")  # moves nothing back
     assert _slugs(at_head, "documents") == after
     command.upgrade(alembic_config(), "head")
     command.upgrade(alembic_config(), "head")
     assert _slugs(at_head, "documents") == after
 
 
-def test_0032_offline_sql(
+def test_0035_offline_sql(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://u:p@nowhere.invalid:5432/x")
-    command.upgrade(alembic_config(), "0031:0032", sql=True)
+    command.upgrade(alembic_config(), "0034:0035", sql=True)
     out = capsys.readouterr().out
     assert out.count("UPDATE documents SET template_slug=") == 3
     for slug in REMOVED:

@@ -261,9 +261,10 @@ def test_a_shortened_title_is_still_dropped_as_unwanted(url, title, unwanted):
     assert entry["unwanted"] == 1
 
 
-def test_a_shortened_title_still_meets_the_cybersecurity_rule():
+def test_a_shortened_title_still_meets_the_persons_never_apply_rule():
     """The heading "Cybersecurity: AI Engineer" reported as "AI Engineer": the heading is
-    stored, and the store's cybersecurity rule (sweep.commit_verified) skips it."""
+    stored, and the person's own rule against cybersecurity skips it in the store
+    (sweep.commit_verified)."""
 
     async def script(session):
         await session.navigate(OFFER_5)
@@ -273,8 +274,10 @@ def test_a_shortened_title_still_meets_the_cybersecurity_rule():
     _, commits = run(saved(), Vie(), script)
     [finding] = commits.stored
     assert (finding.title, finding.evidence["rule"]) == ("Cybersecurity: AI Engineer", "heading")
-    rule = never_apply.matching_rule([never_apply.CYBER_RULE], finding.company or "", finding.title)
-    assert rule is never_apply.CYBER_RULE
+    owners = never_apply.NeverApplyRule.parse(
+        "No cybersecurity roles: cyber, security, pentest, threat"
+    )
+    assert never_apply.matching_rule([owners], finding.company or "", finding.title) is owners
 
 
 def test_elsewhere_a_posting_of_another_contract_is_still_dropped():

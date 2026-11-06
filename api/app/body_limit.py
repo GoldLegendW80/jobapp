@@ -66,6 +66,7 @@ from app.apply.answer_limits import LETTER_MAX
 from app.apply.bank import QUESTION_MAX, VALUE_MAX
 from app.documents.content import RAW_MAX_BYTES
 from app.jobs.schemas import POSTING_MAX
+from app.profile.about_text import TEXT_MAX as ABOUT_TEXT_MAX
 
 Scope = MutableMapping[str, Any]
 Message = MutableMapping[str, Any]
@@ -91,6 +92,8 @@ SIZED: dict[tuple[str, str], int] = {
     ("POST", "/api/jobs"): 4 * POSTING_MAX + 64 * 1024,
     # A draft saved by hand: the content's raw cap (documents/content.py), and room for escapes.
     ("PUT", "/api/documents/{document_id}/draft"): RAW_MAX_BYTES + 48 * 1024,
+    # About you's whole text, as typed: twice its cleaned cap (profile/about_router.py TextIn).
+    ("PUT", "/api/profile/about"): 4 * 2 * ABOUT_TEXT_MAX + 64 * 1024,
 }
 
 # Routes that read their own raw body with their own limit (module docstring). They are not

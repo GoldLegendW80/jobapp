@@ -11,6 +11,7 @@ import { AdminUsersPage } from "@/features/admin/users-page";
 import { RunPage, RunsPage } from "@/features/agents/runs-page";
 import { QueuePage } from "@/features/apply/queue-page";
 import { ApplicationsSettingsPage } from "@/features/apply/settings-page";
+import { SearchSettingsPage } from "@/features/profile/search-settings-page";
 import { AuthProvider } from "@/features/auth/auth-provider";
 import { PublicOnly, RequireAdmin, RequireAuth } from "@/features/auth/guards";
 import { LinkPage } from "@/features/auth/link-page";
@@ -110,6 +111,7 @@ export const routes: RouteObject[] = [
               { path: "runs", element: <RunsPage /> },
               { path: "runs/:id", element: <RunPage /> },
               { path: "applications", element: <QueuePage /> },
+              { path: "settings/search", element: <SearchSettingsPage /> },
               {
                 path: "settings/applications",
                 element: <ApplicationsSettingsPage />,

@@ -38,6 +38,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.config import ConfigError, get_settings
 from app.db import build_engine, build_sessionmaker
 from app.identity import service as identity_service
+from app.jobs import rescore  # noqa: F401  (an imported skills section asks for its rescore)
 from app.profile import photo as photos
 from app.profile import service
 from app.profile.importer import ConversionError, SourcePaths, convert

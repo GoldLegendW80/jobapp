@@ -206,11 +206,20 @@ function gradientPng(width = 600, height = 400): Buffer {
   ]);
 }
 
-const TABS = ["Identity", "Experience", "Facts", "Skills", "Search", "Answers"];
+const TABS = ["Identity", "Experience", "Facts", "Skills", "Answers"];
 const tab = (page: Page, name: string) =>
   page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
 
 async function openTab(page: Page, name: string) {
+  // The search is in Settings, Search (owner, 2026-11-05); the other sections in the classic
+  // editor's tabs.
+  if (name === "Search") {
+    await page.goto("/settings/search");
+    await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
+    return;
+  }
+  if ((await tab(page, name).count()) === 0)
+    await page.goto(`/profile?tab=${name.toLowerCase()}`);
   await tab(page, name).click();
   await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
 }
@@ -251,6 +260,14 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
   await expect(
     page.getByRole("heading", { level: 1, name: "Profile" }),
   ).toBeVisible();
+  // The one page profile (owner, 2026-11-05): Ready for in place of the bar, and the classic
+  // tabs under More for one release.
+  await expect(page.getByRole("list", { name: "Ready for" })).toContainText(
+    "Scoring postings",
+  );
+  await page.getByRole("button", { name: "More", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Classic editor" }).click();
+  await expect(page).toHaveURL(/\/profile\?tab=identity$/);
   await expect(
     page.getByRole("progressbar", { name: "Profile completeness" }),
   ).toHaveAttribute("aria-valuenow", "100");
@@ -405,7 +422,7 @@ test("Answers: edit and save", async () => {
 });
 
 test("a reload shows every saved change", async () => {
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Senior Applied AI Engineer",
   );
@@ -521,7 +538,7 @@ test("unsaved changes: switching tab and leaving the page ask first", async () =
   await page.getByRole("link", { name: "jobapp" }).click();
   await guard.getByRole("button", { name: "Discard changes" }).click();
   await expect(page).toHaveURL(/\/jobs$/);
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Senior Applied AI Engineer",
   );

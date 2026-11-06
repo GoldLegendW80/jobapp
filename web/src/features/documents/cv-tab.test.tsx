@@ -213,7 +213,7 @@ describe("the CV tab", () => {
     );
     expect(within(line).getByRole("link")).toHaveAttribute(
       "href",
-      "/profile?tab=search",
+      "/settings/search",
     );
   });
 

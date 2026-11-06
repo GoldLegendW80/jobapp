@@ -290,7 +290,11 @@ def test_nothing_but_found_or_skipped_jobs_is_written(
     assert {job.status for job in jobs_of(factory, alice)} == {JobStatus.found, JobStatus.skipped}
 
 
-def test_never_apply_rules_and_the_cybersecurity_rule_skip_with_their_note(
+SALES_RULE = "No sales roles: sales (test rule)"
+OWNERS_RULE = "No cybersecurity roles: cyber, security, pentest, threat"
+
+
+def test_the_persons_never_apply_rules_skip_with_their_note_and_the_app_adds_none(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
     profile(factory, alice)  # the person's rules name sales only
@@ -299,14 +303,30 @@ def test_never_apply_rules_and_the_cybersecurity_rule_skip_with_their_note(
         new_sweep(factory, alice),
         runner(reports("jobs/cyber", "jobs/sales", "jobs/robot")),
     )
-    by_title = {job.title: job for job in jobs_of(factory, alice)}
-    assert by_title["Cyber Defence Engineer"].status is JobStatus.skipped
-    assert "cyber" in by_title["Cyber Defence Engineer"].notes
-    assert by_title["Robot Sales Lead"].status is JobStatus.skipped
-    assert by_title["Robot Sales Lead"].notes == "No sales roles: sales (test rule)"
-    assert by_title["Robot Engineer"].status is JobStatus.found
-    assert (row.stats["skipped_by_rule"], entry_of(row)["skipped_by_rule"]) == (2, 2)
+    by_title = {job.title: (job.status, job.notes) for job in jobs_of(factory, alice)}
+    # No rule of the app's own about a kind of role (owner, 2026-11-05): kept.
+    assert by_title["Cyber Defence Engineer"] == (JobStatus.found, "")
+    assert by_title["Robot Sales Lead"] == (JobStatus.skipped, SALES_RULE)
+    assert by_title["Robot Engineer"][0] is JobStatus.found
+    assert (row.stats["skipped_by_rule"], entry_of(row)["skipped_by_rule"]) == (1, 1)
     assert row.stats["new"] == 3
+    assert_counts_agree(factory, row, alice)
+
+
+def test_the_persons_own_rule_against_cybersecurity_skips_with_its_note(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice, never_apply=[SALES_RULE, OWNERS_RULE])
+    row = run(
+        factory,
+        new_sweep(factory, alice),
+        runner(reports("jobs/cyber", "jobs/sales", "jobs/robot")),
+    )
+    by_title = {job.title: (job.status, job.notes) for job in jobs_of(factory, alice)}
+    assert by_title["Cyber Defence Engineer"] == (JobStatus.skipped, OWNERS_RULE)
+    assert by_title["Robot Sales Lead"] == (JobStatus.skipped, SALES_RULE)
+    assert by_title["Robot Engineer"][0] is JobStatus.found
+    assert (row.stats["skipped_by_rule"], entry_of(row)["skipped_by_rule"]) == (2, 2)
     assert_counts_agree(factory, row, alice)
 
 

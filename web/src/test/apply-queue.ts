@@ -54,6 +54,9 @@ export function fakeQueue(
     reads: 0,
     puts: [] as { id: string; field: string; value: unknown }[],
     approves: [] as { id: string; hash: string }[],
+    /** Each Approve all ready, with the items it named. */
+    batches: [] as { id: string; hash: string }[][],
+    remembers: [] as { id: string; field_key: string; value: unknown }[],
     rejects: [] as { id: string; skip_posting: boolean }[],
     cancels: [] as string[],
     /** "It was submitted" and "Try again", in order. */
@@ -232,6 +235,71 @@ export function fakeQueue(
         fakeApplication("approved", { id, posting_id: id }),
       );
     }),
+    // Approve all ready: each item as its own approve would answer it; an item named with an old
+    // hash, or no longer ready, is left out with the api's sentence.
+    http.post("*/api/apply/queue/approve", async ({ request }) => {
+      const { items: named } = (await request.json()) as {
+        items: { application_id: string; answers_hash: string }[];
+      };
+      state.batches.push(
+        named.map((one) => ({
+          id: one.application_id,
+          hash: one.answers_hash,
+        })),
+      );
+      const results = named.map(({ application_id: id, answers_hash }) => {
+        const item = state.items.find((one) => one.id === id);
+        if (item?.state !== "ready")
+          return {
+            application_id: id,
+            approved: false,
+            state: item?.state ?? null,
+            code: "not_ready",
+            detail: "This application is not waiting for your approval.",
+          };
+        if (answers_hash !== state.hash(id))
+          return {
+            application_id: id,
+            approved: false,
+            state: "ready",
+            code: "stale",
+            detail:
+              "The form or your documents changed since you looked. Check the answers shown now and approve again.",
+          };
+        state.items = state.items.map((one) =>
+          one.id === id ? { ...one, state: "approved" } : one,
+        );
+        return {
+          application_id: id,
+          approved: true,
+          state: "approved",
+          code: null,
+          detail: null,
+        };
+      });
+      const approved = results.filter((one) => one.approved).length;
+      return HttpResponse.json({
+        results,
+        approved,
+        left_out: results.length - approved,
+      });
+    }),
+    http.post(
+      "*/api/applications/:id/remember",
+      async ({ params, request }) => {
+        const body = (await request.json()) as {
+          field_key: string;
+          value: unknown;
+        };
+        state.remembers.push({ id: String(params.id), ...body });
+        const refusal = refused();
+        if (refusal) return refusal;
+        return HttpResponse.json({
+          outcome: "saved",
+          question: body.field_key,
+        });
+      },
+    ),
     http.post("*/api/applications/:id/cancel", ({ params }) => {
       const id = String(params.id);
       state.cancels.push(id);

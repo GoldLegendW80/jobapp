@@ -807,7 +807,8 @@ def test_accept_all_takes_what_is_neither_locked_nor_flagged(
     # accept all fills what is empty: the two values this test takes are empty before it
     save(factory, alice, "identity", {**full("identity"), "headline": None})
     base = save(factory, alice, "answers", {**full("answers"), "relocation": None})
-    locked = made(factory, alice, "identity", "languages", GERMAN)
+    # a locked fact on a value the profile holds: accepted on its own (an empty slot joins)
+    locked = made(factory, alice, "identity", "languages", {"name": "English", "level": "C2"})
     headline = made(factory, alice, "identity", "headline", "Applied AI Engineer")
     block = made(factory, alice, "facts", "blocks", BLOCK)
     second = made(factory, alice, "facts", "blocks", {"title": "Talks", "body": "A made up talk."})

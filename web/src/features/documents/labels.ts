@@ -7,6 +7,7 @@ import { formatDateTime } from "@/lib/format";
 import type {
   BaseSource,
   DocumentOut,
+  Estimate,
   Generation,
   Kind,
   GenerationBrief,
@@ -126,6 +127,14 @@ export const tokenRange = (range: { low: number; high: number }): string =>
 export function money(currency: string, value: string | number): string {
   const number = Number(value);
   return `${currency} ${Number.isFinite(number) ? number.toFixed(2) : String(value)}`;
+}
+
+/** "about 1,000 to 2,000 tokens, about USD 0.10 to USD 0.20" (the cost on an API key only). */
+export function estimateSentence(estimate: Estimate): string {
+  const range = tokenRange(estimate.tokens);
+  if (estimate.cost === null) return range;
+  const { currency, low, high } = estimate.cost;
+  return `${range}, about ${money(currency, low)} to ${money(currency, high)}`;
 }
 
 /** The part of the record's path the person can read: "highlights.1" is "Highlights, item 2". */

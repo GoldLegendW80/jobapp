@@ -36,6 +36,8 @@ export interface SectionFormOptions<
   fromForm: (values: F) => SectionData[S];
   rules?: ListRules;
   onDirtyChange: (dirty: boolean) => void;
+  /** After a save the api accepted, with the profile it answered. */
+  onSaved?: (saved: Profile) => void;
 }
 
 export interface SectionForm<F extends FieldValues> {
@@ -64,6 +66,7 @@ export function useSectionForm<S extends SectionName, F extends FieldValues>({
   fromForm,
   rules,
   onDirtyChange,
+  onSaved,
 }: SectionFormOptions<S, F>): SectionForm<F> {
   const client = useQueryClient();
   const form = useForm<F>({
@@ -100,6 +103,7 @@ export function useSectionForm<S extends SectionName, F extends FieldValues>({
       base.current = saved.revision;
       form.reset(toForm(saved.sections[section]));
       toast.success(`${label} saved.`);
+      onSaved?.(saved);
     },
     onError: (error, values) => {
       const stale = conflictOf(error);

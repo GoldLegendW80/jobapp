@@ -111,10 +111,33 @@ const FAILURES: Record<string, string> = {
   form_changed: "the form changed while it was being filled",
 };
 
-/** What a queued application waits for: the api names it in `needs` while it waits. */
-function waitingLine(needs: string | null): string {
+const BLOCKED_BY_RULE =
+  "The last attempt was blocked by a rule. Nothing was sent.";
+
+/** An application that ended before its form for want of documents (apply/run.py, `prepare`). */
+const BLOCKED: Record<string, string> = {
+  documents_not_written:
+    "Your CV or letter could not be written, so nothing was sent. The posting's documents say why: write them again there, then apply.",
+  no_documents:
+    "This posting had no CV to send, so nothing was sent. Write one with the posting's documents, then apply.",
+};
+
+/**
+ * What a queued application waits for: the api names it in `needs` while it waits. Apply on a
+ * posting without documents asks them first (owner, 2026-11-05: "Apply with no documents writes
+ * them and then sends"); nothing is written before the documents consent and a credential.
+ */
+function waitingLine(needs: string | null, mode?: string): string {
+  if (needs === "documents:consent") {
+    return "Waiting for your CV and letter to be written. Confirm what is sent to the writer in the CV tab of your profile first: nothing is written before.";
+  }
+  if (needs === "documents:credential") {
+    return "Waiting for your CV and letter to be written. Add a model credential in your account first.";
+  }
   if (needs?.startsWith("documents:")) {
-    return "Waiting for your CV and letter to be written. The form is filled once they are ready.";
+    return mode === "direct"
+      ? "Writing your CV and letter, then sending. The form is filled and sent once they are ready."
+      : "Waiting for your CV and letter to be written. The form is filled once they are ready.";
   }
   if (needs === "retry") {
     return "The last attempt did not finish, so the assistant tries again later by itself. Nothing was sent.";
@@ -162,7 +185,7 @@ export function statusLine(application: Application | null | undefined) {
     return DIRECT_LINES[application.state];
   switch (application.state) {
     case "queued":
-      return waitingLine(application.needs);
+      return waitingLine(application.needs, application.mode);
     case "filling":
       return "Filling the form. You can leave this page: the fill goes on, and you will find the result here.";
     case "needs_person": {
@@ -193,7 +216,7 @@ export function statusLine(application: Application | null | undefined) {
       return `The last attempt failed${why ? `: ${why}` : ""}. Nothing was sent.`;
     }
     case "blocked":
-      return "The last attempt was blocked by a rule. Nothing was sent.";
+      return BLOCKED[application.error_code ?? ""] ?? BLOCKED_BY_RULE;
     case "posting_closed":
       return "The site says this posting is closed. Nothing was sent.";
     case "rehearsed":
@@ -332,6 +355,13 @@ export const isOpenField = (answer: Answer) =>
 
 export const leftFields = (answers: readonly Answer[]) =>
   answers.filter(isOpenField);
+
+/** What the row says after the answer went to Saved answers, or did not. */
+export const REMEMBERED = {
+  saved:
+    "Saved for next forms: the next form with this question is filled with it.",
+  kept: "Your saved answers already hold an answer to this question: it was kept.",
+};
 
 /** The kinds the api takes no value for: a file and a list of choices (`set_answer` of A6). */
 const NOT_TYPED_KINDS = new Set(["file", "multi", "designated"]);

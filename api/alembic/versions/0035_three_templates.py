@@ -2,8 +2,8 @@
 one of the twenty removed folders moves to the nearest of the three, so that its next render
 prints with a look close to the one it had rather than with the default and a note.
 
-Revision ID: 0032
-Revises: 0031
+Revision ID: 0035
+Revises: 0034
 
 Data only, no schema change. `documents.template_slug` alone moves: a version keeps its
 `template_slug` and its PDF (a frozen version is what was sent, and the freeze trigger of 0015
@@ -19,8 +19,8 @@ good as any for a release that falls back on what it does not know.
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0032"
-down_revision = "0031"
+revision = "0035"
+down_revision = "0034"
 branch_labels = None
 depends_on = None
 

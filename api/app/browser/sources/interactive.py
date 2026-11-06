@@ -30,7 +30,7 @@ place only: an unwanted reading wins over another contract, which wins over a ke
 the title, location and address), as a website's own filter takes one value, but a posting of
 the contract a website has by nature (B21: the VIE website's) is never dropped as of another
 contract (`nature_contract`). Unwanted titles and unwanted places are dropped after reading, and
-the app's own rule against cybersecurity marks a stored one skipped (sweep.commit_verified).
+the person's never apply rules mark a stored one skipped (sweep.commit_verified).
 The agent's first message gets the summary of the person's profile (B21,
 app/profile/fit_summary.py, `FinderAgent.profile`): it reports what fits the profile, the saved
 titles being where it starts searching.

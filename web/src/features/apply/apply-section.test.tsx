@@ -850,6 +850,61 @@ describe("a failing refresh", () => {
     ).toBeInTheDocument();
     expect(section.textContent).not.toMatch(/within a minute/);
   });
+
+  it("says Apply writes the CV and letter, then sends, while they are written", async () => {
+    fakeApply({
+      application: fakeApplication("queued", {
+        mode: "direct",
+        needs: "documents:writing",
+      }),
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(
+        "Writing your CV and letter, then sending. The form is filled and sent once they are ready.",
+      ),
+    ).toBeVisible();
+    expect(
+      within(section).getByText(
+        "The browser starts once your CV and letter are ready.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("asks for the documents consent with a link, and writes nothing before", async () => {
+    fakeApply({
+      application: fakeApplication("queued", {
+        mode: "direct",
+        needs: "documents:consent",
+      }),
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(/nothing is written before\.$/),
+    ).toBeVisible();
+    expect(
+      within(section).getByRole("link", { name: "Open the CV tab" }),
+    ).toHaveAttribute("href", "/profile/cv");
+  });
+
+  it("says plainly that a writer failed and nothing was sent", async () => {
+    fakeApply({
+      application: fakeApplication("blocked", {
+        mode: "direct",
+        error_code: "documents_not_written",
+      }),
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByText(
+        "Your CV or letter could not be written, so nothing was sent. The posting's documents say why: write them again there, then apply.",
+      ),
+    ).toBeVisible();
+    // Apply is offered again once the documents are written.
+    expect(
+      within(section).getByRole("button", { name: "Apply" }),
+    ).toBeVisible();
+  });
 });
 
 describe("after the click", () => {

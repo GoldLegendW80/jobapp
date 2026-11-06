@@ -154,12 +154,18 @@ test("a run started in the page reads the page images, then the texts", async ()
   ).toBeVisible();
   for (const name of FILES)
     await page.getByRole("checkbox", { name: named(name) }).check();
-  await page.getByRole("button", { name: "See the estimate" }).click();
-  const dialog = page.getByRole("dialog", { name: "Before the run starts" });
+  const dialog = page.getByRole("region", { name: "Before the run starts" });
+  const start = dialog.getByRole("button", {
+    name: /^Complete my profile \(about [0-9,]+ to [0-9,]+ tokens\)$/,
+  });
+  await expect(start).toBeVisible();
+  await dialog
+    .getByRole("button", { name: "What is read, and the limits" })
+    .click();
   await expect(dialog.getByTestId("estimate")).toBeVisible();
   await expect(dialog).not.toContainText(DASH);
   await dialog.getByRole("checkbox", { name: /I have read this/ }).check();
-  await dialog.getByRole("button", { name: "Start the run" }).click();
+  await start.click();
   await expect(dialog).toBeHidden();
   await expect(
     page.getByRole("heading", { name: "The run in progress" }),
