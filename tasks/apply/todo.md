@@ -231,6 +231,13 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 **Left to do:** while the person watches, an answer typed in the app's box during a live ask (today the live view only); removing the 2026-11-01 direct fill path once no application filled by it is left (contract later).
 **Scope:** L. **Depends on:** none. **Migration:** none.
 
+## A20: The apply agent never asks; Review first shows every field it filled, then one Confirm
+**Issue:** none (this session could not create issues). **Owner, 2026-11-06:** "when i click on apply in full auto mode, I just want that the agent do all the work to apply and he never ask me a question. when I'm not in full auto mode, I want to see all the input he filled in but don't matter of the website or whatever, then a button to confirm." ([decisions](../../docs/decisions.md), the row of 2026-11-06).
+**Acceptance:** box unticked, no `browser_ask_person` and no question in any run, a required field the profile does not answer filled by the agent and named in the run report (`chosen`: label, value, why); a sign in wall (after a guest path was looked for), a password or code box, a captcha or a payment end `failed` with one plain sentence; the CV and the letter to every resume widget (prompt; browserd's upload already sets a file input or answers the chooser a button opens); box ticked, the same agent on a lease `apply_review` (its acts on a submit element refused, a wizard's step button aside, `detect.review_step`), `apply_ready` names the send by its ref, `ready` with the list from the recorded acts (`agent:filled`, step, label, value, chosen), `POST /api/applications/{id}/confirm` with the list's hash, the gate's click in the held session, the agent reading the confirmation only, `submitted` or `submit_unknown`; Cancel, the wait's bound, a lost lease and a held session that stopped beating send nothing (`session_lost`, Try again); an A19 question left from before still answers and resumes.
+**Edge cases to test:** `api/tests/apply/test_a20_review_first.py`, `test_a19_applier.py` (no question, the old question), `api/tests/browser/test_a20_review_lease.py` (the step phrases, the capability a click only), `web/src/features/apply/agent-fields.test.tsx`.
+**Left to do:** the docker marked real Chromium test of the three resume widgets and of the review lease (`test_a19_native.py` extended); the journeys `web/e2e/apply-one-click.spec.ts` and a Review first one with recorded model streams; the review queue card of such an item (its Approve is refused, the person confirms on the job page).
+**Scope:** L. **Depends on:** none. **Migration:** none.
+
 ## Checkpoint A: the owner's real applications
 **Issue:** to create. Human steps on `https://jobapp.taild83d16.ts.net`, with the owner's own profile and documents, written on the issue with their date. No test or agent ever submits to a real company outside these steps.
 - **Stage A, after A7 (the first end to end slice on the Jetson):** he picks one real Greenhouse or Ashby posting he wants, clicks Apply, watches the fill on his phone or laptop, checks the answers and the screenshot, approves; the posting is `applied` and the documents are frozen (the confirmation mail and its link by the mail module are checked when mail is back, not here: with mail paused this stage does not need them). He writes what he had to correct.
@@ -268,6 +275,7 @@ Tasks of one group never edit the same file; where two tasks touch one file they
 | A18c | to create | Complete my profile on this site: the web | M | A18a, A18b, B4 | none | 14 |
 | A17 | to create | Privacy, retention and isolation over the module | S | A7 to A13c, A15, A16, A18a to A18c (not A14) | none | 15 |
 | A19 | none | One click Apply works like Claude Code with Playwright CLI on the owner's Mac | L | none | none | after 15 |
+| A20 | none | The apply agent never asks; Review first shows every field it filled, then one Confirm | L | none | none | after A19 |
 | Checkpoint A | to create | The owner's real applications, stages A to E | human | A7, then A12, A13b, A16, A18c | none | after 5, 7, 9, 12 and 14 |
 
 **The first end to end slice**, in the order the orchestrator runs it across the three plans (documents, then browser, then apply; the groups are P0 to P8 and the tasks of one group run in parallel):
