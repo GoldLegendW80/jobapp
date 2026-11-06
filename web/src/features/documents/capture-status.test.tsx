@@ -111,7 +111,7 @@ describe("uploaded CV capture controls", () => {
         retry,
       );
       expect(
-        screen.queryByText(/Classic was kept|last attempt failed/i),
+        screen.queryByText(/Band was kept|last attempt failed/i),
       ).toBeNull();
       if (status === "queued" || status === "running")
         expect(
@@ -412,7 +412,7 @@ describe("capture completion across CV navigation", () => {
       if (remount) await act(() => router.navigate("/profile"));
       const cv = {
         ...api.cvs[0]!,
-        template_slug: terminal === "done" ? "upload-new" : "classic",
+        template_slug: terminal === "done" ? "upload-new" : "band",
         design_generation: terminal === null ? null : capture(terminal),
       };
       api.cvs[0] = cv;

@@ -45,7 +45,7 @@ CHECK_MAX_HEIGHT). A renderer that cannot be reached, is busy or times out raise
 CheckUnavailableError: nothing is known of the template, and no repair is spent.
 
 Any problem refuses the template as a refusal of `template_rules` does: back to the model once,
-then `classic` is kept. A Problem names a file, a field path and a step, never a text.
+then the base CV keeps its template. A Problem names a file, a field path and a step, never a text.
 
 Luminance is read from the screenshots' 8 bit luma with the sRGB curve, an approximation of the
 WCAG relative luminance per pixel; anti aliasing makes the edges of a glyph lighter, which is why

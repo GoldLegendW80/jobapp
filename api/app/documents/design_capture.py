@@ -23,8 +23,8 @@ runs, a DOCX's style names, ids and `based_on`) go through ingestion's secret ru
 REDACTED before the model reads it.
 
 **The checks** (`validate`): the manifest is written by code (`manifest_of`: the captured
-density ladder, the mapped fonts, the accent, `classic`'s soft limits), never by the model;
-the three files the model wrote pass `template_rules.check` (the static allow list), the
+density ladder, the mapped fonts, the accent, the default template's soft limits), never by the
+model; the three files the model wrote pass `template_rules.check` (the static allow list), the
 template system's `from_files`, then `design_check.check_template` (the render check in the
 renderer's Chromium: every field visible, uncovered, inside the page, contrasted, and the
 density read). A refusal goes back to the model once (`decide`); a second refusal ends the
@@ -45,7 +45,7 @@ codes of CAPTURE_NOTES.
 **The loader** (`load`, registered with `templates.register_loader`): `templates.resolve` finds
 a person's own template through it, by the person's id and the slug only, and validates it again
 at every resolve (the authoring rules and `template_rules.check`); a row that fails them, or
-another person's slug, resolves to None, and `render_job.template_of` prints `classic`.
+another person's slug, resolves to None, and `render_job.template_of` prints the default.
 
 Logs carry ids, codes and counts, never a text of the file or of the template.
 """
@@ -280,7 +280,7 @@ def fonts_of(tokens: template_rules.Tokens) -> tuple[str, ...]:
 def manifest_of(slug: str, version: int, inputs: Inputs) -> dict[str, Any]:
     """The manifest of a user template, written by code from the captured tokens."""
     tokens = inputs.tokens
-    classic = templates.registry()[templates.DEFAULT]
+    default = templates.registry()[templates.DEFAULT]
     return {
         "slug": slug,
         "version": version,
@@ -296,7 +296,7 @@ def manifest_of(slug: str, version: int, inputs: Inputs) -> dict[str, Any]:
         **{
             kind: {
                 "steps": template_rules.steps(tokens, kind),
-                "soft_limits": asdict(classic.kinds[kind].soft_limits),
+                "soft_limits": asdict(default.kinds[kind].soft_limits),
             }
             for kind in templates.KINDS
         },

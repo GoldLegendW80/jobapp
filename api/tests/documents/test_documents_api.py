@@ -457,7 +457,7 @@ def test_template_and_language_switches(
     assert versions[1].pdf_sha256 is not None
     assert (
         api.request(
-            "PATCH", f"/api/documents/{document}", token=blake, json={"template_slug": "classic"}
+            "PATCH", f"/api/documents/{document}", token=blake, json={"template_slug": "band"}
         ).status_code
         == 404
     )
@@ -466,10 +466,10 @@ def test_template_and_language_switches(
 def test_templates_thumbnails_and_settings(two: dict[str, Any], api: Api) -> None:
     alex, blake = two["alex"], two["blake"]
     gallery = api.get("/api/document-templates", token=alex).json()["templates"]
-    classic = next(t for t in gallery if t["slug"] == "classic")
-    assert classic["user"] is False
-    assert set(classic["name"]) == {"en", "fr"}
-    thumbnail = api.get(classic["thumbnails"]["cv"], token=blake)  # public data of the app
+    band = next(t for t in gallery if t["slug"] == "band")
+    assert band["user"] is False
+    assert set(band["name"]) == {"en", "fr"}
+    thumbnail = api.get(band["thumbnails"]["cv"], token=blake)  # public data of the app
     assert thumbnail.status_code == 200
     assert thumbnail.content.startswith(b"\x89PNG")
     assert thumbnail.headers["cache-control"].startswith("public, max-age=")
@@ -568,7 +568,7 @@ def test_a_restore_is_stored_when_the_render_queue_is_full(
 
 
 @pytest.mark.parametrize(
-    "change", [{"template_slug": "sidebar"}, {"language": "fr"}], ids=["template", "language"]
+    "change", [{"template_slug": "photo-columns"}, {"language": "fr"}], ids=["template", "language"]
 )
 def test_a_switch_is_stored_when_the_render_queue_is_full(
     full: dict[str, Any],
@@ -607,7 +607,7 @@ def test_a_draft_body_over_its_class_is_413_and_one_at_the_class_is_saved(
 def test_a_patch_that_changes_nothing_asks_for_no_render(
     full: dict[str, Any], api: Api, factory: sessionmaker[Session], queue: RecordingQueue
 ) -> None:
-    same = {"template_slug": "classic", "language": "en"}
+    same = {"template_slug": "band", "language": "en"}
     for change in (same, {}):
         kept = api.request(
             "PATCH", f"/api/documents/{full['second']}", token=full["alex"], json=change

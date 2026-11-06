@@ -74,22 +74,20 @@ describe("the Template view", () => {
     const buttons = within(strip).getAllByRole("button");
     expect(buttons.map((one) => one.textContent)).toEqual([
       "My uploaded lookFrom your CV",
-      "Banner",
-      "ClassicIn use",
-      "Compact",
-      "Sidebar",
-      "Serif",
+      "BandIn use",
+      "Ledger",
+      "Photo-columns",
     ]);
-    const classic = within(strip).getByRole("button", { name: /^Classic/ });
-    expect(classic).toHaveAttribute("aria-pressed", "true");
+    const band = within(strip).getByRole("button", { name: /^Band/ });
+    expect(band).toHaveAttribute("aria-pressed", "true");
     expect(
-      within(strip).getByRole("button", { name: /^Compact/ }),
+      within(strip).getByRole("button", { name: /^Ledger/ }),
     ).toHaveAttribute("aria-pressed", "false");
     // The CV's page 1 at the address the api gave, with the template version in it.
-    const image = classic.querySelector("img");
+    const image = band.querySelector("img");
     expect(image).toHaveAttribute(
       "src",
-      "/api/document-templates/classic/thumbnail?kind=cv&v=1",
+      "/api/document-templates/band/thumbnail?kind=cv&v=1",
     );
     // The person's own has no image: a plain frame.
     expect(
@@ -108,17 +106,17 @@ describe("the Template view", () => {
   it("switches with a click: the same words, a new version, the new one marked, the base CV untouched", async () => {
     const { api } = setup(POSTING_CV);
     const { user, strip } = await openTemplates("p");
-    await user.click(within(strip).getByRole("button", { name: /^Compact/ }));
+    await user.click(within(strip).getByRole("button", { name: /^Ledger/ }));
     await waitFor(() => {
       expect(
-        within(strip).getByRole("button", { name: /^Compact/ }),
+        within(strip).getByRole("button", { name: /^Ledger/ }),
       ).toHaveAttribute("aria-pressed", "true");
     });
     expect(writes(api)).toEqual([
       expect.objectContaining({
         method: "PATCH",
         path: "/api/documents/p",
-        body: { template_slug: "compact" },
+        body: { template_slug: "ledger" },
       }),
     ]);
     // Only the posting's CV was asked to change: nothing was sent about its base CV.
@@ -130,11 +128,11 @@ describe("the Template view", () => {
     const { strip } = await openTemplates("l");
     expect(
       within(strip)
-        .getByRole("button", { name: /^Banner/ })
+        .getByRole("button", { name: /^Ledger/ })
         .querySelector("img"),
     ).toHaveAttribute(
       "src",
-      "/api/document-templates/banner/thumbnail?kind=letter&v=1",
+      "/api/document-templates/ledger/thumbnail?kind=letter&v=1",
     );
     expect(
       screen.getByText(
@@ -151,14 +149,16 @@ describe("the Template view", () => {
         "The CVs you write from this one afterwards take its template. The CVs already written keep theirs.",
       ),
     ).toBeVisible();
-    await user.click(within(strip).getByRole("button", { name: /^Sidebar/ }));
+    await user.click(
+      within(strip).getByRole("button", { name: /^Photo-columns/ }),
+    );
     await waitFor(() => {
       expect(writes(api)).toHaveLength(1);
     });
     expect(writes(api)[0]).toMatchObject({
       method: "PATCH",
       path: "/api/documents/b",
-      body: { template_slug: "sidebar" },
+      body: { template_slug: "photo-columns" },
     });
   });
 
@@ -176,7 +176,7 @@ describe("the Template view", () => {
     });
     const { user, strip } = await openTemplates("p");
     expect(screen.queryByTestId("overflow-note")).toBeNull();
-    await user.click(within(strip).getByRole("button", { name: /^Banner/ }));
+    await user.click(within(strip).getByRole("button", { name: /^Ledger/ }));
     const note = await screen.findByTestId("overflow-note", undefined, {
       timeout: 4000,
     });
@@ -242,19 +242,19 @@ describe("the Template view", () => {
     expect(note.textContent).toMatch(
       /^Version 1 was sent on .+\. It stays as it was: a new template makes a new version\.$/,
     );
-    await user.click(within(strip).getByRole("button", { name: /^Serif/ }));
+    await user.click(within(strip).getByRole("button", { name: /^Ledger/ }));
     await waitFor(() => {
       expect(writes(api)).toHaveLength(1);
     });
     expect(note.textContent).not.toMatch(SEPARATOR);
   });
 
-  it("says when the document's template is no longer served, and that Classic prints it", async () => {
+  it("says when the document's template is no longer served, and that Band prints it", async () => {
     setup({ ...POSTING_CV, template_slug: "upload-gone0000" });
     await openTemplates("p");
     const note = screen.getByTestId("removed-note");
     expect(note).toHaveTextContent(
-      "The template this document used is no longer available, so it is printed with Classic. Choose another one to change it.",
+      "The template this document used is no longer available, so it is printed with Band, the default. Choose another one to change it.",
     );
     expect(
       within(screen.getByRole("list", { name: "Templates" })).queryByRole(
@@ -268,7 +268,7 @@ describe("the Template view", () => {
     const { gallery } = setup(POSTING_CV);
     gallery.patchStatus = 422;
     const { user, strip } = await openTemplates("p");
-    await user.click(within(strip).getByRole("button", { name: /^Compact/ }));
+    await user.click(within(strip).getByRole("button", { name: /^Ledger/ }));
     expect(
       await screen.findByText("This template does not exist."),
     ).toBeVisible();
@@ -284,15 +284,13 @@ describe("the Template view", () => {
 
   it("works with the keyboard only", async () => {
     const { api } = setup(POSTING_CV, {
-      templates: [fakeTemplate("classic"), fakeTemplate("compact")],
+      templates: [fakeTemplate("band"), fakeTemplate("ledger")],
     });
     const { user, strip } = await openTemplates("p");
-    within(strip)
-      .getByRole("button", { name: /^Classic/ })
-      .focus();
+    within(strip).getByRole("button", { name: /^Band/ }).focus();
     await user.tab();
     expect(
-      within(strip).getByRole("button", { name: /^Compact/ }),
+      within(strip).getByRole("button", { name: /^Ledger/ }),
     ).toHaveFocus();
     await user.keyboard("{Enter}");
     await waitFor(() => {

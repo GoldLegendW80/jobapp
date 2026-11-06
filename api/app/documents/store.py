@@ -70,6 +70,7 @@ from sqlalchemy.orm import Session, undefer
 from app.config import get_settings
 from app.documents import checks as doc_checks
 from app.documents import content as c
+from app.documents import templates
 from app.documents.corrections import Correction
 from app.documents.models import (
     OPEN_GENERATION,
@@ -107,7 +108,7 @@ from app.profile.schemas import PreferencesSection
 
 logger = logging.getLogger("app.documents")
 
-CLASSIC = "classic"  # the default template (D4a)
+DEFAULT_TEMPLATE = templates.DEFAULT  # the default template (D4a; `band` since D27)
 LOCK_TIMEOUT_MS = jobs_service.LOCK_TIMEOUT_MS
 BUSY = "This document is being changed. Try again."
 NAME_MAX = 100
@@ -507,7 +508,7 @@ def create_base(
     at: datetime,
     content: object | None = None,
     language: Language = Language.en,
-    template_slug: str = CLASSIC,
+    template_slug: str = DEFAULT_TEMPLATE,
     written_by: Author = Author.writer,
     source_document_id: uuid.UUID | None = None,
     limit: int | None = None,
@@ -705,8 +706,8 @@ def get_or_create(
     """The posting's CV or letter, made empty the first time. Its language is the person's
     `preferences.documents_language`, the posting text's (`language_of`) when it is `auto`
     (`language_for`). A CV takes the template of the base CV it is written from (the one named,
-    else the default), a letter the template of the posting's CV; else `classic`. Two calls at
-    once make one row: the second insert waits for the first and does nothing."""
+    else the default), a letter the template of the posting's CV; else the default template. Two
+    calls at once make one row: the second insert waits for the first and does nothing."""
     existing = _posting_document(db, user_id, posting_id, kind)
     if existing is not None:
         return existing
@@ -715,7 +716,7 @@ def get_or_create(
     ).one_or_none()
     if posting is None:
         raise NotFoundError(posting_id)
-    template, base_id = CLASSIC, None
+    template, base_id = DEFAULT_TEMPLATE, None
     if kind == Kind.cv:
         base = (
             default_base(db, user_id)
@@ -889,7 +890,7 @@ def snapshot(
     """The draft as a version: `(version, made)`. `content`, given, is stored in place of the
     draft, which stays as it is (D7: a generation whose draft was edited during its run), and
     always makes a version. `template_slug`, given, is the template the version is printed
-    with when it is not the document's own (a template no longer served prints with `classic`).
+    with when it is not the document's own (a template no longer served prints with the default).
     Without a generation, when the latest version has the draft's content hash, language,
     template and template version and is not frozen, it is reused (`made` is False); a
     generation always makes one. A legacy version points at its job file (`legacy_file_id`, with

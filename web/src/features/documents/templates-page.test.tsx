@@ -65,16 +65,14 @@ describe("the gallery", () => {
     expect(headings).toEqual(["From your CV", "All templates"]);
     expect(cardNames(section("From your CV"))).toEqual(["My uploaded look"]);
     expect(cardNames(section("All templates"))).toEqual([
-      "Banner",
-      "Classic",
-      "Compact",
-      "Sidebar",
-      "Serif",
+      "Band",
+      "Ledger",
+      "Photo-columns",
     ]);
-    const classic = screen.getByTestId("template-classic");
-    expect(classic).toHaveTextContent("The classic look, in English.");
+    const band = screen.getByTestId("template-band");
+    expect(band).toHaveTextContent("The band look, in English.");
     expect(
-      within(classic)
+      within(band)
         .getAllByRole("listitem")
         .map((one) => one.textContent),
     ).toEqual([
@@ -84,12 +82,12 @@ describe("the gallery", () => {
       "photo",
     ]);
     expect(
-      within(classic).getByRole("img", { name: "Classic, the CV" }),
+      within(band).getByRole("img", { name: "Band, the CV" }),
     ).toHaveAttribute(
       "src",
-      "/api/document-templates/classic/thumbnail?kind=cv&v=1",
+      "/api/document-templates/band/thumbnail?kind=cv&v=1",
     );
-    expect(screen.getByText("6 templates.")).toBeVisible();
+    expect(screen.getByText("4 templates.")).toBeVisible();
     // Opened from nowhere, nothing can be used.
     expect(
       screen.queryByRole("button", { name: "Use for this document" }),
@@ -102,14 +100,14 @@ describe("the gallery", () => {
     setup();
     const { user } = await openGallery();
     await user.selectOptions(screen.getByLabelText("Photo"), "No photo");
-    expect(cardNames(section("All templates"))).toEqual(["Compact", "Serif"]);
-    // The person's own declares no photo slot in its manifest.
+    // Each of the three has a photo slot; the person's own declares none in its manifest.
+    expect(screen.queryByRole("region", { name: "All templates" })).toBeNull();
     expect(cardNames(section("From your CV"))).toEqual(["My uploaded look"]);
-    expect(screen.getByText("3 of 6 templates match.")).toBeVisible();
+    expect(screen.getByText("1 of 4 templates match.")).toBeVisible();
 
     await user.selectOptions(screen.getByLabelText("Photo"), "Any");
     await user.selectOptions(screen.getByLabelText("Columns"), "Two columns");
-    expect(cardNames(section("All templates"))).toEqual(["Sidebar"]);
+    expect(cardNames(section("All templates"))).toEqual(["Photo-columns"]);
     // An own template has no tags: a columns filter does not guess it.
     expect(screen.queryByRole("region", { name: "From your CV" })).toBeNull();
 
@@ -117,9 +115,9 @@ describe("the gallery", () => {
     expect(
       screen.getByText("No template matches these filters."),
     ).toBeVisible();
-    expect(screen.getByText("0 of 6 templates match.")).toBeVisible();
+    expect(screen.getByText("0 of 4 templates match.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear the filters" }));
-    expect(screen.getByText("6 templates.")).toBeVisible();
+    expect(screen.getByText("4 templates.")).toBeVisible();
     expect(screen.getByLabelText("Columns")).toHaveValue("any");
     expect(
       screen.getByLabelText("Easy for hiring software to read"),
@@ -129,35 +127,35 @@ describe("the gallery", () => {
   it("shows the letter on hover, and on a tap of See the letter", async () => {
     setup();
     const { user } = await openGallery();
-    const banner = screen.getByTestId("template-banner");
-    const image = within(banner).getByRole("img", { name: "Banner, the CV" });
+    const ledger = screen.getByTestId("template-ledger");
+    const image = within(ledger).getByRole("img", { name: "Ledger, the CV" });
     fireEvent.mouseEnter(image.parentElement!);
     expect(
-      within(banner).getByRole("img", { name: "Banner, the letter" }),
+      within(ledger).getByRole("img", { name: "Ledger, the letter" }),
     ).toHaveAttribute(
       "src",
-      "/api/document-templates/banner/thumbnail?kind=letter&v=1",
+      "/api/document-templates/ledger/thumbnail?kind=letter&v=1",
     );
     fireEvent.mouseLeave(image.parentElement!);
     expect(
-      within(banner).getByRole("img", { name: "Banner, the CV" }),
+      within(ledger).getByRole("img", { name: "Ledger, the CV" }),
     ).toBeVisible();
 
-    const toggle = within(banner).getByRole("button", {
+    const toggle = within(ledger).getByRole("button", {
       name: "See the letter",
     });
     await user.click(toggle);
     expect(
-      within(banner).getByRole("img", { name: "Banner, the letter" }),
+      within(ledger).getByRole("img", { name: "Ledger, the letter" }),
     ).toBeVisible();
     expect(
-      within(banner).getByRole("button", { name: "See the CV" }),
+      within(ledger).getByRole("button", { name: "See the CV" }),
     ).toHaveAttribute("aria-pressed", "true");
     await user.click(
-      within(banner).getByRole("button", { name: "See the CV" }),
+      within(ledger).getByRole("button", { name: "See the CV" }),
     );
     expect(
-      within(banner).getByRole("img", { name: "Banner, the CV" }),
+      within(ledger).getByRole("img", { name: "Ledger, the CV" }),
     ).toBeVisible();
     // The person's own has no letter image: no toggle.
     expect(
@@ -176,29 +174,29 @@ describe("the gallery", () => {
         "Choose the look of this CV. The words stay the same.",
       ),
     ).toBeVisible();
-    const classic = screen.getByTestId("template-classic");
-    expect(within(classic).getByText("In use")).toBeVisible();
+    const band = screen.getByTestId("template-band");
+    expect(within(band).getByText("In use")).toBeVisible();
     expect(
-      within(classic).queryByRole("button", { name: "Use for this document" }),
+      within(band).queryByRole("button", { name: "Use for this document" }),
     ).toBeNull();
     await user.click(
-      within(screen.getByTestId("template-compact")).getByRole("button", {
+      within(screen.getByTestId("template-ledger")).getByRole("button", {
         name: "Use for this document",
       }),
     );
     expect(
-      await screen.findByText("Compact is now used for this document."),
+      await screen.findByText("Ledger is now used for this document."),
     ).toBeVisible();
     await waitFor(() => {
       expect(
-        within(screen.getByTestId("template-compact")).getByText("In use"),
+        within(screen.getByTestId("template-ledger")).getByText("In use"),
       ).toBeVisible();
     });
     expect(writes(api)).toEqual([
       expect.objectContaining({
         method: "PATCH",
         path: "/api/documents/p",
-        body: { template_slug: "compact" },
+        body: { template_slug: "ledger" },
       }),
     ]);
     expect(
@@ -216,19 +214,19 @@ describe("the gallery", () => {
       ),
     ).toBeVisible();
     await user.click(
-      within(screen.getByTestId("template-sidebar")).getByRole("button", {
+      within(screen.getByTestId("template-photo-columns")).getByRole("button", {
         name: "Use for this document",
       }),
     );
     expect(
       await screen.findByText(
-        "Sidebar is now used for this document. The CVs you write from it afterwards take it; the CVs already written keep theirs.",
+        "Photo-columns is now used for this document. The CVs you write from it afterwards take it; the CVs already written keep theirs.",
       ),
     ).toBeVisible();
     expect(writes(api)[0]).toMatchObject({
       method: "PATCH",
       path: "/api/documents/b",
-      body: { template_slug: "sidebar" },
+      body: { template_slug: "photo-columns" },
     });
     expect(
       screen.getByRole("link", { name: "Back to the document" }),
@@ -242,10 +240,10 @@ describe("the gallery", () => {
       "Choose the look of this CV. The words stay the same.",
     );
     await waitFor(() => {
-      expect(cardNames(section("All templates"))).toContain("Classic FR");
+      expect(cardNames(section("All templates"))).toContain("Band FR");
     });
-    expect(screen.getByTestId("template-classic")).toHaveTextContent(
-      "Le style classic, en français.",
+    expect(screen.getByTestId("template-band")).toHaveTextContent(
+      "Le style band, en français.",
     );
   });
 
@@ -287,15 +285,15 @@ describe("the gallery", () => {
     expect(
       screen.getByLabelText("Easy for hiring software to read"),
     ).toBeChecked();
-    const compact = screen.getByTestId("template-compact");
-    within(compact).getByRole("button", { name: "See the letter" }).focus();
+    const ledger = screen.getByTestId("template-ledger");
+    within(ledger).getByRole("button", { name: "See the letter" }).focus();
     await user.keyboard("{Enter}");
     expect(
-      within(compact).getByRole("img", { name: "Compact, the letter" }),
+      within(ledger).getByRole("img", { name: "Ledger, the letter" }),
     ).toBeVisible();
     await user.tab();
     expect(
-      within(compact).getByRole("button", { name: "Use for this document" }),
+      within(ledger).getByRole("button", { name: "Use for this document" }),
     ).toHaveFocus();
     await user.keyboard("{Enter}");
     await waitFor(() => {

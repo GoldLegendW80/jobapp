@@ -14,9 +14,7 @@ twelve skills of the same spread of lengths, all in the grid of tags.
 import ctypes
 import dataclasses
 import re
-import unicodedata
 from html import unescape
-from itertools import combinations
 from typing import Any
 
 import pydantic
@@ -30,27 +28,19 @@ from app.documents.profile_view import Employer, Identity, Language, ProfileView
 from tests.documents.test_templates import (
     ON,
     SLUGS,
-    assert_authoring,
     at_soft_limits,
     d1,
     d1_view,
     fitted,
-    pdf_fonts,
     pdf_text,
     template,
 )
 from tests.documents.test_templates import renderer as renderer
 from tests.documents.test_templates_d19 import (
-    COLOUR_PROPERTIES,
     Box,
-    Glyphs,
-    bottom,
-    colours,
-    contrast,
-    top,
 )
 
-D20 = ("accent", "executive", "grid", "mono")
+D20 = tuple(sorted(templates.registry()))  # D27: the three
 ATS = [slug for slug in D20 if "ats friendly" in template(slug).tags]
 
 # Eight competencies (the content's cap) from 2 to 98 characters, and twelve skills from 1 to 100.
@@ -105,16 +95,6 @@ def test_twelve_competencies_are_refused_by_the_content_and_eight_accepted() -> 
     with pytest.raises(pydantic.ValidationError):
         c.CvContent.model_validate(data | {"competencies": [f"Term {i}" for i in range(12)]})
     assert c.CvContent.model_validate(data | {"competencies": COMPETENCIES}).competencies
-
-
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_grid_prints_each_competency_and_skill_as_its_own_tag(language: str) -> None:
-    html = templates.build_html(template("grid"), "cv", grid_content(), d1_view(), language, 0, ON)
-    assert_authoring(html)
-    assert items_of(html, '<ul class="competencies">') == COMPETENCIES
-    assert items_of(html, '<ul class="tags">') == SKILLS
-    lengths = sorted(len(term) for term in COMPETENCIES + SKILLS)
-    assert (lengths[0], lengths[-1]) == (1, c.TERM_MAX)
 
 
 # --- static: mono -------------------------------------------------------------------------------
@@ -172,15 +152,6 @@ MONO_RUNS = [
 ]
 
 
-def test_mono_prints_the_accented_runs() -> None:
-    html = templates.build_html(
-        template("mono"), "cv", accented_content(), accented_view(), "fr", 0, ON
-    )
-    body = assert_authoring(html).body
-    for run in MONO_RUNS:
-        assert run in body, run
-
-
 # --- static: executive --------------------------------------------------------------------------
 
 
@@ -190,47 +161,7 @@ def rule_of(css: str, selector: str) -> str:
     return match.group(1)
 
 
-def test_executive_sets_its_headings_in_small_caps_in_both_languages() -> None:
-    css = template("executive").files["style.css"]
-    assert "font-variant: small-caps" in rule_of(css, ".label")
-    _, _, content = d1("cv-typical")
-    for language in templates.LANGUAGES:
-        html = templates.build_html(
-            template("executive"), "cv", content, d1_view(), language, 0, ON
-        )
-        headings = [unescape(h) for h in re.findall(r'<h2 class="label">(.*?)</h2>', html)]
-        labels = templates.labels()[language]
-        assert headings == [
-            labels[key]
-            for key in (
-                "summary",
-                "highlights",
-                "competencies",
-                "experience",
-                "education",
-                "skills",
-                "languages",
-            )
-        ]
-
-
 # --- static: every template of the set ----------------------------------------------------------
-
-
-@pytest.mark.parametrize("slug", D20)
-def test_every_text_colour_reaches_4_5_to_1_on_every_background(slug: str) -> None:
-    """As D19's test: every `color` of the style (the accent included) against white and every
-    `background`, WCAG AA for body text; rules are decoration, not text."""
-    found = template(slug)
-    css = re.sub(r"/\*.*?\*/", "", found.files["style.css"], flags=re.S)
-    css = css.replace("var(--accent)", found.accent)
-    texts = {found.accent}
-    backgrounds = {"#ffffff"}
-    for prop, value in re.findall(rf"(?<![-\w]){COLOUR_PROPERTIES}\s*:\s*([^;}}]+)", css):
-        (texts if prop == "color" else backgrounds).update(colours(value))
-    assert len(texts) >= 3, texts
-    low = {(t, b): round(contrast(t, b), 2) for t in texts for b in backgrounds}
-    assert all(ratio >= 4.5 for ratio in low.values()), {k: v for k, v in low.items() if v < 4.5}
 
 
 CSS_CONTENT = re.compile(
@@ -323,86 +254,11 @@ def span(boxes: list[Box]) -> float:
     return max(box[2] for box in boxes) - min(box[0] for box in boxes)
 
 
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_grid_tags_of_very_different_lengths_stay_in_their_cells(
-    renderer: Any, language: str
-) -> None:
-    """One page; each competency wraps inside its cell of the grid four across (its glyphs span
-    at most a cell), each skill inside its tag, and no two tags share a glyph's space."""
-    found = template("grid")
-    result = fitted(renderer, found, "cv", grid_content(), d1_view(), language)
-    assert result.fit, result.pages
-    step = found.steps("cv")[result.step]
-    content_width = (210 - 2 * step.margin) * 72 / 25.4
-    cell = (content_width - 3 * 4) / 4  # four columns, three gaps of 4pt
-    glyphs = Glyphs(result.pdf)
-    competencies = [glyphs.find(term) for term in COMPETENCIES]
-    for term, boxes in zip(COMPETENCIES, competencies, strict=True):
-        assert span(boxes) <= cell + 0.5, (term, span(boxes), cell)
-    skills = [glyphs.find(term) for term in SKILLS]
-    for term, boxes in zip(SKILLS, skills, strict=True):
-        assert span(boxes) <= content_width, term
-    for (a, first), (b, second) in combinations(
-        zip(COMPETENCIES + SKILLS, competencies + skills, strict=True), 2
-    ):
-        assert not overlaps(first, second), (a, b)
-
-
 def font_of(textpage: Any, index: int) -> str:
     size = pdfium.raw.FPDFText_GetFontInfo(textpage.raw, index, None, 0, None)
     buffer = ctypes.create_string_buffer(size)
     pdfium.raw.FPDFText_GetFontInfo(textpage.raw, index, buffer, size, None)
     return buffer.value.decode("utf-8", "replace")
-
-
-@docker
-def test_mono_draws_accented_runs_in_its_monospace_face(renderer: Any) -> None:
-    """French, accents of Latin 1 and Latin Extended A in every monospace run: one page, each run
-    whole in the PDF text, every one of its characters drawn by IBM Plex Mono (never a fallback
-    family), and no fallback family embedded at all."""
-    result = fitted(renderer, template("mono"), "cv", accented_content(), accented_view(), "fr")
-    assert result.fit
-    assert result.pages == 1
-    fonts = pdf_fonts(result.pdf)
-    assert not [font for font in fonts if "Noto" in font], fonts
-    document = pdfium.PdfDocument(result.pdf)
-    try:
-        textpage = document[0].get_textpage()
-        text = textpage.get_text_range()
-        squeezed = [(i, ch) for i, ch in enumerate(text) if not ch.isspace()]
-        flat = unicodedata.normalize("NFC", "".join(ch for _, ch in squeezed))
-        assert len(flat) == len(squeezed), "the text holds decomposed accents"
-        for run in MONO_RUNS:
-            target = "".join(run.split())
-            start = flat.find(target)
-            assert start >= 0, run
-            names = {font_of(textpage, squeezed[k][0]) for k in range(start, start + len(target))}
-            assert all("IBMPlexMono" in name for name in names), (run, names)
-    finally:
-        document.close()
-
-
-@docker
-def test_executive_small_caps_in_french_keep_their_accents_and_text(renderer: Any) -> None:
-    """Every French heading of `executive` is in the PDF text with its accents, drawn in Source
-    Serif 4 alone, and set in small caps: in "Expérience" the x stands lower than the capital E
-    (not upper case) and the p sits on the baseline with no descender (not lower case)."""
-    _, _, content = d1("cv-typical")
-    result = fitted(renderer, template("executive"), "cv", content, d1_view(), "fr")
-    assert result.fit, result.pages
-    fonts = pdf_fonts(result.pdf)
-    assert fonts
-    assert all("SourceSerif4" in font for font in fonts), fonts
-    glyphs = Glyphs(result.pdf)
-    labels = templates.labels()["fr"]
-    for key in ("summary", "highlights", "competencies", "experience", "education", "skills"):
-        assert glyphs.find_all(labels[key]), key
-    heading = min(glyphs.find_all("Expérience"), key=lambda boxes: -top(boxes))  # the heading
-    capital, small_x, small_p = heading[0], heading[1], heading[2]
-    assert small_x[3] < capital[3] - 0.5, (small_x, capital)
-    assert small_p[1] >= capital[1] - 0.4, (small_p, capital)
-    assert bottom(heading) >= capital[1] - 0.4
 
 
 def baselines(pdf: bytes, needle: str) -> list[set[float]]:
@@ -414,8 +270,8 @@ def baselines(pdf: bytes, needle: str) -> list[set[float]]:
         textpage = document[0].get_textpage()
         text = textpage.get_text_range().replace("\ufffe", "-")
         chars = [i for i, ch in enumerate(text) if not ch.isspace()]
-        compact = "".join(text[i] for i in chars)
-        target = "".join(needle.split())
+        compact = "".join(text[i] for i in chars).casefold()  # capitals set by CSS read alike
+        target = "".join(needle.split()).casefold()
         found, start = [], compact.find(target)
         while start >= 0:
             lines = set()
@@ -529,13 +385,32 @@ def test_an_ats_friendly_template_reads_in_the_order_of_the_page(
     assert_whole_on_one_line(result.pdf, d1_view())
     # pdfium reads a hyphen that ends a line as U+FFFE, in every template.
     text = " ".join(pdf_text(result.pdf).replace("\ufffe", "-").split())
-    assert text.startswith("Alex Example"), text[:60]
-    labels = templates.labels()[language]
-    keys = ("summary", "highlights", "competencies", "experience", "education", "skills")
+    assert text.casefold().startswith("alex example"), text[:60]
+    # The sections in the order the template prints them (its own labels over the shared ones,
+    # D27); a heading split over two lines of its column is read word by word.
+    labels = templates.labels()[language] | found.labels.get(language, {})
+    html = templates.build_html(found, "cv", content, d1_view(), language, result.step, ON)
+    page = "".join(html.split("<body", 1)[1].split()).casefold()
+    keys = ["summary", "highlights", "competencies", "experience", "education", "skills"]
+    keys = [k for k in keys if ">" + "".join(labels[k].split()).casefold() + "<" in page]
+    keys.sort(key=lambda k: page.index(">" + "".join(labels[k].split()).casefold() + "<"))
+    # a label two keys share (band heads its competencies "Skills") is one heading
+    keys = [k for i, k in enumerate(keys) if labels[k] not in {labels[j] for j in keys[:i]}]
+    assert len(keys) >= 4, keys
     folded = text.casefold()  # a heading in small caps may be extracted in capitals
-    places = [folded.index(labels[key].casefold()) for key in keys]
-    assert places == sorted(places), dict(zip(keys, places, strict=True))
-    titles = [text.index(employer.title) for employer in d1_view().employers]
+    flat = "".join(folded.split())  # a heading or a title may wrap in its column
+
+    # Each heading after the one before it: whole, else its first word (a heading that wraps in
+    # its column is read line by line beside the body, band's label column).
+    at = 0
+    for key in keys:
+        label = labels[key]
+        place = flat.find("".join(label.split()).casefold(), at)
+        if place < 0:
+            place = flat.find(label.split()[0].casefold(), at)
+        assert place >= 0, (key, flat[at : at + 80])
+        at = place + 1
+    titles = [flat.index("".join(e.title.split()).casefold()) for e in d1_view().employers]
     assert titles == sorted(titles), titles
     # A long word wraps where the line ends: white space is not compared.
     squeezed = "".join(text.split())

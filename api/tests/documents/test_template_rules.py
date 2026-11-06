@@ -13,6 +13,7 @@ another.
 import json
 import random
 import secrets
+from pathlib import Path
 
 import pytest
 from jinja2 import Environment, nodes
@@ -21,7 +22,9 @@ from app.documents import content as c
 from app.documents import design_check, template_css, template_rules, templates
 from app.documents.template_rules import FIELDS, LABELS, MACROS, Problem, check, check_css
 
-CLASSIC = templates.ROOT / "classic"
+# The upload rules' baseline: the files of `classic`, the default of D4a, kept as a fixture when
+# the twenty templates went (D27); a person's own template is checked against these rules.
+CLASSIC = Path(__file__).resolve().parent / "fixtures" / "upload_baseline"
 MANIFEST = json.loads((CLASSIC / "manifest.json").read_text(encoding="utf-8"))
 FILES = {name: (CLASSIC / name).read_text(encoding="utf-8") for name in templates.FILES}
 
@@ -41,107 +44,111 @@ def _bundled():
             yield folder
 
 
-# The bundled templates are written by hand and never go through these checks in production;
-# some use what can lay a box over another, which a template from an upload may not.
-OVERLAY_FAMILY = ("it can lay a box over another", "a ::before or ::after holds punctuation only")
-WHOLE = {"classic", "compact", "grid"}
-
-# The repository's own templates need not pass the filter of an upload (decision on #427):
-# each is pinned to exactly what it uses, its HTML set holding for cv.html.j2 and letter.html.j2.
-_CUT = ("literal", "markup cut by a Jinja construct")
-_OUTSIDE = ("property", "a property outside the allowed list")
-_SELECTOR = ("selector", "a selector outside the allowed forms")
-# A full bleed sheet sets its own page margin, executive's band a fixed height and its headline
-# an inline size containment, sidebar's column a page high minimum: a template from an upload may
-# not, the render check lays out the step's page box and its canary shapes only.
-_PAGE = ("page", "@page: margin: var(--margin)")
-_HEIGHT = ("property", "height: auto, a length only on the photo (img or .photo)")
-_MIN_HEIGHT = ("property", "min-height: auto, a length only on the photo (img or .photo)")
-# banner and sidebar are pinned in REPOSITORY below, with the rest of what they use
-GEOMETRY = {
-    "executive": {_HEIGHT, ("property", "contain: a value outside the allowed list")},
-}
-# the helpers of _base/layout.html.j2, which only the repository's templates import
-_LAYOUT = {
-    ("construct", "import only _base/macros.html.j2 as base with context"),
-}
-# the contact lines printed by those helpers only, which an upload may not call
-_LAYOUT_CONTACT = _LAYOUT | {
-    ("construct", "a call of anything but a macro of base"),
-    ("unprinted", "contact[].text is not printed, or only under another test"),
-}
-
-
-def _box(*properties):
-    return {
-        ("property", f"{p}: a ::before or ::after holds punctuation only, no box")
-        for p in properties
-    }
-
-
-def _over(*properties):
-    return {("property", f"{p}: it can lay a box over another") for p in properties}
-
-
+# The repository's own templates need not pass the filter of an upload (decision on #427): each
+# of the three (D27) is pinned to exactly what the upload rules refuse in it, file by file. Task
+# D28 makes the rules accept the method of the three; until then a change shows here.
 REPOSITORY = {
-    "academic": (set(), {_SELECTOR}),
-    # page 1's margin, which the band bleeds into
-    "banner": (
-        set(),
-        {
-            ("page", "@page :first: the repository's templates only"),
-            ("page", "@page: only size: A4 and margin: var(--margin)"),
-        },
-    ),
-    "bold": (
-        {("construct", "the expression Compare"), _CUT},
-        {
-            _OUTSIDE,
-            ("property", "grid-template-columns: a function outside the allowed list"),
-            ("property", "margin: a value outside the allowed list"),
-        }
-        | _box("border"),
-    ),
-    "cards": (
-        set(),
-        {("property", "margin: a value outside the allowed list")}
-        | _box("border", "border-radius"),
-    ),
-    "columns-header": (
-        _LAYOUT_CONTACT,
-        {("property", "grid-template-columns: a function outside the allowed list")},
-    ),
-    "elegant": (
-        set(),
-        {_OUTSIDE, ("property", "position: static or relative"), _PAGE}
-        | _box("border-bottom", "flex")
-        | _over("bottom", "grid-row", "left", "right", "top"),
-    ),
-    "nordic": (set(), _box("border-top", "width")),
-    # a negative margin and `overflow: hidden` clip the rule that would open a row of contact lines
-    "plain": (
-        set(),
-        {_SELECTOR, _OUTSIDE, ("property", "margin: a value outside the allowed list")},
-    ),
-    "portrait": (
-        _LAYOUT
-        | {("construct", "the construct Assign"), _CUT, ("name", "a name that is not a field")},
-        {
-            _OUTSIDE,
-            _SELECTOR,
-            _HEIGHT,
-            ("property", "vertical-align: a value outside the allowed list"),
-        }
-        | _box("border", "border-top", "height", "width")
-        | _over("grid-row"),
-    ),
-    "sidebar": (_LAYOUT_CONTACT, {_PAGE, _MIN_HEIGHT} | _over("grid-area")),
-    "split-right": (_LAYOUT_CONTACT, _over("grid-area") | _box("border-top", "width")),
+    "band": {
+        ("cv.html.j2", "attribute", "an attribute other than a class name"),
+        ("cv.html.j2", "construct", "the expression Compare"),
+        ("cv.html.j2", "construct", "the expression CondExpr"),
+        ("cv.html.j2", "construct", "the expression Filter"),
+        ("cv.html.j2", "literal", "markup cut by a Jinja construct"),
+        ("cv.html.j2", "name", "a field that contact[] has not"),
+        ("cv.html.j2", "tag", "a tag outside the allowed list"),
+        ("cv.html.j2", "unprinted", "contact[].text is not printed, or only under another test"),
+        (
+            "cv.html.j2",
+            "unprinted",
+            "schools[].location is not printed, or only under another test",
+        ),
+        ("letter.html.j2", "attribute", "an attribute other than a class name"),
+        ("letter.html.j2", "construct", "the expression Compare"),
+        ("letter.html.j2", "construct", "the expression Filter"),
+        ("letter.html.j2", "literal", "markup cut by a Jinja construct"),
+        ("letter.html.j2", "name", "a field that contact[] has not"),
+        ("letter.html.j2", "tag", "a tag outside the allowed list"),
+        (
+            "letter.html.j2",
+            "unprinted",
+            "contact[].text is not printed, or only under another test",
+        ),
+        ("style.css", "page", "@page: only size: A4 and margin: var(--margin)"),
+        (
+            "style.css",
+            "property",
+            "background: a ::before or ::after holds punctuation only, no box",
+        ),
+        (
+            "style.css",
+            "property",
+            "border-radius: a ::before or ::after holds punctuation only, no box",
+        ),
+        ("style.css", "property", "height: a ::before or ::after holds punctuation only, no box"),
+        ("style.css", "property", "left: it can lay a box over another"),
+        ("style.css", "property", "min-width: a value outside the allowed list"),
+        ("style.css", "property", "position: a ::before or ::after holds punctuation only, no box"),
+        ("style.css", "property", "top: it can lay a box over another"),
+        ("style.css", "property", "white-space: a value outside the allowed list"),
+        ("style.css", "property", "width: a ::before or ::after holds punctuation only, no box"),
+    },
+    "ledger": {
+        ("cv.html.j2", "attribute", "an attribute other than a class name"),
+        ("cv.html.j2", "construct", "the expression Compare"),
+        ("cv.html.j2", "construct", "the expression Filter"),
+        ("cv.html.j2", "literal", "markup cut by a Jinja construct"),
+        ("cv.html.j2", "name", "a field that contact[] has not"),
+        ("cv.html.j2", "tag", "a tag outside the allowed list"),
+        ("cv.html.j2", "unprinted", "contact[].text is not printed, or only under another test"),
+        ("letter.html.j2", "attribute", "an attribute other than a class name"),
+        ("letter.html.j2", "construct", "the expression Compare"),
+        ("letter.html.j2", "construct", "the expression Filter"),
+        ("letter.html.j2", "literal", "markup cut by a Jinja construct"),
+        ("letter.html.j2", "name", "a field that contact[] has not"),
+        ("letter.html.j2", "tag", "a tag outside the allowed list"),
+        (
+            "letter.html.j2",
+            "unprinted",
+            "contact[].text is not printed, or only under another test",
+        ),
+        ("style.css", "page", "@page: only size: A4 and margin: var(--margin)"),
+        ("style.css", "property", "min-width: a value outside the allowed list"),
+        ("style.css", "property", "white-space: a value outside the allowed list"),
+        ("style.css", "selector", "a selector outside the allowed forms"),
+    },
+    "photo-columns": {
+        ("cv.html.j2", "attribute", "an attribute other than a class name"),
+        ("cv.html.j2", "construct", "the construct Assign"),
+        ("cv.html.j2", "construct", "the expression Compare"),
+        ("cv.html.j2", "construct", "the expression CondExpr"),
+        ("cv.html.j2", "construct", "the expression Filter"),
+        ("cv.html.j2", "literal", "markup cut by a Jinja construct"),
+        ("cv.html.j2", "name", "a field that contact[] has not"),
+        ("cv.html.j2", "tag", "a tag outside the allowed list"),
+        ("cv.html.j2", "unprinted", "contact[].text is not printed, or only under another test"),
+        (
+            "cv.html.j2",
+            "unprinted",
+            "content.skills[].items is not printed, or only under another test",
+        ),
+        ("letter.html.j2", "attribute", "an attribute other than a class name"),
+        ("letter.html.j2", "construct", "the expression Compare"),
+        ("letter.html.j2", "construct", "the expression Filter"),
+        ("letter.html.j2", "literal", "markup cut by a Jinja construct"),
+        ("letter.html.j2", "name", "a field that contact[] has not"),
+        ("letter.html.j2", "tag", "a tag outside the allowed list"),
+        (
+            "letter.html.j2",
+            "unprinted",
+            "contact[].text is not printed, or only under another test",
+        ),
+        ("style.css", "property", "url(), a template from an upload embeds nothing"),
+    },
 }
 
 
-def _hand_written():
-    return [f for f in _bundled() if f.name not in REPOSITORY]
+def test_the_table_names_every_bundled_template():
+    assert sorted(REPOSITORY) == sorted(f.name for f in _bundled())
 
 
 @pytest.mark.parametrize("name", sorted(REPOSITORY))
@@ -155,28 +162,7 @@ def test_each_repository_template_shows_exactly_what_it_uses(name):
         fonts=tuple(manifest["fonts"]),
         accent=manifest["accent"],
     )
-    html, css = REPOSITORY[name]
-    expected = {(file, *problem) for file in ("cv.html.j2", "letter.html.j2") for problem in html}
-    expected |= {("style.css", *problem) for problem in css}
-    assert {(p.file, p.code, p.detail) for p in found} == expected
-
-
-@pytest.mark.parametrize("folder", _hand_written(), ids=lambda f: f.name)
-def test_every_bundled_template_passes_untouched_but_for_the_overlay_family(folder):
-    manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    files = {name: (folder / name).read_text(encoding="utf-8") for name in templates.FILES}
-    found = check(
-        files,
-        photo=manifest["photo"],
-        fonts=tuple(manifest["fonts"]),
-        accent=manifest["accent"],
-    )
-    pinned = GEOMETRY.get(folder.name, set())
-    assert {(p.code, p.detail) for p in found if (p.code, p.detail) in pinned} == pinned
-    found = [p for p in found if (p.code, p.detail) not in pinned]
-    assert (found == []) == (folder.name in WHOLE)
-    assert [p for p in found if p.file != "style.css" or p.code != "property"] == []
-    assert all(p.detail.split(": ", 1)[1].startswith(OVERLAY_FAMILY) for p in found)
+    assert {(p.file, p.code, p.detail) for p in found} == REPOSITORY[name]
 
 
 def test_the_macro_table_is_the_shared_macros_and_the_labels_exist():

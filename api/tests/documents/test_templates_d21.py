@@ -8,12 +8,10 @@ Marked `docker`: the same cases through the real renderer, with the geometry of 
 (pypdfium2 character boxes and path objects) and the text order of the one tagged ats friendly.
 """
 
-import asyncio
 import ctypes
 import re
 from html import unescape
 from html.parser import HTMLParser
-from itertools import pairwise
 from typing import Any
 
 import pypdfium2 as pdfium
@@ -22,18 +20,15 @@ import pytest
 from PIL import Image, ImageChops
 
 from app.documents import content as c
-from app.documents import fit, templates
+from app.documents import templates
 from app.documents.profile_view import Identity, ProfileView, School
-from tests.documents.conftest import view_of, written
 from tests.documents.test_templates import (
     ON,
     SLUGS,
-    assert_authoring,
     at_soft_limits,
     d1,
     d1_view,
     fitted,
-    pdf_text,
     template,
 )
 from tests.documents.test_templates import renderer as renderer
@@ -41,14 +36,14 @@ from tests.documents.test_templates_d19 import (
     COLOUR_PROPERTIES,
     Box,
     Glyphs,
-    a_photo,
     bottom,
     colours,
     contrast,
     top,
 )
+from tests.documents.test_templates_d22 import assert_read_in_order
 
-D21 = ("elegant", "bold", "cards", "academic")
+D21 = tuple(sorted(templates.registry()))  # D27: the three
 MM = 72 / 25.4  # points in a millimetre
 A4 = (210 * MM, 297 * MM)
 
@@ -89,34 +84,6 @@ def three_schools_view(language: str) -> ProfileView:
     )
 
 
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_academic_prints_the_education_before_the_experience(language: str) -> None:
-    _, _, content = d1("cv-typical")
-    html = templates.build_html(
-        template("academic"), "cv", content, three_schools_view(language), language, 0, ON
-    )
-    body = assert_authoring(html).body
-    labels = templates.labels()[language]
-    assert headings(html) == [labels[key] for key in ACADEMIC_ORDER]
-    degrees = [school.degree for school in three_schools_view(language).schools]
-    places = [body.index(degree) for degree in degrees]
-    assert places == sorted(places)
-    assert body.index(labels["education"]) < places[0]
-    assert places[-1] < body.index(labels["experience"])
-    assert "September 2019 to June 2023" in body or "septembre 2019 à juin 2023" in body
-    assert "Boston" in body
-
-
-def test_every_other_template_of_the_set_prints_the_experience_first() -> None:
-    _, language, content = d1("cv-typical")
-    labels = templates.labels()[language]
-    for slug in ("elegant", "bold", "cards"):
-        found = headings(
-            templates.build_html(template(slug), "cv", content, d1_view(), language, 0, ON)
-        )
-        assert found.index(labels["experience"]) < found.index(labels["education"]), slug
-
-
 # --- static: cards ------------------------------------------------------------------------------
 
 
@@ -153,33 +120,6 @@ def cards_of(html: str) -> list[str]:
     return ["".join(" ".join(texts).split()) for texts in parser.cards]
 
 
-def test_cards_keep_a_card_whole_and_put_each_role_on_its_own() -> None:
-    css = template("cards").files["style.css"]
-    rule = re.search(r"(?m)^\.card\s*\{([^}]*)\}", css)
-    assert rule
-    assert "break-inside: avoid" in rule.group(1)
-    for language in templates.LANGUAGES:
-        _, _, content = d1("cv-long")
-        view = d1_view()
-        html = templates.build_html(template("cards"), "cv", content, view, language, 0, ON)
-        texts = cards_of(html)
-        # The heading card, one card for each of the six other sections and one per role (the
-        # first role's card carries the Experience heading).
-        assert len(texts) == 1 + 6 + len(content.experience)
-        labels = {
-            key: "".join(text.split())
-            for key, text in templates.labels()[language].items()
-            if isinstance(text, str)
-        }
-        for key in ("summary", "highlights", "competencies", "experience", "education", "skills"):
-            assert sum(text.startswith(labels[key]) for text in texts) == 1, key
-        by_key = {employer.key: employer for employer in view.employers}
-        roles = [text.removeprefix(labels["experience"]) for text in texts]
-        for role in content.experience:
-            title = "".join(by_key[role.employer_key].title.split())
-            assert sum(text.startswith(title) for text in roles) == 1, title
-
-
 # --- static: bold -------------------------------------------------------------------------------
 
 LONG_NAMES = [
@@ -208,25 +148,13 @@ def with_name(view: ProfileView, name: str) -> ProfileView:
     )
 
 
-@pytest.mark.parametrize(
-    ("name", "size"),
-    [("Alex Example", ""), (LONG_NAMES[1], " long"), (LONG_NAMES[0], " longer")],
-)
-def test_bold_sets_a_long_name_smaller(name: str, size: str) -> None:
-    _, language, content = d1("cv-typical")
-    view = with_name(d1_view(), name)
-    for kind, data in (("cv", content), ("letter", d1("letter-en")[2])):
-        html = templates.build_html(template("bold"), kind, data, view, language, 0, ON)
-        assert f'<h1 class="name{size}">{in_words(name)}</h1>' in html, kind
-
-
 def in_words(name: str) -> str:
-    return " ".join(f'<span class="w">{word}</span>' for word in name.split())
+    return " ".join(f'<span class="word">{word}</span>' for word in name.split())
 
 
 @pytest.mark.parametrize("slug", D21)
 def test_each_word_of_the_name_is_a_box_of_its_own(slug: str) -> None:
-    """A box per word (`.w`, inline-block) moves a word whole to the next line: the line breaks
+    """A box per word (`.word`, inline-block) moves a word whole to the next line: the line breaks
     at a space, never at the hyphen of a double-barrelled name."""
     name = "Anne-Sophie de La Tour-Échantillon"
     view = with_name(d1_view(), name)
@@ -234,7 +162,7 @@ def test_each_word_of_the_name_is_a_box_of_its_own(slug: str) -> None:
         html = templates.build_html(template(slug), kind, data, view, "en", 0, ON)
         assert re.search(rf'<h1 class="name[^"]*">{re.escape(in_words(name))}</h1>', html), kind
     assert re.search(
-        r"\.w\s*\{\s*display:\s*inline-block;\s*max-width:\s*100%;",
+        r"\.word\s*\{\s*display:\s*inline-block;\s*max-width:\s*100%;",
         template(slug).files["style.css"],
     )
 
@@ -255,6 +183,8 @@ def painted_pairs(slug: str) -> set[tuple[str, str]]:
     pairs: set[tuple[str, str]] = set()
     texts, surfaces = {found.accent}, {"#ffffff"}
     for _, body in RULE.findall(css):
+        if re.search(r"(?<![-\w])content\s*:\s*(\"\"|'')", body):
+            continue  # an empty box (a bullet dot) paints no text: not a surface for text
         fore: set[str] = set()
         back: set[str] = set()
         for prop, value in re.findall(rf"(?<![-\w]){COLOUR_PROPERTIES}\s*:\s*([^;}}]+)", body):
@@ -267,34 +197,20 @@ def painted_pairs(slug: str) -> set[tuple[str, str]]:
     return pairs | {(t, s) for t in texts for s in surfaces}
 
 
+def test_the_contrast_pairs_read_a_rule_with_its_own_background() -> None:
+    assert ("#f8f8f8", "#262525") in painted_pairs("band")  # the band sets both
+    # the round bullets of band and photo-columns are empty boxes: no text is read on them
+    assert ("#262525", "#262525") not in painted_pairs("band")
+    assert ("#07113c", "#07113c") not in painted_pairs("photo-columns")
+    assert {text for text, _ in painted_pairs("ledger")} == {"#000000"}
+
+
 @pytest.mark.parametrize("slug", D21)
 def test_every_text_colour_reaches_4_5_to_1_on_what_it_is_painted_on(slug: str) -> None:
     pairs = painted_pairs(slug)
-    assert len({t for t, _ in pairs}) >= 2, pairs
+    assert {t for t, _ in pairs}, pairs
     low = {pair: round(contrast(*pair), 2) for pair in pairs}
     assert all(ratio >= 4.5 for ratio in low.values()), {k: v for k, v in low.items() if v < 4.5}
-
-
-def test_the_contrast_pairs_read_a_rule_with_its_own_background_alone() -> None:
-    pairs = painted_pairs("bold")
-    assert ("#ffffff", "#16171b") in pairs
-    assert ("#ffffff", "#ffffff") not in pairs
-    assert ("#16171b", "#ffffff") in pairs
-    assert ("#1c5d99", "#dce8f4") in painted_pairs("cards")
-
-
-@pytest.mark.parametrize("slug", D21)
-def test_the_tags_say_what_the_template_is(slug: str) -> None:
-    found = template(slug)
-    tags = set(found.tags)
-    assert ("photo" in tags) == (found.photo != "none")
-    assert ("no photo" in tags) == (found.photo == "none")
-    assert ("two columns" in tags) == (slug == "cards")
-    assert ("one column" in tags) == (slug != "cards")
-    assert ("ats friendly" in tags) == (slug == "academic")
-    serif = {"elegant": True, "bold": False, "cards": False, "academic": True}[slug]
-    assert ("serif" in tags) == serif
-    assert ("sans" in tags) == (not serif)
 
 
 def normalised(found: templates.Template) -> str:
@@ -369,137 +285,9 @@ CARD = (0xEE, 0xF4, 0xFA)
 HEAD_CARD = (0xDC, 0xE8, 0xF4)
 
 
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-@pytest.mark.parametrize("name", ["cv-long", "cv-tightest"])
-def test_cards_move_whole_to_the_next_page_and_are_never_cut(
-    renderer: Any, language: str, name: str
-) -> None:
-    """At the loosest step these CVs take two pages: a card that would cross the end of page 1
-    moves whole to page 2. Every card is painted once (a cut card is painted on both pages) and
-    its text stands whole on one page."""
-    _, _, content = d1(name)
-    html = templates.build_html(template("cards"), "cv", content, d1_view(), language, 0, ON)
-    rendered = renderer.render(html)
-    assert rendered.pages == 2, rendered.pages
-    texts = cards_of(html)
-    painted = fills(rendered.pdf, CARD) + fills(rendered.pdf, HEAD_CARD)
-    assert len(painted) == len(texts), (len(painted), len(texts))
-    assert set(painted) == {0, 1}  # the case is real: cards stand on both pages
-    pages = pages_text(rendered.pdf)
-    for text in texts:
-        assert sum(text.casefold() in page for page in pages) == 1, text[:60]
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_cards_fitted_long_cv_paints_each_card_once_on_one_page(
-    renderer: Any, language: str
-) -> None:
-    _, _, content = d1("cv-long")
-    found = template("cards")
-    result = fitted(renderer, found, "cv", content, d1_view(), language)
-    assert result.fit
-    assert result.pages == 1
-    html = templates.build_html(found, "cv", content, d1_view(), language, result.step, ON)
-    painted = fills(result.pdf, CARD) + fills(result.pdf, HEAD_CARD)
-    assert len(painted) == len(cards_of(html))
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-@pytest.mark.parametrize("name", LONG_NAMES, ids=["words", "one-word", "the-cap"])
-@pytest.mark.parametrize("with_photo", [False, True], ids=["no-photo", "photo"])
-def test_bold_keeps_a_very_long_name_on_the_page(
-    renderer: Any, language: str, name: str, with_photo: bool
-) -> None:
-    """The typical CV with a very long name: one page, the name whole in the PDF text, every one
-    of its glyphs inside the page's margins (it wraps, it never runs off the page or under the
-    photo), and the headline below its last line."""
-    found = template("bold")
-    _, _, content = d1("cv-typical")
-    view = with_name(d1_view(), name)
-    uri = a_photo() if with_photo else None
-
-    def build(step: templates.Step) -> str:
-        return templates.build_html(found, "cv", content, view, language, step, ON, photo=uri)
-
-    async def render(html: str) -> Any:
-        return await asyncio.to_thread(renderer.render, html)
-
-    result = asyncio.run(fit.fit(found.steps("cv"), build, render=render))
-    assert result.fit, result.pages
-    step = found.steps("cv")[result.step]
-    glyphs = Glyphs(result.pdf)
-    boxes = glyphs.find(name)
-    left, right = step.margin * MM, A4[0] - step.margin * MM
-    if with_photo:
-        right -= (30 + 6) * MM  # the photo and the gap of the heading
-    assert min(box[0] for box in boxes) >= left - 0.5
-    assert max(box[2] for box in boxes) <= right + 0.5, (max(box[2] for box in boxes), right)
-    headline = glyphs.find(content.headline[:20])
-    assert top(headline) < bottom(boxes)
-    assert "".join(name.split()) in "".join(pdf_text(result.pdf).split())
-
-
-@docker
-@pytest.mark.parametrize("kind", templates.KINDS)
-def test_bold_without_a_photo_gives_the_name_the_full_width(renderer: Any, kind: str) -> None:
-    """The re-check of D21: without a photo, the gap kept for it narrowed the name's line by
-    6 mm. A name of one word of narrow letters, wider than the line, fills its first line to
-    within 3 mm of the right margin."""
-    found = template("bold")
-    name = "L" + "il" * 60
-    view = with_name(d1_view(), name)
-    content = d1("cv-typical")[2] if kind == "cv" else d1("letter-en")[2]
-    result = fitted(renderer, found, kind, content, view, "en")
-    assert result.fit, result.pages
-    right = A4[0] - found.steps(kind)[result.step].margin * MM
-    boxes = Glyphs(result.pdf).find(name)
-    assert right - 3 * MM <= max(box[2] for box in boxes) <= right + 0.5 * MM
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_bold_letter_with_a_very_long_name_fits(renderer: Any, language: str) -> None:
-    kind, _, content = d1("letter-en")
-    view = with_name(d1_view(), LONG_NAMES[2])
-    result = fitted(renderer, template("bold"), kind, content, view, language)
-    assert result.fit
-    assert result.pages == 1
-
-
 def heading(glyphs: Glyphs, label: str) -> list[Box]:
     """The occurrence of `label` set largest: the heading, not a word inside a sentence."""
     return max(glyphs.find_all(label), key=lambda boxes: top(boxes) - bottom(boxes))
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-@pytest.mark.parametrize("who", ["three", "dana"])
-def test_academic_with_three_schools_fits_with_the_education_above_the_experience(
-    renderer: Any, language: str, who: str
-) -> None:
-    """Three schools (D1's typical CV with three, and D2's Dana, whose three are dated by month
-    with a city and a country): one page, the Education heading above every school, every school
-    above the Experience heading, in the order of the profile."""
-    if who == "three":
-        view, content = three_schools_view(language), d1("cv-typical")[2]
-    else:
-        view, content = view_of("dana"), c.CvContent.model_validate(written("cv_typical"))
-    result = fitted(renderer, template("academic"), "cv", content, view, language)
-    assert result.fit, result.pages
-    assert result.pages == 1
-    labels = templates.labels()[language]
-    glyphs = Glyphs(result.pdf)
-    education = heading(glyphs, labels["education"])
-    experience = heading(glyphs, labels["experience"])
-    degrees = [glyphs.find(school.degree) for school in view.schools]
-    assert len(degrees) == 3
-    assert bottom(education) > top(degrees[0])
-    for upper, lower in pairwise(degrees):
-        assert bottom(upper) > top(lower)
-    assert bottom(degrees[-1]) > top(experience)
 
 
 def typical(slug: str, full: bool) -> c.CvContent:
@@ -509,53 +297,14 @@ def typical(slug: str, full: bool) -> c.CvContent:
 
 
 @docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-@pytest.mark.parametrize("full", [False, True], ids=["typical", "soft-limits"])
-def test_academic_reads_in_the_order_of_the_page(renderer: Any, language: str, full: bool) -> None:
-    """The PDF text, as an applicant tracking system extracts it: the name first, the sections in
-    the order of the page (the education before the experience), the roles in order, every
-    bullet whole; on the typical CV and on the typical CV filled to the soft limits."""
-    content = typical("academic", full)
-    result = fitted(renderer, template("academic"), "cv", content, d1_view(), language)
-    assert result.fit
-    text = " ".join(pdf_text(result.pdf).replace("\ufffe", "-").split())
-    assert text.startswith("Alex Example"), text[:60]
-    labels = templates.labels()[language]
-    places = [text.index(labels[key]) for key in ACADEMIC_ORDER]
-    assert places == sorted(places), dict(zip(ACADEMIC_ORDER, places, strict=True))
-    titles = [text.index(employer.title) for employer in d1_view().employers]
-    assert titles == sorted(titles), titles
-    squeezed = "".join(text.split())
-    for role in content.experience:
-        for bullet in role.bullets:
-            assert "".join(bullet.split()) in squeezed, bullet[:60]
-
-
-class Texts(HTMLParser):
-    """The text nodes of a built page's body, in the order of the document."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.texts: list[str] = []
-        self._body = False
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._body = self._body or tag == "body"
-
-    def handle_data(self, data: str) -> None:
-        if self._body and data.strip():
-            self.texts.append("".join(data.split()).casefold())
-
-
-@docker
 @pytest.mark.parametrize("slug", D21)
 @pytest.mark.parametrize("name", ["cv-typical", "cv-soft-limits", "letter-en"])
 def test_the_pdf_text_follows_the_order_of_the_document(
     renderer: Any, slug: str, name: str
 ) -> None:
-    """Every text of the built page is found in the PDF text in the order of the document: no
-    part of the layout is painted, and so extracted, out of its place (a positioned marker once
-    sent the competencies of `cards` and the bullets of `bold` to the end of the page)."""
+    """The PDF text read as the layout lays it out (D27): the name first, every word in it, and
+    each block's own words in their order (a positioned marker once sent the competencies of
+    `cards` to the end of the page)."""
     if name == "cv-soft-limits":
         kind, language, content = "cv", "en", typical(slug, full=True)
     else:
@@ -564,14 +313,7 @@ def test_the_pdf_text_follows_the_order_of_the_document(
     result = fitted(renderer, found, kind, content, d1_view(), language)
     assert result.fit
     html = templates.build_html(found, kind, content, d1_view(), language, result.step, ON)
-    parser = Texts()
-    parser.feed(html)
-    text = pages_text(result.pdf)[0]
-    at = 0
-    for chunk in parser.texts:
-        place = text.find(chunk, at)
-        assert place >= 0, (chunk, text[at : at + 80])
-        at = place + len(chunk)
+    assert_read_in_order(html, pages_text(result.pdf)[0], d1_view().identity.full_name)
 
 
 LONG_CONTACT = Identity(
@@ -664,30 +406,6 @@ def frames(pdf: bytes) -> list[list[float]]:
         document.close()
 
 
-@docker
-@pytest.mark.parametrize("kind", templates.KINDS)
-def test_elegant_draws_its_frame_on_every_page(renderer: Any, kind: str) -> None:
-    """The frame stands 6 mm inside the sheet's edge, on page 1 of a fitted document and on each
-    page of a two page one (D1's long CV at the loosest step)."""
-    found = template("elegant")
-    name = "cv-long" if kind == "cv" else "letter-en"
-    _, language, content = d1(name)
-    loosest = renderer.render(
-        templates.build_html(found, kind, content, d1_view(), language, 0, ON)
-    )
-    fitted_ = fitted(renderer, found, kind, content, d1_view(), language)
-    assert fitted_.pages == 1
-    assert loosest.pages == (2 if kind == "cv" else 1)
-    expected = [6 * MM, 6 * MM, A4[0] - 6 * MM, A4[1] - 6 * MM]
-    for pdf, pages in ((fitted_.pdf, 1), (loosest.pdf, loosest.pages)):
-        per_page = frames(pdf)
-        assert len(per_page) == pages
-        for spans in per_page:
-            assert 1 <= len(spans) <= 2, spans  # a double border: its two lines, or one path
-            outer = min(spans)
-            assert all(abs(a - b) <= 1.5 for a, b in zip(outer, expected, strict=True)), spans
-
-
 # --- docker: a name breaks between its words ----------------------------------------------------
 
 HYPHENATED = [
@@ -775,7 +493,7 @@ def test_every_glyph_of_every_page_stays_inside_the_frame(
         templates.build_html(found, kind, content, d1_view(), language, 0, ON)
     )
     assert rendered.pages == 2, rendered.pages
-    inset = (6 * MM + 2.8) if slug == "elegant" else step.margin * MM
+    inset = step.margin * MM
     pages = glyph_boxes(rendered.pdf)
     assert len(pages) == 2
     if kind == "letter":  # page 1 starts the letter, it does not hold the heading alone

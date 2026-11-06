@@ -213,10 +213,13 @@ def test_the_built_html_follows_the_authoring_rules(slug: str, kind: str, langua
     page = assert_authoring(html)
     assert f'<html lang="{language}">' in html
     assert "Alex Example" in page.body
-    labels = templates.labels()[language]
+    labels = templates.labels()[language] | template(slug).labels.get(language, {})
     if kind == "cv":
-        for key in ("summary", "experience", "education", "skills", "languages"):
+        for key in ("summary", "experience", "education", "languages"):
             assert labels[key] in page.body, key
+        # The skills under their label, or each group under its own (band, D27).
+        groups = [group["label"] for group in sample(kind)["skills"]]
+        assert labels["skills"] in page.body or all(g in page.body for g in groups)
     else:
         assert templates.format_date(ON, language) in page.body
         for field in ("recipient", "subject", "salutation", "closing"):
@@ -317,16 +320,16 @@ def test_every_field_prints_as_text(slug: str, kind: str, language: str) -> None
 def test_target_and_notes_are_never_printed() -> None:
     content = sample("cv") | {"target": "TargetMarker7f3", "notes": "NotesMarker9c1"}
     html = templates.build_html(
-        template("classic"), "cv", content, thumbnails.sample_view(), "en", 0, ON
+        template(templates.DEFAULT), "cv", content, thumbnails.sample_view(), "en", 0, ON
     )
     assert "TargetMarker7f3" not in html
     assert "NotesMarker9c1" not in html
 
 
 def test_the_sandbox_refuses_what_a_template_should_not_reach() -> None:
-    files = dict(template("classic").files)
+    files = dict(template(templates.DEFAULT).files)
     files["cv.html.j2"] = "{{ name.__class__.__mro__ }}"
-    manifest = json.loads((templates.ROOT / "classic" / "manifest.json").read_text())
+    manifest = json.loads((templates.ROOT / templates.DEFAULT / "manifest.json").read_text())
     rogue = templates.from_files(manifest, files)
     with pytest.raises(SecurityError):
         templates.build_html(rogue, "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON)
@@ -335,7 +338,7 @@ def test_the_sandbox_refuses_what_a_template_should_not_reach() -> None:
 def test_no_filter_of_the_environment_prints_markup() -> None:
     """Every filter left in the environment, tried on markup (alone, with an argument, on a
     list): none prints a tag or an attribute unescaped. `safe` and the others are gone."""
-    env = templates.environment(template("classic"))
+    env = templates.environment(template(templates.DEFAULT))
     assert not set(templates.UNESCAPING) & set(env.filters)
     hostile = '<b onmouseover="x">'
     for name in sorted(env.filters):
@@ -355,8 +358,8 @@ def test_no_filter_of_the_environment_prints_markup() -> None:
 
 
 def test_a_template_cannot_print_markup_through_a_filter() -> None:
-    manifest = json.loads((templates.ROOT / "classic" / "manifest.json").read_text())
-    files = dict(template("classic").files)
+    manifest = json.loads((templates.ROOT / templates.DEFAULT / "manifest.json").read_text())
+    files = dict(template(templates.DEFAULT).files)
     files["cv.html.j2"] = '<p title="{{ content.summary|tojson }}"></p>'
     with pytest.raises(TemplateError, match="does not compile"):
         templates.from_files(manifest, files)
@@ -402,8 +405,8 @@ def test_the_built_page_is_checked_before_the_renderer(page: str, breach: str) -
 
 
 def test_a_template_printing_a_handler_is_refused_at_build() -> None:
-    manifest = json.loads((templates.ROOT / "classic" / "manifest.json").read_text())
-    files = dict(template("classic").files)
+    manifest = json.loads((templates.ROOT / templates.DEFAULT / "manifest.json").read_text())
+    files = dict(template(templates.DEFAULT).files)
     # Past the authoring rules (no "on...=" in the file): the handler is built by the template.
     files["cv.html.j2"] = (
         "{% extends '_base/page.html.j2' %}{% block body %}"
@@ -423,7 +426,7 @@ FORGED = "/*" + "0" * 32 + "*/"  # the shape of the token drawn for each render
 def test_text_shaped_like_the_style_token_stays_text(marker: str, kind: str) -> None:
     """The review's input (`/*fonts*/` in the name) and the token's own shape in every field of
     the content and of the profile: printed as written, the style in the <style> alone."""
-    found = template("classic")
+    found = template(templates.DEFAULT)
     content = hostile_cv() if kind == "cv" else hostile_letter()
     content = json.loads(json.dumps(content).replace("<script>alert(1)</script>", marker))
     view = hostile_view()
@@ -485,7 +488,7 @@ def test_every_character_of_the_review_prints_with_a_named_font(slug: str, kind:
 
 
 def test_cjk_text_yields_a_recorded_correction_not_a_failure() -> None:
-    found = template("classic")
+    found = template(templates.DEFAULT)
     fixed, records = templates.printable(found, "cv", review_cv())
     assert isinstance(fixed, c.CvContent)
     by_path = {record.field_path: record for record in records}
@@ -533,7 +536,7 @@ def test_a_presentation_selector_goes_and_its_character_stays(slug: str) -> None
 
 def test_an_emoji_with_its_selector_is_a_recorded_correction() -> None:
     content = sample("cv") | {"headline": f"Engineer {SELECTED}", "highlights": [KEYCAPS]}
-    _, records = templates.printable(template("classic"), "cv", content)
+    _, records = templates.printable(template(templates.DEFAULT), "cv", content)
     by_path = {record.field_path: record for record in records}
     assert by_path["headline"].after == "Engineer " + " ".join(s[0] for s in SELECTED.split())
     assert by_path["highlights.0"].after == "1 # *"
@@ -554,11 +557,11 @@ SCRIPTS = [
 
 @pytest.mark.parametrize(("text", "printed"), SCRIPTS)
 def test_a_superscript_never_merges_with_its_digits(text: str, printed: str) -> None:
-    families = template("classic").fonts
+    families = template(templates.DEFAULT).fonts
     assert templates.printable_text(families, text) == printed
     # Those the fonts draw stay, those they lack print with an explicit mark and are recorded.
     content = sample("cv") | {"headline": f"Scale {text}"}
-    _, records = templates.printable(template("classic"), "cv", content)
+    _, records = templates.printable(template(templates.DEFAULT), "cv", content)
     assert [(r.before, r.after) for r in records] == (
         [] if text == printed else [(f"Scale {text}", f"Scale {printed}")]
     )
@@ -569,7 +572,7 @@ def test_printable_runs_before_the_dash_rule() -> None:
     from app.documents.settings import DocumentSettings
 
     content = sample("cv") | {"headline": "Data Engineer － Platform"}
-    fixed, records = templates.printable(template("classic"), "cv", content)
+    fixed, records = templates.printable(template(templates.DEFAULT), "cv", content)
     assert fixed.headline == "Data Engineer - Platform"
     dashed, dash_records = corrections.fix_separators(
         "cv", fixed, DocumentSettings(no_dash_separators=True)
@@ -695,7 +698,7 @@ def test_profile_text_replaced_for_the_template_is_recorded() -> None:
         languages=(Language("日本語 Japanese", "native"),),
         identity=Identity(full_name="Alex ＜Example＞", email="e2e-alex@example.org"),
     )
-    fixed, records = templates.printable_profile(template("classic"), view)
+    fixed, records = templates.printable_profile(template(templates.DEFAULT), view)
     assert [(r.field_path, r.before, r.after) for r in records] == [
         ("profile.identity.full_name", "Alex ＜Example＞", "Alex <Example>"),
         ("profile.employers.0.organisation", "Ｋestrel 東京", "Kestrel"),
@@ -709,9 +712,9 @@ def test_profile_text_replaced_for_the_template_is_recorded() -> None:
     assert fixed.employers[0].organisation == "Kestrel"
     assert fixed.employers[0].key == "acme"
     # The page prints the replaced text, escaped.
-    html = templates.build_html(template("classic"), "cv", sample("cv"), view, "en", 0, ON)
+    html = templates.build_html(template(templates.DEFAULT), "cv", sample("cv"), view, "en", 0, ON)
     assert "Alex &lt;Example&gt;" in html
-    assert templates.printable_profile(template("classic"), fixed) == (fixed, [])
+    assert templates.printable_profile(template(templates.DEFAULT), fixed) == (fixed, [])
 
 
 def every_fallback_face(families: tuple[str, ...]) -> tuple[str, dict[str, int]]:
@@ -737,8 +740,10 @@ def test_the_html_of_the_worst_case_stays_far_under_the_renderer_cap(
     families: tuple[str, ...],
 ) -> None:
     """Each fallback face is embedded once, whatever the number of families and weights."""
-    manifest = json.loads((templates.ROOT / "classic" / "manifest.json").read_text())
-    found = templates.from_files(manifest | {"fonts": list(families)}, template("classic").files)
+    manifest = json.loads((templates.ROOT / templates.DEFAULT / "manifest.json").read_text())
+    found = templates.from_files(
+        manifest | {"fonts": list(families)}, template(templates.DEFAULT).files
+    )
     text, counts = every_fallback_face(families)
     assert set(counts) == set(templates.FALLBACKS)
     content = review_cv() | {"summary": text[: c.SUMMARY_MAX]}
@@ -754,18 +759,19 @@ def test_the_html_of_the_worst_case_stays_far_under_the_renderer_cap(
 
 
 def test_the_thumbnail_hash_covers_the_base_and_the_fonts(tmp_path: Path) -> None:
-    folder = copy_classic(tmp_path / "templates", "classic")
+    folder = copy_default(tmp_path / "templates", templates.DEFAULT)
     base = tmp_path / "_base"
     shutil.copytree(templates.BASE, base)
     library = tmp_path / "fonts"
-    shutil.copytree(templates.FONTS / "nunito-sans", library / "nunito-sans")
+    family = template(templates.DEFAULT).fonts[0]
+    shutil.copytree(templates.FONTS / family, library / family)
     first = templates.thumbnail_hash(folder, base, library)
     assert first == templates.thumbnail_hash(folder, base, library)
     macros = base / "macros.html.j2"
     macros.write_text(macros.read_text() + "\n")
     second = templates.thumbnail_hash(folder, base, library)
     assert second != first
-    face = library / "nunito-sans" / "latin-400-normal.woff2"
+    face = library / family / "latin-400-normal.woff2"
     face.write_bytes(face.read_bytes() + b"\0")
     assert templates.thumbnail_hash(folder, base, library) != second
 
@@ -773,9 +779,9 @@ def test_the_thumbnail_hash_covers_the_base_and_the_fonts(tmp_path: Path) -> Non
 # --- the registry refuses a broken folder at start ----------------------------------------------
 
 
-def copy_classic(root: Path, slug: str = "broken") -> Path:
+def copy_default(root: Path, slug: str = "broken") -> Path:
     folder = root / slug
-    shutil.copytree(templates.ROOT / "classic", folder)
+    shutil.copytree(templates.ROOT / templates.DEFAULT, folder)
     manifest = json.loads((folder / "manifest.json").read_text())
     manifest["slug"] = slug
     (folder / "manifest.json").write_text(json.dumps(manifest))
@@ -795,8 +801,8 @@ def refusal(root: Path) -> str:
     return raised.value.reason
 
 
-def test_a_copy_of_classic_is_accepted(tmp_path: Path) -> None:
-    copy_classic(tmp_path, "copy")
+def test_a_copy_of_the_default_is_accepted(tmp_path: Path) -> None:
+    copy_default(tmp_path, "copy")
     assert list(templates.discover(tmp_path)) == ["copy"]
 
 
@@ -804,19 +810,19 @@ def test_a_copy_of_classic_is_accepted(tmp_path: Path) -> None:
     "field", ["slug", "version", "name", "tags", "photo", "fonts", "accent", "cv", "thumbnail_of"]
 )
 def test_a_manifest_with_a_missing_field_is_refused(tmp_path: Path, field: str) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     edit_manifest(folder, lambda m: m.pop(field))
     assert field in refusal(tmp_path)
 
 
 def test_steps_not_loosest_first_are_refused(tmp_path: Path) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     edit_manifest(folder, lambda m: m["cv"]["steps"].reverse())
     assert "loosest first" in refusal(tmp_path)
 
 
 def test_two_equal_steps_are_refused(tmp_path: Path) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     edit_manifest(folder, lambda m: m["letter"]["steps"].insert(0, m["letter"]["steps"][0]))
     assert "loosest first" in refusal(tmp_path)
 
@@ -836,19 +842,19 @@ def test_two_equal_steps_are_refused(tmp_path: Path) -> None:
     ],
 )
 def test_a_wrong_manifest_value_is_refused(tmp_path: Path, change: Any, said: str) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     edit_manifest(folder, change)
     assert said in refusal(tmp_path)
 
 
 def test_a_folder_without_thumbnails_is_refused(tmp_path: Path) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     (folder / "thumbnail-letter.png").unlink()
     assert "thumbnail-letter.png" in refusal(tmp_path)
 
 
 def test_a_folder_without_a_template_file_is_refused(tmp_path: Path) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     (folder / "letter.html.j2").unlink()
     assert "letter.html.j2" in refusal(tmp_path)
 
@@ -873,14 +879,14 @@ def test_a_folder_without_a_template_file_is_refused(tmp_path: Path) -> None:
     ],
 )
 def test_the_authoring_rules_refuse(tmp_path: Path, name: str, text: str, said: str) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     with (folder / name).open("a") as handle:
         handle.write(text)
     assert said in refusal(tmp_path)
 
 
 def test_a_photo_slot_needs_a_photo_in_the_manifest(tmp_path: Path) -> None:
-    folder = copy_classic(tmp_path)
+    folder = copy_default(tmp_path)
     edit_manifest(folder, lambda m: m.update(photo="none", tags=["one column", "no photo"]))
     with (folder / "cv.html.j2").open("a") as handle:
         handle.write("{{ photo }}")
@@ -889,7 +895,7 @@ def test_a_photo_slot_needs_a_photo_in_the_manifest(tmp_path: Path) -> None:
 
 def test_a_template_with_an_optional_photo_prints_none_without_one(tmp_path: Path) -> None:
     """A fixture manifest of the test: `photo: optional`, a profile without photo."""
-    copy_classic(tmp_path, "optional-photo")
+    copy_default(tmp_path, "optional-photo")
     found = templates.discover(tmp_path)["optional-photo"]
     assert found.photo == "optional"
     html = templates.build_html(found, "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON)
@@ -936,6 +942,78 @@ def test_the_labels_have_both_languages_and_no_dash() -> None:
             assert not re.search(r"[–—]| - ", text)
 
 
+LABELS = {
+    "en": {"experience": "Career so far"},
+    "fr": {"summary": "En bref", "experience": "Parcours"},
+}
+
+
+def test_a_manifest_s_own_labels_go_over_the_shared_ones_per_language(tmp_path: Path) -> None:
+    edit_manifest(copy_default(tmp_path, "own-labels"), lambda m: m.update(labels=LABELS))
+    found = templates.discover(tmp_path)["own-labels"]
+    assert found.labels == LABELS
+    shared = templates.labels()
+    for language, own in LABELS.items():
+        html = templates.build_html(
+            found, "cv", sample("cv"), thumbnails.sample_view(), language, 0, ON
+        )
+        body = assert_authoring(html).body
+        for text in own.values():
+            assert text in body
+        for key in ("education", "languages"):  # not in LABELS: the shared label prints
+            assert shared[language][key] in body, (language, key)
+    english = templates.build_html(found, "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON)
+    assert "En bref" not in english  # a language's labels stay in their language
+
+
+def test_a_manifest_without_labels_is_valid_as_a_person_s_own_template_is(tmp_path: Path) -> None:
+    edit_manifest(copy_default(tmp_path, "no-labels"), lambda m: m.pop("labels", None))
+    found = templates.discover(tmp_path)["no-labels"]
+    assert found.labels == {}
+    html = templates.build_html(found, "cv", sample("cv"), thumbnails.sample_view(), "fr", 0, ON)
+    assert templates.labels()["fr"]["experience"] in assert_authoring(html).body
+
+
+@pytest.mark.parametrize(
+    ("labels", "said"),
+    [
+        ("About", "per language"),
+        ({"de": {"summary": "Profil"}}, "per language"),
+        ({"en": ["About"]}, "names only"),
+        ({"en": {"photo": "Me"}}, "names only"),
+        ({"en": {"summary": ""}}, "1 to 40"),
+        ({"en": {"summary": "   "}}, "1 to 40"),
+        ({"en": {"summary": " About"}}, "1 to 40"),
+        ({"en": {"summary": "x" * 41}}, "1 to 40"),
+        ({"en": {"summary": 3}}, "1 to 40"),
+        ({"en": {"summary": "About \u2013 me"}}, "a dash"),
+        ({"en": {"summary": "About\u2014me"}}, "a dash"),
+        ({"en": {"summary": "About - me"}}, "a dash"),
+        ({"fr": {"summary": "<b>Profil"}}, "a <"),
+    ],
+)
+def test_a_malformed_label_is_refused(tmp_path: Path, labels: Any, said: str) -> None:
+    edit_manifest(copy_default(tmp_path), lambda m: m.update(labels=labels))
+    assert said in refusal(tmp_path)
+
+
+def test_a_hyphenated_label_of_forty_characters_is_accepted(tmp_path: Path) -> None:
+    labels = {"en": {"summary": "Self-taught", "experience": "x" * 40}}
+    edit_manifest(copy_default(tmp_path, "hyphen"), lambda m: m.update(labels=labels))
+    assert templates.discover(tmp_path)["hyphen"].labels == labels
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+@pytest.mark.parametrize("kind", templates.KINDS)
+def test_each_contact_line_prints_its_kind_as_its_class(slug: str, kind: str) -> None:
+    view = thumbnails.sample_view()
+    html = templates.build_html(template(slug), kind, sample(kind), view, "en", 0, ON)
+    lines = templates.contact_lines(view)
+    assert {line["kind"] for line in lines} == {"email", "phone", "place", "link"}
+    for line in lines:
+        assert f'<li class="{line["kind"]}">' in html, line
+
+
 def test_contact_lines_link_only_https_and_mailto() -> None:
     view = ProfileView(
         revision=1,
@@ -954,17 +1032,21 @@ def test_contact_lines_link_only_https_and_mailto() -> None:
         ),
     )
     assert templates.contact_lines(view) == [
-        {"text": "e2e-alex@example.org", "href": "mailto:e2e-alex@example.org"},
-        {"text": "+33 6 00 00 00 00", "href": None},
-        {"text": "Lyon, France", "href": None},
-        {"text": "linkedin.example/in/alex", "href": "https://www.linkedin.example/in/alex/"},
-        {"text": "example.org/alex", "href": None},
-        {"text": "javascript:alert(1)", "href": None},
+        {"text": "e2e-alex@example.org", "href": "mailto:e2e-alex@example.org", "kind": "email"},
+        {"text": "+33 6 00 00 00 00", "href": None, "kind": "phone"},
+        {"text": "Lyon, France", "href": None, "kind": "place"},
+        {
+            "text": "linkedin.example/in/alex",
+            "href": "https://www.linkedin.example/in/alex/",
+            "kind": "link",
+        },
+        {"text": "example.org/alex", "href": None, "kind": "link"},
+        {"text": "javascript:alert(1)", "href": None, "kind": "link"},
     ]
 
 
 def built(content: dict[str, Any], view: ProfileView, kind: str = "cv", lang: str = "en") -> Page:
-    html = templates.build_html(template("classic"), kind, content, view, lang, 0, ON)
+    html = templates.build_html(template(templates.DEFAULT), kind, content, view, lang, 0, ON)
     return assert_authoring(html)
 
 
@@ -1004,22 +1086,24 @@ def test_six_languages_are_printed() -> None:
         languages=tuple(Language(name, "fluent") for name in names),
     )
     body = built(sample("cv"), view).body
-    assert all(re.search(rf"{name} ?: fluent", body) for name in names)
+    assert all(re.search(rf"{name}( ?: | \()fluent", body) for name in names)
 
 
 def test_right_to_left_text_in_a_bullet_prints_with_its_fallback_font() -> None:
     content = sample("cv") | {
         "experience": [{"employer_key": "example-corp", "bullets": ["Built שלום and مرحبا tools."]}]
     }
-    html = templates.build_html(template("classic"), "cv", content, view_of("alex"), "en", 0, ON)
+    html = templates.build_html(
+        template(templates.DEFAULT), "cv", content, view_of("alex"), "en", 0, ON
+    )
     assert "Built שלום and مرحبا tools." in Page(html).body
-    stack = 'font-family:"Nunito Sans","Noto Sans Hebrew","Noto Sans Arabic",sans-serif'
-    assert stack in html
+    name = templates.fonts()[template(templates.DEFAULT).fonts[0]].name
+    assert f'font-family:"{name}","Noto Sans Hebrew","Noto Sans Arabic",sans-serif' in html
 
 
 def test_latin_text_embeds_no_fallback_font() -> None:
     html = templates.build_html(
-        template("classic"), "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON
+        template(templates.DEFAULT), "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON
     )
     assert "Noto" not in html
     assert html.count("@font-face") <= 10
@@ -1059,7 +1143,7 @@ def test_empty_sections_are_not_printed() -> None:
 
 
 def test_build_html_takes_a_step_object_or_its_index() -> None:
-    found, view = template("classic"), thumbnails.sample_view()
+    found, view = template(templates.DEFAULT), thumbnails.sample_view()
     last = found.steps("cv")[-1]
     by_index = templates.build_html(found, "cv", sample("cv"), view, "en", -1, ON)
     assert by_index == templates.build_html(found, "cv", sample("cv"), view, "en", last, ON)
@@ -1126,7 +1210,14 @@ def test_a_photo_over_the_cap_is_refused() -> None:
 def test_the_photo_prints_in_a_template_with_a_slot() -> None:
     uri = photo.embed(jpeg_with_gps((800, 800), quality=80))
     html = templates.build_html(
-        template("classic"), "cv", sample("cv"), thumbnails.sample_view(), "en", 0, ON, photo=uri
+        template(templates.DEFAULT),
+        "cv",
+        sample("cv"),
+        thumbnails.sample_view(),
+        "en",
+        0,
+        ON,
+        photo=uri,
     )
     images = [attrs for tag, attrs in assert_authoring(html).tags if tag == "img"]
     assert [attrs["src"] for attrs in images] == [uri]
@@ -1135,7 +1226,7 @@ def test_the_photo_prints_in_a_template_with_a_slot() -> None:
 def test_a_photo_that_is_not_an_embedded_address_is_refused() -> None:
     with pytest.raises(ValueError, match="not a data: address"):
         templates.build_html(
-            template("classic"),
+            template(templates.DEFAULT),
             "cv",
             sample("cv"),
             thumbnails.sample_view(),
@@ -1163,10 +1254,13 @@ FAMILIES = {
     "caladea": "Caladea",
     "arimo": "Arimo",
     "tinos": "Tinos",
+    "raleway": "Raleway",
+    "inter-tight": "Inter Tight",
+    "gantari": "Gantari",
 }
 
 
-def test_the_font_library_holds_the_fourteen_families_with_their_licences() -> None:
+def test_the_font_library_holds_the_seventeen_families_with_their_licences() -> None:
     library = templates.fonts()
     own = {key: family.name for key, family in library.items() if not family.fallback}
     assert own == FAMILIES
@@ -1244,17 +1338,17 @@ def test_resolve_finds_a_bundled_template_then_asks_the_loader() -> None:
 
     def loader(db: object, user_id: object, slug: str) -> templates.Template | None:
         asked.append(slug)
-        return template("classic") if slug == "upload-1a2b3c4d" else None
+        return template(templates.DEFAULT) if slug == "upload-1a2b3c4d" else None
 
-    assert templates.resolve(None, None, "classic") is template("classic")
+    assert templates.resolve(None, None, templates.DEFAULT) is template(templates.DEFAULT)
     # no loader, or design_capture's, which finds no row without a session
     assert templates.resolve(None, None, "upload-1a2b3c4d") is None
     # design_capture registers the real loader at import: put it back for the tests after
     previous = templates._loader
     templates.register_loader(loader)
     try:
-        assert templates.resolve(None, None, "classic") is template("classic")
-        assert templates.resolve(None, None, "upload-1a2b3c4d") is template("classic")
+        assert templates.resolve(None, None, templates.DEFAULT) is template(templates.DEFAULT)
+        assert templates.resolve(None, None, "upload-1a2b3c4d") is template(templates.DEFAULT)
         assert templates.resolve(None, None, "upload-ffffffff") is None
     finally:
         templates.register_loader(previous)
@@ -1321,7 +1415,7 @@ def test_the_fit_rule_on_d1_fixtures(renderer: Any, slug: str, language: str) ->
         steps[name] = result.step
         main = templates.fonts()[found.fonts[0]].name.replace(" ", "")
         assert any(font.startswith(main) for font in pdf_fonts(result.pdf)), name
-        assert "Alex Example" in pdf_text(result.pdf)
+        assert "alex example" in pdf_text(result.pdf).casefold()  # capitals by CSS read alike
     assert steps["cv-short"] == 0, steps
     assert steps["cv-typical"] < last, steps
     assert steps["cv-short"] <= steps["cv-typical"] <= steps["cv-long"] <= steps["cv-tightest"]
@@ -1411,7 +1505,7 @@ def test_an_emoji_as_phones_type_it_renders(renderer: Any, slug: str, sample_: s
     text = "".join(pdf_text(rendered.pdf).split())
     printed = templates.printable_text(template(slug).fonts, sample_)
     assert printed[:1] == sample_[0]
-    assert "Engineer" in text
+    assert "engineer" in text.casefold()  # a headline in capitals by CSS reads alike
     if len(printed) == 1:  # a ligature of a sequence (`👍🏽`) maps to no text in the PDF
         assert "AlexExample" not in text  # the name kept its character
         assert printed in text, sample_

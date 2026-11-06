@@ -33,7 +33,7 @@ def test_a_cv_starts_with_the_name(renderer: Any, slug: str, language: str, name
     kind, _, content = d1(name)
     result = fitted(renderer, template(slug), kind, content, d1_view(), language)
     assert result.fit
-    assert first_page_text(result.pdf).lstrip().startswith("Alex Example"), slug
+    assert first_page_text(result.pdf).lstrip().casefold().startswith("alex example"), slug
 
 
 @docker
@@ -43,4 +43,4 @@ def test_a_letter_starts_with_the_name(renderer: Any, slug: str) -> None:
     result = fitted(renderer, template(slug), kind, content, d1_view(), language)
     assert result.fit
     text = first_page_text(result.pdf).lstrip()
-    assert text.startswith("Alex Example"), (slug, text[:80])
+    assert text.casefold().startswith("alex example"), (slug, text[:80])

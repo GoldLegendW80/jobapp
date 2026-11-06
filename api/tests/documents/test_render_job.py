@@ -483,8 +483,8 @@ def _switch_during_render(
 @pytest.mark.parametrize(
     ("change", "looks"),
     [
-        ({"template_slug": "sidebar"}, [("classic", "en"), ("sidebar", "en")]),
-        ({"language": Language.fr}, [("classic", "en"), ("classic", "fr")]),
+        ({"template_slug": "photo-columns"}, [("band", "en"), ("photo-columns", "en")]),
+        ({"language": Language.fr}, [("band", "en"), ("band", "fr")]),
     ],
 )
 def test_a_switch_during_a_render_of_the_same_revision_is_rendered_next(
@@ -507,7 +507,7 @@ def test_a_switch_during_a_render_of_the_same_revision_is_rendered_next(
 def test_a_failed_render_keeps_the_switch_queued_for_the_cron(
     factory: sessionmaker[Session],
 ) -> None:
-    made, _, _ = _switch_during_render(factory, fail="render_failed", template_slug="sidebar")
+    made, _, _ = _switch_during_render(factory, fail="render_failed", template_slug="photo-columns")
     document = _document(factory, made["document"])
     assert (document.render_state, document.render_error) == (RenderState.queued, None)
 
@@ -516,8 +516,8 @@ def test_a_failed_render_keeps_the_switch_queued_for_the_cron(
 def test_the_overflow_hook_is_called_for_the_look_the_person_kept_only(
     factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, switched_pages: int
 ) -> None:
-    # The CV overflows in `classic`; the person switches to `sidebar` during that render. The
-    # one shorten pass must start from sidebar's own render, never from the look left.
+    # The CV overflows in `band`; the person switches to `photo-columns` during that render. The
+    # one shorten pass must start from photo-columns' own render, never from the look left.
     called: list[uuid.UUID] = []
     monkeypatch.setattr(
         render_job, "on_overflow", lambda _document, version: called.append(version)
@@ -531,10 +531,10 @@ def test_the_overflow_hook_is_called_for_the_look_the_person_kept_only(
         return claim(*args)
 
     monkeypatch.setattr(render_job, "_claim", claiming)
-    made, _, _ = _switch_during_render(factory, renderer=renderer, template_slug="sidebar")
+    made, _, _ = _switch_during_render(factory, renderer=renderer, template_slug="photo-columns")
     left, kept = _versions(factory, made["document"])
-    assert (left.template_slug, left.fit) == ("classic", FitResult.overflow)
-    assert kept.template_slug == "sidebar"
+    assert (left.template_slug, left.fit) == ("band", FitResult.overflow)
+    assert kept.template_slug == "photo-columns"
     if switched_pages == 1:
         assert kept.fit == FitResult.one_page
         assert called == []
@@ -556,7 +556,7 @@ def test_an_error_of_the_overflow_hook_keeps_a_switch_queued_for_the_cron(
             switched.append(True)
             with factory() as db:
                 assert render_job.switch(
-                    db, made["user"], document_id, at=AT, template_slug="sidebar"
+                    db, made["user"], document_id, at=AT, template_slug="photo-columns"
                 )
                 render_job.mark_edited(db, made["user"], document_id)
                 db.commit()
@@ -572,8 +572,8 @@ def test_an_error_of_the_overflow_hook_keeps_a_switch_queued_for_the_cron(
     assert [
         (v.template_slug, v.pdf_sha256 is not None) for v in _versions(factory, made["document"])
     ] == [
-        ("classic", True),
-        ("sidebar", True),
+        ("band", True),
+        ("photo-columns", True),
     ]
     document = _document(factory, made["document"])
     assert (document.render_state, document.render_error) == (RenderState.idle, None)
@@ -614,7 +614,7 @@ def test_a_document_locked_while_the_pdf_is_stored_is_waited_for(
         )
 
 
-@pytest.mark.parametrize("change", [{"template_slug": "sidebar"}, {"language": Language.fr}])
+@pytest.mark.parametrize("change", [{"template_slug": "photo-columns"}, {"language": Language.fr}])
 def test_a_store_refused_its_lock_every_time_keeps_a_switch_queued_for_the_cron(
     factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch, change: dict[str, Any]
 ) -> None:

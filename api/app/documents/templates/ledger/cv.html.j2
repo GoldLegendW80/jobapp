@@ -1,0 +1,122 @@
+{#- ledger: a cream page between heavy black rules; the name in capitals and the headline on
+    the left, the contact lines in two columns on the right; then one row per section between
+    thin grey rules, its label on the left and its body on a grid of four columns: the profile
+    with the highlights and the competencies under it, the experience, the skill groups, the
+    education and the languages. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<div class="heavy"></div>
+<header class="head">
+{{ base.portrait() }}
+<div class="who">
+<h1 class="name{% if name|length > 22 %} long{% endif %}{% if name.split()|map("length")|select(">", 14)|list %} longword{% endif %}">{{ base.words(name) }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+</div>
+{% if contact %}
+<ul class="contact">
+{% for line in contact %}
+<li class="{{ line.kind }}">{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+</header>
+<div class="heavy"></div>
+
+{% if content.summary or content.highlights or content.competencies %}
+<section class="row">
+<h2 class="label">{{ base.label("summary") }}</h2>
+<div class="body">
+{% if content.summary %}<p class="summary">{{ content.summary }}</p>{% endif %}
+{% if content.highlights or content.competencies %}
+<div class="pair">
+{% if content.highlights %}
+<div class="half">
+<h3 class="title">{{ base.label("highlights") }}</h3>
+<ul class="lines">
+{% for item in content.highlights %}
+<li>{{ item }}</li>
+{% endfor %}
+</ul>
+</div>
+{% endif %}
+{% if content.competencies %}
+<div class="half">
+<h3 class="title">{{ base.label("competencies") }}</h3>
+<ul class="lines two">
+{% for item in content.competencies %}
+<li>{{ item }}</li>
+{% endfor %}
+</ul>
+</div>
+{% endif %}
+</div>
+{% endif %}
+</div>
+</section>
+{% endif %}
+
+{% if roles %}
+<section class="row">
+<h2 class="label">{{ base.label("experience") }}</h2>
+<div class="body">
+{% for role in roles %}
+<article class="role">
+<h3 class="title">{{ role.title }}{% if role.title and role.organisation %}, {% endif %}{{ role.organisation }}</h3>
+{% if role.period or role.location %}<p class="meta">{{ role.period }}{% if role.period and role.location %}, {% endif %}{{ role.location }}</p>{% endif %}
+{% for item in role.bullets %}
+<p class="text">{{ item }}</p>
+{% endfor %}
+</article>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if content.skills %}
+<section class="row">
+<h2 class="label">{{ base.label("skills") }}</h2>
+<div class="body cells">
+{% for group in content.skills %}
+<div class="cell{% if (group["items"] + [group.label])|map("length")|select(">", 40)|list %} wide{% endif %}">
+<h3 class="title">{{ group.label }}</h3>
+<ul class="lines">
+{% for item in group["items"] %}
+<li>{{ item }}</li>
+{% endfor %}
+</ul>
+</div>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if schools %}
+<section class="row">
+<h2 class="label">{{ base.label("education") }}</h2>
+<div class="body cells">
+{% for item in schools %}
+<div class="cell{% if [item.degree or "", item.school or "", item.location or ""]|map("length")|select(">", 40)|list %} wide{% endif %}">
+<h3 class="title">{{ item.degree }}</h3>
+<ul class="lines">
+{% if item.school %}<li>{{ item.school }}</li>{% endif %}
+{% if item.period or item.location %}<li>{{ item.period }}{% if item.period and item.location %}, {% endif %}{{ item.location }}</li>{% endif %}
+</ul>
+</div>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if languages %}
+<section class="row">
+<h2 class="label">{{ base.label("languages") }}</h2>
+<div class="body cells">
+{% for item in languages %}
+<p class="cell lang{% if (item.name ~ ": " ~ (item.level or ""))|length > 40 %} wide{% endif %}">{{ item.name }}{% if item.level %}: {{ item.level }}{% endif %}</p>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+<div class="heavy"></div>
+{% endblock %}

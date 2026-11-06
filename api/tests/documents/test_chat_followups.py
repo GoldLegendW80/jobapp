@@ -373,7 +373,7 @@ OWN = "upload-1a2b3c4d"
 def own_template() -> Any:
     """A person's own template, served while `alive[0]`, as D25b's loader would."""
     alive = [True]
-    mine = dataclasses.replace(templates.registry()["classic"], slug=OWN, name={"en": "Mine"})
+    mine = dataclasses.replace(templates.registry()["band"], slug=OWN, name={"en": "Mine"})
     # design_capture registers the real loader at import: put it back for the tests after
     previous = templates._loader
     templates.register_loader(lambda db, user, slug: mine if slug == OWN and alive[0] else None)
@@ -413,12 +413,12 @@ def test_a_persons_template_deleted_during_the_run_falls_back_with_a_note(
     generation = alex.generation(sent["generation"]["id"])
     assert generation.status is GenerationStatus.done
     assert chat.generate.WRITE_TEMPLATE not in (generation.estimate or {})
-    assert alex.document().template_slug == "classic"
+    assert alex.document().template_slug == "band"
     reply = _messages(api, alex)[-1]["text"]
     note = chat.TEMPLATE_GONE.format(name="Mine")
     assert reply.startswith(note)
     if with_text:
-        assert alex.versions()[-1].template_slug == "classic"
+        assert alex.versions()[-1].template_slug == "band"
         assert "Changed the summary." in reply
     else:
         assert reply == f"{note}\n{chat.NOTHING}"
@@ -428,13 +428,17 @@ def test_a_persons_template_deleted_during_the_run_falls_back_with_a_note(
 def test_a_chat_template_switch_records_what_the_template_cannot_print(
     api: Api, alex: Who, queue: RecordingQueue, clock: Any
 ) -> None:
-    sent = _send(api, alex, "use the sidebar template and shorten the summary", "valid").json()
+    sent = _send(
+        api, alex, "use the photo columns template and shorten the summary", "valid"
+    ).json()
     content = c.parse("cv", VALID).model_copy(update={"summary": "Platform engineer 漢字."})
     accepted = submit.Accepted(content, (), content)
-    _ask_and_settle(alex, sent["generation"]["id"], "sidebar", accepted, lambda: None, clock())
+    _ask_and_settle(
+        alex, sent["generation"]["id"], "photo-columns", accepted, lambda: None, clock()
+    )
     generation = alex.generation(sent["generation"]["id"])
     latest = alex.versions()[-1]
-    assert (latest.origin, latest.template_slug) == (Origin.chat, "sidebar")
+    assert (latest.origin, latest.template_slug) == (Origin.chat, "photo-columns")
     assert [(r["field_path"], r["code"]) for r in latest.corrections] == [
         ("summary", "not_printable")
     ]

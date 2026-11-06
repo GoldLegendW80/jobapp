@@ -186,7 +186,7 @@ def test_a_build_waits_for_the_consent_then_the_credential_then_starts(
     assert response.status_code == 202, response.text
     built = response.json()["base_cv"]
     assert built["source"] == "built"
-    assert built["template_slug"] == "classic"
+    assert built["template_slug"] == "band"
     assert built["is_default"] is True
     assert built["name"] == "My CV"
     assert built["generation"]["status"] == "waiting"
@@ -267,7 +267,7 @@ def test_a_copy_takes_the_draft_and_template_and_another_persons_is_404(
             BaseSource.built,
             at=clock(),
             content=load("base_cv_alex.json"),
-            template_slug="sidebar",
+            template_slug="photo-columns",
         )
         db.commit()
         source_id, draft = str(source.id), source.draft
@@ -275,7 +275,7 @@ def test_a_copy_takes_the_draft_and_template_and_another_persons_is_404(
     assert response.status_code == 201, response.text
     copy = response.json()["base_cv"]
     assert copy["name"] == "Copy of Original"
-    assert copy["template_slug"] == "sidebar"
+    assert copy["template_slug"] == "photo-columns"
     assert copy["source"] == "built"
     assert copy["is_default"] is False
     assert copy["generation"] is None

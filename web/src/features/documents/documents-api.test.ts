@@ -37,16 +37,16 @@ const spend = {
   last_30_days: { input: 3, output: 4, cost_usd: "1.00" },
 };
 const template = {
-  slug: "classic",
+  slug: "band",
   version: 1,
   user: false,
-  name: { en: "Classic", fr: "Classique" },
+  name: { en: "Band", fr: "Classique" },
   description: { en: "x", fr: "x" },
   tags: ["ats"],
   photo: "none",
   accent: null,
   kinds: ["cv", "letter"],
-  thumbnails: { cv: "/api/document-templates/classic/thumbnail?kind=cv&v=1" },
+  thumbnails: { cv: "/api/document-templates/band/thumbnail?kind=cv&v=1" },
 };
 const message = {
   id: 1,
@@ -165,10 +165,10 @@ const CASES: Case[] = [
   {
     name: "patchDocument",
     run: () =>
-      api.patchDocument("d1", { language: "fr", template_slug: "compact" }),
+      api.patchDocument("d1", { language: "fr", template_slug: "ledger" }),
     method: "PATCH",
     url: "/api/documents/d1",
-    body: { language: "fr", template_slug: "compact" },
+    body: { language: "fr", template_slug: "ledger" },
     reply: document,
   },
   {
@@ -398,8 +398,8 @@ describe("documents-api", () => {
     expect(api.originalPageUrl("d1", 2)).toBe(
       "/api/documents/d1/original?page=2",
     );
-    expect(api.templateThumbnailUrl("classic", "letter")).toBe(
-      "/api/document-templates/classic/thumbnail?kind=letter",
+    expect(api.templateThumbnailUrl("band", "letter")).toBe(
+      "/api/document-templates/band/thumbnail?kind=letter",
     );
   });
 

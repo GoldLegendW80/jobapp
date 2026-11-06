@@ -130,7 +130,7 @@ def test_an_upload_is_converted_into_the_default_base_cv(
     assert (made["source"], made["name"], made["template_slug"]) == (
         "uploaded",
         "Morgan CV",
-        "classic",
+        "band",
     )
     assert made["is_default"]
     assert (made["generation"]["status"], made["generation"]["wait_reason"]) == (

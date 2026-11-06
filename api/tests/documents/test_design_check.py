@@ -99,7 +99,7 @@ class Recorded:
 
 
 def test_every_shape_is_checked_at_both_steps_in_the_page_box_of_the_step() -> None:
-    template = templates.registry()["classic"]
+    template = templates.registry()["band"]
     check = Recorded("render_failed")
     found = asyncio.run(design_check.check_template(template, check))
     widths = []
@@ -118,7 +118,7 @@ def test_every_shape_is_checked_at_both_steps_in_the_page_box_of_the_step() -> N
 
 @pytest.mark.parametrize("code", ["renderer_unavailable", "timeout"])
 def test_a_renderer_down_busy_or_slow_says_nothing_of_the_template(code: str) -> None:
-    template = templates.registry()["classic"]
+    template = templates.registry()["band"]
     with pytest.raises(design_check.CheckUnavailableError):
         asyncio.run(design_check.check_template(template, Recorded(code)))
 
@@ -145,7 +145,7 @@ def _checked(
     return Checked(
         width=width,
         scroll_width=width if scroll_width is None else scroll_width,
-        height=10_000 // width,  # the tightest step, the wider page, is shorter
+        height=1_000_000 // width,  # the tightest step, the wider page, is shorter
         shown=shown,
         scale=1,
         found=tuple((seen,) for _ in range(needles)),
@@ -189,7 +189,7 @@ class Wide:
 
 
 def test_a_page_wider_than_its_text_is_scaled_at_every_shape_and_step() -> None:
-    template = templates.registry()["classic"]
+    template = templates.registry()["band"]
     assert asyncio.run(design_check.check_template(template, Wide(1))) == []
     found = asyncio.run(design_check.check_template(template, Wide(2)))
     wheres = [

@@ -4,7 +4,7 @@
 
 import-legacy turns the command line's `cv.json` and `letter.json` of that account's postings,
 attached by the jobs import (`./deploy.sh jobs import <email>` first), into the postings' CV and
-letter: version 1 with origin legacy and the template classic; a sent posting's PDF kept and
+letter: version 1 with origin legacy and the default template; a sent posting's PDF kept and
 frozen byte for byte (legacy.py). In one transaction, and idempotent: a second run finds every
 document made and changes nothing. `--dry-run` does the same work, prints the same counts and
 rolls everything back. It runs inside the api container:

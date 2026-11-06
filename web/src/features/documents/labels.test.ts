@@ -62,7 +62,8 @@ describe("labels", () => {
   });
 
   it.each([
-    ["classic", "Classic"],
+    ["band", "Band"],
+    ["photo-columns", "Photo columns"],
     ["two-column", "Two column"],
     ["upload-ab12cd34", "From your CV"],
     ["", ""],

@@ -192,7 +192,7 @@ def test_make_it_fit_starts_the_shortening_of_the_latest_version(
 def test_a_version_made_by_a_template_switch_is_shortened(alex: Who, api: Api, clock: Any) -> None:
     document = written(alex, alex.posting(80), result=FitResult.one_page)
     switched = api.request(
-        "PATCH", f"/api/documents/{document}", token=alex.token, json={"template_slug": "compact"}
+        "PATCH", f"/api/documents/{document}", token=alex.token, json={"template_slug": "ledger"}
     )
     assert switched.status_code == 200, switched.text
     draw(alex, document)
@@ -387,7 +387,7 @@ def test_each_check_refuses_with_its_sentence_and_creates_nothing(
             "PATCH",
             f"/api/documents/{document}",
             token=alex.token,
-            json={"template_slug": "banner"},
+            json={"template_slug": "ledger"},
         )
         assert switched.status_code == 200
     else:
@@ -470,7 +470,7 @@ def test_the_writer_shortens_a_switched_cv_and_the_sent_version_stays(
         )
     )
     with factory() as db:
-        render_job.switch(db, who.user, document, at=AT, template_slug="compact")
+        render_job.switch(db, who.user, document, at=AT, template_slug="ledger")
         render_job.mark_edited(db, who.user, document)
         db.commit()
     asyncio.run(
@@ -481,7 +481,7 @@ def test_the_writer_shortens_a_switched_cv_and_the_sent_version_stays(
     *_, switched = writers.versions(factory, document)
     assert (switched.origin, switched.template_slug, switched.fit) == (
         Origin.template,
-        "compact",
+        "ledger",
         FitResult.overflow,
     )
     with factory() as db:
@@ -511,7 +511,7 @@ def test_the_writer_shortens_a_switched_cv_and_the_sent_version_stays(
         sent.number + 1,
         Origin.generated,
         generation_id,
-        "compact",
+        "ledger",
     )
     assert writers.generation_row(factory, generation_id).status is GenerationStatus.done
     assert len(writers.document_row(factory, document).draft["summary"]) <= 330
@@ -528,7 +528,7 @@ def test_a_switch_committed_while_the_click_waits_is_read_under_the_lock(
         store.lock_document(other, alex.user, document)
         thread = in_thread(lambda: api.request("POST", fit(document), token=alex.token), outcome)
         wait_until_blocked(engine, [thread], 1)
-        render_job.switch(other, alex.user, document, at=alex.clock(), template_slug="compact")
+        render_job.switch(other, alex.user, document, at=alex.clock(), template_slug="ledger")
         store.commit(other)
     thread.join()
     assert "error" not in outcome, outcome.get("error")
