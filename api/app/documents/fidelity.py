@@ -6,9 +6,11 @@ original's page 1.
     measure(original_page, original_lines, candidate_pdf) -> Measure   (pure but for PDFium)
     overlay(original_page, candidate_png) -> JPEG
 
-- The page score: the ink of both pages at the original page image's size (pixels off each
-  page's median grey by INK; the original's photo boxes are grey already, and the candidate's
-  photo is the grey stand in) as intersection over union.
+- The page score: the ink of both pages at the original page image's scale, the candidate
+  letterboxed into the original's frame from the top left corner (`_pages`: a US Letter
+  original is never stretched onto A4), pixels off each page's median grey by INK (the
+  original's photo boxes are grey already, and the candidate's photo is the grey stand in), as
+  intersection over union.
 - The lines: the original's runs (the extraction of page 0, texts scrubbed) and the candidate's
   characters (pypdfium2 on our own render, never on an upload) are joined into lines (one
   baseline within BASELINE_PT, gaps under GAP_PT); each original line is matched to the unused
@@ -239,11 +241,30 @@ def _ink(image: Image.Image) -> Image.Image:
     return grey.point([255 if abs(level - back) > INK else 0 for level in range(256)])
 
 
+A4_WIDTH_PT = 210 * 72 / 25.4  # the candidate's page: the renderer prints A4 only
+
+
+def candidate_width(original_width_px: int, original_width_pt: float | None) -> int:
+    """The width to draw the candidate's A4 page 1 at, in pixels, so that it has the original
+    page image's pixels per point (the original's width when its size is unknown), at most
+    twice the original's width whatever page size the upload claims."""
+    if not original_width_pt or original_width_pt <= 0:
+        return original_width_px
+    width = round(original_width_px * A4_WIDTH_PT / original_width_pt)
+    return max(1, min(width, 2 * original_width_px))
+
+
 def _pages(original: bytes, candidate: bytes) -> tuple[Image.Image, Image.Image]:
+    """Both pages in the original's frame. The candidate, drawn at the original's pixels per
+    point (candidate_width), is letterboxed from the top left corner, never stretched: what an
+    A4 page lacks of a US Letter one is blank, what it has past it is cut (the lines too are
+    measured from the top left corner)."""
     first = Image.open(io.BytesIO(original)).convert("L")
     second = Image.open(io.BytesIO(candidate)).convert("L")
     if second.size != first.size:
-        second = second.resize(first.size, Image.Resampling.BILINEAR)
+        boxed = Image.new("L", first.size, 255)
+        boxed.paste(second, (0, 0))
+        second = boxed
     return first, second
 
 
@@ -293,6 +314,6 @@ def measure_lines(original: Sequence[Line], candidate: Sequence[Line], page: flo
 
 
 def measure(original_page: bytes, original: Sequence[Line], pdf: bytes, png: bytes) -> Measure:
-    """The candidate's PDF and its page 1 image (`png`, at the original image's width) against
-    the original's page image and lines."""
+    """The candidate's PDF and its page 1 image (`png`, at the original image's pixels per
+    point: candidate_width) against the original's page image and lines."""
     return measure_lines(original, candidate_lines(pdf), page_score(original_page, png))

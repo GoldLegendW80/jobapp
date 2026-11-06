@@ -303,6 +303,31 @@ def test_only_a_stop_on_a_limit_counts_as_one(status, error, limit) -> None:
     assert design_capture.stopped_on_a_limit(status, None) is False
 
 
+# #757 round 1 (follow up): each view_render was a full render; a second one in the same pass
+# is answered from the first, in words, without a render or an image.
+def test_a_second_view_render_in_one_pass_is_answered_without_a_render(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    answers: list[Any] = []
+    real = writer_design_tools.view_render
+
+    async def view_render(scope):
+        answers.append(await real(scope))
+        return answers[-1]
+
+    monkeypatch.setattr(writer_design_tools, "view_render", view_render)
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_viewed_twice"))
+    assert generation.status is GenerationStatus.done, generation.error
+    first, second = answers
+    assert [block["type"] for block in first] == ["image", "text"]
+    assert [block["type"] for block in second] == ["text"]
+    assert second[0]["text"] == f"{writer_design_tools.SAME_RENDER}\n{first[1]['text']}"
+    # the accepted submit's measure and the first view_render: two renders, not three
+    assert len(services.renderer.calls) == 2
+
+
 def test_a_refusal_is_repaired_once(who: Person, monkeypatch: pytest.MonkeyPatch) -> None:
     Services(monkeypatch, design("Morgan Exampleton"))
     base = uploaded_base(who)
@@ -694,9 +719,10 @@ def test_the_estimate_counts_the_images() -> None:
     assert pdf.low == 5 * 10_334 + 4 * (5_000 + 4_800) + 3 * 4_000 + 4_000 + 5 * 500
     # each page twice, sent again at each of the 13 later turns: the renders are the same
     assert pdf.high - docx.high == 4 * 1_600 * 13
-    # 14 turns, 5 submits sent again 10, 8, 6, 4 and 2 times, each with its view_render
-    resent = 30 * (13_334 + 1_600)
-    assert docx.high == 14 * 10_334 + 13 * 40_000 + resent + 5 * 13_334 + 14 * 500
+    # 14 turns, 6 submits: the refused one sent again 10 times, its repair and the four passes
+    # 9, 7, 5, 3 and 1 times, each with its view_render, and one more view_render 9 times
+    resent = 10 * 13_334 + 25 * (13_334 + 1_600) + 9 * 1_600
+    assert docx.high == 14 * 10_334 + 13 * 40_000 + resent + 6 * 13_334 + 14 * 500
     assert design_estimate.capture(design_estimate.prompt_chars("design")).high <= 1_500_000
     assert pdf.ceiling == 2 * pdf.high
     assert asyncio.iscoroutinefunction(design_check.check_template)

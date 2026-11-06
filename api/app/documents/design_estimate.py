@@ -15,13 +15,16 @@ the page images in it.
   12,000 characters), TEMPLATE_HIGH_CHARS for files near their caps.
 - Low: `n = 5` turns (the reads, the pages, one submit, the render, the closing line), one
   submit: `input = n*(F+P) + (n-1)*(R_low + I_low) + (n-2)*O_low`, `output = O_low + n*T`.
-- High: `n = DOCUMENTS_DESIGN_MAX_TURNS`, `k = 1 + DOCUMENTS_DESIGN_PASSES` submits. A submit
-  and the image that follows it are sent again only at the turns after them: the first at
-  turn FIRST_SUBMIT, then one every two turns (a view_render, a submit), so the j-th of them
-  (from 0) is sent again `r_j = max(n - FIRST_SUBMIT - 2j, 0)` times; the reads and the pages
-  at every turn after the first:
-  `input = n*(F+P) + (n-1)*(R_high + I_pages) + sum_j r_j*(O_high + I_render)`,
-  `output = k*O_high + n*T`.
+- High: `n = DOCUMENTS_DESIGN_MAX_TURNS`, `k = 2 + DOCUMENTS_DESIGN_PASSES` submits: a refused
+  one at turn FIRST_SUBMIT, its repair at the next turn, then one every two turns (a
+  view_render, a submit). A submit is sent again only at the turns after it: the refused one
+  `r_0 = max(n - FIRST_SUBMIT, 0)` times (its answer is a few lines), the j-th accepted one
+  (from 1, at turn `t_j = FIRST_SUBMIT + 2j - 1`) `r_j = max(n - t_j, 0)` times with the
+  image of its view_render; one more view_render (a second look in a pass, answered from the
+  last render) is counted as an image sent again `r_1` times; the reads and the pages at every
+  turn after the first:
+  `input = n*(F+P) + (n-1)*(R_high + I_pages) + r_0*O_high + sum_j r_j*(O_high + I_render)
+  + r_1*I_render`, `output = k*O_high + n*T`.
 - The ceiling is twice the high figure, as for a writer.
 
 Pure but for `for_capture`, which reads the upload's type, never its content.
@@ -71,12 +74,17 @@ def capture(
     images_low = IMAGE_TOKENS * (pages + 1)
     pages_high = IMAGE_TOKENS * 2 * pages
     o_low, o_high = text_tokens(TEMPLATE_LOW_CHARS), text_tokens(TEMPLATE_HIGH_CHARS)
-    n_low, n_high, k = TURNS_LOW, max(turns, TURNS_LOW), 1 + max(passes, 0)
+    n_low, n_high, k = TURNS_LOW, max(turns, TURNS_LOW), 2 + max(passes, 0)
     low_input = n_low * fixed + (n_low - 1) * (read_low + images_low) + (n_low - 2) * o_low
     low_output = o_low + n_low * TEXT_OUTPUT
-    resent = sum(max(n_high - FIRST_SUBMIT - 2 * j, 0) for j in range(k))
+    refused = max(n_high - FIRST_SUBMIT, 0)
+    accepted = [max(n_high - (FIRST_SUBMIT + 2 * j - 1), 0) for j in range(1, k)]
     high_input = (
-        n_high * fixed + (n_high - 1) * (read_high + pages_high) + resent * (o_high + IMAGE_TOKENS)
+        n_high * fixed
+        + (n_high - 1) * (read_high + pages_high)
+        + refused * o_high
+        + sum(accepted) * (o_high + IMAGE_TOKENS)
+        + accepted[0] * IMAGE_TOKENS
     )
     high_output = k * o_high + n_high * TEXT_OUTPUT
     high = high_input + high_output

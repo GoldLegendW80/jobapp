@@ -118,3 +118,24 @@ def test_the_overlay_is_a_jpeg_of_the_originals_size() -> None:
     jpeg = fidelity.overlay(page(), page(5))
     with Image.open(io.BytesIO(jpeg)) as image:
         assert (image.format, image.size) == ("JPEG", (600, 850))
+
+
+# #757 round 1 (follow up): a US Letter original is no longer stretched onto the A4 candidate.
+def _sheet(width: int, height: int) -> bytes:
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((56, 60, 300, 80), fill=(20, 20, 20))  # a name, 1px a point
+    draw.rectangle((56, 700, 500, 712), fill=(20, 20, 20))  # a line low on both pages
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    return out.getvalue()
+
+
+def test_a_us_letter_original_is_letterboxed_not_stretched() -> None:
+    letter, a4 = _sheet(612, 792), _sheet(595, 842)  # both at one pixel a point
+    assert fidelity.candidate_width(612, 612.0) == 595
+    assert fidelity.candidate_width(612, None) == 612
+    assert fidelity.candidate_width(1_568, 1.0) == 2 * 1_568  # a tiny page claimed: bounded
+    assert fidelity.page_score(letter, a4) == pytest.approx(1.0)
+    image = Image.open(io.BytesIO(fidelity.overlay(letter, a4)))
+    assert image.size == (612, 792)

@@ -402,6 +402,10 @@ class RunState:
     closed: bool = False  # no submit is taken any more
     refused: bool = False  # closed by a refusal, nothing accepted
     gone: bool = False  # the upload could not be read
+    # the last view_render's answer and the accepted files it printed: a second call while
+    # they are still the ones kept (the same pass) is answered from it, without a render
+    # (never stored, never logged)
+    viewed: tuple[dict[str, str], list[dict[str, Any]]] | None = None
     turn: asyncio.Lock = field(default_factory=asyncio.Lock)  # one submit at a time
     reading: asyncio.Lock = field(default_factory=asyncio.Lock)  # the inputs read once
 

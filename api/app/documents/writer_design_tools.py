@@ -10,7 +10,8 @@ id: each reads the run's binding (`writer_design.bind_generation`).
 - `view_render()`: page 1 of the base CV printed with the best template accepted so far at
   step 0 (the captured density), a grey box in place of the person's photo, as one image: its
   ink laid over the upload's page 0 (the render alone for a DOCX); the measure in words
-  (fidelity.py, design_capture.said).
+  (fidelity.py, design_capture.said). A second call while the same version is kept is
+  answered in words from the last one, without a render or an image (`RunState.viewed`).
 - `submit_template(cv_html, letter_html, css, labels?)`: `design_capture.labels_of` (the
   upload's own headings as the template's labels), `design_capture.validate`, then for an
   accepted one the fidelity measure (`candidate`: the base CV at step 0 through the renderer,
@@ -48,6 +49,10 @@ GONE = "The uploaded CV can no longer be read. Stop and answer with one short li
 NO_PAGE = "No page image: the file is a Word document, its styles are in read_design."
 NOT_A_PAGE = "Only pages 0 and 1 can be viewed, as far as the file has them."
 NOT_YET = "Nothing is accepted yet: submit_template first."
+SAME_RENDER = (
+    "Nothing changed since your last view_render: the image above is still the render. Submit"
+    " a correction to see a new one."
+)
 UNAVAILABLE = "The check cannot run now. Stop and answer with one short line."
 FAILED = "The tool failed. Stop and answer with one short line."
 RENDER_WIDTH = 1100
@@ -139,7 +144,7 @@ async def view_page(scope: app_tools.Scope, page: object) -> bytes | tuple[str, 
 @dataclass(frozen=True)
 class Candidate:
     pdf: bytes
-    png: bytes  # page 1, at the original page image's width
+    png: bytes  # page 1, at the original page image's pixels per point
     measure: fidelity.Measure | None  # None for a DOCX: no page to lie on
 
 
@@ -185,8 +190,10 @@ async def candidate(
     rendered = await render_client.render(build(template.steps("cv")[0]))
     width = RENDER_WIDTH
     if inputs.pages:
+        read = inputs.layout.get("read") or ()
+        width_pt = read[0]["size_pt"][0] if read else None
         with Image.open(io.BytesIO(inputs.pages[0])) as original:
-            width = original.width
+            width = fidelity.candidate_width(original.width, width_pt)
     png = await asyncio.to_thread(render_client.page1_png, rendered.pdf, width)
     if not inputs.pages or not inputs.layout.get("read"):
         return Candidate(rendered.pdf, png, None)
@@ -211,7 +218,14 @@ async def view_render(scope: app_tools.Scope) -> list[dict[str, Any]] | tuple[st
     run = design_capture.state(scope.run_id)
     if run.accepted is None or run.inputs is None:
         return NOT_YET, True
-    found = await candidate(scope, run.inputs, run.accepted, run.labels)
+    if run.viewed is not None and run.viewed[0] is run.accepted:
+        # A second look in the same pass: the files kept are the ones printed last, so the
+        # render is the same; it is said again in words, without a render or an image (the
+        # estimate counts one image a pass).
+        words = next(block["text"] for block in run.viewed[1] if block["type"] == "text")
+        return [{"type": "text", "text": f"{SAME_RENDER}\n{words}"}]
+    printed = run.accepted
+    found = await candidate(scope, run.inputs, printed, run.labels)
     if found is None:
         return GONE, True
     # One image a pass (the estimate counts one): the overlay holds both pages' ink, the render
@@ -223,6 +237,8 @@ async def view_render(scope: app_tools.Scope) -> list[dict[str, Any]] | tuple[st
     blocks = [_block(drawn)]
     words = design_capture.said(found.measure) or "No measure: the upload has no page image."
     blocks.append({"type": "text", "text": words})
+    if run.accepted is printed:  # no better version was accepted while it rendered
+        run.viewed = (printed, blocks)
     return blocks
 
 
@@ -334,7 +350,8 @@ def _view_render(scope: app_tools.Scope) -> SdkMcpTool[Any]:
         "Show page 1 of the base CV printed with the best template accepted so far at its "
         "loosest step, laid over page 0 of the upload (the upload's ink red, the render's "
         "blue, both black), and the measure: the score, the lines in place and the largest "
-        "offsets in points. Takes no id.",
+        "offsets in points. A second call before a new version is accepted shows nothing "
+        "new. Takes no id.",
         EMPTY,
     )
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
