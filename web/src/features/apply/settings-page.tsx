@@ -96,12 +96,6 @@ export function ApplicationsSettingsPage() {
             sentence="Postings are listed from this fit score. You set it on your profile, Search, as Minimum fit."
             link={{ to: "/settings/search", text: "Open Settings, Search" }}
           />
-          <ThresholdCard
-            id="write-documents"
-            heading="Write documents from"
-            value={query.data.write_documents_from}
-            sentence="The app writes a CV and a letter for postings from this fit score. It is a documents setting, read only here."
-          />
           <MinFitCard settings={query.data} />
           <FullAutoAdvanced settings={query.data} />
         </>
