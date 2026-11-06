@@ -265,8 +265,11 @@ const kpi = (page: Page, label: string) =>
     .getByRole("button", { name: new RegExp(`^${label}: `) });
 const summary = (page: Page) =>
   page.getByRole("main").getByRole("status").first();
-const postings = (page: Page) => page.getByRole("table", { name: "Postings" });
+const postings = (page: Page) => page.getByRole("list", { name: "Postings" });
 const bodyRows = (page: Page) => postings(page).locator("[data-index]");
+/** The posting shown beside the list, from 1024px wide. */
+const pane = (page: Page) =>
+  page.getByRole("region", { name: "Selected posting" });
 
 let context: BrowserContext;
 let page: Page;
@@ -316,8 +319,11 @@ test("a new account starts empty, then holds the 433 rows with the CSV counts", 
   await expect(summary(page)).toHaveText(`${TOTAL} postings`);
   for (const [label, count] of Object.entries(CSV_COUNTS))
     await expect(kpi(page, label)).toHaveAccessibleName(`${label}: ${count}`);
-  // The histogram counts every row: its buckets plus the unscored add up to 433.
-  const bars = page
+  // The histogram, in the Filters sheet, counts every row: its buckets plus the unscored add up
+  // to 433.
+  await page.getByRole("button", { name: /^Filters/ }).click();
+  const sheet = page.getByRole("dialog", { name: "Filters" });
+  const bars = sheet
     .getByRole("list", { name: "Postings per fit range" })
     .getByRole("button");
   await expect(bars).toHaveCount(10);
@@ -328,11 +334,16 @@ test("a new account starts empty, then holds the 433 rows with the CSV counts", 
     histogram += Number(/: (\d+) postings$/.exec(name)?.[1]);
   const unscored = Number(
     /(\d+) unscored/.exec(
-      (await page.getByText(/\d+ unscored/).textContent()) ?? "",
+      (await sheet.getByText(/\d+ unscored/).textContent()) ?? "",
     )?.[1],
   );
   expect(histogram + unscored).toBe(TOTAL);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
   await expect(bodyRows(page).first()).toBeVisible();
+  // The first posting is shown beside the list, and marked in it.
+  await expect(bodyRows(page).first()).toHaveAttribute("aria-current", "true");
+  await expect(pane(page).getByRole("heading", { level: 2 })).toBeVisible();
   await shots(page, "dashboard", false);
   expect(errors).toEqual([]);
 });
@@ -410,7 +421,7 @@ test("filter by status and search; the URL holds the view and opens the same in 
   expect(errors).toEqual([]);
 });
 
-test("scrolling loads all 433 rows page by page, with only a window in the DOM", async () => {
+test("scrolling the list loads all 433 rows page by page, with only a window in the DOM", async () => {
   test.setTimeout(90_000);
   const cursors: string[] = [];
   page.on("request", (request) => {
@@ -420,10 +431,12 @@ test("scrolling loads all 433 rows page by page, with only a window in the DOM",
   });
   await page.goto("/jobs");
   await expect(summary(page)).toHaveText(`${TOTAL} postings`);
-  const last = postings(page).locator(`[aria-rowindex="${TOTAL + 1}"]`);
+  const last = postings(page).locator(`[aria-posinset="${TOTAL}"]`);
+  // From 1024px the list scrolls in its own box, beside the selected posting.
   for (let i = 0; i < 40 && !(await last.isVisible()); i += 1) {
-    await page.evaluate(() => {
-      window.scrollTo(0, document.documentElement.scrollHeight);
+    await postings(page).evaluate((list) => {
+      const box = list.parentElement;
+      if (box) box.scrollTop = box.scrollHeight;
     });
     await page.waitForTimeout(300);
   }
@@ -510,9 +523,11 @@ test("a detail with its posting, files, PDF preview and history; back keeps the 
   }
 
   await page.getByRole("link", { name: "Back to jobs" }).click();
+  // The same view, and the posting it opened selected beside the list.
   const query = new URLSearchParams({
     status: "applied",
     company: job.company,
+    job: job.id,
   });
   await expect
     .poll(() => {
@@ -523,37 +538,46 @@ test("a detail with its posting, files, PDF preview and history; back keeps the 
   await expect(
     page.getByRole("list", { name: "Active filters" }),
   ).toContainText(`Company: ${job.company}`);
+  await expect(
+    pane(page).getByRole("heading", { level: 2, name: job.title }),
+  ).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("keyboard: arrows move between rows and Enter opens one", async () => {
+test("keyboard: arrows move the selection, the posting beside follows, and Enter opens one", async () => {
   await page.goto("/jobs?sort=fit");
   const first = bodyRows(page).first();
   await expect(first).toBeVisible();
   await first.focus();
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowDown");
-  await expect(bodyRows(page).nth(2)).toBeFocused();
-  const href = await bodyRows(page).nth(2).locator("a").getAttribute("href");
+  const third = bodyRows(page).nth(2);
+  await expect(third).toBeFocused();
+  await expect(third).toHaveAttribute("aria-current", "true");
+  const href = await third.locator("a").first().getAttribute("href");
+  const id = href?.split("/").at(-1) ?? "none";
+  await expect(page).toHaveURL(new RegExp(`/jobs\\?sort=fit&job=${id}$`));
+  const title = await third.locator("a").first().textContent();
+  await expect(
+    pane(page).getByRole("heading", { level: 2, name: title ?? "" }),
+  ).toBeVisible();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(new RegExp(`${href ?? "none"}$`));
   await page.goBack();
-  await expect(page).toHaveURL(/\/jobs\?sort=fit$/);
+  // The arrows replaced the entry: back lands on the list with that posting still selected.
+  await expect(page).toHaveURL(new RegExp(`/jobs\\?sort=fit&job=${id}$`));
   expect(errors).toEqual([]);
 });
 
-test("on a phone the rows are cards and nothing overflows", async () => {
+test("on a phone the list stands alone, its cards fit, and nothing overflows", async () => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto("/jobs?status=shortlisted");
   await expect(summary(page)).toHaveText("146 postings match");
   const card = bodyRows(page).first();
   await expect(card).toBeVisible();
-  // The header row is for screen readers only; each row is a bordered card.
-  const header = postings(page).getByRole("rowgroup").first();
-  await expect(header).toContainText("Company");
-  expect((await header.boundingBox())?.width ?? 0).toBeLessThanOrEqual(1);
-  // The row itself is the card (a table row holds its cells only).
-  await expect(card).toHaveCSS("border-top-style", "solid");
+  // No posting beside the list: a tap opens the posting's page.
+  await expect(pane(page)).toHaveCount(0);
+  await expect(card).not.toHaveAttribute("aria-current", "true");
   const box = await card.boundingBox();
   expect(box?.width ?? 999).toBeLessThanOrEqual(375 - 32);
   expect(

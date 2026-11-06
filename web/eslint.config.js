@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+
 import js from "@eslint/js";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
@@ -45,8 +47,121 @@ const SHADCN_ONLY = [
   },
 ];
 
+/**
+ * The layers of web/ARCHITECTURE.md, as import bans per folder. ESLint keeps one
+ * no-restricted-imports per file (a later block replaces an earlier one), so each folder gets all
+ * its bans in one block. Tests and stories may reach any layer to build fixtures.
+ */
+const FEATURES = readdirSync(new URL("./src/features", import.meta.url));
+const NOT_APP = ["@/app/**", "@/design-system/**"];
+const banned = (patterns) => ({
+  files: patterns.files,
+  ignores: ["src/**/*.test.{ts,tsx}", "src/**/*.stories.tsx"],
+  rules: {
+    "no-restricted-imports": [
+      "error",
+      {
+        patterns: patterns.groups.map(([group, message]) => ({
+          group,
+          message,
+        })),
+      },
+    ],
+  },
+});
+const LAYERS = [
+  banned({
+    files: ["src/lib/**", "src/hooks/**"],
+    groups: [
+      [
+        ["@/components/**", "@/features/**", ...NOT_APP],
+        "lib/ and hooks/ are the bottom layer: they import no component, feature or app file.",
+      ],
+    ],
+  }),
+  banned({
+    files: ["src/components/ui/**", "src/components/blocks/**"],
+    groups: [
+      [
+        ["@/components/shared/**", "@/features/**", ...NOT_APP],
+        "A generic component knows no feature: pass what it needs as props.",
+      ],
+    ],
+  }),
+  banned({
+    files: [
+      "src/features/*/api/**",
+      "src/features/*/helpers/**",
+      "src/features/*/hooks/**",
+    ],
+    groups: [
+      [
+        [
+          "@/components/**",
+          "@/features/*/components/**",
+          "@/features/*/pages/**",
+          ...NOT_APP,
+        ],
+        "api/, helpers/ and hooks/ hold data and logic: they render nothing, so they import no component or page.",
+      ],
+    ],
+  }),
+  banned({
+    files: ["src/components/shared/**"],
+    groups: [
+      [
+        ["@/features/*/components/**", "@/features/*/pages/**", ...NOT_APP],
+        "A shared component serves several pages: it imports no page and no component of a single page.",
+      ],
+    ],
+  }),
+  ...FEATURES.flatMap((feature) => [
+    banned({
+      files: [`src/features/${feature}/components/**`],
+      groups: [
+        [
+          [
+            "@/features/*/components/**",
+            `!@/features/${feature}/components/**`,
+          ],
+          "A component of one page lives in that page's feature. Used by two pages or more, it belongs in components/shared/.",
+        ],
+        [
+          ["@/features/*/pages/**", ...NOT_APP],
+          "A component imports no page and no app file.",
+        ],
+      ],
+    }),
+    banned({
+      files: [`src/features/${feature}/pages/**`],
+      groups: [
+        [
+          [
+            "@/features/*/components/**",
+            `!@/features/${feature}/components/**`,
+          ],
+          "A page composes its own feature's components and the shared ones (components/shared/).",
+        ],
+        [
+          ["@/features/*/pages/**", ...NOT_APP],
+          "A page imports no other page and no app file.",
+        ],
+      ],
+    }),
+  ]),
+];
+
 export default tseslint.config(
-  { ignores: ["dist", "coverage", "playwright-report", "test-results"] },
+  {
+    ignores: [
+      "dist",
+      "coverage",
+      "playwright-report",
+      "test-results",
+      "storybook-static",
+      ".storybook/public",
+    ],
+  },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [js.configs.recommended, ...tseslint.configs.strictTypeChecked],
@@ -87,6 +202,17 @@ export default tseslint.config(
     rules: { "no-restricted-syntax": ["error", ...SHADCN_ONLY] },
   },
   {
+    // Story files and their helpers export meta, story objects and helpers, not only components.
+    // The route table is configuration: a change to it reloads the page.
+    files: [
+      "src/**/*.stories.tsx",
+      "src/design-system/**",
+      ".storybook/**",
+      "src/app/routes.tsx",
+    ],
+    rules: { "react-refresh/only-export-components": "off" },
+  },
+  {
     files: ["src/**/*.test.{ts,tsx}", "src/test/**", "e2e/**", "*.config.ts"],
     languageOptions: { globals: { ...globals.node } },
     rules: {
@@ -94,6 +220,7 @@ export default tseslint.config(
       "@typescript-eslint/no-non-null-assertion": "off",
     },
   },
+  ...LAYERS,
   {
     files: ["**/*.js"],
     extends: [js.configs.recommended],

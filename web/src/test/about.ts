@@ -11,7 +11,7 @@ import {
   type About,
   type AboutPart,
   type PartKind,
-} from "@/features/profile/about-api";
+} from "@/features/profile/api/about-api";
 
 import { server } from "./server";
 

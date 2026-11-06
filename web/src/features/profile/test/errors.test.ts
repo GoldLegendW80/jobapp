@@ -1,0 +1,222 @@
+import { describe, expect, it } from "vitest";
+
+import { ApiError } from "@/lib/api";
+import { haraldLike } from "@/test/profile";
+
+import { serverFieldError, validationDetail } from "../helpers/errors";
+import {
+  toFactsForm,
+  toSearchForm,
+  toSkillsForm,
+} from "../helpers/editor-forms";
+import {
+  toAnswersForm,
+  toExperienceForm,
+  toIdentityForm,
+} from "../helpers/forms";
+
+const identity = toIdentityForm(haraldLike().identity);
+const experience = toExperienceForm(haraldLike().experience);
+const answers = toAnswersForm(haraldLike().answers);
+const facts = toFactsForm(haraldLike().facts);
+const skills = toSkillsForm(haraldLike().skills);
+const search = toSearchForm(haraldLike().search);
+
+describe("serverFieldError", () => {
+  it("maps a leaf path to that field, as a sentence", () => {
+    expect(
+      serverFieldError("data.email: must be a valid email address", identity),
+    ).toEqual({
+      name: "email",
+      message: "Must be a valid email address.",
+    });
+    expect(
+      serverFieldError(
+        "data.employers.2.start: must be a year or a month, written YYYY or YYYY-MM, between 1900 and 2100",
+        experience,
+      ),
+    ).toEqual({
+      name: "employers.2.start",
+      message:
+        "Must be a year or a month, written YYYY or YYYY-MM, between 1900 and 2100.",
+    });
+    expect(
+      serverFieldError("data.languages.1.name: Field required", identity)?.name,
+    ).toBe("languages.1.name");
+  });
+
+  it("maps an item level end before start to the item's end", () => {
+    expect(
+      serverFieldError(
+        "data.employers.0: end must not be before start",
+        experience,
+      ),
+    ).toEqual({
+      name: "employers.0.end",
+      message: "End must not be before start.",
+    });
+    expect(
+      serverFieldError(
+        "data.education.1: end must not be before start",
+        experience,
+      )?.name,
+    ).toBe("education.1.end");
+  });
+
+  it("maps a duplicate in a list to the first repeated item", () => {
+    const dup = {
+      ...experience,
+      employers: [
+        experience.employers[0]!,
+        experience.employers[1]!,
+        { ...experience.employers[2]!, key: "lumetra" },
+      ],
+    };
+    expect(
+      serverFieldError(
+        "data.employers: duplicate employer key: each must be unique",
+        dup,
+        {
+          unique: { employers: "key" },
+        },
+      ),
+    ).toEqual({
+      name: "employers.2.key",
+      message: "Duplicate employer key: each must be unique.",
+    });
+    const countries = {
+      ...answers,
+      work_authorization: [
+        answers.work_authorization[0]!,
+        { ...answers.work_authorization[1]!, country: " france " },
+      ],
+    };
+    expect(
+      serverFieldError(
+        "data.work_authorization: duplicate country: each must be unique",
+        countries,
+        {
+          unique: { work_authorization: "country" },
+        },
+      )?.name,
+    ).toBe("work_authorization.1.country");
+  });
+
+  it("maps a plain string list item to its value field", () => {
+    expect(
+      serverFieldError(
+        "data.leave_blank.0: control characters are not allowed",
+        answers,
+        {
+          wrapped: ["leave_blank"],
+        },
+      ),
+    ).toEqual({
+      name: "leave_blank.0.value",
+      message: "Control characters are not allowed.",
+    });
+  });
+
+  it.each([
+    "data.surprise: Extra inputs are not permitted",
+    "data.employers.9.start: out of range item",
+    "data.employers: duplicate employer key",
+    "data.employers.0: something else entirely",
+    "body.data: Input should be a valid dictionary",
+    "base_revision: Input should be greater than or equal to 0",
+    "not a detail at all",
+    "",
+  ])("gives undefined for %j", (detail) => {
+    expect(serverFieldError(detail, experience)).toBeUndefined();
+  });
+
+  it("keeps a message that already ends with a full stop", () => {
+    expect(
+      serverFieldError("data.phone: must be a phone number.", identity)
+        ?.message,
+    ).toBe("Must be a phone number.");
+  });
+});
+
+describe("serverFieldError on term lists", () => {
+  it("maps a refused term to that term of the list, without the prefix", () => {
+    expect(
+      serverFieldError(
+        "data.have.1.terms: term 2: invalid regular expression at position 7: missing ), unterminated subpattern",
+        skills,
+      ),
+    ).toEqual({
+      name: "have.1.terms.1",
+      message:
+        "Invalid regular expression at position 7: missing ), unterminated subpattern.",
+    });
+    expect(
+      serverFieldError(
+        "data.title_exclude.terms: term 1: nested quantifiers such as (a+)+ are not allowed: they can make matching hang",
+        search,
+      )?.name,
+    ).toBe("title_exclude.terms.0");
+    expect(
+      serverFieldError(
+        "data.gates.0.terms: term 1: a plain term is at most 200 characters",
+        skills,
+      ),
+    ).toEqual({
+      name: "gates.0.terms.0",
+      message: "A plain term is at most 200 characters.",
+    });
+  });
+
+  it.each([
+    "data.have.1.terms: term 3: invalid regular expression",
+    "data.have.1.terms: term 0: invalid regular expression",
+    "data.have.1.terms: List should have at most 300 items after validation",
+    "data.have.7.terms: term 1: invalid regular expression",
+  ])("leaves %j above the form", (detail) => {
+    expect(serverFieldError(detail, skills)).toBeUndefined();
+  });
+
+  it("maps a refused rule", () => {
+    expect(
+      serverFieldError(
+        "data.never_apply.0: control characters are not allowed",
+        search,
+        { wrapped: ["never_apply"] },
+      )?.name,
+    ).toBe("never_apply.0.value");
+  });
+
+  it("names an item only for a duplicate, never for a list wide rule", () => {
+    const rules = { unique: { blocks: "title" } };
+    expect(
+      serverFieldError(
+        "data.blocks: duplicate block title: each must be unique",
+        facts,
+        rules,
+      )?.name,
+    ).toBe("blocks.0.title");
+    expect(
+      serverFieldError(
+        "data.blocks: the fact base is 200123 bytes, at most 200000 allowed",
+        facts,
+        rules,
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe("validationDetail", () => {
+  it("reads the detail of a 422 only", () => {
+    const e422 = new ApiError("http", "x", {
+      status: 422,
+      body: { detail: "data.email: bad" },
+    });
+    const e409 = new ApiError("http", "x", {
+      status: 409,
+      body: { detail: "stale" },
+    });
+    expect(validationDetail(e422)).toBe("data.email: bad");
+    expect(validationDetail(e409)).toBeUndefined();
+    expect(validationDetail(new Error("x"))).toBeUndefined();
+  });
+});

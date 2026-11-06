@@ -2,8 +2,8 @@ import { act, waitFor } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { expect, vi } from "vitest";
 
-import type { Browser, Lease } from "@/features/browser/browser-api";
-import { screenFactory, type Screen } from "@/features/browser/screen";
+import type { Browser, Lease } from "@/features/browser/api/browser-api";
+import { screenFactory, type Screen } from "@/features/browser/helpers/screen";
 
 import { server } from "./server";
 

@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 
-import type { User } from "@/features/auth/api";
+import type { User } from "@/features/auth/api/auth-api";
 
 import { server } from "./server";
 

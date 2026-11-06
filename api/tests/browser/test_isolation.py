@@ -597,7 +597,7 @@ def test_a_deleted_persons_directory_goes_and_only_theirs(
 
 
 # --- the profile volume: one service mounts it, no backup holds it -----------------------------
-# The sentences of /privacy that say so are web/src/features/public/texts.ts (BROWSER_WHERE,
+# The sentences of /privacy that say so are web/src/features/public/lib/texts.ts (BROWSER_WHERE,
 # BROWSER_DISK); public-pages.test.tsx asserts the page shows them.
 
 VOLUME = "browserprofiles"

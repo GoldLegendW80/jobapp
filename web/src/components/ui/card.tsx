@@ -1,18 +1,22 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-function Card({ className, ...props }: React.ComponentProps<"div">) {
-  return (
-    <div
-      data-slot="card"
-      className={cn(
-        "flex flex-col gap-6 rounded-xl border bg-card py-6 text-card-foreground shadow-sm",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+// forwardRef: on React 18 a function component drops `ref` (a card that takes focus needs it).
+const Card = React.forwardRef<HTMLDivElement, React.ComponentProps<"div">>(
+  function Card({ className, ...props }, ref) {
+    return (
+      <div
+        ref={ref}
+        data-slot="card"
+        className={cn(
+          "flex flex-col gap-6 rounded-xl bg-card py-6 text-card-foreground",
+          className,
+        )}
+        {...props}
+      />
+    );
+  },
+);
 
 function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
@@ -31,7 +35,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-title"
-      className={cn("leading-none font-semibold", className)}
+      className={cn("leading-snug font-semibold", className)}
       {...props}
     />
   );

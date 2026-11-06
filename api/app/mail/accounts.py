@@ -56,8 +56,9 @@ from app.mail.errors import GoogleError, stored_code
 from app.mail.google import SCOPE_READONLY, SCOPE_SEND, GoogleClient, Grant, Tokens
 from app.mail.models import TOKEN_KIND, AccountStatus, MailAccount
 
-# The version of the consent text the page shows (web/src/features/mail/gmail-card.tsx). A
-# change of that text raises both, and a consent given to an older text no longer counts.
+# The version of the consent text the page shows
+# (web/src/features/mail/components/gmail-card.tsx). A change of that text raises both, and a
+# consent given to an older text no longer counts.
 CONSENT_VERSION = 1
 # A disconnect whose flag is older than this was interrupted: the tick finishes it.
 STALE_DISCONNECT = timedelta(seconds=60)

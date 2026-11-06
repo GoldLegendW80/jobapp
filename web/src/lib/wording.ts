@@ -296,6 +296,8 @@ export const WORDING = {
   // The posting page: Apply and the documents first, the rest folded.
   yourApplication: "Your application",
   moreAboutPosting: "More about this posting",
+  // The Jobs list's detail pane: the selected posting on its own page.
+  openFullPage: "Open full page",
   addWebsites: "Add websites",
   // Opportunities O3.
   pay: "Pay",

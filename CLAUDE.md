@@ -20,7 +20,8 @@ whole file.
 | `api/app/<module>/` | FastAPI + SQLAlchemy + arq worker, one folder per module: identity, profile, jobs, agents, ingestion, mail, documents, browser, apply |
 | `api/tests/<module>/` | pytest, against real Postgres and Redis (`ops/agent-test.sh` starts throwaway ones) |
 | `api/alembic/versions/` | migrations, expand first, contract later (CONTRIBUTING.md) |
-| `web/src/features/<feature>/` | React + Tailwind + shadcn + TanStack Query, Vitest next to the code |
+| `web/src/` | React + Tailwind + shadcn + TanStack Query: `app/` (routes, lazy pages, shell), `components/{ui,blocks,shared/<feature>}/` (shared: used by 2+ pages), `features/<feature>/{api,components,helpers,hooks,pages,stories,test}/` (all fetching in `api/`), `hooks/`, `lib/`. Map and import rules: [web/ARCHITECTURE.md](web/ARCHITECTURE.md) |
+| `web/src/index.css`, `web/src/design-system/`, `web/.storybook/` | the design system: tokens in index.css, documented in Storybook (`pnpm --dir web storybook`): a story next to each component, and every page under Pages with its user stories |
 | `web/e2e/` | Playwright journeys; a group per `<group>-all.config.ts` |
 | `browser/`, `renderer/`, `caddy/`, `tailscale/` | the browser service (Chromium, browserd), the PDF renderer, the proxy, the public URL |
 | `compose.yml`, `compose.mac.yml`, `compose.dev.yml` | the stack; add `compose.mac.yml` on an Apple silicon Mac (docs/runbooks/development-on-the-mac.md, Apple silicon) |

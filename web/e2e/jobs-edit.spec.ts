@@ -223,7 +223,7 @@ const kpiCount = async (page: Page, label: string) =>
       .exec((await kpi(page, label).getAttribute("aria-label")) ?? "")?.[1]
       ?.replaceAll(",", ""),
   );
-const postings = (page: Page) => page.getByRole("table", { name: "Postings" });
+const postings = (page: Page) => page.getByRole("list", { name: "Postings" });
 const rowBoxes = (page: Page) =>
   postings(page).getByRole("checkbox", { name: / at / });
 const bulkBar = (page: Page) =>
@@ -274,7 +274,8 @@ test("a detail page: status, notes autosave and fit set by hand", async () => {
   await page.goto("/jobs?status=found&sort=company");
   const first = postings(page).locator("[data-index='0']");
   await expect(first).toBeVisible();
-  const link = first.getByRole("link");
+  // The title is the item's first link: it opens the posting's own page.
+  const link = first.getByRole("link").first();
   const title = (await link.textContent()) ?? "";
   await link.click();
   await expect(
@@ -382,7 +383,7 @@ test("select five rows, set them to Shortlisted, then Undo", async () => {
 
 test("select every posting of a view up to the cap", async () => {
   await page.goto("/jobs?sort=company");
-  await postings(page)
+  await page
     .getByRole("checkbox", { name: "Select every posting in this view" })
     .click();
   const expected = Math.min(total, 500);

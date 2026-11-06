@@ -262,7 +262,7 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
   await expect(page.getByRole("main").getByRole("status").first()).toHaveText(
     "1 posting",
   );
-  await expect(page.getByRole("table", { name: "Postings" })).toContainText(
+  await expect(page.getByRole("list", { name: "Postings" })).toContainText(
     POSTING,
   );
 

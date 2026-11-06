@@ -1,6 +1,6 @@
 import { http, HttpResponse } from "msw";
 
-import type { Answer, Application } from "@/features/apply/apply-api";
+import type { Answer, Application } from "@/features/apply/api/apply-api";
 
 import { defaultApplySettings, server } from "./server";
 

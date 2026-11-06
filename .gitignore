@@ -45,3 +45,4 @@ backups/
 .env.mailsend
 .env.redis
 .secrets/
+web/storybook-static/

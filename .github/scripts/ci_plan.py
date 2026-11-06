@@ -383,10 +383,12 @@ def verify_problems(
 #    configuration) touches no group. The same rules as the pull request plan of CI, not a copy.
 # 3. JOURNEY_RULES below: the gate itself and this mapping run every group, the fakes of a group
 #    run that group, the scripts of operations and the shell tests run none.
-# 4. A web feature (web/src/features/<feature>/) touches its
+# 4. A web feature (web/src/features/<feature>/, and its shared components in
+#    web/src/components/shared/<feature>/) touches its
 #    groups and those of every feature that imports the file, directly or transitively.
-#    Web wiring (routes.tsx, App.tsx, main.tsx) carries nothing on; files outside a feature
-#    (web/src/lib/) are shared. AREA_GROUPS names the groups of web features.
+#    Web wiring (app/routes.tsx, app/app.tsx, app/main.tsx) carries nothing on; files outside a
+#    feature (web/src/app/, components/, hooks/, lib/) are shared. AREA_GROUPS names the groups
+#    of web features.
 # 5. A spec or a group config of web/e2e touches its own group; any other file there (stack.ts,
 #    a helper, playwright.config.ts) every group.
 # 6. Anything else runs every group: a path nobody decided is checked in full.
@@ -626,15 +628,15 @@ NAMED_REGISTRIES = frozenset(
 # request paths they hold, matched against the routes the api files declare. A new card on one
 # of these pages widens its api file by itself; a new page shared this way is added here.
 WEB_SHARED_PAGES = {
-    "web/src/features/shell/app-shell.tsx": "the shell of every signed in page",
-    "web/src/features/auth/auth-provider.tsx": "the session of every page",
-    "web/src/features/auth/login-page.tsx": "the sign in of every journey",
-    "web/src/features/onboarding/onboarding-gate.tsx": "the onboarding gate",
-    "web/src/features/onboarding/welcome-page.tsx": "the onboarding",
-    "web/src/features/jobs/jobs-page.tsx": "the job list",
-    "web/src/features/jobs/job-detail-page.tsx": "the job page",
-    "web/src/features/profile/profile-page.tsx": "the profile page",
-    "web/src/features/account/account-page.tsx": "the account page",
+    "web/src/app/layouts/app-shell.tsx": "the shell of every signed in page",
+    "web/src/features/auth/components/auth-provider.tsx": "the session of every page",
+    "web/src/features/auth/pages/login-page.tsx": "the sign in of every journey",
+    "web/src/components/shared/onboarding/onboarding-gate.tsx": "the onboarding gate",
+    "web/src/features/onboarding/pages/welcome-page.tsx": "the onboarding",
+    "web/src/features/jobs/pages/jobs-page.tsx": "the job list",
+    "web/src/features/jobs/pages/job-detail-page.tsx": "the job page",
+    "web/src/features/profile/pages/profile-page.tsx": "the profile page",
+    "web/src/features/account/pages/account-page.tsx": "the account page",
 }
 # A string of the web code that is a page address, not a request: a link or a navigation.
 WEB_LINK = re.compile(r"(?:\b(?:to|href|path)\s*[=:]\s*\{?\s*|\bnavigate\(\s*)$")
@@ -653,7 +655,9 @@ ROUTE_METHODS = frozenset(
 )
 
 
-WEB_WIRING = frozenset({"web/src/routes.tsx", "web/src/App.tsx", "web/src/main.tsx"})
+WEB_WIRING = frozenset(
+    {"web/src/app/routes.tsx", "web/src/app/app.tsx", "web/src/app/main.tsx"}
+)
 SHARED = "<shared>"
 TS_TOKEN = re.compile(
     # ECMAScript 12.3: LF, CR, LS and PS terminate a single-line comment.
@@ -1405,8 +1409,14 @@ def route_matches(path: tuple[str, ...], route: tuple[str, ...]) -> bool:
 
 
 def web_area(path: str) -> str:
+    """The web module of a path: web/src/features/<module>/..., or a component two pages share,
+    web/src/components/shared/<module>/..., which belongs to the module whose data it shows."""
     parts = path.split("/")
-    return parts[3] if len(parts) > 4 and parts[2] == "features" else SHARED
+    if len(parts) > 4 and parts[2] == "features":
+        return parts[3]
+    if len(parts) > 5 and parts[2:4] == ["components", "shared"]:
+        return parts[4]
+    return SHARED
 
 
 def importers(start: str, graph: dict[str, set[str]], stop) -> set[str]:

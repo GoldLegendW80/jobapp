@@ -39,9 +39,9 @@ function Table({
         className={cn(
           "w-full",
           stacked
-            ? "sm:overflow-x-auto sm:rounded-lg sm:border"
-            : "overflow-x-auto rounded-lg border",
-          busy && "opacity-60",
+            ? "sm:overflow-x-auto sm:rounded-lg sm:border sm:bg-card"
+            : "overflow-x-auto rounded-lg border bg-card",
+          busy && "[&_tbody]:opacity-60",
         )}
       >
         <table
@@ -65,8 +65,8 @@ function TableCaption({
       data-slot="table-caption"
       className={cn(
         "px-3 py-2 text-left text-sm text-muted-foreground",
-        // A stacked table is a block under 640px: the caption spans the cards' width.
-        stacked && "max-sm:block max-sm:w-full max-sm:px-0",
+        // A block spans the cards' width by itself; a width here would beat sr-only's 1px and scroll the page sideways.
+        stacked && "max-sm:block max-sm:px-0",
         className,
       )}
       {...props}
@@ -85,7 +85,7 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
       <thead
         data-slot="table-header"
         className={cn(
-          "border-b bg-muted/50 text-left text-xs text-muted-foreground",
+          "border-b bg-muted text-left text-xs text-muted-foreground",
           stacked && "max-sm:sr-only",
           className,
         )}

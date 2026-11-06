@@ -22,12 +22,14 @@ function SheetClose(props: React.ComponentProps<typeof SheetPrimitive.Close>) {
   return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
 }
 
-function SheetOverlay({
-  className,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+// forwardRef: on React 18 Presence needs the overlay's ref to run its exit animation.
+const SheetOverlay = React.forwardRef<
+  HTMLDivElement,
+  React.ComponentProps<typeof SheetPrimitive.Overlay>
+>(function SheetOverlay({ className, ...props }, ref) {
   return (
     <SheetPrimitive.Overlay
+      ref={ref}
       data-slot="sheet-overlay"
       className={cn(
         "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in motion-reduce:animate-none! data-[state=open]:fade-in-0",
@@ -36,7 +38,7 @@ function SheetOverlay({
       {...props}
     />
   );
-}
+});
 
 function SheetContent({
   className,
@@ -52,7 +54,7 @@ function SheetContent({
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          "fixed z-50 flex flex-col gap-4 bg-background shadow-lg transition ease-in-out motion-reduce:transition-none data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in motion-reduce:animate-none! data-[state=open]:duration-500",
+          "fixed z-50 flex flex-col gap-4 bg-card shadow-lg transition ease-in-out motion-reduce:transition-none data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in motion-reduce:animate-none! data-[state=open]:duration-500",
           side === "right" &&
             "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
           side === "left" &&

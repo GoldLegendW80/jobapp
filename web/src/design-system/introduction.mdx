@@ -1,0 +1,55 @@
+import { Meta } from "@storybook/addon-docs/blocks";
+
+<Meta title="Introduction" />
+
+# jobapp design system
+
+A calm workspace for a job search. A grey canvas, white cards with soft corners, near-black pills
+for the actions, and one orange for what matters: the figure to look at first, a chart, progress,
+a count that waits for you. The postings, CVs and applications are the content; the interface stays quiet
+around them.
+
+## Principles
+
+1. **One black pill per group.** The primary action (`primary`) is a near-black pill; the actions
+   beside it are grey pills (`secondary`) or quiet (`ghost`). The active section of a navigation
+   is a black pill too.
+2. **Orange is rare.** `brand` marks the featured figure, charts, progress and the counts that
+   wait for the person. Never an ordinary button. Focus is a neutral ring, so it never reads as
+   an error.
+3. **Words first, color second.** Fit, status and pay are always said in words; their tone only
+   helps the eye. Meaning colors (`success`, `warning`, `info`, `destructive`) carry meaning,
+   never categories.
+4. **White on grey is the depth.** Cards sit on the canvas without a border or a shadow; panels
+   inside a card are grey. Only menus, popovers and dialogs cast a shadow.
+5. **Soft and round.** Every action is a pill; fields 12 px, cards 20 px, dialogs 24 px.
+6. **Motion answers a click.** Feedback in 120 ms, overlays under 250 ms, one strong ease out,
+   nothing that moves by itself.
+
+## How it is built
+
+- **Tokens** live in one file, `web/src/index.css`: color, radius, shadow, motion and the type
+  family (Instrument Sans). The app and this Storybook read the same file; change a token and
+  both follow.
+- **Components** are the shadcn components of `web/src/components/ui`, each with its story next
+  to it, plus a few shared blocks in `web/src/components` (PageHeader, PillNav, Brand).
+- **Pages** are only compositions of those components; `eslint.config.js` forbids a hand-built
+  button, field, table or dialog. Under **Pages**, every route of the app renders for real (its
+  guards, the shell, the page), against the same fake api as the tests. Each story is one user
+  story: "As a job seeker, I want ..., so that ...".
+- **Themes**: the paint brush in the toolbar switches between the system setting, light and
+  dark. The app follows the system setting.
+
+## Writing in the interface
+
+Plain words from the person's side ("Find jobs", not "Run a sweep"); the same verb from the button
+to the toast ("Apply", then "Application sent"); sentence case; errors say what happened and what
+to do next. No dash as a separator in any text a person reads: use a comma, a colon or a new
+sentence.
+
+## Run it
+
+```sh
+pnpm --dir web storybook        # http://localhost:6006
+pnpm --dir web build-storybook  # a static copy in web/storybook-static
+```

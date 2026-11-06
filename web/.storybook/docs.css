@@ -1,0 +1,4 @@
+/* Docs pages: each story block sits on the app canvas, so cards show and dark stories read. */
+.docs-story {
+  background-color: var(--background);
+}

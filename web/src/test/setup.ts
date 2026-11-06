@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
 
 import { server } from "./server";
@@ -49,6 +49,10 @@ for (const [name, fn] of [
 ] as const) {
   if (missing(name, proto)) proto[name] = fn;
 }
+
+// Pages load lazily (app/routes.tsx): a file's first visit to a page also compiles that page,
+// which can pass the default 1 s of findBy and waitFor while the whole suite runs in parallel.
+configure({ asyncUtilTimeout: 3000 });
 
 // Any request without a handler fails the test, so nothing reaches a real network.
 beforeAll(() => {

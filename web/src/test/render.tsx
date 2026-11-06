@@ -5,7 +5,7 @@ import { createMemoryRouter, RouterProvider } from "react-router";
 
 import { createQueryClient } from "@/lib/query";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { routes } from "@/routes";
+import { routes } from "@/app/routes";
 
 /**
  * Render with a fresh QueryClient using the app's own defaults, so no cache leaks between tests.

@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 
-import { PHONE_QUERY } from "@/lib/use-media-query";
+import { PHONE_QUERY } from "@/hooks/use-media-query";
 
 /**
  * Make `window.matchMedia` answer as a phone does (narrower than `sm`): the phone query matches,

@@ -1,6 +1,6 @@
 import { delay, http, HttpResponse } from "msw";
 
-import type { JobDetail, JobListItem } from "@/features/jobs/api";
+import type { JobDetail, JobListItem } from "@/features/jobs/api/jobs-api";
 
 import { server } from "./server";
 
