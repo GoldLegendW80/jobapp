@@ -154,6 +154,8 @@ DEFAULT_SCRIPTS = {
     (Kind.cv, GenerationMode.posting): "documents_cv_valid",
     (Kind.cv, GenerationMode.shorten): "documents_cv_shorten",
     (Kind.letter, GenerationMode.posting): "documents_letter_valid",
+    (Kind.cv, GenerationMode.panel): "documents_cv_panel",
+    (Kind.letter, GenerationMode.panel): "documents_letter_panel",
     (Kind.proposal, GenerationMode.posting): "documents_proposal_valid",
 }
 # The writer of each kind of posting document, and the modes it writes in.

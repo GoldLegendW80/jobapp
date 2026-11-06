@@ -392,3 +392,24 @@ def test_the_catalog_lists_the_eight_panel_agents_under_documents() -> None:
         assert catalog.CATEGORY_OF[name] == "documents"
         assert found[name].model == "claude-sonnet-5-5"
         assert "Adapted from hiring-panel-skill by Alex Chen" in found[name].system_prompt
+
+
+def test_a_version_that_no_longer_reads_fails_the_panel_and_the_letter_still_follows(
+    world: World,
+) -> None:
+    document, panel_id, generation = written_cv(world, world.posting(70))
+    with world.factory() as db:
+        db.execute(
+            sa.update(DocumentVersion)
+            .where(DocumentVersion.document_id == document)
+            .values(content={"schema": 1, "unknown_field": "x"})
+        )
+        db.commit()
+        source = db.get(DocumentGeneration, generation)
+        assert source is not None
+        source_run = source.run_id
+    fakes = Fakes(world)
+    assert asyncio.run(panel.run(fakes.steps(), panel_id)) == "failed"
+    assert row(world, panel_id).failed == ["panel_error"]
+    assert fakes.after == [(source_run, "failed")]
+    assert fakes.prompts == {}

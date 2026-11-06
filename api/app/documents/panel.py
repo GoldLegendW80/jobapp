@@ -354,7 +354,8 @@ def document_text(kind: str, content: dict[str, Any], fixed: dict[str, Any] | No
     """The document as a reader meets it: its printed fields in order, and above each employer's
     bullets the line the template prints from the fixed facts (title, organisation, place,
     dates); the schools and languages of the fixed facts at the end."""
-    model = c.parse(Kind.letter if kind == "letter" else Kind.cv, content)
+    parsed_as: Any = {"letter": Kind.letter, "base": "base"}.get(kind, Kind.cv)
+    model = c.parse(parsed_as, content)
     employers = {e.get("key"): e for e in (fixed or {}).get("employers") or []}
     lines: list[str] = []
     shown: set[str] = set()
@@ -537,17 +538,27 @@ def _stopped(db: Session, run_id: uuid.UUID) -> str:
 class RuntimeCall:
     """`Call` on the agents runtime: one run of the named agent, executed in this process (the
     pattern of apply/model_check.py `RuntimeCheck`). `scripts` names the fake backend's stream
-    per agent (tests; the default stream is the agent's name)."""
+    per agent, or a list of them for its successive calls (tests; the default stream is the
+    agent's name)."""
 
     context: Any
-    scripts: dict[str, str] = field(default_factory=dict)
+    scripts: dict[str, str | list[str]] = field(default_factory=dict)
+    _calls: dict[str, int] = field(default_factory=dict)
+
+    def _script(self, agent: str) -> str | None:
+        found = self.scripts.get(agent)
+        if not isinstance(found, list):
+            return found
+        count = self._calls.get(agent, 0)
+        self._calls[agent] = count + 1
+        return found[min(count, len(found) - 1)] if found else None
 
     async def __call__(self, agent: str, user_id: uuid.UUID, prompt: str, budget: int) -> Reply:
         from app.agents import runner  # the SDK: the worker's image only
 
         context = self.context
         key = panel_hold.hold(prompt)
-        data = PanelInput(request=key, token_budget=budget, script=self.scripts.get(agent))
+        data = PanelInput(request=key, token_budget=budget, script=self._script(agent))
         expects = None if agent == MERGE_AGENT else ROLE_OF[agent.removeprefix("documents_panel_")]
 
         def create(db: Session) -> uuid.UUID | str:
@@ -932,7 +943,29 @@ async def _reviews(steps: Steps, loaded: Loaded) -> tuple[dict[str, Any], list[u
 async def run(steps: Steps, panel_id: uuid.UUID) -> str:
     """The whole panel (module docstring). Returns its final status. Never raises for a step
     that fails: the panel says what failed, and the letter of a CV still follows."""
-    loaded = await asyncio.to_thread(_in_db, steps.sessions, lambda db: load(db, panel_id))
+    try:
+        loaded = await asyncio.to_thread(_in_db, steps.sessions, lambda db: load(db, panel_id))
+    except Exception as exc:
+        # A version that no longer reads: the panel fails, the first version stays.
+        logger.error(
+            "documents.panel.failed",
+            extra={"panel_id": str(panel_id), "error": type(exc).__name__},
+        )
+        await asyncio.to_thread(
+            _save,
+            steps.sessions,
+            panel_id,
+            status=PanelStatus.failed.value,
+            failed=["panel_error"],
+            finished_at=steps.clock(),
+        )
+        if steps.after is not None:
+            row = await asyncio.to_thread(
+                _in_db, steps.sessions, lambda db: db.get(DocumentPanel, panel_id)
+            )
+            cv_run = row.source_run_id if row is not None and row.kind == "cv" else None
+            await steps.after(cv_run, PanelStatus.failed.value)  # the letter still follows
+        return PanelStatus.failed.value
     if loaded is None:
         return "gone"
     status = PanelStatus.failed.value
@@ -1179,7 +1212,15 @@ def close_unsent(sessions: sessionmaker[Session], panel_id: uuid.UUID, at: datet
     )
 
 
-async def job(context: Any, panel_id: uuid.UUID, *, scripts: dict[str, str] | None = None) -> str:
+def _one(found: str | list[str] | None) -> str | None:
+    if isinstance(found, list):
+        return found[0] if found else None
+    return found
+
+
+async def job(
+    context: Any, panel_id: uuid.UUID, *, scripts: dict[str, str | list[str]] | None = None
+) -> str:
     """The arq job `documents_panel` (app/worker.py): the panel on the agents runtime of this
     process, then the letter of a CV, whatever the panel's outcome."""
     from app.agents import runner
@@ -1198,7 +1239,7 @@ async def job(context: Any, panel_id: uuid.UUID, *, scripts: dict[str, str] | No
         sessions=context.sessions,
         clock=context.clock,
         settings=context.settings,
-        rebuild_script=(scripts or {}).get("rebuild"),
+        rebuild_script=_one((scripts or {}).get("rebuild")),
         after=after,
     )
     return await run(steps, panel_id)

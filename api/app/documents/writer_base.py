@@ -179,6 +179,9 @@ def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
         if document.source_document_id is None:
             return None  # the file was deleted in ingestion
         upload_id = str(document.source_document_id)
+    elif generation.mode is GenerationMode.panel and document.source_document_id is not None:
+        # The hiring panel's rebuild of a converted upload (D29): its file stays a source.
+        upload_id = str(document.source_document_id)
     return {
         "generation_id": str(generation.id),
         "document_id": str(document.id),
