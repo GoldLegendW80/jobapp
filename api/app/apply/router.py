@@ -113,6 +113,8 @@ class QuestionOut(BaseModel):
 
 
 class QuestionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     answer: str = Field(default="", max_length=5000)
     remember: bool = False
 
