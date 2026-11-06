@@ -31,7 +31,7 @@ The command line workspace (`engine/` beside this repository) is the reference. 
 | An agent writes `data/jobs/<id>/cv.json` and `letter.json` by hand, after a person asks | The CV writer and the letter writer (agents runtime) write the same shapes for every found posting, automatically, through one validated tool each |
 | `assemble.py` hard codes name, contact, employers, dates, education, languages and the photo | The template reads them from the profile (`identity`, `experience`), or from the base CV where the profile is still empty; a writer never writes them |
 | `fit.py` and `letter.py` try density steps loosest first in Chrome on the Mac | The same loop on the Jetson's renderer, per template, with each template's own steps |
-| `style.css.html`, one design | Twenty templates, each a folder of HTML, CSS and a manifest; the first one, "Classic", re-expresses the command line's layout; and a template derived from the person's own uploaded CV |
+| `style.css.html`, one design | Three templates (the owner's, since D27; twenty before it, the first of which, "Classic", re-expressed the command line's layout), each a folder of HTML, CSS and a manifest; and a template derived from the person's own uploaded CV |
 | A fact check pass done by the agent rereading `facts.md` "as an adversary" | M9's rules run in code after every generation, and what they find is corrected automatically and recorded on the document |
 | Hard rule 9: never regenerate the PDF of an `applied` row | A sent version is frozen by a database trigger and never rendered again |
 | `build` moves `found` or `shortlisted` to `cv_ready` | The first CV of a posting that fits one page does the same |
