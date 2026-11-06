@@ -378,8 +378,9 @@ def test_a_posting_estimate_includes_both_panels() -> None:
     limits = estimate.limits()
     pair = estimate.posting(9_000, 4_000, 6_000, **limits)
     one = panel.cost(estimate.CONTENT_LOW_CHARS, 6_000, **limits)
-    assert pair.high >= 2 * one.high
-    assert pair.ceiling == 2 * pair.high
+    shown = estimate.with_panels(pair, 6_000, **limits)
+    assert shown.high == pair.high + 2 * one.high
+    assert shown.low > pair.low
 
 
 def test_the_catalog_lists_the_eight_panel_agents_under_documents() -> None:

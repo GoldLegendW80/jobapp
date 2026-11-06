@@ -107,5 +107,6 @@ def figures(db: Session, user_id: uuid.UUID) -> Figures:
     kind = CredentialKind(credential.kind) if credential is not None else None
     profile = estimate.profile_chars(db, user_id)
     base = estimate.base_chars(db, user_id, None)
-    one = estimate.posting(profile, base, estimate.POSTING_DEFAULT_CHARS, **estimate.limits())
+    pair = estimate.posting(profile, base, estimate.POSTING_DEFAULT_CHARS, **estimate.limits())
+    one = estimate.with_panels(pair, estimate.POSTING_DEFAULT_CHARS, **estimate.limits())
     return Figures(model=model_for(kind), priced=pricing.priced(kind), posting=one)

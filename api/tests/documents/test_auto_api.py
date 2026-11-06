@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -20,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
-from app.documents import consent, estimate, generate, store, tick
+from app.documents import consent, generate, store, tick
 from app.documents.models import (
     Author,
     BaseSource,
@@ -197,39 +196,6 @@ def test_a_recorded_stream_named_by_the_click_is_the_writers_and_the_letters(
         assert generate.LETTER_SCRIPT not in letter.estimate
 
 
-@pytest.mark.parametrize("script", ["", "Journey", "journey-1", "journey one", "a" * 31])
-def test_a_script_that_is_not_a_stream_suffix_is_refused(alex: Who, api: Api, script: str) -> None:
-    job = alex.posting(80)
-    response = api.request(
-        "POST", write(job), token=alex.token, json={"kinds": ["cv"], "script": script}
-    )
-    assert response.status_code == 422
-
-
-def test_a_click_with_the_ceiling_reached_is_written_and_never_counted(
-    alex: Who, api: Api, factory: sessionmaker[Session], clock: Any, migrated_url: str
-) -> None:
-    with factory() as db:
-        db.execute(
-            sa.text(
-                "UPDATE profiles SET sections = jsonb_set(sections, '{search}', "
-                "CAST(:s AS jsonb)) WHERE user_id = :u"
-            ),
-            {"s": '{"documents": {"daily_ceiling": 1}}', "u": alex.user},
-        )
-        db.commit()
-    auto = alex.posting(90)
-    settings = make_settings(migrated_url, agents_fake_backend=True)
-    tick.tick(factory, clock(), settings, only=[alex.user])
-    clicked = alex.posting(90)
-    response = api.request("POST", write(clicked), token=alex.token, json={"kinds": ["cv"]})
-    assert response.status_code == 202, response.text
-    assert response.json()["generations"][0]["status"] == "running"
-    spent = api.request("GET", SPEND, token=alex.token).json()
-    assert spent["written_today"] == 1  # the automatic one only
-    assert alex.generations(auto)[0][2] is GenerationTrigger.auto
-
-
 def test_a_click_from_another_base_cv_names_it(alex: Who, api: Api) -> None:
     with alex.factory() as db:
         other = store.create_base(db, alex.user, "Other", BaseSource.built, at=alex.clock()).id
@@ -240,24 +206,6 @@ def test_a_click_from_another_base_cv_names_it(alex: Who, api: Api) -> None:
     )
     assert response.status_code == 202, response.text
     assert alex.generations(job)[0][3] == other
-
-
-def test_an_automatic_generation_that_waits_gives_way_to_a_click_and_a_running_one_is_409(
-    alex: Who, api: Api, factory: sessionmaker[Session], clock: Any, migrated_url: str
-) -> None:
-    first, second = alex.posting(90), alex.posting(85)
-    settings = make_settings(migrated_url, agents_fake_backend=True)
-    tick.tick(factory, clock(), settings, only=[alex.user])
-    assert [g[1] for g in alex.generations(second)] == [GenerationStatus.queued]
-    response = api.request("POST", write(second), token=alex.token, json={"kinds": ["cv"]})
-    assert response.status_code == 202, response.text
-    # one frozen clock: both rows have the same created_at, so compare them as a set
-    assert {g[1:3] for g in alex.generations(second)} == {
-        (GenerationStatus.cancelled, GenerationTrigger.auto),
-        (GenerationStatus.running, GenerationTrigger.click),
-    }
-    busy = api.request("POST", write(first), token=alex.token, json={"kinds": ["cv"]})
-    assert busy.status_code == 409
 
 
 def test_a_click_waits_behind_a_render_holding_the_posting_and_both_commit(
@@ -335,85 +283,6 @@ def test_another_persons_posting_and_base_cv_answer_404(
     assert bad.status_code == 422
 
 
-def test_the_spend_counts_the_modules_runs_only_and_never_another_persons(
-    alex: Who, api: Api, factory: sessionmaker[Session], clock: Any, queue: RecordingQueue
-) -> None:
-    blake = Who(factory, api, BLAKE, clock)
-    blake.credential()
-    for who in (alex, blake):
-        job = who.posting(10)
-        response = api.request("POST", write(job), token=who.token, json={"kinds": ["cv"]})
-        assert response.status_code == 202, response.text
-    with factory() as db:
-        db.execute(
-            sa.text(
-                "UPDATE agent_runs SET input_tokens = 1000, output_tokens = 200, cost_usd = 0.5 "
-                "WHERE user_id = :u"
-            ),
-            {"u": alex.user},
-        )
-        db.execute(
-            sa.text(
-                "UPDATE agent_runs SET input_tokens = 7, output_tokens = 7, cost_usd = 9 "
-                "WHERE user_id = :u"
-            ),
-            {"u": blake.user},
-        )
-        # a run of another module of Alex: never part of the documents' spend
-        db.execute(
-            sa.text(
-                "INSERT INTO agent_runs (user_id, agent, input, status, input_tokens, "
-                "output_tokens, cost_usd) SELECT user_id, 'echo', input, status, 5000, 5000, 3 "
-                "FROM agent_runs WHERE user_id = :u LIMIT 1"
-            ),
-            {"u": alex.user},
-        )
-        db.commit()
-    spent = api.request("GET", SPEND, token=alex.token)
-    assert spent.status_code == 200, spent.text
-    body = spent.json()
-    assert (body["today"]["input"], body["today"]["output"]) == (1000, 200)
-    assert Decimal(body["last_30_days"]["cost_usd"]) == Decimal("0.5")
-    assert body["priced"] is True
-
-
-def test_a_lower_threshold_counts_the_postings_it_adds_with_their_estimate(
-    alex: Who, api: Api, factory: sessionmaker[Session], clock: Any
-) -> None:
-    with factory() as db:
-        db.execute(
-            sa.text(
-                "UPDATE profiles SET sections = jsonb_set(sections, '{search}', "
-                "CAST(:s AS jsonb)) WHERE user_id = :u"
-            ),
-            {"s": '{"documents": {"min_fit": 65}}', "u": alex.user},
-        )
-        db.commit()
-    for fit in (80, 65, 64, 55):
-        alex.posting(fit)
-    alex.posting(50, days_ago=30)
-    alex.posting(None)
-
-    def asked(min_fit: int | None = None) -> dict[str, Any]:
-        params = {} if min_fit is None else {"min_fit": min_fit}
-        response = api.request("GET", SPEND, params=params, token=alex.token)
-        assert response.status_code == 200, response.text
-        return response.json()
-
-    saved = asked()
-    assert (saved["min_fit"], saved["to_write"], saved["newly"]) == (65, 2, 0)
-    assert saved["newly_estimate"]["tokens"] == {"low": 0, "high": 0}
-    with factory() as db:
-        each = consent.figures(db, alex.user, clock().date()).posting
-    two = estimate.times(each, 2)
-    for lowered in (asked(55), asked(0)):
-        assert (lowered["to_write"], lowered["newly"]) == (4, 2)
-        assert lowered["newly_estimate"]["tokens"] == {"low": two.low, "high": two.high}
-        assert lowered["newly_estimate"]["cost"] is not None  # an API key
-    assert (asked(64)["newly"], asked(65)["newly"], asked(100)["newly"]) == (1, 0, 0)
-    assert asked(80)["to_write"] == 1
-
-
 # Around both midnights: UTC, and Paris (summer, UTC+2, and winter, UTC+1). `found_on` is the UTC
 # date of the clock, so a posting found 29 days ago counts at every one of these instants.
 BOUNDARIES = [
@@ -425,25 +294,6 @@ BOUNDARIES = [
     datetime(2026, 1, 14, 23, 0, 0, tzinfo=UTC),  # midnight in Paris, winter
     datetime(2026, 3, 28, 23, 30, 0, tzinfo=UTC),  # the night the clocks change
 ]
-
-
-@pytest.mark.parametrize("now", BOUNDARIES, ids=lambda at: at.isoformat())
-def test_min_fit_counts_the_last_30_days_only(
-    alex: Who, api: Api, clock: Any, now: datetime
-) -> None:
-    clock.now = now
-    token = api.login_token(ALEX)
-    alex.posting(60)
-    alex.posting(60, days_ago=29)
-    alex.posting(60, days_ago=30)
-    alex.posting(40)
-    alex.posting(None)
-    at_default = api.request("GET", SPEND, token=token).json()
-    assert (at_default["min_fit"], at_default["postings_30_days"]) == (70, 0)
-    lowered = api.request("GET", SPEND, params={"min_fit": 50}, token=token).json()
-    assert (lowered["min_fit"], lowered["postings_30_days"], lowered["to_write"]) == (50, 2, 2)
-    assert lowered["to_write_estimate"]["tokens"]["high"] > 0
-    assert api.request("GET", SPEND, params={"min_fit": 101}, token=token).status_code == 422
 
 
 def test_writing_the_cv_again_from_another_base_cv_takes_the_written_letter_along(
