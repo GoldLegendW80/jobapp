@@ -269,12 +269,14 @@ def read_application(
         agent=_agent(db, application),
         hold_until=full_auto.hold_until(db, application) if held else None,
         now=deps.clock(request),
-        **_filled(db, application),
+        **_filled(db, application, deps.clock(request)),
     )
 
 
-def _filled(db: Session, application: Application) -> dict[str, Any]:
-    """A20: the list of what the agent filled, and the answers it chose (from the run report)."""
+def _filled(db: Session, application: Application, now: datetime) -> dict[str, Any]:
+    """A20: the list of what the agent filled, and the answers it chose (from the run report).
+    The list's hash, which a Confirm sends back, only while a held session of the current run
+    waits for it (`confirm.live`)."""
     from app.apply import applier, confirm
 
     review = confirm.review_agent(db, application)
@@ -286,7 +288,7 @@ def _filled(db: Session, application: Application) -> dict[str, Any]:
         out["filled"] = FilledOut(
             fields=[FieldOut.model_validate(f) for f in fields],
             submit=str(listed.get("submit") or ""),
-            fields_hash=hashed if application.state is State.ready else None,
+            fields_hash=hashed if confirm.live(db, application, now) else None,
         )
     report = db.get(ApplicationAnswer, (application.id, applier.REPORT_KEY))
     if report is not None and report.user_id == application.user_id:

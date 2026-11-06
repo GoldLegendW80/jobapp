@@ -238,6 +238,8 @@ FACTS_JS = r"""
     return {
       tag: control.tagName.toLowerCase(),
       type: kindOf(control),
+      // A20: whether the type is written: a <button> without one is a form's default submit.
+      typed: !!(control.hasAttribute && control.hasAttribute("type")),
       role: (control.getAttribute("role") || "").toLowerCase(),
       in_form: !!form,
       in_control: !!(up(control) && closest(up(control), "a, button, [role=button], [role=link]")),
@@ -460,28 +462,45 @@ STEP_PHRASES = frozenset({
 
 def review_step(facts: Any, *, action: str = "click") -> bool:
     """A wizard's step button on the review lease (A20): True only when the clicked element and
-    the element under the click point are buttons whose names are all step phrases (fail
-    closed: no name, an unreadable fact, a selector hit, a send word, a link: False)."""
+    the element under the click point are buttons whose names are all step phrases, or a form's
+    default submit (a `<button>` with no type: an upload picker, "Add another", Yes or No) whose
+    names hold no word of a send (REVIEW_SEND). Fail closed: no name, an unreadable fact, a
+    selector hit, a wrapper of a submit, a send word, a link: False. A pass may still send the
+    form: the caller marks the result `step_submit`, and the api counts it as a possible send."""
     if action != "click" or not isinstance(facts, dict):
         return False
     targets = [facts]
     if "point" in facts:
         targets.append(facts["point"])
-    for target in targets:
-        if not isinstance(target, dict) or not isinstance(target.get("names"), list):
-            return False
-        if target.get("selector_error") or target.get("selector_hit"):
-            return False
-        if target.get("tag") == "a" or target.get("role") == "link":
-            return False
-        names = [n for n in target["names"] if isinstance(n, str) and n.strip()]
-        if not names or len(names) > NAMES_MAX:
-            return False
-        for name in names:
-            folded = " ".join(words(name[:NAME_MAX], camel=False))
-            if folded not in STEP_PHRASES or says_agent_send([name]):
-                return False
-    return True
+    return all(_review_target(target) for target in targets)
+
+
+# A20: on the review lease, what a default submit's name must not hold: the words of a send
+# (says_submit, says_agent_send) and those a last step says alone ("Confirm", "Complete",
+# "Save", "Finalise", "Validate"), as stems over the glued words. A wizard's "Save and continue"
+# is a step phrase, read first.
+REVIEW_SEND = CONFIRM_VERBS + PROFILE_STEMS + ("bestatig",)
+
+
+def _review_target(target: Any) -> bool:
+    if not isinstance(target, dict) or not isinstance(target.get("names"), list):
+        return False
+    if target.get("selector_error") or target.get("selector_hit") or target.get("custom_submit"):
+        return False
+    if target.get("tag") == "a" or target.get("role") == "link":
+        return False
+    names = [n for n in target["names"] if isinstance(n, str) and n.strip()]
+    if not names or len(names) > NAMES_MAX:
+        return False
+    if says_agent_send(names):
+        return False
+    if all(" ".join(words(n[:NAME_MAX], camel=False)) in STEP_PHRASES for n in names):
+        return True
+    if target.get("holds_submit") or says_submit(names) or _starts(_glued(names), REVIEW_SEND):
+        return False
+    default = target.get("tag") == "button" and target.get("typed") is False
+    # The element under the point inside that button (its text, an icon) does not submit alone.
+    return default or not _submits(target, "click")
 
 
 # A19: what else marks a send on the agent's lease, read on a button (never a link): German

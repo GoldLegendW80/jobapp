@@ -87,8 +87,11 @@ TRANSITIONS: dict[State, frozenset[State]] = {
 MANUAL_SENT_FROM = frozenset({S.queued, S.filling, S.needs_person})
 
 # One click Apply's agent (A19): its own first act on a submit element, never another mode's.
-AGENT_MOVES = {S.filling: frozenset({S.submitting})}
-# One click Apply's agent (A19): the person's Try again after a send it could not confirm.
+# A20: Review first's run, from `ready` too: a held session lost after a step act browserd traced
+# records the possible send (confirm.lost), never a click.
+AGENT_MOVES = {S.filling: frozenset({S.submitting}), S.ready: frozenset({S.submitting})}
+# The apply agent (A19, Review first's A20): the person's Try again after a send it could not
+# confirm (applier.retry, only for an application the agent ran).
 PERSON_RETRIES = {S.submit_unknown: frozenset({S.queued})}
 
 # Where a `submitting` with no click goes (`move(..., click_refused=True)`): back to `ready`, or
@@ -140,7 +143,7 @@ def move(
     )
     person_retry = (
         retried_by_person
-        and application.mode is Mode.direct
+        and application.mode in (Mode.direct, Mode.review)
         and to in PERSON_RETRIES.get(current, ())
     )
     if not (sent_by_person or no_click or agent_click or person_retry or allowed(current, to)):

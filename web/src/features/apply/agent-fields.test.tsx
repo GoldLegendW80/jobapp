@@ -44,6 +44,41 @@ describe("AgentFields (A20)", () => {
     ]);
   });
 
+  it("keeps two fields of one label as two rows (round 1 of the review)", () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    renderWithQuery(
+      <AgentFields
+        application={fakeApplication("ready", { mode: "review" })}
+        filled={{
+          ...FILLED,
+          fields: [
+            {
+              step: "Work",
+              label: "Company",
+              kind: "text",
+              value: "Example Robotics",
+            },
+            {
+              step: "Work",
+              label: "Company",
+              kind: "text",
+              value: "Example Labs",
+            },
+          ],
+        }}
+        onChanged={() => {}}
+      />,
+    );
+    expect(screen.getByText("Example Robotics")).toBeInTheDocument();
+    expect(screen.getByText("Example Labs")).toBeInTheDocument();
+    expect(screen.getAllByText("Company")).toHaveLength(2);
+    // No duplicate key warning from React.
+    expect(
+      errors.mock.calls.some((call) => String(call[0]).includes("same key")),
+    ).toBe(false);
+    errors.mockRestore();
+  });
+
   it("lists every filled field and confirms with the hash it showed, at phone width", async () => {
     window.innerWidth = 375;
     window.dispatchEvent(new Event("resize"));

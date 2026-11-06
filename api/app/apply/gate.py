@@ -583,7 +583,8 @@ def confirm_review(
         raise RefusedError("not_ready")
     if application.answers_hash is None or sent != application.answers_hash:
         raise RefusedError("stale")
-    if (now - application.updated_at).total_seconds() > confirm.BEAT_S:
+    if not confirm.live(db, application, now):
+        # No held session of the current run waits (A20): it ends as `confirm.lost` ends it.
         confirm.lost(db, application, now)
         raise RefusedError("session_lost")
     authorisation = Authorisation(
@@ -897,8 +898,9 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
         from app.apply import applier
 
         if applier.ran_agent(db, application):
-            # One click Apply's agent (A19): one more run of the agent, which looks on the site
-            # for the earlier send first; never an empty Review first item.
+            # The apply agent's run (One click Apply, A19; Review first's, A20): one more run of
+            # the agent, which looks on the site for the earlier send first; never an empty
+            # Review first item, nor the old list with a Confirm no held session waits for.
             applier.retry(db, application, now)
             return application
     if application.ats == "email" and application.mail_send_id is not None:

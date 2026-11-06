@@ -389,6 +389,32 @@ def test_the_cv_lands_in_every_resume_widget(a19, agent):
         agent, "browser_file_upload", ref=ref(page, "button", "New resume"), paths=["cv.pdf"]
     )
     assert fresh["ok"], fresh
+    # The same list as a custom combobox (A20 round 1): a click opens it, a click on an option
+    # chooses; the session records that choice under the combobox's label (applier._clicked).
+    from app.apply import applier
+
+    page = fresh["page"]
+    combo = ref(page, "combobox", "Resume on file")
+    opened = act(agent, "browser_click", ref=combo)
+    assert opened["ok"], opened
+    page = opened["page"]
+    print("COMBOBOX OPEN\n" + page)
+    option = ref(page, "option", "Upload a new file")
+    session = applier.ApplySession(tools=None, capability=None, stop=None, arm=None)  # type: ignore[arg-type]
+    session._record("browser_click", {"ref": combo}, fresh["page"], "Field Robotics Technician")
+    picked = act(agent, "browser_click", ref=option)
+    assert picked["ok"], picked
+    session.page = picked["page"]
+    session._record("browser_click", {"ref": option}, page, "Field Robotics Technician")
+    assert [(e["label"], e["value"], e["kind"]) for e in session.filled] == [
+        ("Resume on file", "Upload a new file", "choice")
+    ], page
+    page = picked["page"]
+    print("COMBOBOX PICKED\n" + page)
+    fresh = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "New resume file"), paths=["cv.pdf"]
+    )
+    assert fresh["ok"], fresh
     send = ref(fresh["page"], "button", "Submit application")
     assert agent.tool("browser_click", ref=send)["error"] == "submit_permit"
     clicked = agent.tool("browser_click", agent.capability, ref=send)
@@ -396,6 +422,7 @@ def test_the_cv_lands_in_every_resume_widget(a19, agent):
     assert agent.tool("browser_wait_for", text="Thank you for applying")["ok"]
     [one] = sent(a19, "a20-widgets")
     assert one["fields"]["existing_resume"] == "new", one["fields"]
+    assert one["fields"]["picked_resume"] == "new", one["fields"]
     files = {f["field"]: (f["filename"], f["sha256"]) for f in one["files"]}
     cv, letter = (
         hashlib.sha256(CV.encode()).hexdigest(),
@@ -405,6 +432,7 @@ def test_the_cv_lands_in_every_resume_widget(a19, agent):
         "cv_button": ("cv.pdf", cv),
         "letter_drop": ("letter.pdf", letter),
         "resume_new": ("cv.pdf", cv),
+        "resume_picked": ("cv.pdf", cv),
     }, files
 
 
@@ -436,8 +464,28 @@ def test_on_the_review_lease_the_agent_never_sends_and_the_gate_s_click_sends_on
         review, "browser_file_upload", ref=ref(page, "button", "Resume"), paths=["cv.pdf"]
     )
     assert uploaded["ok"], uploaded
-    moved = act(review, "browser_click", ref=ref(uploaded["page"], "button", "Next"))
+    page = uploaded["page"]
+    # `<button>`s without a type, each a default submit of the form (round 1 of the review):
+    # with no send word they pass as a step does, traced (`step_submit`) as a possible send.
+    from app.apply import applier
+
+    more = act(review, "browser_click", ref=ref(page, "button", "Add another"))
+    assert more["ok"], more
+    assert more.get("step_submit") is True, more
+    page = more["page"]
+    print("REVIEW ADD ANOTHER\n" + page)
+    yes = ref(page, "button", "Yes")
+    assert applier.container(page, yes)[1] == "Are you authorised to work in the EU?", page
+    assert applier.container_role(page, yes) == "group", page
+    chosen = act(review, "browser_click", ref=yes)
+    assert chosen["ok"], chosen
+    assert chosen.get("step_submit") is True, chosen
+    page = chosen["page"]
+    assert sent(a19, "a20-review") == []  # neither sent the form
+    assert 'textbox "Link"' in page and page.count('textbox "Link"') == 2, page
+    moved = act(review, "browser_click", ref=ref(page, "button", "Next"))
     assert moved["ok"], moved  # a submit button of the step, named Next: a wizard's step
+    assert moved.get("step_submit") is True, moved
     page = moved["page"]
     print("REVIEW STEP 2\n" + page)
     notice = ref(page, "textbox", "notice period")
@@ -473,6 +521,9 @@ def test_on_the_review_lease_the_agent_never_sends_and_the_gate_s_click_sends_on
     assert one["fields"] == {
         "full_name": "Adaline Example",
         "email": "e2e-a20@example.org",
+        "link1": "",
+        "link2": "",
+        "authorised": "Yes",
         "notice": "One month",
     }, one["fields"]
     assert [f["filename"] for f in one["files"]] == ["cv.pdf"]

@@ -22,8 +22,19 @@ holds that capability. On the last step the agent names the control that sends t
   control with the lease's capability; the agent then reads the page only (phase `confirm`) and
   reports the confirmation as One click Apply's recording does (`submitted`, else
   `submit_unknown`, never sent again);
-- Cancel (`gate.cancel`) ends the wait, nothing sent; the wait's bound (READY_WAIT_S), a lost
-  lease or a crash end it `failed` with `session_lost`, nothing sent.
+- Cancel (`gate.cancel`) ends the wait, nothing sent; the wait's bound (READY_WAIT_S, 15
+  minutes), a lost lease or a crash end it `failed` with `session_lost`, nothing sent (or
+  `submit_unknown` after a step act browserd traced, `applier.sent_before_confirm`); so does
+  another application's need of the browser (`yields`, below);
+- a Confirm is offered and accepted only while a held session of the current run lives
+  (`live`): the run's `agent_ready` is newer than the last Try again or end, and the hold beat
+  within BEAT_S;
+- the wait never takes the apply queue's one slot: the fill job hands the held session over
+  (`hand_over`) to a job of its own queue (`queue.APPLY_HOLD`, at most HOLDS_MAX at once and
+  one per person), which waits, clicks on the Confirm and releases the lease. The hold keeps
+  the one browser (its `apply_review` lease, tier 1, its active time counted): it gives it up
+  at its next poll when another person's lease waits, or a submit or an own session of the
+  same person does (`yields`): the person's own other fills wait behind it, 15 minutes at most.
 
 Nothing of a value goes into a log or an event: they carry ids, codes and counts.
 """
@@ -59,11 +70,23 @@ if TYPE_CHECKING:
 
 EVENT = "agent_review"  # written at the click on Apply with the box ticked (service.start)
 FIELDS_KEY = "agent:filled"
-READY_WAIT_S = 1800.0  # the held session waits this long for the person's Confirm
+READY_WAIT_S = 900.0  # the held session waits this long for the person's Confirm (15 minutes)
 POLL_S = 2.0
 KEEP_S = 60.0  # a call on the lease this often keeps browserd's idle timer (300 s) away
 BEAT_S = 180  # a held session that wrote no beat for this long is gone (Confirm refused)
 _REF = re.compile(r"\s*\[ref=e[0-9]+\]")
+HOLDS_MAX = 2  # held sessions at once, one per person (one browser holds one in practice)
+# The same person's waiters a hold gives the browser up for: a submit, or their own session in
+# the browser. Their other fills wait behind it (else each would end the list being read).
+OWN_YIELDS = frozenset({"apply_submit", "full_auto", "takeover", "signin", "apply_manual",
+                        "profile_edit"})  # fmt: skip
+
+
+def yields(user_id: str, holder: str, purpose: str) -> bool:
+    """Whether a hold of `holder` gives the browser up to this waiter (sweeps wait)."""
+    if purpose == "sweep":
+        return False
+    return user_id != holder or purpose in OWN_YIELDS
 
 
 def review_agent(db: Session, application: Application) -> bool:
@@ -102,13 +125,19 @@ def fields_of(db: Session, application: Application) -> dict[str, Any] | None:
 def write_ready(db: Session, application: Application, session: ApplySession, now: datetime):
     """`filling` to `ready` with the list of what the agent filled (the caller commits)."""
     from app.apply import run
+    from app.apply.applier import CHOSEN_STEP
 
     ready = session.ready or {}
     fields = [
         {k: e[k] for k in ("step", "label", "kind", "value") if k in e}
         | ({"chosen": e["chosen"]} if e.get("chosen") else {})
         for e in session.filled
-    ]
+    ] + [
+        # An answer the agent says it chose that no recorded act matches: shown all the same.
+        {"step": CHOSEN_STEP, "label": e["label"], "kind": "choice", "value": e["value"],
+         "chosen": e["why"]}
+        for e in session.chosen_extra
+    ]  # fmt: skip
     submit = str(ready.get("label") or "Submit")
     row = db.get(ApplicationAnswer, (application.id, FIELDS_KEY))
     if row is None:
@@ -137,12 +166,35 @@ def confirm(
     return gate.confirm_review(db, user_id, application_id, sent, now)
 
 
-def lost(db: Session, application: Application, now: datetime) -> None:
-    """The held session is gone before the click: `failed`, nothing sent."""
-    from app.apply import run
+def lost(db: Session, application: Application, now: datetime) -> str:
+    """The held session is gone before the click: `failed`, nothing sent; `submit_unknown` when a
+    step act browserd traced in this run may have sent it (never sent again by the app)."""
+    from app.apply import applier, run
 
-    if application.state in (State.ready, State.approved):
-        run._end(db, application, State.failed, "session_lost", now)
+    if application.state not in (State.ready, State.approved):
+        return application.state.value
+    if applier.stepped(db, application):
+        return applier.sent_before_confirm(db, application, now)
+    run._end(db, application, State.failed, "session_lost", now)
+    return State.failed.value
+
+
+def live(db: Session, application: Application, now: datetime) -> bool:
+    """A held session of the current run waits for this application's Confirm: `ready`, its
+    run's `agent_ready` newer than the last Try again and the last end, and a beat within
+    BEAT_S (the hold writes `updated_at`)."""
+    from app.apply.applier import _last
+
+    if application.state is not State.ready:
+        return False
+    listed = _last(db, application, "agent_ready")
+    if listed is None:
+        return False
+    for kind in ("retry", "ended"):
+        later = _last(db, application, kind)
+        if later is not None and later > listed:
+            return False
+    return (now - application.updated_at).total_seconds() <= BEAT_S
 
 
 # --- the waiting job ---------------------------------------------------------------------------
@@ -171,6 +223,18 @@ def _end_lost(db: Session, application_id: uuid.UUID, now: datetime) -> str:
         return "gone"
     lost(db, found[0], now)
     return found[0].state.value
+
+
+def _give_up(db: Session, application_id: uuid.UUID, now: datetime) -> str | None:
+    """The hold gives the browser up: `ready` ends as `lost` ends it; None once confirmed."""
+    from app.apply import run
+
+    found = run._locked(db, application_id)
+    if found is None:
+        return "gone"
+    if found[0].state is State.approved:
+        return None
+    return lost(db, found[0], now)
 
 
 def _arm(db: Session, application_id: uuid.UUID, now: datetime, code: str | None) -> str:
@@ -233,9 +297,11 @@ async def hold(
     db: Db,
     clock: Callable[[], datetime],
     stop: Callable[[], Awaitable[str | None]],
+    wanted: Callable[[], Awaitable[bool]] | None = None,
 ) -> str:
-    """The held session after `apply_ready`: wait for the person's Confirm, Cancel or the bound,
-    keeping the lease alive; on Confirm the gate clicks. Returns the state written (or seen)."""
+    """The held session after `apply_ready`: wait for the person's Confirm, Cancel, the bound or
+    another application's need of the browser (`wanted`), keeping the lease alive; on Confirm
+    the gate clicks. Returns the state written (or seen)."""
     from app.apply import gate
 
     tools, ready = session.tools, session.ready or {}
@@ -249,6 +315,14 @@ async def hold(
         now_m = session.monotonic()
         if now_m - start >= READY_WAIT_S:
             return await db(lambda s: _end_lost(s, application_id, clock()))
+        if wanted is not None and await wanted():
+            # Another application needs the browser: the hold never blocks it (the
+            # orchestrator's rule, round 1 of the review of #753). A Confirm given meanwhile
+            # wins: the loop reads it next.
+            given_up = await db(lambda s: _give_up(s, application_id, clock()))
+            if given_up is not None:
+                return given_up
+            continue
         if now_m - last_keep >= KEEP_S:
             try:
                 kept = await tools.call("browser_wait_for", {"time": 0.1})

@@ -639,7 +639,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     className="w-full sm:w-fit"
                     disabled={busy}
                     onClick={() => {
-                      ask(detail.data?.agent ? "retryAgent" : "retry");
+                      ask(
+                        detail.data?.review_agent
+                          ? "retryReview"
+                          : detail.data?.agent
+                            ? "retryAgent"
+                            : "retry",
+                      );
                     }}
                   >
                     Try again

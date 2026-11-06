@@ -162,7 +162,7 @@ def test_the_agent_fills_the_person_confirms_and_the_gate_sends_once(
         with factory() as other:
             from app.apply.router import _filled
 
-            seen.update(_filled(other, application(other, app_id)))
+            seen.update(_filled(other, application(other, app_id), services_.fill.clock()))
         seen["code"] = confirm_now(factory, person_a, app_id, services_.fill.clock())
 
     on_wait(services_, person)

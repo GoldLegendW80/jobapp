@@ -3,13 +3,21 @@
 <link rel="stylesheet" href="/forms/a1/forms.css"><body>
 <!-- A20: Review first's lease. A two step form whose Next is a real submit button of the step
 (the page's script shows step 2 on its submit), then the final Submit application, which sends
-everything to /_stub/submit/a20-review. -->
+everything to /_stub/submit/a20-review. Step 1 also has `<button>`s without a type (each a
+default submit of the form, as many sites write them): "Add another" link, and a Yes or No
+question drawn as two buttons of a group; their scripts keep the form from being sent. -->
 <h1>Robot Arm Engineer</h1>
 <form id="application" aria-label="Application">
 <fieldset id="step1"><legend>Step 1 of 2: about you</legend>
 <label for="full_name">Full name</label><input id="full_name" name="full_name" required>
 <label for="email">Email</label><input id="email" name="email" type="email" required>
 <label for="resume">Resume</label><input id="resume" name="resume" type="file" accept="application/pdf" required>
+<div id="links"><label for="link1">Link</label><input id="link1" name="link1"></div>
+<button id="more">Add another</button>
+<div role="group" aria-label="Are you authorised to work in the EU?">
+<button id="yes" aria-pressed="false">Yes</button><button id="no" aria-pressed="false">No</button>
+</div>
+<input type="hidden" id="authorised" name="authorised">
 <button type="submit" id="next">Next</button>
 </fieldset>
 <fieldset id="step2" hidden><legend>Step 2 of 2: your questions</legend>
@@ -19,6 +27,16 @@ everything to /_stub/submit/a20-review. -->
 <p id="problem" role="alert"></p>
 </form>
 <script>
+more.onclick = event => {
+  event.preventDefault();
+  const n = links.querySelectorAll("input").length + 1;
+  links.insertAdjacentHTML("beforeend", `<label for="link${n}">Link</label><input id="link${n}" name="link${n}">`);
+};
+for (const button of [yes, no]) button.onclick = event => {
+  event.preventDefault();
+  authorised.value = button.textContent;
+  yes.setAttribute("aria-pressed", String(button === yes)); no.setAttribute("aria-pressed", String(button === no));
+};
 application.onsubmit = async event => {
   event.preventDefault();
   if (!step1.hidden) { step1.hidden = true; step2.hidden = false; notice.required = true; return; }

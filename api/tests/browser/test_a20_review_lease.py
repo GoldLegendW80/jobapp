@@ -134,3 +134,95 @@ def test_the_api_and_browserd_know_the_same_purposes() -> None:
     lease = SimpleNamespace(request=SimpleNamespace(purpose="apply_review"), gate_hash=b"")
     assert routes.issue_capability(lease)
     assert lease.gate_hash
+
+
+# --- round 1 of the review: a `<button>` without a type, a form's default submit ---------------
+
+
+def untyped(name: str, **rest: Any) -> dict[str, Any]:
+    """FACTS_JS of a `<button>` with no type attribute in a form: its `type` reads "submit"."""
+    return {"names": [name], "tag": "button", "type": "submit", "typed": False, "in_form": True,
+            **rest}  # fmt: skip
+
+
+INSIDE = {"names": ["Add another"], "tag": "span", "type": "", "in_control": True}
+
+
+@pytest.mark.parametrize(
+    ("facts", "passes"),
+    [
+        # No word of a send: an upload picker, "Add another", Yes or No, "Choose".
+        (untyped("Add another"), True),
+        (untyped("+ Add another"), True),
+        (untyped("Add another link"), True),
+        (untyped("Yes"), True),
+        (untyped("No"), True),
+        (untyped("Oui"), True),
+        (untyped("Non"), True),
+        (untyped("Choose"), True),
+        (untyped("Choose file"), True),
+        (untyped("Upload"), True),
+        (untyped("Upload your CV"), True),
+        (untyped("Browse"), True),
+        (untyped("Remove filter"), True),  # danger words are not read on the agent's lease
+        ({**untyped("Add another"), "point": INSIDE}, True),
+        ({**untyped("Yes"), "point": untyped("Yes")}, True),
+        ({**untyped("Upload"), "names": ["Upload", "Choose a file"]}, True),
+        # A send word, or a word a last step says alone: refused, fail closed.
+        (untyped("Submit"), False),
+        (untyped("Submit application"), False),
+        (untyped("Apply"), False),
+        (untyped("Apply now"), False),
+        (untyped("Send"), False),
+        (untyped("Envoyer"), False),
+        (untyped("Postuler"), False),
+        (untyped("Confirm"), False),
+        (untyped("Confirmer"), False),
+        (untyped("Complete"), False),
+        (untyped("Finalise"), False),
+        (untyped("Validate"), False),
+        (untyped("Valider"), False),
+        (untyped("Save"), False),
+        (untyped("Enregistrer"), False),
+        (untyped("Bestätigen"), False),
+        (untyped("Abschicken"), False),
+        (untyped("Finish"), False),
+        (untyped("Done"), False),
+        (untyped("Yes, submit"), False),
+        (untyped("SubmitApplication"), False),
+        (untyped(""), False),
+        ({**untyped("Upload"), "names": ["Upload", "Submit"]}, False),
+        # Not a default submit: an explicit type, an unread one, a wrapper, a selector, a link.
+        ({**untyped("Add another"), "typed": True}, False),
+        ({**untyped("Add another"), "typed": None}, False),
+        ({k: v for k, v in untyped("Add another").items() if k != "typed"}, False),
+        ({**untyped("Add another"), "tag": "input"}, False),
+        ({**untyped("Add another"), "holds_submit": True}, False),
+        ({**untyped("Add another"), "selector_hit": True}, False),
+        ({**untyped("Add another"), "custom_submit": True}, False),
+        ({**untyped("Add another"), "role": "link"}, False),
+        ({**untyped("Add another"), "point": SUBMIT}, False),  # the click lands on the send
+        ({**untyped("Add another"), "point": None}, False),
+    ],
+)
+def test_a_default_submit_without_a_send_word_passes_traced(facts: Any, passes: bool) -> None:
+    assert detect.review_step(facts, action="click") is passes
+    lease = tab("apply_review", gate=False)
+    refused = lease.judge(facts, "click", "browser_click")
+    sends = detect.agent_verdict(facts, action="click") is not None
+    assert (refused is None) is (passes or not sends)
+    # Every pass of an act on a submit element is traced: the api counts it as a possible send.
+    assert lease.step_submit is (passes and sends)
+    if passes and sends:
+        # One click Apply's lease is unchanged: the capability sends it there.
+        assert tab("apply_agent", gate=False).judge(facts, "click", "browser_click") is not None
+
+
+def test_a_step_pass_is_traced_and_the_refusal_is_not() -> None:
+    lease = tab("apply_review", gate=False)
+    assert lease.judge(step("Next"), "click", "browser_click") is None
+    assert lease.step_submit
+    other = tab("apply_review", gate=False)
+    assert other.judge(SUBMIT, "click", "browser_click")["error"] == "submit_permit"
+    assert not other.step_submit
+    assert "typed:" in detect.FACTS_JS  # the fact the rule reads, from the page

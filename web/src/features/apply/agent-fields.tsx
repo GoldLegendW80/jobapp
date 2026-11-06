@@ -66,8 +66,8 @@ export function AgentFields({
           ? "Check what the assistant filled, then confirm to send it"
           : "What the assistant filled"}
       </h3>
-      {byStep(filled.fields).map(([step, fields]) => (
-        <div key={step} className="space-y-1">
+      {byStep(filled.fields).map(([step, fields], stepIndex) => (
+        <div key={stepIndex} className="space-y-1">
           <h4 className="text-sm text-muted-foreground">{step}</h4>
           <Table>
             <TableHeader>
@@ -77,8 +77,9 @@ export function AgentFields({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {fields.map((field) => (
-                <TableRow key={`${step}\u0000${field.label}`}>
+              {fields.map((field, index) => (
+                // Two fields may share a label (a work history's "Company"): keyed by place.
+                <TableRow key={index}>
                   <TableCell className="align-top font-medium break-words">
                     {field.label}
                     {KIND_NOTE[field.kind] ? (

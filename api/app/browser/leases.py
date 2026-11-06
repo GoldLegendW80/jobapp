@@ -528,6 +528,23 @@ class Leases:
             waiting=tuple(places),
         )
 
+    async def waiters(self) -> list[tuple[str, str]]:
+        """(user id, purpose) of every member that still waits for the browser, its ticket
+        alive, in the tiers before the sweeps' (A20: Review first's held session gives the
+        browser up to them, apply/confirm.py `yields`). Ids only, never logged."""
+        found: list[tuple[str, str]] = []
+        try:
+            r = await self._pool()
+            for queue in QUEUES[: TIERS["sweep"]]:
+                for raw in await r.zrange(queue, 0, -1):
+                    member = _text(raw) or ""
+                    user_id, _, purpose = member.partition("|")
+                    if purpose in TIERS and await r.exists(TICKET + member):
+                        found.append((user_id, purpose))
+        except (RedisError, OSError, TimeoutError):
+            raise StoreUnavailableError from None
+        return found
+
     async def holds(self, user_id: str, lease_id: str) -> bool:
         """Whether the person holds that lease now, as this store last knew it: one read, no
         call to browserd (B5's tools ask it before each call; browserd then checks the token)."""
