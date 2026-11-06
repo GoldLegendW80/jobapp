@@ -51,7 +51,7 @@ export const ABOUT_WORDS = {
   reading: "Reading this part",
   notRead: "This part was not read",
   understood: "What the app understood",
-  refused: "Not taken, because this part does not write it:",
+  refused: "Left as it was:",
   stale:
     "You changed this part since Done. Click Done again to see what changes.",
   notNow: "Not now",
