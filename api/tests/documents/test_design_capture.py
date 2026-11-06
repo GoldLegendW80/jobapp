@@ -649,3 +649,59 @@ def test_a_label_is_taken_only_as_the_exact_text_of_a_heading_of_the_upload(prop
         assert labels is None
         assert any(said in p.detail for p in problems), problems
     assert design_capture.labels_of(None, _inputs_with(texts), "fr") == (None, ())
+
+
+def test_several_measured_passes_keep_the_best_with_the_uploads_heading_as_label(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """documents_design_passes: four accepted submits; the measure rises, then falls: the
+    second best is stored with its label, the numbers of its measure, and no text of the CV."""
+    services = Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    # the score of each version, read from the sheet the renderer was given last (a submit and
+    # a view_render measure the same version alike)
+    scores = {".pass0 ": 0.50, ".pass1 ": 0.62, ".pass2 ": 0.70, ".pass3 ": 0.40}
+    seen: list[str] = []
+
+    def measure(original_page, original, pdf, png):
+        seen.append(original[0].text if original else "")
+        html = services.renderer.calls[-1]
+        return _measured(next(v for k, v in scores.items() if k in html))
+
+    monkeypatch.setattr(fidelity, "measure", measure)
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_passes"))
+    assert generation.status is GenerationStatus.done, generation.error
+    assert seen[0] == "Morgan Exampleton"  # the original's lines, as the model read them
+    (row,) = own_templates(who.factory, who.user)
+    assert ".pass2 " in row.css
+    assert ".pass3 " not in row.css
+    assert row.manifest["labels"] == {"en": {"summary": "Platform Engineer"}}
+    kept = row.manifest["capture"]["fidelity"]
+    assert kept["score"] == pytest.approx(0.70)
+    assert kept["in_place"] == 70
+    assert "Morgan" not in json.dumps(row.manifest["capture"])
+    with who.factory() as db:
+        document = store.get(db, who.user, base)
+        assert document is not None
+        found = base_router._out(db, document).design_fidelity
+    assert found is not None
+    assert (found.in_place, found.lines) == (70, 100)
+
+
+def test_the_base_view_shows_no_fidelity_for_a_bundled_template_or_a_bad_row(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Services(monkeypatch, design("Morgan Exampleton"))
+    base = uploaded_base(who)
+    with who.factory() as db:
+        document = store.get(db, who.user, base)
+        assert document is not None
+        assert base_router._out(db, document).design_fidelity is None  # band, the default
+    capture(who, base, "documents_design_valid")
+    with who.factory() as db:
+        row = db.scalars(sa.select(DocumentUserTemplate)).one()
+        row.manifest = {**row.manifest, "capture": {"fidelity": {"lines": 3, "in_place": 9}}}
+        db.commit()
+        document = store.get(db, who.user, base)
+        assert document is not None
+        assert base_router._out(db, document).design_fidelity is None
