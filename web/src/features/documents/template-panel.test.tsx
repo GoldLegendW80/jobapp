@@ -74,11 +74,9 @@ describe("the Template view", () => {
     const buttons = within(strip).getAllByRole("button");
     expect(buttons.map((one) => one.textContent)).toEqual([
       "My uploaded lookFrom your CV",
-      "Ledger",
-      "ClassicIn use",
+      "BandIn use",
       "Ledger",
       "Photo-columns",
-      "Serif",
     ]);
     const band = within(strip).getByRole("button", { name: /^Band/ });
     expect(band).toHaveAttribute("aria-pressed", "true");
@@ -224,7 +222,7 @@ describe("the Template view", () => {
       await openTemplates(doc.id);
       const note = screen.getByTestId("overflow-note");
       expect(note).toHaveTextContent(
-        "Shorten the longest fields in Edit, or choose a more ledger template.",
+        "Shorten the longest fields in Edit, or choose a more compact template.",
       );
       expect(within(note).queryByRole("button")).toBeNull();
     },
@@ -244,7 +242,7 @@ describe("the Template view", () => {
     expect(note.textContent).toMatch(
       /^Version 1 was sent on .+\. It stays as it was: a new template makes a new version\.$/,
     );
-    await user.click(within(strip).getByRole("button", { name: /^Serif/ }));
+    await user.click(within(strip).getByRole("button", { name: /^Ledger/ }));
     await waitFor(() => {
       expect(writes(api)).toHaveLength(1);
     });

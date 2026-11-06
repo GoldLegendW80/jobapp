@@ -65,11 +65,9 @@ describe("the gallery", () => {
     expect(headings).toEqual(["From your CV", "All templates"]);
     expect(cardNames(section("From your CV"))).toEqual(["My uploaded look"]);
     expect(cardNames(section("All templates"))).toEqual([
-      "Ledger",
       "Band",
       "Ledger",
       "Photo-columns",
-      "Serif",
     ]);
     const band = screen.getByTestId("template-band");
     expect(band).toHaveTextContent("The band look, in English.");
@@ -89,7 +87,7 @@ describe("the gallery", () => {
       "src",
       "/api/document-templates/band/thumbnail?kind=cv&v=1",
     );
-    expect(screen.getByText("6 templates.")).toBeVisible();
+    expect(screen.getByText("4 templates.")).toBeVisible();
     // Opened from nowhere, nothing can be used.
     expect(
       screen.queryByRole("button", { name: "Use for this document" }),
@@ -102,10 +100,10 @@ describe("the gallery", () => {
     setup();
     const { user } = await openGallery();
     await user.selectOptions(screen.getByLabelText("Photo"), "No photo");
-    expect(cardNames(section("All templates"))).toEqual(["Ledger", "Serif"]);
-    // The person's own declares no photo slot in its manifest.
+    // Each of the three has a photo slot; the person's own declares none in its manifest.
+    expect(screen.queryByRole("region", { name: "All templates" })).toBeNull();
     expect(cardNames(section("From your CV"))).toEqual(["My uploaded look"]);
-    expect(screen.getByText("3 of 6 templates match.")).toBeVisible();
+    expect(screen.getByText("1 of 4 templates match.")).toBeVisible();
 
     await user.selectOptions(screen.getByLabelText("Photo"), "Any");
     await user.selectOptions(screen.getByLabelText("Columns"), "Two columns");
@@ -117,9 +115,9 @@ describe("the gallery", () => {
     expect(
       screen.getByText("No template matches these filters."),
     ).toBeVisible();
-    expect(screen.getByText("0 of 6 templates match.")).toBeVisible();
+    expect(screen.getByText("0 of 4 templates match.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear the filters" }));
-    expect(screen.getByText("6 templates.")).toBeVisible();
+    expect(screen.getByText("4 templates.")).toBeVisible();
     expect(screen.getByLabelText("Columns")).toHaveValue("any");
     expect(
       screen.getByLabelText("Easy for hiring software to read"),
