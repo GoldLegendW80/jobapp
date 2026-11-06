@@ -47,6 +47,15 @@ export const DECISIONS = {
     confirm: "Apply again",
     call: retryApplication,
   },
+  // Review first's agent (A20): Try again fills again and shows a new list; nothing is sent
+  // before the person's Confirm.
+  retryReview: {
+    title: "Fill it again?",
+    sentence:
+      "The assistant looks on the site first for the earlier one, then fills the form again and shows you a new list to confirm. If the earlier one went through, the company may receive two applications.",
+    confirm: "Fill it again",
+    call: retryApplication,
+  },
 } satisfies Record<
   string,
   Confirmation & { call: (applicationId: string) => Promise<Application> }

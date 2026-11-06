@@ -530,13 +530,25 @@ def reset_interrupted(db: Session, now: datetime) -> int:
 def due(db: Session, now: datetime | None = None) -> list[uuid.UUID]:
     """The applications whose submit job the tick asks for, oldest first: `approved` ones, `held`
     ones whose hold ended at `now` (the database's clock when None), and `ready` Full auto ones,
-    whose job runs the decision."""
+    whose job runs the decision. Never Review first's apply agent's (A20): its hold job alone
+    clicks on the person's Confirm (apply/confirm.py)."""
+    from app.apply import confirm
+    from app.apply.models import ApplicationEvent
+
+    agent_review = sa.select(ApplicationEvent.application_id).where(
+        ApplicationEvent.kind == confirm.EVENT
+    )
     return list(
         db.execute(
             sa.select(Application.id)
             .where(
                 sa.or_(
-                    Application.state == State.approved,
+                    sa.and_(
+                        Application.state == State.approved,
+                        sa.or_(
+                            Application.mode != Mode.review, Application.id.not_in(agent_review)
+                        ),
+                    ),
                     Application.id.in_(full_auto.held_over(now)),
                     sa.and_(Application.state == State.ready, Application.mode.in_(AUTOMATIC)),
                 )

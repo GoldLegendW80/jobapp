@@ -47,7 +47,9 @@ log = logging.getLogger("browserd")
 # A19: One click Apply's agent lease gets the capability too: the api sends it with a tool call
 # only while the emergency stop is off (APPLY_SUBMIT_ENABLED, the administrator's pause), and
 # only with it may that lease's tools act on a submit element (actions.Tab.judge).
-GATE_PURPOSES = ("apply_submit", "profile_edit", actions.AGENT_PURPOSE)
+# A20: Review first's agent lease gets one too, for the gate's click after the person's Confirm
+# only: on it a call with the capability is a browser_click (the agent's session never has it).
+GATE_PURPOSES = ("apply_submit", "profile_edit", actions.AGENT_PURPOSE, actions.REVIEW_PURPOSE)
 # What Playwright's error says when another element would take the click or the hover (its
 # actionability log): told to the agent as `element_covered` (a cookie banner, 2026-10-28).
 COVERED = "intercepts pointer events"

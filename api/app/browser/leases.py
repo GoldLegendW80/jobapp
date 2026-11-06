@@ -109,6 +109,7 @@ LEASE_MAX_S = {
     "profile_edit": 900,
     "full_auto": 900,
     "apply_agent": 3600,  # A19: One click Apply's agent (browserd's config.py)
+    "apply_review": 3600,  # A20: Review first's apply agent (browserd's config.py)
     "sweep": 86_400,  # B20: as long as the search takes; the idle timer still ends a stuck one
 }
 PURPOSES = tuple(LEASE_MAX_S)
@@ -121,6 +122,7 @@ TIERS = {
     "profile_edit": 1,
     "full_auto": 2,
     "apply_agent": 1,
+    "apply_review": 1,
     "sweep": 3,
 }
 PREEMPTS_SWEEP = ("takeover", "signin")  # a person's own browser ends a sweep lease (B8)
@@ -525,6 +527,23 @@ class Leases:
             held_by_other=held is not None and mine is None,
             waiting=tuple(places),
         )
+
+    async def waiters(self) -> list[tuple[str, str]]:
+        """(user id, purpose) of every member that still waits for the browser, its ticket
+        alive, in the tiers before the sweeps' (A20: Review first's held session gives the
+        browser up to them, apply/confirm.py `yields`). Ids only, never logged."""
+        found: list[tuple[str, str]] = []
+        try:
+            r = await self._pool()
+            for queue in QUEUES[: TIERS["sweep"]]:
+                for raw in await r.zrange(queue, 0, -1):
+                    member = _text(raw) or ""
+                    user_id, _, purpose = member.partition("|")
+                    if purpose in TIERS and await r.exists(TICKET + member):
+                        found.append((user_id, purpose))
+        except (RedisError, OSError, TimeoutError):
+            raise StoreUnavailableError from None
+        return found
 
     async def holds(self, user_id: str, lease_id: str) -> bool:
         """Whether the person holds that lease now, as this store last knew it: one read, no

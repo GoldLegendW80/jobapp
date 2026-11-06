@@ -12,7 +12,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
-import { reviewFirst } from "./apply-one-click-helpers";
+import { startReviewFirst } from "./apply-one-click-helpers";
 
 // Only synthetic local ATS forms. Browserd uses its private opener; the model click path is unchanged.
 test.describe.configure({ mode: "serial", timeout: 900_000 });
@@ -168,8 +168,7 @@ test("without consent an external link starts no application, then the person op
 
 test("Review fills the modal, declines Follow company, and submits once after approval", async () => {
   await page.goto(`/jobs/${review}`);
-  await reviewFirst(page.request);
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await startReviewFirst(page);
   await expect
     .poll(async () => (await latest(review)).state, { timeout: FILL })
     .toBe("ready");

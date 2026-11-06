@@ -286,16 +286,18 @@ def calls_of(prompt: str) -> list[tuple[str, dict]]:
     return made
 
 
-def replay(lease: Lease, calls: list[tuple[str, dict]]) -> tuple[str, dict | None]:
+def replay(
+    lease: Lease, calls: list[tuple[str, dict]], review: bool = False
+) -> tuple[str, dict | None]:
     """The calls as the apply agent's session sends them (applier.ApplySession): an act refused
     `submit_permit` again with the capability, a snapshot after each act; the ask and the report
     end the replay. Returns the last page's address and the report or the ask."""
     url = ""
     for name, args in calls:
-        if name in ("browser_ask_person", "apply_done"):
+        if name in ("browser_ask_person", "apply_done", "apply_ready"):
             return url, {"tool": name, **args}
         done = lease.tool(name, **args)
-        if done.get("error") == "submit_permit":
+        if done.get("error") == "submit_permit" and not review:
             done = lease.tool(name, lease.capability, **args)
         assert done.get("ok"), (name, args, done)
         if name != "browser_wait_for":
@@ -304,30 +306,224 @@ def replay(lease: Lease, calls: list[tuple[str, dict]]) -> tuple[str, dict | Non
 
 
 def test_the_journey_s_recorded_stream_on_real_chromium(a19, agent):
-    """The apply journey's stream (apply_agent.json) on the same pages under `atsforms`: a run
-    whose first message lacks the notice period asks for it on step 2 and sends nothing; a run
-    whose first message holds the person's answer types it, clicks Submit itself and reports the
-    confirmation page it read; the site records one submission."""
-    from app.apply import applier
-
+    """The apply journeys' stream (apply_agent.json) on the same pages under `atsforms`: a run
+    with nothing saved never asks (A20): it types its own notice period, clicks Submit itself
+    and reports it as chosen; a run with the saved answer types it; one submission each."""
     assert agent.put("cv.pdf", CV)["status"] == 200
-    url, asked = replay(agent, calls_of('{"answers_to_your_questions": []}'))
-    assert asked is not None, url
-    assert asked["tool"] == "browser_ask_person", asked
-    assert asked["field"] == "What is your notice period?", asked
-    assert asked["kind"] == "fact", asked
-    page = agent.snapshot()
-    assert 'textbox "What is your notice period?" [ref=e22]' in page, page
-    assert applier.shown(asked["field"], page)  # the label the job page shows is the page's
-    assert sent(a19) == []
-    answered = '{"answers_to_your_questions": [{"answer": "Six weeks"}]}'
-    url, report = replay(agent, calls_of(answered))
+    url, report = replay(agent, calls_of('{"answers_to_your_questions": [], "saved_answers": {}}'))
     assert report is not None, url
     assert report["tool"] == "apply_done", report
+    assert report["outcome"] == "submitted", report
+    assert report["chosen"][0]["field"] == "What is your notice period?", report
+    assert report["confirmation_url"] == url == "http://atsforms:8080/forms/a19/confirmation.html"
+    [one] = sent(a19)
+    assert one["fields"]["notice"] == "One month", one["fields"]
+    url, report = replay(agent, calls_of('{"saved_answers": {"notice": "Six weeks"}}'))
+    assert report is not None, report
+    assert report["outcome"] == "submitted", report
+    assert [s["fields"]["notice"] for s in sent(a19)] == ["One month", "Six weeks"]
+    assert [f["sha256"] for f in sent(a19)[0]["files"]] == [hashlib.sha256(CV.encode()).hexdigest()]
+
+
+def test_the_review_journey_s_recorded_stream_on_the_review_lease(a19, review):
+    """The Review first journey's runs of the same stream on an `apply_review` lease: the fill
+    ends with apply_ready naming Submit application, nothing is sent; the gate's click sends
+    once; the reading run reports the confirmation it read."""
+    assert review.put("cv.pdf", CV)["status"] == 200
+    filled = '{"review_first": true, "saved_answers": {"notice": "Six weeks"}}'
+    url, ready = replay(review, calls_of(filled), review=True)
+    assert ready is not None, ready
+    assert ready["tool"] == "apply_ready", ready
+    page = review.snapshot()
+    assert f'button "Submit application" [ref={ready["submit_ref"]}]' in page, page
+    assert sent(a19) == []
+    clicked = review.tool(
+        "browser_click", review.capability, ref=ready["submit_ref"], element="Submit application"
+    )
+    assert clicked["ok"], clicked
+    url, report = replay(review, calls_of('{"gate_clicked": true, "review_first": true}'), True)
+    assert report is not None, report
     assert report["outcome"] == "submitted", report
     assert report["confirmation_url"] == url == "http://atsforms:8080/forms/a19/confirmation.html"
     [one] = sent(a19)
     assert one["fields"]["notice"] == "Six weeks", one["fields"]
-    assert one["fields"]["email"] == "e2e-a19@example.org", one["fields"]
-    assert one["fields"]["motivation"].startswith("I have built robot arms"), one["fields"]
-    assert [f["sha256"] for f in one["files"]] == [hashlib.sha256(CV.encode()).hexdigest()]
+
+
+# --- A20: the resume widgets, and Review first's lease (purpose `apply_review`) ----------------
+
+WIDGETS = "http://careers.a19-robotics.test:8080/forms/a20/widgets.html"
+REVIEW = "http://careers.a19-robotics.test:8080/forms/a20/review.html"
+LETTER = pdf().replace("595 842", "612 792")  # another real PDF: its own bytes
+
+
+def test_the_cv_lands_in_every_resume_widget(a19, agent):
+    """A20 point 3: a file input hidden behind a styled button, a drop zone that opens the file
+    chooser, and a "Choose one" list of files with an option that reveals a new upload."""
+    assert agent.put("cv.pdf", CV)["status"] == 200
+    assert agent.put("letter.pdf", LETTER)["status"] == 200
+    opened = act(agent, "browser_navigate", url=WIDGETS)
+    assert opened["ok"], opened
+    page = opened["page"]
+    print("WIDGETS\n" + page)
+    typed = act(
+        agent, "browser_type", ref=ref(page, "textbox", "Email"), text="e2e-a20@example.org"
+    )
+    assert typed["ok"], typed
+    behind = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "Upload your CV"), paths=["cv.pdf"]
+    )
+    assert behind["ok"], behind
+    zone = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "drop a file here"),
+        paths=["letter.pdf"],
+    )  # fmt: skip
+    assert zone["ok"], zone
+    chosen = act(
+        agent, "browser_select_option", ref=ref(page, "combobox", "Resume"),
+        values=["Upload a new file"],
+    )  # fmt: skip
+    assert chosen["ok"], chosen
+    page = chosen["page"]
+    print("NEW UPLOAD\n" + page)
+    fresh = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "New resume"), paths=["cv.pdf"]
+    )
+    assert fresh["ok"], fresh
+    # The same list as a custom combobox (A20 round 1): a click opens it, a click on an option
+    # chooses; the session records that choice under the combobox's label (applier._clicked).
+    from app.apply import applier
+
+    page = fresh["page"]
+    combo = ref(page, "combobox", "Resume on file")
+    opened = act(agent, "browser_click", ref=combo)
+    assert opened["ok"], opened
+    page = opened["page"]
+    print("COMBOBOX OPEN\n" + page)
+    option = ref(page, "option", "Upload a new file")
+    session = applier.ApplySession(tools=None, capability=None, stop=None, arm=None)  # type: ignore[arg-type]
+    session._record("browser_click", {"ref": combo}, fresh["page"], "Field Robotics Technician")
+    picked = act(agent, "browser_click", ref=option)
+    assert picked["ok"], picked
+    session.page = picked["page"]
+    session._record("browser_click", {"ref": option}, page, "Field Robotics Technician")
+    assert [(e["label"], e["value"], e["kind"]) for e in session.filled] == [
+        ("Resume on file", "Upload a new file", "choice")
+    ], page
+    page = picked["page"]
+    print("COMBOBOX PICKED\n" + page)
+    fresh = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "New resume file"), paths=["cv.pdf"]
+    )
+    assert fresh["ok"], fresh
+    send = ref(fresh["page"], "button", "Submit application")
+    assert agent.tool("browser_click", ref=send)["error"] == "submit_permit"
+    clicked = agent.tool("browser_click", agent.capability, ref=send)
+    assert clicked["ok"], clicked
+    assert agent.tool("browser_wait_for", text="Thank you for applying")["ok"]
+    [one] = sent(a19, "a20-widgets")
+    assert one["fields"]["existing_resume"] == "new", one["fields"]
+    assert one["fields"]["picked_resume"] == "new", one["fields"]
+    files = {f["field"]: (f["filename"], f["sha256"]) for f in one["files"]}
+    cv, letter = (
+        hashlib.sha256(CV.encode()).hexdigest(),
+        hashlib.sha256(LETTER.encode()).hexdigest(),
+    )
+    assert files == {
+        "cv_button": ("cv.pdf", cv),
+        "letter_drop": ("letter.pdf", letter),
+        "resume_new": ("cv.pdf", cv),
+        "resume_picked": ("cv.pdf", cv),
+    }, files
+
+
+@pytest.fixture
+def review(a19):
+    fetched(a19, "http://atsforms:8080/_stub/reset", "POST")
+    lease = Lease(a19, "apply_review")
+    a19.redactions.append(lease.token)
+    assert lease.capability, "the review lease's capability, held by the api for the gate"
+    a19.redactions.append(lease.capability)
+    yield lease
+    lease.end()
+
+
+def test_on_the_review_lease_the_agent_never_sends_and_the_gate_s_click_sends_once(a19, review):
+    """A20 point 4: the agent fills both steps (the step's Next is a submit button and passes),
+    every act of its own on the final send is refused, a call with the capability is a click
+    only, and the gate's one click after the person's Confirm sends one application."""
+    assert review.put("cv.pdf", CV)["status"] == 200
+    opened = act(review, "browser_navigate", url=REVIEW)
+    assert opened["ok"], opened
+    page = opened["page"]
+    print("REVIEW STEP 1\n" + page)
+    for label, text in (("Full name", "Adaline Example"), ("Email", "e2e-a20@example.org")):
+        typed = act(review, "browser_type", ref=ref(page, "textbox", label), text=text)
+        assert typed["ok"], (label, typed)
+        page = typed["page"]
+    uploaded = act(
+        review, "browser_file_upload", ref=ref(page, "button", "Resume"), paths=["cv.pdf"]
+    )
+    assert uploaded["ok"], uploaded
+    page = uploaded["page"]
+    # `<button>`s without a type, each a default submit of the form (round 1 of the review):
+    # with no send word they pass as a step does, traced (`step_submit`) as a possible send.
+    from app.apply import applier
+
+    more = act(review, "browser_click", ref=ref(page, "button", "Add another"))
+    assert more["ok"], more
+    assert more.get("step_submit") is True, more
+    page = more["page"]
+    print("REVIEW ADD ANOTHER\n" + page)
+    yes = ref(page, "button", "Yes")
+    assert applier.container(page, yes)[1] == "Are you authorised to work in the EU?", page
+    assert applier.container_role(page, yes) == "group", page
+    chosen = act(review, "browser_click", ref=yes)
+    assert chosen["ok"], chosen
+    assert chosen.get("step_submit") is True, chosen
+    page = chosen["page"]
+    assert sent(a19, "a20-review") == []  # neither sent the form
+    assert page.count('textbox "Link"') == 2, page
+    moved = act(review, "browser_click", ref=ref(page, "button", "Next"))
+    assert moved["ok"], moved  # a submit button of the step, named Next: a wizard's step
+    assert moved.get("step_submit") is True, moved
+    page = moved["page"]
+    print("REVIEW STEP 2\n" + page)
+    notice = ref(page, "textbox", "notice period")
+    assert act(review, "browser_type", ref=notice, text="One month")["ok"]
+    page = review.snapshot()
+    send = ref(page, "button", "Submit application")
+    # The agent's own acts on the send: a click, Enter in a field, a script, all refused.
+    assert review.tool("browser_click", ref=send)["error"] == "submit_permit"
+    assert review.tool("browser_press_key", ref=notice, key="Enter")["error"] == "submit_permit"
+    script = review.tool(
+        "browser_evaluate", function="() => document.querySelector('form').requestSubmit()"
+    )
+    assert script["error"] == "submit_permit", script
+    # With the capability, only the gate's click passes on this lease (403 for any other act).
+    for name, args in (
+        ("browser_press_key", {"ref": notice, "key": "Enter"}),
+        ("browser_type", {"ref": notice, "text": " ", "submit": True}),
+        ("browser_evaluate", {"function": "() => 1"}),
+    ):
+        answer = review.raw(
+            "POST", f"/leases/{review.id}/tools/{name}", json.dumps(args),
+            **{"Content-Type": "application/json", "X-Gate-Capability": review.capability},
+        )  # fmt: skip
+        assert answer["status"] == 403, (name, answer)
+    assert sent(a19, "a20-review") == []
+    # The person's Confirm: the gate clicks the control the agent named, once.
+    clicked = review.tool(
+        "browser_click", review.capability, ref=send, element="Submit application"
+    )
+    assert clicked["ok"], clicked
+    assert review.tool("browser_wait_for", text="Thank you for applying")["ok"]
+    [one] = sent(a19, "a20-review")
+    assert one["fields"] == {
+        "full_name": "Adaline Example",
+        "email": "e2e-a20@example.org",
+        "link1": "",
+        "link2": "",
+        "authorised": "Yes",
+        "notice": "One month",
+    }, one["fields"]
+    assert [f["filename"] for f in one["files"]] == ["cv.pdf"]

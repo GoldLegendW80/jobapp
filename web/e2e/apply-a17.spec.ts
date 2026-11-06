@@ -12,7 +12,7 @@ import {
   waitForRender,
 } from "./documents-helpers";
 import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
-import { reviewFirst } from "./apply-one-click-helpers";
+import { startReviewFirst } from "./apply-one-click-helpers";
 
 // Registered by apply-all.config.ts's apply- prefix. Two isolated invented people, the
 // local fake Greenhouse form, and one explicit UI approval. No real account or site.
@@ -108,8 +108,7 @@ test("A approves one fake submission; B and a signed-out person cannot read its 
 
     await page.goto(`/jobs/${posting}`);
     const section = page.getByRole("region", { name: "Apply", exact: true });
-    await reviewFirst(page.request);
-    await section.getByRole("button", { name: "Apply", exact: true }).click();
+    await startReviewFirst(page);
     await expect(
       section.getByRole("img", { name: /before the click/ }),
     ).toBeVisible({

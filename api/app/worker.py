@@ -82,7 +82,15 @@ Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
   sign in hand off (BROWSER_SESSION_MAX_S, browser B12a) plus a margin, the submit's the
   `apply_submit` lease's ceiling plus a margin. At start, every application left `filling` by a dead
   process ends `failed` as `interrupted`, and every one left `submitting` ends `submit_unknown`:
-  the click may have gone through (reset_fills_at_start).
+  the click may have gone through (reset_fills_at_start). Review first's agent runs (A20): one
+  left `ready` or `approved` ends `session_lost`, one left `filling` after a step act browserd
+  traced is `submit_unknown`.
+
+Apply hold queue (app.queue.APPLY_HOLD, apply A20, app/apply/confirm.py):
+- apply_hold(application_id): Review first's held session after the agent filled the form,
+  handed over by the fill job so the wait for the person's Confirm (15 minutes at most) never
+  takes the apply queue's slot: it waits, the gate clicks on the Confirm, the agent reads the
+  page, the lease is released. At most confirm.HOLDS_MAX at once, one per person.
 
 Shutdown (SIGTERM from docker stop, SIGINT): every Worker stops picking jobs and cancels the
 running ones; a cancelled sweep is failed with "interrupted" (sweep.run_sweep) before exit, a
@@ -105,7 +113,6 @@ import re
 import signal
 import sys
 import threading
-import time
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Collection, Sequence
@@ -786,7 +793,7 @@ async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
     from app.apply import applier as apply_applier
     from app.apply import email as apply_email
     from app.apply import run as apply_run
-    from app.apply.models import Application, Mode
+    from app.apply.models import Application
 
     agent_run = False
     given = ctx.get("apply_services")
@@ -799,11 +806,10 @@ async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
             )
             db.commit()
             return
-        # One click Apply (A19): the apply agent fills and clicks Submit itself. A rehearsal
-        # (never one today: `_mode_of` makes it Review first) keeps the fill, which stops at ready.
-        agent_run = (
-            application is not None and application.mode is Mode.direct and not application.dry_run
-        )
+        # One click Apply (A19): the apply agent fills and clicks Submit itself; Review first from
+        # the Apply button with the box ticked (A20): it fills, the gate sends on the Confirm. A
+        # rehearsal keeps the fill, which stops at ready.
+        agent_run = application is not None and apply_applier.runs_agent(db, application)
     if agent_run:
         await apply_applier.apply(applier_services(ctx), uuid.UUID(application_id))
         return
@@ -815,7 +821,6 @@ def applier_services(ctx: dict[str, Any]) -> Any:
     the runtime and the emergency stop, read for each act on a submit element."""
     from app.apply import admin
     from app.apply import applier as apply_applier
-    from app.browser.sources.interactive import await_person
 
     given = ctx.get("applier_services")
     if given is not None:
@@ -827,14 +832,48 @@ def applier_services(ctx: dict[str, Any]) -> Any:
             return "submit_disabled"
         return "paused" if await admin.paused(ctx.get("redis")) else None
 
-    async def waited(tools: Any, left: int) -> str:
-        return await await_person(tools, left, time.monotonic, asyncio.sleep)
+    async def hand_over(held: Any) -> bool:
+        """The held session to the hold queue (A20); False when there is no room for it."""
+        if not apply_applier.keep_held(held):
+            return False
+        try:
+            job = await ctx["redis"].enqueue_job(
+                "apply_hold",
+                str(held.application_id),
+                _job_id=queue.apply_hold_job_id(held.application_id),
+                _queue_name=queue.APPLY_HOLD,
+            )
+        except Exception as exc:
+            logger.warning("apply.hold_not_queued", extra={"error_type": type(exc).__name__})
+            job = None
+        if job is None:
+            apply_applier.drop_held(held.application_id)
+            return False
+        return True
 
     return apply_applier.Services(
         fill=apply_services(ctx),
         agent=apply_applier.RuntimeApplier(lambda: agent_context(ctx)),
         stop=stop,
-        await_person=waited,
+        hand_over=hand_over,
+    )
+
+
+async def apply_hold(ctx: dict[str, Any], application_id: str) -> None:
+    """Review first's held session (A20), handed over by its fill job in this process. None here
+    (the process restarted, or a second job of the same id): it ends as a lost session ends."""
+    from app.apply import applier as apply_applier
+    from app.apply import run as apply_run
+
+    held = apply_applier.take_held(uuid.UUID(application_id))
+    if held is not None:
+        await apply_applier.run_held(held)
+        return
+    clock = clock_of(ctx)
+    await asyncio.to_thread(
+        apply_run._in_db,
+        sessions_of(ctx),
+        lambda db: apply_applier._lost(db, uuid.UUID(application_id), clock()),
     )
 
 
@@ -954,7 +993,10 @@ async def reset_fills_at_start(ctx: dict[str, Any]) -> int:
     count = 0
     # One transaction per step: a busy manual posting must never roll back an already reset
     # fill or (A6) a `submitting` left by a killed worker, which is `submit_unknown`, never freed.
+    from app.apply import applier as apply_applier
+
     for reset in (
+        apply_applier.reset_interrupted,  # A20: before the fills' reset, which fails them
         apply_run.reset_interrupted,
         apply_submit_run.reset_interrupted,
         apply_manual.reset_interrupted,
@@ -1058,6 +1100,26 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     )
 
 
+def apply_hold_queue() -> QueueSpec:
+    """Review first's held sessions (A20): the wait, the gate's click, the agent's reading."""
+    from app.apply import applier as apply_applier
+    from app.apply import confirm as apply_confirm
+
+    timeout_s = int(apply_confirm.READY_WAIT_S + apply_applier.WALL_TIME_S) + APPLY_JOB_MARGIN_S
+    return QueueSpec(
+        name=queue.APPLY_HOLD,
+        functions=[
+            func(apply_hold, name="apply_hold", timeout=timeout_s, max_tries=1, keep_result=0)
+        ],
+        cron_jobs=[],
+        max_jobs=apply_confirm.HOLDS_MAX,
+        job_timeout_s=timeout_s,
+        # This process alone holds the sessions: a dead one's job keys would refuse the next
+        # hold of the same application (its start reset ended those applications).
+        clears_in_progress=True,
+    )
+
+
 def queues(settings: Settings | None = None) -> list[QueueSpec]:
     """Every queue this worker consumes (TEST_FAST_TIMERS shortens the schedule tick)."""
     register_modules()
@@ -1068,6 +1130,7 @@ def queues(settings: Settings | None = None) -> list[QueueSpec]:
         ingestion_queue(),
         documents_queue(),
         apply_queue(settings),
+        apply_hold_queue(),
     ]
 
 

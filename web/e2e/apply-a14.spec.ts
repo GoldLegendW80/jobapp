@@ -10,7 +10,7 @@ import {
 } from "./documents-helpers";
 import { allowOnConsentPage, stub, stubUrl } from "./mail-helpers";
 import { clearAttempts, newContext, watchErrors } from "./stack";
-import { reviewFirst } from "./apply-one-click-helpers";
+import { startReviewFirst } from "./apply-one-click-helpers";
 
 test.setTimeout(300_000);
 
@@ -83,8 +83,7 @@ test("review confirms a posting recipient and sends exactly the fixed PDFs throu
     await waitForPostingDocuments(page.request, job);
     await page.goto(`/jobs/${job}`);
     const section = page.getByRole("region", { name: "Apply", exact: true });
-    await reviewFirst(page.request);
-    await section.getByRole("button", { name: "Apply", exact: true }).click();
+    await startReviewFirst(page);
     await expect(
       section.getByRole("button", { name: "Approve and submit" }),
     ).toBeVisible({ timeout: 90_000 });

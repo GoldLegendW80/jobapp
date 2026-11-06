@@ -54,6 +54,12 @@ describe("which forms Approve all ready names", () => {
     ["it is a rehearsal", { ...ready, rehearsal: true }, view(), 0],
     ["it is a dry run", ready, view({ dry_run: true }), 0],
     ["Full auto decides it", { ...ready, mode: "full_auto" }, view(), 0],
+    [
+      "the apply agent filled it (A20: Confirm on the job page)",
+      { ...ready, review_agent: true },
+      view(),
+      0,
+    ],
     ["it is under way", queueItem(1, "approved"), view(), 0],
     ["the form moved on since", ready, view({ state: "approved" }), 0],
   ])("leaves it out when %s", (_why, item, approval, unsaved = 0) => {

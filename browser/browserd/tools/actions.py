@@ -58,6 +58,10 @@ from browserd.tools import ask_person, discovery, line, pacing, policy, request_
 log = logging.getLogger("browserd")
 
 AGENT_PURPOSE = "apply_agent"
+# A20: Review first's apply agent (the review box ticked): the agent's rules of AGENT_PURPOSE,
+# but its own tools never act on a submit element (a wizard's step button aside,
+# detect.review_step); with the capability only the gate's browser_click passes (routes).
+REVIEW_PURPOSE = "apply_review"
 # The agent lease's tools that may carry the capability (routes.call_tool): those that act.
 AGENT_ACTS = frozenset({
     "browser_click", "browser_type", "browser_press_key", "browser_select_option",
@@ -216,11 +220,19 @@ class Tab:
     person_holds: Callable[[], bool] | None = None
     # A19: this call acted on a submit element with the capability (the result says so).
     submitted: bool = False
+    # A20: on the review lease, this call let the agent act on a submit element as a wizard's
+    # step (detect.review_step): the act may have sent the form, so the result says so too.
+    step_submit: bool = False
 
     @property
     def agent(self) -> bool:
-        """One click Apply's agent lease (A19)."""
-        return getattr(self.request, "purpose", None) == AGENT_PURPOSE
+        """One click Apply's agent lease (A19), or Review first's (A20)."""
+        return getattr(self.request, "purpose", None) in (AGENT_PURPOSE, REVIEW_PURPOSE)
+
+    @property
+    def review(self) -> bool:
+        """Review first's agent lease (A20): no act of the agent sends the form."""
+        return getattr(self.request, "purpose", None) == REVIEW_PURPOSE
 
     def require_input(self) -> None:
         if self.input_allowed is not None and not self.input_allowed():
@@ -537,6 +549,12 @@ class Tab:
             code = detect.agent_verdict(facts, action=action)
             if code is None:
                 return None
+            if code == "submit" and self.review and detect.review_step(facts, action=action):
+                # A20: a wizard's Next or a default submit with no send word, never its send;
+                # traced, as it may send the form all the same (the api's `step_submit`).
+                self.step_submit = True
+                log.info("lease %s: %s on a submit element, a step", self.lease_tag, tool)
+                return None
             if code != "credential" and self.gate:
                 # The capability: the api read the emergency stop off just before this call.
                 self.submitted = True
@@ -644,6 +662,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
             return failure("person_input", "Refused: the person holds the input.")
         if tab.submitted and result.get("ok"):
             result = {**result, "submit_clicked": True}
+        if tab.step_submit:
+            # Failed or not: the act may have reached the page before the failure.
+            result = {**result, "step_submit": True}
         return await tab.settle(result) if result.get("ok") else result
     except RefusalRecoveryError as exc:
         # The original still propagates; its note tells routes.call_tool to answer guard_failed,
