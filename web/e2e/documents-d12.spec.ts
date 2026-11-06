@@ -24,7 +24,7 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * it, write its CV and letter with one click, see both page 1 previews and "Based on" naming the
  * base CV; the posting is `cv_ready` and its badge says so without a reload. Open the CV, download
  * the PDF. Write the CV again from a copy of the base CV: the letter follows it. A posting with
- * fit 40 says it is under the threshold and "Write now" writes its CV.
+ * fit 40 says it is written on a click (D29) and "Write now" writes its CV.
  *
  * Locally, as documents-d6.spec.ts (AGENTS_FAKE_BACKEND=1 on the worker), then:
  *   E2E_CADDY_URL=http://127.0.0.1:8099 E2E_COMPOSE_PROJECT=jobapp-d12 \
@@ -234,7 +234,7 @@ test("the CV written again from another base CV takes the letter along", async (
   await expect(cv).toContainText("Based on: Copy for D12");
 });
 
-test("a posting under the threshold says so, and Write now writes its CV", async () => {
+test("a posting at a low fit says it is written on a click, and Write now writes its CV", async () => {
   low = await addPosting(page.request, {
     ...person,
     posting: { ...person.posting, title: "Support engineer" },
@@ -242,7 +242,9 @@ test("a posting under the threshold says so, and Write now writes its CV", async
   await setFit(low, 40);
   await page.goto(`/jobs/${low}`);
   const cv = page.getByTestId("posting-cv");
-  await expect(cv).toContainText("Fit 40 is under your threshold of 70");
+  await expect(cv).toContainText(
+    "Not written yet. It is written when you click Write or Apply.",
+  );
   await cv.getByRole("button", { name: "Write now" }).click();
   await expect
     .poll(

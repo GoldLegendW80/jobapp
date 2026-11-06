@@ -20,15 +20,13 @@ import {
 } from "./stack";
 
 /**
- * Documents D13 against the real stack through Caddy, driven through the page: an invented
- * account with a made up model credential, the consent and a base CV (the writers on the fake
- * backend), a posting with fit 80 and one with fit 65. One pass of D10's tick
- * (`python -m app.documents.tick <email>` in the api container) starts the CV of the first, if
- * the worker's own tick has not, so the Search tab's card says one posting was written today
- * against the safety ceiling. Open Advanced, see the count at 70, move the threshold to 60 and
- * see what it adds before saving, save; a ceiling of 501 is refused with its sentence; reload and
- * see 60. The writing rules are saved at once and read back after a reload. Screenshots at every
- * viewport check that nothing overflows on a phone.
+ * Documents D29 (in D13's journey) against the real stack through Caddy, driven through the page:
+ * an invented account with a made up model credential, the consent and a base CV (the writers on
+ * the fake backend), a posting with fit 80. One pass of the documents tick
+ * (`python -m app.documents.tick <email>` in the api container) writes nothing: no document is
+ * written without the person's click. The Search tab has no documents card any more and keeps
+ * the writing rules, saved at once and read back after a reload. Screenshots at every viewport
+ * check that nothing overflows on a phone.
  *
  * Locally, as documents-d6.spec.ts (AGENTS_FAKE_BACKEND=1 on the worker), then:
  *   E2E_CADDY_URL=http://127.0.0.1:8099 E2E_COMPOSE_PROJECT=jobapp-d13 \
@@ -46,7 +44,7 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 
-/** One pass of the automatic generation for this account only. */
+/** One pass of the documents tick for this account only. */
 function tick(email: string): string {
   return execFileSync(
     "docker",
@@ -79,18 +77,6 @@ async function setFit(job: string, fit: number) {
   expect(patched.status()).toBe(200);
 }
 
-const card = () => page.getByTestId("documents-generation");
-/** The Search tab has two Advanced buttons since O4: scope to the documents card by its heading. */
-const advanced = () =>
-  page
-    .locator("section")
-    .filter({
-      has: page.getByRole("heading", { name: "Documents for new postings" }),
-    })
-    .getByRole("button", { name: "Advanced", exact: true });
-const slider = () => page.getByRole("slider", { name: "Fit score threshold" });
-const figures = () => page.getByTestId("documents-threshold");
-
 test.beforeAll(async ({ browser }) => {
   person = invented("d13");
   context = await newContext(browser);
@@ -103,7 +89,7 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("an invented person has a base CV, and the tick writes the posting at fit 80", async () => {
+test("an invented person has a base CV, and the tick writes nothing for a posting at fit 80", async () => {
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
@@ -127,64 +113,29 @@ test("an invented person has a base CV, and the tick writes the posting at fit 8
 
   const high = await addPosting(page.request, person);
   await setFit(high, 80);
-  const middle = await addPosting(page.request, {
-    ...person,
-    posting: { ...person.posting, title: "Support engineer" },
-  });
-  await setFit(middle, 65);
 
-  // The worker's own tick may start the posting first: the card's Today line is the proof.
-  expect(tick(person.email)).toMatch(/^started [01],/);
+  expect(tick(person.email)).toMatch(/^started 0,/);
+  const read = await page.request.get(`/api/jobs/${high}/documents`);
+  const { documents } = (await read.json()) as { documents: unknown[] };
+  expect(documents).toEqual([]);
+  await page.goto(`/jobs/${high}`);
+  await expect(page.getByTestId("posting-cv")).toContainText(
+    "Not written yet. It is written when you click Write or Apply.",
+  );
+  await shots(page, "written-on-click");
 });
 
-test("the card shows today's count, and what a threshold of 60 adds before it is saved", async () => {
+test("the Search tab has no documents card", async () => {
   await page.goto("/settings/search");
   await expect(
-    card().getByRole("switch", { name: "Write documents automatically" }),
-  ).toBeChecked();
-  await expect(card()).toContainText("For postings with a fit of 70 or more.");
-  await expect(page.getByTestId("documents-today")).toContainText(
-    "Today: 1 posting written, the safety ceiling is 100.",
-  );
-  await expect(page.getByTestId("documents-spend")).toBeVisible();
-
-  await advanced().click();
-  await expect(figures()).toContainText(
-    "1 posting of the last 30 days has a fit of 70 or more.",
-  );
-  // From 70, Page Down moves the slider ten points, as a person does with the keyboard.
-  await slider().focus();
-  await page.keyboard.press("PageDown");
-  await expect(figures()).toContainText(
-    "2 postings of the last 30 days have a fit of 60 or more.",
-  );
-  await expect(page.getByTestId("documents-newly")).toContainText(
-    "Lowering it to 60 adds 1 posting to write, about",
-  );
-  await shots(page, "threshold-60");
-
-  const ceiling = page.getByLabel("Safety ceiling per day");
-  await ceiling.fill("501");
-  await page.getByRole("button", { name: "Save search" }).click();
-  await expect(
-    page.getByText(
-      "The safety ceiling is a whole number of postings a day, from 1 to 500.",
-    ),
+    page.getByRole("heading", { name: "Writing rules" }),
   ).toBeVisible();
-  await ceiling.fill("100");
-  await page.getByRole("button", { name: "Save search" }).click();
-  await expect(page.getByText("Search saved.")).toBeVisible();
-});
-
-test("after a reload the threshold is 60", async () => {
-  await page.reload();
-  await expect(card()).toContainText("For postings with a fit of 60 or more.");
-  await advanced().click();
-  await expect(slider()).toHaveAttribute("aria-valuenow", "60");
-  await expect(figures()).toContainText(
-    "2 postings of the last 30 days have a fit of 60 or more.",
-  );
-  await expect(page.getByTestId("documents-newly")).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Documents for new postings" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("slider", { name: "Fit score threshold" }),
+  ).toHaveCount(0);
 });
 
 test("the writing rules are saved at once and read back after a reload", async () => {
