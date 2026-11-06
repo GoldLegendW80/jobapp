@@ -334,7 +334,7 @@ def test_a_long_name_stays_on_the_page_and_whole(
         ys = baselines(result.pdf, word)
         assert max(ys) - min(ys) < 1.0, word
     assert top(glyphs.find(content.headline[:20])) < bottom(boxes)
-    assert "".join(name.split()) in "".join(pdf_text(result.pdf).split())
+    assert "".join(name.split()).casefold() in "".join(pdf_text(result.pdf).split()).casefold()
 
 
 def images(pdf: bytes) -> list[tuple[float, float, float, float]]:

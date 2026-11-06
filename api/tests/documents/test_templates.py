@@ -1415,7 +1415,7 @@ def test_the_fit_rule_on_d1_fixtures(renderer: Any, slug: str, language: str) ->
         steps[name] = result.step
         main = templates.fonts()[found.fonts[0]].name.replace(" ", "")
         assert any(font.startswith(main) for font in pdf_fonts(result.pdf)), name
-        assert "Alex Example" in pdf_text(result.pdf)
+        assert "alex example" in pdf_text(result.pdf).casefold()  # capitals by CSS read alike
     assert steps["cv-short"] == 0, steps
     assert steps["cv-typical"] < last, steps
     assert steps["cv-short"] <= steps["cv-typical"] <= steps["cv-long"] <= steps["cv-tightest"]
@@ -1505,7 +1505,7 @@ def test_an_emoji_as_phones_type_it_renders(renderer: Any, slug: str, sample_: s
     text = "".join(pdf_text(rendered.pdf).split())
     printed = templates.printable_text(template(slug).fonts, sample_)
     assert printed[:1] == sample_[0]
-    assert "Engineer" in text
+    assert "engineer" in text.casefold()  # a headline in capitals by CSS reads alike
     if len(printed) == 1:  # a ligature of a sequence (`👍🏽`) maps to no text in the PDF
         assert "AlexExample" not in text  # the name kept its character
         assert printed in text, sample_

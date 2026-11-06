@@ -385,7 +385,7 @@ def test_an_ats_friendly_template_reads_in_the_order_of_the_page(
     assert_whole_on_one_line(result.pdf, d1_view())
     # pdfium reads a hyphen that ends a line as U+FFFE, in every template.
     text = " ".join(pdf_text(result.pdf).replace("\ufffe", "-").split())
-    assert text.startswith("Alex Example"), text[:60]
+    assert text.casefold().startswith("alex example"), text[:60]
     labels = templates.labels()[language]
     keys = ("summary", "highlights", "competencies", "experience", "education", "skills")
     folded = text.casefold()  # a heading in small caps may be extracted in capitals

@@ -13,6 +13,7 @@ import asyncio
 import dataclasses
 import json
 import re
+from pathlib import Path
 
 import pypdfium2 as pdfium
 import pytest
@@ -51,15 +52,19 @@ def checker(stack: Stack) -> design_check.Check:
     return check
 
 
+BASELINE = Path(__file__).resolve().parent / "fixtures" / "upload_baseline"
+
+
 def probe(css: str = "", replace: tuple[tuple[str, str], ...] = ()) -> templates.Template:
-    """band, with `css` appended and each `replace` applied to its style sheet."""
-    band = templates.registry()["band"]
-    style = band.files["style.css"]
+    """classic (the upload rules' baseline, kept as a fixture when the twenty went in D27), with
+    `css` appended and each `replace` applied to its style sheet."""
+    files = {name: (BASELINE / name).read_text(encoding="utf-8") for name in templates.FILES}
+    style = files["style.css"]
     for old, new in replace:
         style = re.sub(old, new, style)
-    manifest = json.loads((band.folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((BASELINE / "manifest.json").read_text(encoding="utf-8"))
     manifest["slug"] = "probe"
-    return templates.from_files(manifest, {**band.files, "style.css": style + css})
+    return templates.from_files(manifest, {**files, "style.css": style + css})
 
 
 @pytest.mark.parametrize("slug", sorted(templates.registry()))
