@@ -4,7 +4,8 @@ Queues are named lists in Redis, each consumed by its own arq Worker inside the 
 container (app/worker.py): SWEEPS (jobs J5), AGENTS (agents A2, the user's agent runs) and
 INGESTION (ingestion G2b, the reading of uploaded documents, one at a time), DOCUMENTS
 (documents D6, the renders of CVs and letters, one at a time, and the module's cron jobs) and
-APPLY (apply A5, the fill of one application form at a time, and its tick). A
+APPLY (apply A5, the fill of one application form at a time, and its tick), APPLY_HOLD (apply
+A20, Review first's held sessions waiting for the person's Confirm, outside APPLY's slot). A
 later lane for automatic agent runs (mail triage, scheduled assessments) gets a queue name of its
 own here, consumed after the interactive one, so a batch never delays a run someone is watching.
 
@@ -34,6 +35,7 @@ AGENTS = "jobapp:agents"
 INGESTION = "jobapp:ingestion"
 DOCUMENTS = "jobapp:documents"
 APPLY = "jobapp:apply"
+APPLY_HOLD = "jobapp:apply_hold"
 CONNECT_TIMEOUT_S = 2
 
 
@@ -84,6 +86,11 @@ def document_job_id(document_id: object, attempts: int, pending_since: datetime 
 def render_job_id(document_id: object, revision: int) -> str:
     """One render per (document, draft revision): asking again while it waits is the same job."""
     return f"render:{document_id}:{revision}"
+
+
+def apply_hold_job_id(application_id: object) -> str:
+    """One held wait per application (A20)."""
+    return f"apply-hold:{application_id}"
 
 
 def apply_fill_job_id(application_id: object) -> str:

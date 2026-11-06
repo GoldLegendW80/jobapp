@@ -31,7 +31,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, likes, service
-from app.apply.models import Application, ApplicationEvent, Mode, State
+from app.apply.models import Application, ApplicationAnswer, ApplicationEvent, Mode, State
 from app.db import get_session
 from app.documents import store
 from app.identity import deps
@@ -131,6 +131,26 @@ class EventOut(BaseModel):
     data: dict[str, Any]
 
 
+class FieldOut(BaseModel):
+    step: str
+    label: str
+    kind: str
+    value: str
+    chosen: str | None = None
+
+
+class FilledOut(BaseModel):
+    fields: list[FieldOut]
+    submit: str
+    fields_hash: str | None  # hex, sent back with Confirm and send
+
+
+class ChosenOut(BaseModel):
+    label: str
+    value: str
+    why: str
+
+
 class ApplicationDetail(ApplicationOut):
     events: list[EventOut]
     question: QuestionOut | None = None
@@ -138,6 +158,12 @@ class ApplicationDetail(ApplicationOut):
     agent: bool = False
     hold_until: datetime | None
     now: datetime
+    # A20: Review first's apply agent: what it filled (the list the person confirms) and the
+    # answers it chose for the person; `review_agent` names such an application.
+    review_agent: bool = False
+    filled: FilledOut | None = None
+    chosen: list[ChosenOut] = []
+    summary: str | None = None  # the agent's own account, shown after a failed run
 
 
 class ApplicationList(BaseModel):
@@ -194,6 +220,7 @@ def start_application(
             body.dry_run,
             now=deps.clock(request),
             stub_base=request.app.state.settings.apply_stub_base_url,
+            agent_review=body.mode == "apply" and not body.dry_run,
         )
     except service.PostingNotFoundError:
         db.rollback()
@@ -247,7 +274,35 @@ def read_application(
         agent=_agent(db, application),
         hold_until=full_auto.hold_until(db, application) if held else None,
         now=deps.clock(request),
+        **_filled(db, application, deps.clock(request)),
     )
+
+
+def _filled(db: Session, application: Application, now: datetime) -> dict[str, Any]:
+    """A20: the list of what the agent filled, and the answers it chose (from the run report).
+    The list's hash, which a Confirm sends back, only while a held session of the current run
+    waits for it (`confirm.live`)."""
+    from app.apply import applier, confirm
+
+    review = confirm.review_agent(db, application)
+    out: dict[str, Any] = {"review_agent": review}
+    listed = confirm.fields_of(db, application) if review else None
+    if listed is not None:
+        fields = [f for f in listed.get("fields", []) if isinstance(f, dict)]
+        hashed = application.answers_hash.hex() if application.answers_hash else None
+        out["filled"] = FilledOut(
+            fields=[FieldOut.model_validate(f) for f in fields],
+            submit=str(listed.get("submit") or ""),
+            fields_hash=hashed if confirm.live(db, application, now) else None,
+        )
+    report = db.get(ApplicationAnswer, (application.id, applier.REPORT_KEY))
+    if report is not None and report.user_id == application.user_id:
+        rows = report.value.get("chosen") if isinstance(report.value, dict) else None
+        said = report.value.get("summary") if isinstance(report.value, dict) else None
+        out["summary"] = said if isinstance(said, str) and said else None
+        if isinstance(rows, list):
+            out["chosen"] = [ChosenOut.model_validate(r) for r in rows if isinstance(r, dict)]
+    return out
 
 
 def _question(db: Session, application: Application) -> QuestionOut | None:

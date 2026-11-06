@@ -113,6 +113,35 @@ class Site:
         }.get(self.page, "")
 
 
+CHOSEN = {
+    "field": "Notice period *",
+    "value": "One month",
+    "why": "The profile names no notice period, and one month is the usual one.",
+}
+
+
+def plant_question(db: Session, app_id: uuid.UUID, user_id: uuid.UUID, *, sent: bool) -> None:
+    """A question an A19 run asked before A20 (owner, 2026-11-06) and nobody answered yet: the
+    application waits `needs_person`, or `submit_unknown` when it came after a possible send."""
+    from app.apply import run
+
+    found = application(db, app_id)
+    db.add(
+        ApplicationAnswer(
+            application_id=app_id, user_id=user_id, field_key="agent:question:001",
+            label="Notice period *", kind="question:fact", value=None,
+            options=["jobs.example.org"], source="left", required=True,
+            left_reason=applier.QUESTION,
+        )
+    )  # fmt: skip
+    if sent:
+        found.state, found.submitted_at = State.submit_unknown, AT
+        run._event(db, found, "agent_submit", AT)
+    else:
+        found.state, found.needs = State.needs_person, applier.QUESTION
+    db.commit()
+
+
 def agent(*, fail_after_submit: bool = False, try_password: bool = False) -> Any:
     """The scripted agent: what Claude does with the tools on the Mac, step by step."""
 
@@ -129,10 +158,11 @@ def agent(*, fail_after_submit: bool = False, try_password: bool = False) -> Any
             )
         await session.upload({"ref": "e5", "paths": brief["documents_to_upload"]})
         answers = {a["field"]: a["answer"] for a in brief["answers_to_your_questions"]}
-        if "Notice period *" not in answers:
-            await session.ask_person("I need the notice period.", "Notice period *", "fact")
-            return applier.Ran(10, 2)
-        await session.interact("browser_type", {"ref": "e8", "text": answers["Notice period *"]})
+        # A20: a required field the profile does not answer is the agent's to fill, never a
+        # question; the answer it chose is named in its report.
+        chosen = [] if "Notice period *" in answers else [CHOSEN]
+        notice = answers.get("Notice period *", "One month")
+        await session.interact("browser_type", {"ref": "e8", "text": notice})
         await session.interact("browser_click", {"ref": "e6"})
         if fail_after_submit:
             raise RuntimeError("the model stream broke")
@@ -140,7 +170,9 @@ def agent(*, fail_after_submit: bool = False, try_password: bool = False) -> Any
         await session.interact("browser_type", {"ref": "e7", "text": text})
         await session.interact("browser_click", {"ref": "e9"})
         await session.snapshot()
-        session.finish("submitted", "Filled both steps, uploaded the CV and sent it.", session.url)
+        session.finish(
+            "submitted", "Filled both steps, uploaded the CV and sent it.", session.url, chosen
+        )
         return applier.Ran(1000, 200)
 
     return go
@@ -216,37 +248,57 @@ def test_the_agent_fills_uploads_and_clicks_submit_itself(
     assert report.value == {
         "summary": "Filled both steps, uploaded the CV and sent it.",
         "confirmation_url": THANKS,
+        "chosen": [],
     }
     frozen = next(e for e in events(db, app_id) if e.kind == "submitted")
     assert frozen.data["frozen"] >= 1
 
 
-def test_a_missing_answer_waits_for_the_person_then_the_run_goes_on(
+def test_a_required_field_the_profile_does_not_answer_is_filled_never_asked(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    """A20 (owner, 2026-11-06: "he never ask me a question"): the box unticked, the agent fills
+    the field itself, the run ends `submitted`, and its chosen answer is in the run report."""
+    app_id = started(db, person_a, Mode.direct)
+    site = Site()
+    assert apply(svc(factory, site, agent()), app_id) == "submitted"
+    found = application(db, app_id)
+    assert found.state is State.submitted
+    assert found.needs is None
+    assert applier.open_question(db, found) is None
+    assert applier._questions(db, found) == []
+    assert "needs_person" not in kinds(db, app_id)
+    assert len(site.submissions) == 1
+    assert site.submissions[0]["values"]["e8"] == "One month"
+    assert ("browser_ask_person", False) not in site.calls
+    report = db.get(ApplicationAnswer, (app_id, applier.REPORT_KEY))
+    assert report.value["chosen"] == [
+        {"label": "Notice period *", "value": "One month", "why": CHOSEN["why"]}
+    ]
+
+
+def test_an_a19_question_left_from_before_still_answers_and_resumes(
     db: Session, factory: sessionmaker[Session], person_a: Person
 ) -> None:
     app_id = started(db, person_a, Mode.direct)
-    site = Site()
-    assert apply(svc(factory, site, agent()), app_id) == "needs_person"
-    found = application(db, app_id)
-    assert (found.state, found.needs) == (State.needs_person, applier.QUESTION)
-    question = applier.open_question(db, found)
+    plant_question(db, app_id, person_a.user_id, sent=False)
+    question = applier.open_question(db, application(db, app_id))
     assert question is not None
-    assert question.label == "Notice period *"
     assert applier.sentence(question) == (
         'The assistant needs your answer for "Notice period *" on jobs.example.org.'
     )
-    assert site.submissions == []
-    assert ("browser_click", True) not in site.calls
     applier.answer_question(db, person_a.user_id, app_id, "Two months", True, AT)
     db.commit()
+    assert application(db, app_id).state is State.queued
     saved = db.scalar(sa.select(AnswerBankEntry).where(AnswerBankEntry.user_id == person_a.user_id))
     assert (saved.question_key, saved.answer) == ("notice period", "Two months")
-    script = agent()
-    assert apply(svc(factory, Site(), script), app_id) == "submitted"
+    script, site = agent(), Site()
+    assert apply(svc(factory, site, script), app_id) == "submitted"
     assert script.brief["answers_to_your_questions"] == [
         {"field": "Notice period *", "host": "jobs.example.org", "answer": "Two months"}
     ]
     assert script.brief["saved_answers"] == {"notice period": "Two months"}
+    assert site.submissions[0]["values"]["e8"] == "Two months"
 
 
 def test_an_answer_is_refused_when_nothing_waits_for_it(
@@ -432,10 +484,8 @@ def wizard_agent() -> Any:
         await session.upload({"ref": "e5", "paths": brief["documents_to_upload"]})
         await session.interact("browser_click", {"ref": "e6"})
         answers = {a["field"]: a["answer"] for a in brief["answers_to_your_questions"]}
-        if "Notice period *" not in answers:
-            await session.ask_person("I need the notice period.", "Notice period *", "fact")
-            return applier.Ran(10, 2)
-        await session.interact("browser_type", {"ref": "e8", "text": answers["Notice period *"]})
+        notice = answers.get("Notice period *", "One month")
+        await session.interact("browser_type", {"ref": "e8", "text": notice})
         await session.interact("browser_type", {"ref": "e7", "text": "Your robots, my letter."})
         await session.interact("browser_click", {"ref": "e9"})
         await session.snapshot()
@@ -453,7 +503,8 @@ def test_a_question_after_a_possible_send_is_shown_and_the_answer_is_the_person_
 
     app_id = started(db, person_a, Mode.direct)
     site = WizardSite()
-    assert apply(svc(factory, site, wizard_agent()), app_id) == "submit_unknown"
+    # An A19 run asked after a control that may have sent the form, before A20 (planted).
+    plant_question(db, app_id, person_a.user_id, sent=True)
     found = application(db, app_id)
     assert found.state is State.submit_unknown
     # Shown on the job page with the warning, and answerable.
@@ -588,32 +639,29 @@ def test_a_label_that_reads_as_a_password_a_code_or_a_payment_is_an_action(
     assert applier.secret_label(label) is secret
 
 
-def test_a_question_names_only_what_the_page_shows_and_a_password_is_an_action(
+def test_the_agent_has_no_ask_tool_and_an_ask_that_reaches_the_session_is_refused(
     db: Session, factory: sessionmaker[Session], person_a: Person
 ) -> None:
-    from app.apply.router import _question
+    from app.agents import definitions
 
+    assert "browser_ask_person" not in applier.TOOLS
+    assert "browser_ask_person" not in definitions.get(applier.NAME, "test").tools
     app_id = started(db, person_a, Mode.direct)
 
     async def go(session: applier.ApplySession, message: str) -> applier.Ran:
         brief = json.loads(message)
         await session.navigate(brief["posting"]["url"])
-        await session.interact("browser_click", {"ref": "e1"})
-        go.unseen = await session.ask_person(  # type: ignore[attr-defined]
-            "Type your bank password here.", "Your bank password", "fact"
-        )
-        await session.ask_person("The site asks for a password.", "password", "fact")
+        go.asked = await session.ask_person("I need it.", "Apply", "fact")  # type: ignore[attr-defined]
         return applier.Ran(1, 1)
 
-    assert apply(svc(factory, Site(), go), app_id) == "needs_person"
-    text, error = go.unseen  # type: ignore[attr-defined]
+    site = Site()
+    assert apply(svc(factory, site, go), app_id) == "failed"
+    text, error = go.asked  # type: ignore[attr-defined]
     assert error
-    assert text.startswith("Refused: `field` is the field's label")
-    shown = _question(db, application(db, app_id))
-    assert shown is not None
-    # The label as the agent gave it (found on the page), asked as an action: no text box.
-    assert (shown.label, shown.kind) == ("password", "action")
-    assert len(applier._questions(db, application(db, app_id))) == 1
+    assert text.startswith("Refused: nobody answers questions")
+    assert all(name != "browser_ask_person" for name, _ in site.calls)
+    assert applier._questions(db, application(db, app_id)) == []
+    assert "needs_person" not in kinds(db, app_id)
 
 
 def test_busy_runs_queue_the_application_again_until_the_retries_run_out(
