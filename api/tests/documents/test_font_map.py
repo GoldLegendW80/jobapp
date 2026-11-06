@@ -88,6 +88,15 @@ KNOWN_CASES = [
     ("Consolas", {"monospace": False, "serif": True}, "ibm-plex-mono", 400, False),
     ("DejaVuSansMono-Bold", {}, "ibm-plex-mono", 700, False),
     ("RobotoMono-Italic", {}, "ibm-plex-mono", 400, True),
+    # the families of the three templates (D27): Raleway itself, the stand ins of TT fonts
+    ("Raleway-Medium", {}, "raleway", 500, False),
+    ("Raleway-BoldItalic", {}, "raleway", 700, True),
+    ("Inter Tight", {}, "inter-tight", 400, False),
+    ("TT Commons", {}, "inter-tight", 400, False),
+    ("TT Commons Pro Medium", {}, "inter-tight", 500, False),
+    ("TTCommonsPro-DemiBold", {}, "inter-tight", 600, False),
+    ("TT Hazelnuts Bold", {}, "gantari", 700, False),
+    ("TTHazelnuts-Italic", {}, "gantari", 400, True),
 ]
 
 
@@ -106,7 +115,8 @@ NEAR_MISSES = [
     ("TimesSquare-Bold", {"serif": True}, "source-serif-4"),
     ("Arial Rounded MT Bold", {}, "arimo"),
     ("Interstate-Light", {}, "arimo"),
-    ("Inter Tight", {"serif": True}, "source-serif-4"),
+    ("Inter Rounded", {"serif": True}, "source-serif-4"),
+    ("TT Norms", {"serif": True}, "source-serif-4"),
     ("Calibrix", {"serif": True}, "source-serif-4"),
     ("Cambria Math", {}, "arimo"),
     ("Georgian", {}, "arimo"),
