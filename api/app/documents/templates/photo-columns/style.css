@@ -144,3 +144,4 @@ li, p, h3 { overflow-wrap: anywhere; }
 .name { white-space: nowrap; }
 .name.long { white-space: normal; }
 .name .word { white-space: nowrap; }
+.name.longword .word { white-space: normal; }  /* broken inside only when it cannot fit whole */
