@@ -10,8 +10,10 @@ import { useTitle } from "@/lib/use-title";
 
 import { FilterBar } from "../filter-bar";
 import { hasFilters, toSearchParams } from "../filters";
+import { BulkBar } from "../jobs-actions";
 import { useJobFilters } from "../use-job-filters";
 import { plural } from "./format";
+import { useMapSelection } from "./map-selection";
 import { getPlaces, placesKey } from "./places-api";
 import { PlacesPanel } from "./places-panel";
 import { JobsViewTabs } from "./view-tabs";
@@ -20,7 +22,9 @@ import { WorldMap } from "./world-map";
 /**
  * /jobs/map: the postings of the current filters (the same URL query as the list) on a world
  * map, a pin per city or country their location names, the places as a list beside it, and the
- * locations no place matches. A port of the Map view of engine/dashboard.html.
+ * locations no place matches. A port of the Map view of engine/dashboard.html. A place's
+ * postings can be ticked, a place at a time or all of it, and the Jobs list's bulk bar acts on
+ * them (Apply to the selected postings, Like, status, note).
  */
 export function JobsMapPage() {
   useTitle("Jobs map");
@@ -32,6 +36,7 @@ export function JobsMapPage() {
     placeholderData: keepPreviousData,
   });
   const [selected, setSelected] = useState<string | null>(null);
+  const selection = useMapSelection(apiQuery);
   const data = places.data;
   const from = `/map${query ? `?${query}` : ""}`;
 
@@ -86,6 +91,7 @@ export function JobsMapPage() {
               selected={selected}
               onSelect={setSelected}
               from={from}
+              selection={selection}
             />
           ) : (
             <Skeleton
@@ -95,6 +101,7 @@ export function JobsMapPage() {
           )}
         </div>
       )}
+      <BulkBar selection={selection} />
     </div>
   );
 }
