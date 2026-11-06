@@ -207,6 +207,14 @@ choice made by the build that stands until the owner says otherwise.
 - 2026-10-21 (#358): a posting that leaves `applied` before the approved version's render lands is
   frozen by the next trigger (Try again, Mark as sent, apply's send, a return to applied): one
   `SPEC-documents.md` sentence plus a test pinning it.
+- 2026-11-06 (D27): with three PDF CVs made with Canva attached, the owner wrote: "now i want you deep focus on the templates. There is 3 templates attached to this message. I want to to replicate exactly these tree as editable cv, create the resume in the same style, remove all the templates of the app and upload this one. then, according to the method you used to replicate these templates, I want you to implement this in the app so when a user upload his cv, the app will use the exact same style for generating new cv and cover letters."
+  The three, replicated by measurement as `band`, `photo-columns` and `ledger`, replace the twenty
+  bundled templates (this revises "switched among 20 templates": a document is switched among the
+  three and the person's own). The default is `band`. A document on a removed template moves to
+  the nearest of the three (migration 0032: `sidebar`, `split-right`, `portrait`, `banner`,
+  `columns-header`, `cards`, `grid` to `photo-columns`; `serif`, `elegant`, `executive`, `nordic` to
+  `ledger`; every other to `band`); versions keep theirs. The second half, the design capture of an
+  upload with the same method, is task D28.
 
 ## Interactive job search (2026-10-24, #626)
 
