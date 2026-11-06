@@ -942,7 +942,10 @@ def test_the_labels_have_both_languages_and_no_dash() -> None:
             assert not re.search(r"[–—]| - ", text)
 
 
-LABELS = {"en": {"experience": "Career so far"}, "fr": {"summary": "En bref", "experience": "Parcours"}}
+LABELS = {
+    "en": {"experience": "Career so far"},
+    "fr": {"summary": "En bref", "experience": "Parcours"},
+}
 
 
 def test_a_manifest_s_own_labels_go_over_the_shared_ones_per_language(tmp_path: Path) -> None:

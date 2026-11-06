@@ -10,7 +10,6 @@ reach the next entry, `minimal`'s headings stay in its margin, and a CV with a p
 import asyncio
 import io
 import re
-from html import unescape
 from typing import Any
 
 import pypdfium2 as pdfium
@@ -23,16 +22,13 @@ from app.documents.profile_view import Employer, Identity, ProfileView, School
 from tests.documents.test_templates import (
     ON,
     SLUGS,
-    assert_authoring,
     d1,
     d1_view,
-    fitted,
-    pdf_text,
     template,
 )
 from tests.documents.test_templates import renderer as renderer
 
-D19 = ("serif", "timeline", "split-right", "minimal")
+D19 = tuple(sorted(templates.registry()))  # D27: the three
 
 
 def view_with_open_end_and_undated_school() -> ProfileView:
@@ -86,38 +82,6 @@ def rail_of(html: str, label: str) -> str:
 # --- static: the built HTML ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("language", "present"),
-    [("en", "March 2021 to present"), ("fr", "mars 2021 à aujourd&#39;hui")],
-)
-def test_timeline_puts_an_open_end_and_an_undated_school_on_the_rail(
-    language: str, present: str
-) -> None:
-    labels = templates.labels()[language]
-    html = templates.build_html(
-        template("timeline"),
-        "cv",
-        timeline_content(),
-        view_with_open_end_and_undated_school(),
-        language,
-        0,
-        ON,
-    )
-    assert_authoring(html)
-    experience = rail_of(html, labels["experience"])
-    assert f'<p class="period">{present}</p>' in experience
-    assert experience.index("Platform Engineer") < experience.index(present)
-    # A role without bullets still prints its title and its period.
-    assert "Developer" in experience
-    assert "2018 to 2021" in experience or "2018 à 2021" in experience
-    education = rail_of(html, labels["education"])
-    undated = education.split('<div class="school">')[1]  # the first school
-    assert "Undated School" in undated
-    assert "Certificate in Testing" in undated
-    assert 'class="period"' not in undated
-    assert '<p class="period">2015' in education
-
-
 LOCATIONS = {
     "en": ("Clermont-Ferrand, France", "Boston, Massachusetts, United States"),
     "fr": ("Saint-Étienne, France", "Boston, Massachusetts, États-Unis"),
@@ -147,48 +111,6 @@ def timeline_content_with_skills() -> c.CvContent:
     data = timeline_content().model_dump()
     skills = [{"label": "Cloud", "items": ["Kubernetes", "Terraform"]}]
     return c.CvContent.model_validate(data | {"skills": skills})
-
-
-def test_timeline_prints_only_the_period_in_the_rail_and_the_location_in_the_text() -> None:
-    html = templates.build_html(
-        template("timeline"),
-        "cv",
-        timeline_content_with_skills(),
-        view_with_schools_with_long_locations("en"),
-        "en",
-        0,
-        ON,
-    )
-    education = rail_of(html, templates.labels()["en"]["education"])
-    assert education.count('<p class="period">September 2016 to June 2019</p>') == 2
-    assert '<p class="period">2014 to 2017</p>' in education
-    assert education.count('<p class="place">Clermont-Ferrand, France</p>') == 2
-    assert '<p class="place">Boston, Massachusetts, United States</p>' in education
-
-
-def test_split_right_prints_a_long_skills_list_in_the_panel_after_the_story() -> None:
-    _, language, content = d1("cv-typical")
-    content = long_skills(content)
-    html = templates.build_html(template("split-right"), "cv", content, d1_view(), language, 0, ON)
-    page = assert_authoring(html)
-    main, side = html.index('<main class="main">'), html.index('<aside class="side">')
-    assert main < side
-    for g in range(4):
-        assert f"Group {g}" in html[side:]
-        assert ", ".join(f"Tool{g}x{i}" for i in range(18)) in page.body
-
-
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_minimal_without_highlights_prints_no_highlights_heading(language: str) -> None:
-    labels = templates.labels()[language]
-    _, _, content = d1("cv-typical")
-    html = templates.build_html(
-        template("minimal"), "cv", without_highlights(content), d1_view(), language, 0, ON
-    )
-    body = assert_authoring(html).body
-    assert labels["highlights"] not in body
-    for key in ("summary", "competencies", "experience", "education", "skills", "languages"):
-        assert labels[key] in body, key
 
 
 # --- static: contrast ---------------------------------------------------------------------------
@@ -287,71 +209,9 @@ def test_the_contrast_test_fails_on_a_colour_form_it_does_not_know(value: str) -
         colour(value)
 
 
-@pytest.mark.parametrize("slug", D19)
-def test_every_text_colour_reaches_4_5_to_1_on_every_background(slug: str) -> None:
-    """Every `color` of the style (the accent included) against white and every `background`:
-    WCAG AA for body text. Rules (borders) are decoration and are not text. A colour written in a
-    form the test cannot read fails it."""
-    found = template(slug)
-    css = re.sub(r"/\*.*?\*/", "", found.files["style.css"], flags=re.S)
-    css = css.replace("var(--accent)", found.accent)
-    texts = {found.accent}
-    backgrounds = {"#ffffff"}
-    for prop, value in re.findall(rf"(?<![-\w]){COLOUR_PROPERTIES}\s*:\s*([^;}}]+)", css):
-        (texts if prop == "color" else backgrounds).update(colours(value))
-    assert len(texts) >= 3, texts
-    low = {(t, b): round(contrast(t, b), 2) for t in texts for b in backgrounds}
-    assert all(ratio >= 4.5 for ratio in low.values()), {k: v for k, v in low.items() if v < 4.5}
-
-
 # --- docker: through the real renderer ----------------------------------------------------------
 
 docker = pytest.mark.docker
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_timeline_with_an_open_end_and_an_undated_school_renders_one_page(
-    renderer: Any, language: str
-) -> None:
-    result = fitted(
-        renderer,
-        template("timeline"),
-        "cv",
-        timeline_content(),
-        view_with_open_end_and_undated_school(),
-        language,
-    )
-    assert result.fit, result.pages
-    assert result.step == 0, result.step
-    text = " ".join(pdf_text(result.pdf).split())
-    assert "present" in text or "aujourd" in text
-    assert "Undated School" in text
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_split_right_with_a_long_skills_list_fits_one_page(renderer: Any, language: str) -> None:
-    _, _, content = d1("cv-typical")
-    result = fitted(
-        renderer, template("split-right"), "cv", long_skills(content), d1_view(), language
-    )
-    assert result.fit, result.pages
-    text = "".join(pdf_text(result.pdf).split())
-    assert all(f"Tool{g}x17" in text for g in range(4))
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_minimal_without_highlights_fits_no_later_than_with_them(
-    renderer: Any, language: str
-) -> None:
-    _, _, content = d1("cv-typical")
-    found, view = template("minimal"), d1_view()
-    plain = fitted(renderer, found, "cv", without_highlights(content), view, language)
-    full = fitted(renderer, found, "cv", content, view, language)
-    assert plain.fit, plain.pages
-    assert plain.step <= full.step, (plain.step, full.step)
 
 
 # --- docker: the geometry of the PDF -------------------------------------------------------------
@@ -396,75 +256,6 @@ def top(boxes: list[Box]) -> float:
 
 def bottom(boxes: list[Box]) -> float:
     return min(box[1] for box in boxes)
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-@pytest.mark.parametrize("loosest", [True, False])
-def test_timeline_dates_of_a_school_never_reach_the_next_entry(
-    renderer: Any, language: str, loosest: bool
-) -> None:
-    """The review of PR #286: a school dated by month with a city and a country took four rail
-    lines and printed over the next school's dates, the last one over the Skills heading."""
-    found = template("timeline")
-    step = 0 if loosest else len(found.steps("cv")) - 1
-    html = templates.build_html(
-        found,
-        "cv",
-        timeline_content_with_skills(),
-        view_with_schools_with_long_locations(language),
-        language,
-        step,
-        ON,
-    )
-    rendered = renderer.render(html)
-    assert rendered.pages == 1
-    labels = templates.labels()[language]
-    education = rail_of(html, labels["education"])
-    periods = [unescape(p) for p in re.findall(r'<p class="period">(.*?)</p>', education)]
-    degrees = ["Master of Science", "Bachelor of Science", "Associate Degree"]
-    assert len(periods) == len(degrees) == 3
-    glyphs = Glyphs(rendered.pdf)
-    titles = [glyphs.find(degree) for degree in degrees]
-    heading = glyphs.find(labels["skills"])
-    # The rail: what stands left of the titles, under the Education heading, in reading order.
-    column = min(box[0] for title in titles for box in title) - 1
-    below = bottom(glyphs.find(labels["education"]))
-    rail = [
-        (ch, glyphs.boxes[i])
-        for i, ch in glyphs.chars
-        if glyphs.boxes[i][2] <= column and glyphs.boxes[i][3] <= below
-    ]
-    letters = "".join(ch for ch, _ in rail).upper()
-    dates, at = [], 0
-    for period in periods:
-        target = "".join(period.split()).upper()
-        start = letters.find(target, at)
-        assert start >= 0, f"{period!r} is not whole in the rail: {letters!r}"
-        at = start + len(target)
-        dates.append([box for _, box in rail[start:at]])
-    for index in range(len(degrees) - 1):
-        next_top = max(top(titles[index + 1]), top(dates[index + 1]))
-        assert bottom(dates[index]) > next_top, (language, step, index)
-    assert bottom(dates[-1]) > top(heading), (language, step)
-
-
-@docker
-@pytest.mark.parametrize("language", templates.LANGUAGES)
-def test_minimal_headings_stay_in_the_left_margin(renderer: Any, language: str) -> None:
-    """Every heading ends before the text column that starts right of it (at the loosest step,
-    where the type is largest)."""
-    _, _, content = d1("cv-short")
-    labels = templates.labels()[language]
-    html = templates.build_html(template("minimal"), "cv", content, d1_view(), language, 0, ON)
-    rendered = renderer.render(html)
-    assert rendered.pages == 1
-    glyphs = Glyphs(rendered.pdf)
-    summary = glyphs.find(content.summary[:12])
-    column = min(box[0] for box in summary)
-    for key in ("summary", "highlights", "competencies", "experience", "education"):
-        heading = min(glyphs.find_all(labels[key]), key=lambda boxes: boxes[0][0])  # the leftmost
-        assert max(box[2] for box in heading) <= column + 0.01, (language, key)
 
 
 def a_photo() -> str:

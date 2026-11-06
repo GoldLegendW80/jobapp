@@ -44,7 +44,8 @@ STAYS = ["band", "photo-columns", "ledger", "upload-abcd1234", "upload-zz99yy88"
 def _moves() -> dict[str, str]:
     path = next(templates.ROOT.parents[2].glob("alembic/versions/0032_*.py"))
     spec = importlib.util.spec_from_file_location("revision_0032", path)
-    assert spec is not None and spec.loader is not None
+    assert spec is not None
+    assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return dict(module.MOVES)
@@ -87,7 +88,7 @@ def _version(conn: sa.Connection, user: str, document: str, slug: str, frozen: b
 def _slugs(engine: sa.Engine, table: str) -> dict[str, str]:
     column = "document_id" if table == "document_versions" else "id"
     with engine.connect() as conn:
-        rows = conn.execute(sa.text(f"SELECT {column}, template_slug FROM {table}"))  # noqa: S608
+        rows = conn.execute(sa.text(f"SELECT {column}, template_slug FROM {table}"))
         return {str(key): slug for key, slug in rows}
 
 
