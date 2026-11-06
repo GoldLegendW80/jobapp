@@ -750,11 +750,17 @@ def prepare(db: Session, application_id: uuid.UUID, now: datetime) -> Brief | st
     if found is None:
         return "gone"
     application, posting = found
-    if application.state is not State.queued or not runs_agent(db, application):
+    if (
+        application.state is not State.queued
+        or application.mode not in (Mode.direct, Mode.review)
+        or application.ats == "email"
+    ):
         return "not_queued"
-    review = application.mode is Mode.review
     if application.dry_run:
         return "dry_run"  # a rehearsal never runs an agent that clicks Submit (worker.apply_fill)
+    if not runs_agent(db, application):
+        return "not_queued"  # Review first of a Like, or of the 2026-11-01 build
+    review = application.mode is Mode.review
     if _clicked_before(db, application):
         return "already_run"  # never by construction: one click gives one run
     user_id = application.user_id
