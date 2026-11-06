@@ -50,6 +50,66 @@ function fakeApplications(initial: Application[] = []) {
   return state;
 }
 
+/** The confirmation's two routes (bulk-apply-api.ts): the read of the posting, then its start,
+ * which also lists the started application among the person's applications. */
+function fakeConfirm(
+  state: { items: Application[] },
+  leftOut: { code: string; detail: string } | null = null,
+) {
+  const calls = { previews: [] as unknown[], starts: [] as unknown[] };
+  server.use(
+    http.post("*/api/apply/bulk/preview", async ({ request }) => {
+      calls.previews.push(await request.json());
+      const posting = {
+        posting_id: JOB,
+        company: "Example Robotics",
+        title: "Robotics Engineer",
+      };
+      return HttpResponse.json({
+        review_before_send: false,
+        limit: 25,
+        items: leftOut
+          ? []
+          : [
+              {
+                ...posting,
+                documents: [],
+                estimate: null,
+                email: false,
+                seen: "a".repeat(64),
+              },
+            ],
+        left_out: leftOut ? [{ ...posting, ...leftOut }] : [],
+        beyond: [],
+        estimate: null,
+        cost_note: "",
+      });
+    }),
+    http.post("*/api/apply/bulk", async ({ request }) => {
+      calls.starts.push(await request.json());
+      const started = fakeApplication("queued", {
+        posting_id: JOB,
+        mode: "direct",
+        needs: "documents:writing",
+      });
+      state.items = [started, ...state.items];
+      return HttpResponse.json({
+        results: [
+          {
+            posting_id: JOB,
+            started: true,
+            application_id: started.id,
+            mode: "direct",
+          },
+        ],
+        started: 1,
+        left_out: 0,
+      });
+    }),
+  );
+  return calls;
+}
+
 function rowOf(title: string) {
   const table = screen.getByRole("table", { name: "Postings" });
   return within(table)
@@ -66,8 +126,9 @@ async function openJobs(rows = [makeJob(1, { title: "Robotics Engineer" })]) {
 }
 
 describe("Apply on a row of the Jobs list", () => {
-  it("applies in one click with the posting page's call, then links to the application", async () => {
+  it("asks for a confirmation that names the posting, starts it on Apply to 1, then links to it", async () => {
     const api = fakeApplications();
+    const confirm = fakeConfirm(api);
     const user = await openJobs();
     const apply = await within(rowOf("Robotics Engineer")).findByRole(
       "button",
@@ -78,9 +139,25 @@ describe("Apply on a row of the Jobs list", () => {
       expect(apply).toBeEnabled();
     });
     await user.click(apply);
-    await waitFor(() => {
-      expect(api.starts).toEqual([{ id: JOB, body: { mode: "apply" } }]);
+    // Owner, 2026-11-06: "yes confirmation". Nothing starts before it.
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Apply to 1 posting?",
     });
+    expect(confirm.previews).toEqual([{ posting_ids: [JOB] }]);
+    expect(dialog).toHaveTextContent("Example Robotics, Robotics Engineer");
+    expect(confirm.starts).toEqual([]);
+    expect(api.starts).toEqual([]);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Apply to 1" }),
+    );
+    await waitFor(() => {
+      expect(confirm.starts).toHaveLength(1);
+    });
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Close",
+      }),
+    );
     // Still on the list: the row now says it is under way and links to it.
     const link = await within(rowOf("Robotics Engineer")).findByRole(
       "link",
@@ -194,20 +271,12 @@ describe("Apply on a row of the Jobs list", () => {
     ).toBeNull();
   });
 
-  it("says the api's refusal and starts nothing else", async () => {
-    fakeApplications();
-    server.use(
-      http.post("*/api/postings/:id/applications", () =>
-        HttpResponse.json(
-          {
-            detail: "You already applied to this role at this company.",
-            code: "same_role",
-            application_id: null,
-          },
-          { status: 409 },
-        ),
-      ),
-    );
+  it("says why it would not apply, and starts nothing", async () => {
+    const api = fakeApplications();
+    const confirm = fakeConfirm(api, {
+      code: "same_role",
+      detail: "You already applied to this role at this company.",
+    });
     const user = await openJobs();
     const apply = await within(rowOf("Robotics Engineer")).findByRole(
       "button",
@@ -218,10 +287,19 @@ describe("Apply on a row of the Jobs list", () => {
       expect(apply).toBeEnabled();
     });
     await user.click(apply);
+    const dialog = await screen.findByRole("alertdialog");
     expect(
-      await screen.findByText(
+      await within(dialog).findByText(
         "You already applied to this role at this company.",
       ),
     ).toBeVisible();
+    expect(
+      within(dialog).queryByRole("button", { name: /^Apply to \d/ }),
+    ).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(confirm.starts).toEqual([]);
+    expect(api.starts).toEqual([]);
+    // Still on the list: the dialog's clicks never opened the posting.
+    expect(screen.getByRole("table", { name: "Postings" })).toBeVisible();
   });
 });

@@ -27,6 +27,10 @@ import { cn } from "@/lib/utils";
 import { WORDING, contractWord } from "@/lib/wording";
 
 import { ApplyRow } from "@/features/apply/apply-row";
+import {
+  BulkApplyDialog,
+  type BulkApplyRequest,
+} from "@/features/apply/bulk-apply";
 
 import type { JobListItem } from "./api";
 import { FitBadge, PayText, StatusBadge } from "./badges";
@@ -114,6 +118,9 @@ export function JobsList({
   const measured = useRef(new WeakSet<Element>());
   const [scrollMargin, setScrollMargin] = useState(0);
   const [active, setActive] = useState(0);
+  // A row's Apply opens one confirmation, outside the rows, so its clicks and keys never reach
+  // a row's own handlers (which open the posting).
+  const [applying, setApplying] = useState<BulkApplyRequest | null>(null);
   const focusPending = useRef(false);
   const estimate = mobile ? CARD_MOBILE : ROW_DESKTOP;
 
@@ -432,6 +439,9 @@ export function JobsList({
                     job={job}
                     from={from}
                     focusable={virtual.index === current}
+                    onApply={(id) => {
+                      setApplying({ ids: [id], key: Date.now() });
+                    }}
                   />
                 </TableCell>
               </TableRow>
@@ -439,6 +449,13 @@ export function JobsList({
           })}
         </TableBody>
       </Table>
+      <BulkApplyDialog
+        request={applying}
+        onClose={() => {
+          setApplying(null);
+        }}
+        onApplied={() => undefined}
+      />
       {hasNextPage ? (
         <p
           role="status"
