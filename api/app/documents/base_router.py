@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 
 from app import queue as queues
 from app.db import get_session
-from app.documents import consent, eligibility, generate, render_job, store, writer_base
+from app.documents import consent, generate, render_job, store, writer_base
 from app.documents.models import (
     Author,
     BaseSource,
@@ -214,20 +214,13 @@ class EstimateOut(BaseModel):
     cost: CostOut | None  # an API key only
 
 
-class WeekOut(EstimateOut):
-    postings: int
-    postings_30_days: int
-
-
 class ConsentOut(BaseModel):
     version: int
     text: str
     accepted: bool
     accepted_at: datetime | None
     model: str | None
-    min_fit: int
-    posting: EstimateOut
-    week: WeekOut
+    posting: EstimateOut  # one posting's CV and letter, their hiring panels included (D29)
     cost_note: str
 
 
@@ -345,21 +338,14 @@ def _estimate_out(found: RunEstimate, model: str | None, priced: bool) -> Estima
 
 def _consent_out(db: Session, user: User, at: datetime) -> ConsentOut:
     row = consent.current(db, user.id)
-    figures = consent.figures(db, user.id, eligibility.found_day(at))
-    week = _estimate_out(figures.week, figures.model, figures.priced)
+    figures = consent.figures(db, user.id)
     return ConsentOut(
         version=consent.VERSION,
         text=consent.text(consent.VERSION),
         accepted=row is not None,
         accepted_at=row.accepted_at if row is not None else None,
         model=figures.model,
-        min_fit=figures.min_fit,
         posting=_estimate_out(figures.posting, figures.model, figures.priced),
-        week=WeekOut(
-            **week.model_dump(),
-            postings=figures.week_postings,
-            postings_30_days=figures.postings_30_days,
-        ),
         cost_note=pricing.ESTIMATE_NOTE if figures.priced else pricing.QUOTA_NOTE,
     )
 

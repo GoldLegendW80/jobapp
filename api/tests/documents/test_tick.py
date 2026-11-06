@@ -1,32 +1,13 @@
-"""D10: the tick on a real Postgres at head, two e2e people, the fake backend for the one test
-that runs the writers end to end. No test sleeps or reads the clock: every pass gets its `at`.
+"""D29: the documents tick once nothing is written without a click, on a real Postgres at head,
+two e2e people. No test sleeps or reads the clock: every pass gets its `at`.
 
-The first base CV built from the profile (and nothing from an empty profile); postings inserted
-by a sweep and by hand both picked up; the threshold at, under, without a fit, lowered (the last
-30 days now written, highest fit first) and raised (nothing removed); 31 days old; a never apply
-rule; `auto` off; the consent and the credential (waiting, nothing counted, then started); the
-safety ceiling in America/New_York while the server is in UTC; one automatic run at a time; a
-posting skipped or fallen under the threshold while waiting (cancelled); the retry once; the
-default base CV changed; legacy files; the tick lock held by another pass; and the canary. The
-base CV the tick names for a CV that waited without one (its own deleted, or none yet) gives its
-template as the write's own, so a write from another base CV later takes that one's; a switch by
-hand made while it waited is kept and still read as one.
-
-Never two starts: a click that read the open generation before the tick started it, and a click
-committed between the tick's read and its start (one run either way, no exception, the next
-person still handled). A run that ended without its final hook (reaped, killed, cancelled while
-queued): untouched within the grace, then settled, the next posting started and the posting
-retried once. One person's failure never ends the pass; a start that raised is never counted; a
-waiting automatic base CV with `auto` off; no base CV and no employer still cancels.
-
-The letter of a written CV is work for the tick after the CV moved its posting to `cv_ready`: the
-one the chain left `queued` (the person's runs all busy) and the one it never created (the hook
-cut short), never one of a posting applied meanwhile or of a `cv_ready` posting without a written
-CV; and it gets what the pair's ceiling has left after the CV's run.
-
-The posting's lock before the document's: a move to applied beside the tick's letter start and
-beside a recovered CV retried at once (two sessions, both commit), and a move to applied
-committed after the pass read the status (the CV or the letter cancelled, never started)."""
+Nothing writes without a click: a found posting at fit 95 gets nothing, with or without a base
+CV. A generation of trigger `auto` left open from D10 is cancelled once, its document and
+versions untouched. What the tick still does: the clicks that waited for the consent, a
+credential or a base CV start; a click with no base CV builds one from the profile and the CV
+waits for it, then is written from it; a run that ended without its final hook is settled
+after the grace; a held person is left to the next pass; one person's failure never ends the
+pass; the cron queues runs by id."""
 
 from __future__ import annotations
 
@@ -53,39 +34,33 @@ from app.documents import (  # noqa: F401 (writers registers the writers)
     tick,
     writers,
 )
-from app.documents import content as c
 from app.documents.models import (
+    Author,
     BaseSource,
     Document,
     DocumentGeneration,
-    DocumentVersion,
     GenerationMode,
     GenerationStatus,
     GenerationTrigger,
     GenerationWait,
     Kind,
-    Scope,
 )
-from app.jobs import service as jobs_service
-from app.jobs.models import Job, JobStatus
+from app.jobs.models import Job
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
-from tests.documents.canary import find, marker
+from tests.documents.canary import marker
 from tests.documents.conftest import load
 from tests.documents.render_support import CV, give_profile
 from tests.documents.store_support import (
     AT,
     USER_A,
     USER_B,
-    add_job_file,
     add_user,
     engine,
     factory,
     migrated_url,
     short_locks,
 )
-from tests.documents.two_sessions import in_thread, mark_applied, wait_until_blocked
-from tests.documents.writer_support import Person, execute
 
 __all__ = ["engine", "factory", "migrated_url", "short_locks"]
 
@@ -201,6 +176,7 @@ class World:
                     DocumentGeneration.trigger,
                     DocumentGeneration.status,
                     DocumentGeneration.wait_reason,
+                    DocumentGeneration.document_id,
                     DocumentGeneration.ceiling_day,
                     DocumentGeneration.token_ceiling,
                     DocumentGeneration.base_document_id,
@@ -268,433 +244,331 @@ def posting_cv(found: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --- the first base CV --------------------------------------------------------------------------
 
 
-def test_the_first_base_cv_is_built_from_the_profile_and_postings_wait_for_it(
+def click(who: World, posting: uuid.UUID, *, start: bool = True) -> uuid.UUID:
+    """A "Write" of the posting's CV, as `auto_router.write_now` does it, in its own session."""
+    from app.documents import writer_base
+
+    with who.factory() as db:
+        store.lock_person(db, who.user)
+        store.lock_posting(db, who.user, posting)
+        reason = writer_base.click_wait(db, who.user, AT)
+        document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
+        auto_router._give_way(db, document, AT)
+        figures = estimate.for_posting(db, who.user, posting, None)
+        made = generate.create(
+            db,
+            document,
+            GenerationMode.posting,
+            GenerationTrigger.click,
+            None,
+            estimate.as_json(figures),
+            figures.ceiling,
+            at=AT,
+            status=GenerationStatus.waiting if reason else GenerationStatus.queued,
+            wait_reason=reason,
+        )
+        if start and reason is None:
+            generate.start(db, made, at=AT, settings=who.settings)
+        store.commit(db)
+        return made.id
+
+
+def end_runs(who: World, status: str, error: str | None, finished: datetime | None) -> None:
+    """The person's runs end as the reaper, a killed worker or a cancel leave them: no hook."""
+    with who.factory() as db:
+        db.execute(
+            sa.text(
+                "UPDATE agent_runs SET status = CAST(:s AS agent_run_status), error = :e, "
+                "finished_at = :f WHERE user_id = :u"
+            ),
+            {"s": status, "e": error, "f": finished, "u": who.user},
+        )
+        db.commit()
+
+
+# --- nothing without a click --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("base", [True, False])
+def test_a_found_posting_at_fit_95_gets_nothing_without_a_click(
+    factory: sessionmaker[Session], migrated_url: str, base: bool
+) -> None:
+    who = World(factory, migrated_url, USER_A, base=base)
+    who.posting(95)
+    who.search(auto=True, min_fit=0, daily_ceiling=500)  # an old profile's block, unread
+    assert who.tick() == []
+    assert who.tick(AT + timedelta(days=1)) == []
+    assert who.generations() == []
+    with who.factory() as db:
+        assert len(store.base_cvs(db, who.user)) == (1 if base else 0)
+
+
+def test_an_open_automatic_generation_is_cancelled_once_and_its_document_kept(
+    world: World,
+) -> None:
+    posting = world.posting(90)
+    with world.factory() as db:
+        document = store.get_or_create(db, world.user, posting, Kind.cv, at=AT)
+        store.save_draft(
+            db, world.user, document.id, CV, document.draft_revision, Author.user, at=AT
+        )
+        generate.create(
+            db, document, GenerationMode.posting, GenerationTrigger.auto, None, {}, 1000, at=AT
+        )
+        store.commit(db)
+        draft = store.get(db, world.user, document.id)
+        assert draft is not None
+        revision = draft.draft_revision
+    assert world.tick() == []
+    [found] = world.generations(posting)
+    assert (found["trigger"], found["status"]) == (
+        GenerationTrigger.auto,
+        GenerationStatus.cancelled,
+    )
+    assert world.tick() == []
+    assert len(world.generations(posting)) == 1
+    with world.factory() as db:
+        kept = store.get(db, world.user, document.id)
+        assert kept is not None
+        assert kept.draft_revision == revision
+
+
+# --- the clicks that waited ---------------------------------------------------------------------
+
+
+def test_a_click_that_waited_for_the_consent_starts_once_it_is_given(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = World(factory, migrated_url, USER_A, consent=False)
+    posting = who.posting(40)
+    click(who, posting)
+    [waiting] = who.generations(posting)
+    assert (waiting["status"], waiting["wait_reason"]) == (
+        GenerationStatus.waiting,
+        GenerationWait.consent,
+    )
+    assert who.tick() == []
+    who.consent()
+    started = who.tick()
+    [running] = who.generations(posting)
+    assert running["status"] is GenerationStatus.running
+    assert started == [running["run_id"]]
+
+
+def test_a_click_with_no_base_cv_builds_it_first_then_the_cv_from_it(
     factory: sessionmaker[Session], migrated_url: str
 ) -> None:
     who = World(factory, migrated_url, USER_A, base=False)
-    posting = who.posting(80)
-    runs = who.tick()
+    posting = who.posting(55)
+    click(who, posting)
     found = who.generations()
     base = [g for g in found if g["mode"] is GenerationMode.base_profile]
-    assert len(base) == 1
-    assert base[0]["trigger"] is GenerationTrigger.auto
-    assert base[0]["status"] is GenerationStatus.running
-    assert runs == [base[0]["run_id"]]
-    with factory() as db:
-        built = store.base_cvs(db, who.user)
-        assert [(b.base_source, b.is_default) for b in built] == [(BaseSource.profile, True)]
-    cv = posting_cv(who.generations(posting))
-    assert [(g["status"], g["wait_reason"]) for g in cv] == [
-        (GenerationStatus.waiting, GenerationWait.base_cv)
+    [cv] = posting_cv(found)
+    assert [(g["trigger"], g["status"]) for g in base] == [
+        (GenerationTrigger.click, GenerationStatus.queued)
     ]
-    # A second pass builds no second base CV.
-    assert who.tick() == []
-    assert len([g for g in who.generations() if g["mode"] is GenerationMode.base_profile]) == 1
-
-
-def test_an_empty_profile_without_a_base_cv_gets_nothing(
-    factory: sessionmaker[Session], migrated_url: str
-) -> None:
-    who = World(factory, migrated_url, USER_A, base=False, profile=False)
-    who.posting(90)
-    assert who.tick() == []
-    assert who.generations() == []
-    with factory() as db:
-        assert store.base_cvs(db, who.user) == []
-        assert db.scalar(sa.select(sa.func.count()).select_from(Document)) == 0
-
-
-# --- which postings -----------------------------------------------------------------------------
-
-
-def test_postings_from_a_sweep_and_by_hand_are_both_picked_up_at_the_threshold_only(
-    world: World,
-) -> None:
-    swept = world.posting(80, source="ashby")
-    by_hand = world.posting(70)
-    under = world.posting(69)
-    no_fit = world.posting(None)
-    runs = world.tick()
-    assert len(runs) == 1  # one automatic run at a time
-    states = {
-        p: [(g["status"], g["wait_reason"]) for g in posting_cv(world.generations(p))]
-        for p in (swept, by_hand, under, no_fit)
-    }
-    assert states[swept] == [(GenerationStatus.running, None)]  # highest fit first
-    assert states[by_hand] == [(GenerationStatus.queued, None)]
-    assert states[under] == []
-    assert states[no_fit] == []
-    world.finish()
-    assert len(world.tick()) == 1  # the letter of the written CV first: the pair is finished
-    letters = [g for g in world.generations(swept) if g["kind"] is Kind.letter]
-    assert [g["status"] for g in letters] == [GenerationStatus.running]
-    world.finish()
-    assert len(world.tick()) == 1
-    assert [g["status"] for g in posting_cv(world.generations(by_hand))] == [
-        GenerationStatus.running
-    ]
-
-
-def test_a_posting_found_31_or_30_days_ago_is_not_written_29_is(world: World) -> None:
-    old = world.posting(90, found_on=TODAY - timedelta(days=31))
-    edge = world.posting(90, found_on=TODAY - timedelta(days=30))
-    inside = world.posting(90, found_on=TODAY - timedelta(days=29))
-    world.tick()
-    assert posting_cv(world.generations(old)) == []
-    assert posting_cv(world.generations(edge)) == []
-    assert len(posting_cv(world.generations(inside))) == 1
-
-
-def test_lowering_the_threshold_writes_the_last_30_days_highest_first_and_raising_removes_nothing(
-    world: World,
-) -> None:
-    sixty = world.posting(60)
-    fifty_five = world.posting(55)
-    forty = world.posting(40)
-    world.tick()
-    assert world.generations() == []
-    world.search(min_fit=50)
-    world.tick()
-    assert [g["status"] for g in posting_cv(world.generations(sixty))] == [GenerationStatus.running]
-    assert [g["status"] for g in posting_cv(world.generations(fifty_five))] == [
-        GenerationStatus.queued
-    ]
-    assert posting_cv(world.generations(forty)) == []
-    world.finish()
-    world.search(min_fit=90)
-    world.tick()
-    # the written one stays written; the queued one under the new threshold is cancelled
-    assert [g["status"] for g in posting_cv(world.generations(sixty))] == [GenerationStatus.done]
-    assert [g["status"] for g in posting_cv(world.generations(fifty_five))] == [
-        GenerationStatus.cancelled
-    ]
-
-
-def test_a_never_apply_rule_excludes_a_posting_added_by_hand(world: World) -> None:
-    world.search(extra={"never_apply": ["No security roles: security"]})
-    excluded = world.posting(95, title="Security engineer")
-    kept = world.posting(80)
-    world.tick()
-    assert posting_cv(world.generations(excluded)) == []
-    assert len(posting_cv(world.generations(kept))) == 1
-
-
-def test_auto_off_creates_nothing_and_cancels_what_waits(world: World) -> None:
-    first = world.posting(90)
-    second = world.posting(85)
-    world.tick()
-    world.search(auto=False)
-    world.tick()
-    assert [g["status"] for g in posting_cv(world.generations(first))] == [GenerationStatus.running]
-    assert [g["status"] for g in posting_cv(world.generations(second))] == [
-        GenerationStatus.cancelled
-    ]
-    third = world.posting(99)
-    world.tick()
-    assert posting_cv(world.generations(third)) == []
-
-
-def test_imported_postings_with_legacy_files_are_never_written(world: World) -> None:
-    imported = world.posting(95, status="found")
-    with world.factory() as db:
-        add_job_file(db, imported)
-        db.commit()
-    world.tick()
-    assert world.generations(imported) == []
-
-
-# --- waiting, never failing ---------------------------------------------------------------------
-
-
-def test_without_consent_or_credential_nothing_starts_and_nothing_counts(
-    factory: sessionmaker[Session], migrated_url: str
-) -> None:
-    who = World(factory, migrated_url, USER_A, consent=False, credential=False)
-    posting = who.posting(80)
-    assert who.tick() == []
-    assert [(g["status"], g["wait_reason"]) for g in who.generations(posting)] == [
-        (GenerationStatus.waiting, GenerationWait.consent)
-    ]
-    who.consent()
-    assert who.tick() == []
-    assert [(g["status"], g["wait_reason"], g["ceiling_day"]) for g in who.generations()] == [
-        (GenerationStatus.waiting, GenerationWait.credential, None)
-    ]
-    with factory() as db:
-        assert tick.started_today(db, who.user, TODAY) == 0
-    who.credential()
-    assert len(who.tick()) == 1
-    assert [(g["status"], g["ceiling_day"]) for g in who.generations()] == [
-        (GenerationStatus.running, TODAY)
-    ]
-
-
-def test_a_posting_skipped_or_under_the_threshold_while_waiting_is_cancelled(
-    world: World,
-) -> None:
-    running = world.posting(95)
-    skipped = world.posting(90)
-    dropped = world.posting(85)
-    world.tick()
-    world.set_job(skipped, status="skipped")
-    world.set_job(dropped, fit=60)
-    world.tick()
-    assert [g["status"] for g in world.generations(skipped)] == [GenerationStatus.cancelled]
-    assert [g["status"] for g in world.generations(dropped)] == [GenerationStatus.cancelled]
-    assert [g["status"] for g in world.generations(running)] == [GenerationStatus.running]
-
-
-# --- the safety ceiling -------------------------------------------------------------------------
-
-
-def test_the_ceiling_waits_until_midnight_in_new_york_while_the_server_is_in_utc(
-    world: World,
-) -> None:
-    world.search(daily_ceiling=1, extra={"sweep_schedule": {"timezone": "America/New_York"}})
-    first = world.posting(90)
-    second = world.posting(85)
-    morning = datetime(2026, 10, 14, 13, 0, tzinfo=AT.tzinfo)  # 09:00 in New York
-    world.tick(morning)
-    world.finish(at=morning)
-    late = datetime(2026, 10, 15, 3, 59, tzinfo=AT.tzinfo)  # 23:59 on the 14th in New York
-    assert len(world.tick(late)) == 1  # the letter never waits: its posting counted with its CV
-    assert [g["kind"] for g in world.generations(first)] == [Kind.cv, Kind.letter]
-    world.finish(at=late)
-    assert world.tick(late) == []
-    assert [(g["status"], g["wait_reason"]) for g in posting_cv(world.generations(second))] == [
-        (GenerationStatus.waiting, GenerationWait.daily_ceiling)
-    ]
-    midnight = datetime(2026, 10, 15, 4, 0, tzinfo=AT.tzinfo)  # 00:00 on the 15th in New York
-    assert len(world.tick(midnight)) == 1
-    found = posting_cv(world.generations(second))
-    assert [(g["status"], g["ceiling_day"]) for g in found] == [
-        (GenerationStatus.running, date(2026, 10, 15))
-    ]
-    assert [g["ceiling_day"] for g in posting_cv(world.generations(first))] == [date(2026, 10, 14)]
-
-
-def test_the_first_base_cv_with_eleven_postings_writes_all_highest_fit_first(
-    factory: sessionmaker[Session], migrated_url: str
-) -> None:
-    who = World(factory, migrated_url, USER_A, base=False)
-    fits = [71, 99, 80, 75, 93, 88, 70, 72, 95, 84, 90]
-    ids = {who.posting(fit, found_on=TODAY - timedelta(days=n)): fit for n, fit in enumerate(fits)}
-    stale = who.posting(99, found_on=TODAY - timedelta(days=31))
-    who.tick()
+    assert (cv["status"], cv["wait_reason"]) == (GenerationStatus.waiting, GenerationWait.base_cv)
+    first = who.tick()  # the base CV starts, the CV still waits for it
+    [base_run] = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
+    assert first == [base_run["run_id"]]
+    assert posting_cv(who.generations())[0]["wait_reason"] is GenerationWait.base_cv
     who.finish()  # the base CV is written
-    order: list[int] = []
-    for _ in range(2 * len(fits) + 1):  # a CV, then its letter, for each
-        who.tick()
-        for g in who.generations():
-            if g["status"] is GenerationStatus.running and g["kind"] is Kind.cv:
-                order.append(ids[g["posting_id"]])
-        who.finish()
-    assert order == sorted(fits, reverse=True)
-    assert who.generations(stale) == []
+    second = who.tick(AT + timedelta(seconds=1))
+    [cv] = posting_cv(who.generations())
+    assert cv["status"] is GenerationStatus.running
+    assert second == [cv["run_id"]]
+    with who.factory() as db:
+        default = store.default_base(db, who.user)
+        assert default is not None
+        assert cv["base_document_id"] == default.id
 
 
-# --- retries, base CVs, locks -------------------------------------------------------------------
+def _auto_base_build(who: World, status: GenerationStatus) -> uuid.UUID:
+    """The first base CV D10 built at the tick, left open at the deploy of D29: the skeleton
+    "My CV" as the default and its generation of trigger `auto`, not started."""
+    from app.documents import writer_base
+
+    with who.factory() as db:
+        built = writer_base.build_from_profile(
+            db, who.user, at=AT, source=BaseSource.profile, trigger=GenerationTrigger.auto
+        )
+        assert built.generation is not None
+        built.generation.status = status
+        store.commit(db)
+        return built.document.id
 
 
-def test_a_failed_generation_is_retried_once_after_ten_minutes(world: World) -> None:
-    posting = world.posting(80)
-    world.tick()
-    world.finish("failed", "run_failed")
-    assert world.tick(AT + timedelta(seconds=599)) == []
-    assert len(world.tick(AT + timedelta(seconds=600))) == 1
-    world.finish("failed", "run_failed", at=AT + timedelta(seconds=600))
-    assert world.tick(AT + timedelta(days=1)) == []
-    assert [g["status"] for g in world.generations(posting)] == [GenerationStatus.failed] * 2
-
-
-def test_a_stop_at_the_ceiling_is_retried_at_once_with_one_more_high_estimate(
-    world: World,
+@pytest.mark.parametrize("consent_later", [False, True])
+def test_an_automatic_base_cv_build_is_cancelled_never_started_by_the_tick(
+    factory: sessionmaker[Session], migrated_url: str, consent_later: bool
 ) -> None:
-    posting = world.posting(80)
-    world.tick()
-    world.finish("failed", "token_limit")
+    """Review of D29, item 2 (a): a queued one, or one waiting for a consent given later."""
+    who = World(factory, migrated_url, USER_A, base=False, consent=not consent_later)
+    document = _auto_base_build(
+        who, GenerationStatus.waiting if consent_later else GenerationStatus.queued
+    )
+    if consent_later:
+        assert who.tick() == []
+        who.consent()
+    assert who.tick() == []
+    [found] = who.generations()
+    assert (found["document_id"], found["trigger"], found["status"], found["run_id"]) == (
+        document,
+        GenerationTrigger.auto,
+        GenerationStatus.cancelled,
+        None,
+    )
+    assert who.tick() == []
+
+
+def test_a_click_after_a_cancelled_automatic_base_cv_builds_that_base_cv_first(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    """Review of D29, item 2 (b): the never written skeleton is no base CV to write from."""
+    who = World(factory, migrated_url, USER_A, base=False)
+    document = _auto_base_build(who, GenerationStatus.queued)
+    assert who.tick() == []  # the automatic build is cancelled
+    posting = who.posting(55)
+    click(who, posting)
+    found = who.generations()
+    base = [g for g in found if g["mode"] is GenerationMode.base_profile]
+    assert [(g["document_id"], g["trigger"], g["status"]) for g in base] == [
+        (document, GenerationTrigger.auto, GenerationStatus.cancelled),
+        (document, GenerationTrigger.click, GenerationStatus.queued),
+    ]
+    [cv] = posting_cv(found)
+    assert (cv["status"], cv["wait_reason"]) == (GenerationStatus.waiting, GenerationWait.base_cv)
+    with who.factory() as db:
+        assert [b.id for b in store.base_cvs(db, who.user)] == [document]
+    first = who.tick()  # the base CV starts first, the CV waits for it
+    assert first == [
+        g["run_id"] for g in who.generations() if g["status"] is GenerationStatus.running
+    ]
+    assert posting_cv(who.generations())[0]["wait_reason"] is GenerationWait.base_cv
+
+
+def test_two_clicks_at_once_build_one_base_cv(
+    engine: sa.Engine, factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    """Review of D29, item 7: the second click waits for lock 1 and reads the first one's base
+    CV again under it, instead of building a second "My CV"."""
+    import threading
+
+    from app.documents import writer_base
+    from tests.documents.test_store import _wait_until_blocked
+
+    who = World(factory, migrated_url, USER_A, base=False)
+    outcome: dict[str, Any] = {}
+    with factory() as first, factory() as second:
+        assert writer_base.click_wait(first, who.user, AT) is GenerationWait.base_cv
+        pid = second.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+
+        def other_click() -> None:
+            try:
+                outcome["reason"] = writer_base.click_wait(second, who.user, AT)
+                store.commit(second)
+            except Exception as exc:  # the main thread asserts on it
+                outcome["error"] = exc
+                second.rollback()
+
+        thread = threading.Thread(target=other_click)
+        thread.start()
+        _wait_until_blocked(engine, pid, thread)
+        assert thread.is_alive()  # it waits for lock 1, before it reads the base CVs
+        store.commit(first)
+        thread.join(20)
+    assert "error" not in outcome
+    assert outcome["reason"] is GenerationWait.base_cv
+    with factory() as db:
+        assert len(store.base_cvs(db, who.user)) == 1
+    builds = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
+    assert len(builds) == 1
+
+
+def test_a_click_meeting_the_limit_of_active_runs_stays_queued_for_the_next_tick(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    posting = world.posting(60)
+    click(world, posting, start=False)
+
+    def busy(*_: Any, **__: Any) -> Any:
+        raise runs.ActiveRunsError("busy")
+
+    monkeypatch.setattr(tick.generate, "start", busy)
+    assert world.tick() == []
+    assert posting_cv(world.generations(posting))[0]["status"] is GenerationStatus.queued
+    monkeypatch.undo()
     assert len(world.tick()) == 1
-    found = world.generations(posting)  # one frozen clock: tell them apart by status
-    (first,) = [g for g in found if g["status"] is GenerationStatus.failed]
-    (second,) = [g for g in found if g["status"] is GenerationStatus.running]
-    with world.factory() as db:
-        high = db.get(DocumentGeneration, second["id"]).estimate["high"]  # type: ignore[union-attr]
-    assert second["token_ceiling"] == first["token_ceiling"] + high
 
 
-def test_a_changed_default_base_cv_is_used_by_later_postings_only(world: World) -> None:
-    earlier = world.posting(90)
-    world.tick()
-    with world.factory() as db:
-        other = store.create_base(db, world.user, "Other", BaseSource.built, at=AT)
-        store.set_default(db, world.user, other.id, AT)
-        db.commit()
-        other_id = other.id
-    later = world.posting(85)
-    world.finish()
-    world.tick()
-    assert [g["base_document_id"] for g in posting_cv(world.generations(earlier))] == [world.base]
-    assert [g["base_document_id"] for g in posting_cv(world.generations(later))] == [other_id]
+# --- recovery, the lock, one person's failure, the cron -----------------------------------------
 
 
-def _bases(world: World, *slugs: str) -> list[uuid.UUID]:
-    """Base CVs of these templates, each a second newer than the last, so the oldest other one is
-    known when the default is deleted."""
-    made = []
-    with world.factory() as db:
-        for n, slug in enumerate(slugs, start=1):
-            at = AT + timedelta(seconds=n)
-            base = store.create_base(
-                db, world.user, f"CV {slug}", BaseSource.built, at=at, template_slug=slug
-            )
-            made.append(base.id)
-        db.commit()
-    return made
+def test_the_grace_is_over_the_runners_final_hook_timeout() -> None:
+    assert runner.FINAL_HOOK_TIMEOUT_S < tick.HOOK_GRACE_S
 
 
 @pytest.mark.parametrize(
-    ("before", "named", "recorded", "again"),
+    ("run", "error", "status", "code"),
     [
-        # The default deleted while the CV waits: the tick names the oldest other one.
-        ("delete", "photo-columns", "photo-columns", "band"),
-        # No base CV when the CV's generation was created: the tick names the first one made.
-        ("none", "photo-columns", "photo-columns", "band"),
-        # A switch by hand while it waits is kept, and still is one for the next write.
-        ("switch", "ledger", "band", "ledger"),
+        ("failed", failures.TOKEN_LIMIT, GenerationStatus.failed, "token_limit"),
+        ("failed", "The worker stopped.", GenerationStatus.failed, "run_failed"),
+        ("done", None, GenerationStatus.failed, "run_failed"),
+        ("cancelled", None, GenerationStatus.cancelled, None),
+        ("running", None, GenerationStatus.running, None),
     ],
 )
-def test_the_template_a_named_base_cv_gives_is_the_writes_never_a_switch_by_hand(
-    factory: sessionmaker[Session],
-    migrated_url: str,
-    before: str,
-    named: str,
-    recorded: str,
-    again: str,
+def test_a_clicks_run_that_ended_without_its_hook_is_settled_after_the_grace(
+    world: World, run: str, error: str | None, status: GenerationStatus, code: str | None
 ) -> None:
-    who = World(factory, migrated_url, USER_A, consent=False, base=before != "none")
-    posting = who.posting(90)
-    if before == "none":
-        with factory() as db:
-            document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
-            generate.create(
-                db,
-                document,
-                GenerationMode.posting,
-                GenerationTrigger.auto,
-                None,
-                {},
-                1000,
-                at=AT,
-                status=GenerationStatus.waiting,
-                wait_reason=GenerationWait.consent,
-            )
-            db.commit()
-    else:
-        who.tick()  # waits for the consent, from the first base CV, `classic`
-    with factory() as db:
-        cv = db.scalar(
-            sa.select(Document.id).where(Document.posting_id == posting, Document.kind == Kind.cv)
-        )
-        if before == "switch":
-            assert render_job.switch(db, who.user, cv, at=AT, template_slug="ledger")
-        db.commit()
-    columns, band = _bases(who, "photo-columns", "band")
-    if before != "none":
-        with factory() as db:
-            default = store.delete_base(db, who.user, who.base, AT)
-            assert default is not None
-            assert default.id == columns
-            db.commit()
-    [waiting] = posting_cv(who.generations(posting))
-    assert waiting["base_document_id"] is None
-    who.consent()
-    who.tick()
-    with factory() as db:
-        generation = db.get(DocumentGeneration, waiting["id"])
-        document = store.get(db, who.user, cv)
-        assert generation is not None
-        assert document is not None
-        assert (generation.base_document_id, document.base_document_id) == (columns, columns)
-        assert (document.template_slug, generation.estimate[generate.WRITE_TEMPLATE]) == (
-            named,
-            recorded,
-        )
-        generate.finish(db, generation, c.parse("cv", CV), [], at=AT)
-        db.commit()
-    with factory() as db:  # "Write it again from this CV" with the third base CV
-        document = store.get(db, who.user, cv)
-        assert document is not None
-        mode, trigger = GenerationMode.posting, GenerationTrigger.click
-        generate.create(db, document, mode, trigger, band, {}, 1000, at=AT)
-        db.commit()
-        assert (document.template_slug, document.base_document_id) == (again, band)
+    posting = world.posting(90)
+    click(world, posting)
+    end_runs(world, run, error, AT if run != "running" else None)
+    world.tick(AT + timedelta(seconds=tick.HOOK_GRACE_S - 1))
+    assert posting_cv(world.generations(posting))[0]["status"] is GenerationStatus.running
+    world.tick(AT + timedelta(seconds=tick.HOOK_GRACE_S + 1))
+    [found] = posting_cv(world.generations(posting))
+    with world.factory() as db:
+        row = db.get(DocumentGeneration, found["id"])
+        assert row is not None
+        assert (row.status, row.error) == (status, code)
 
 
 def test_a_pass_that_finds_the_person_held_does_nothing(world: World) -> None:
-    world.posting(80)
+    posting = world.posting(80)
+    click(world, posting, start=False)
     with world.factory() as holder:
         assert tick.try_lock(holder, world.user)
         assert world.tick() == []
-        assert world.generations() == []
     assert len(world.tick()) == 1
 
 
-def test_two_passes_in_a_row_start_one_run(world: World) -> None:
-    world.posting(80)
-    world.posting(81)
-    first = world.tick()
-    second = world.tick()
-    assert len(first) == 1
-    assert second == []
-    running = [g for g in world.generations() if g["status"] is GenerationStatus.running]
-    assert len(running) == 1
-
-
-def test_another_persons_rows_are_never_touched(
-    factory: sessionmaker[Session], migrated_url: str
+def test_an_unexpected_error_for_one_person_never_ends_the_pass_for_the_next(
+    factory: sessionmaker[Session],
+    migrated_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     alex = World(factory, migrated_url, USER_A)
-    blake = World(factory, migrated_url, USER_B, consent=False)
-    alex.posting(80)
-    blake_posting = blake.posting(90)
-    alex.tick()
-    assert blake.generations() == []
-    blake.tick()
-    assert [g["wait_reason"] for g in blake.generations(blake_posting)] == [GenerationWait.consent]
-    assert all(g["posting_id"] != blake_posting for g in alex.generations())
-
-
-# --- end to end on the fake backend -------------------------------------------------------------
-
-
-def test_a_found_posting_gets_its_cv_then_its_letter_and_no_text_reaches_the_logs(
-    world: World, caplog: pytest.LogCaptureFixture
-) -> None:
+    blake = World(factory, migrated_url, USER_B)
+    click(alex, alex.posting(90), start=False)
+    blake_posting = blake.posting(80)
+    click(blake, blake_posting, start=False)
     planted = marker()
-    posting = world.posting(80, text=POSTING + " " + planted)
-    caplog.set_level(logging.DEBUG)
-    who = Person(world.factory, world.settings, world.keyring, world.user, posting, world.base)
-    (cv_run,) = world.tick()
-    execute(who, cv_run)
-    chained = [j["args"][0] for j in who.queue.jobs if j["function"] == "run_agent"]
-    if chained:
-        execute(who, uuid.UUID(chained[0]))
-    else:  # the person's runs were busy: the tick writes the letter
-        (letter_run,) = world.tick()
-        execute(who, letter_run)
-    assert world.tick() == []
-    with world.factory() as db:
-        kinds = db.execute(
-            sa.select(Document.kind, sa.func.count(DocumentVersion.id))
-            .join(DocumentVersion, DocumentVersion.document_id == Document.id)
-            .where(Document.posting_id == posting, Document.scope == Scope.posting)
-            .group_by(Document.kind)
-        ).all()
-    assert dict(kinds) == {Kind.cv: 1, Kind.letter: 1}
-    assert find([planted], logs=caplog.text) == []
+    real = tick.start_clicks
 
+    def broken(db: Session, user_id: uuid.UUID, *args: Any) -> list[uuid.UUID]:
+        if user_id == alex.user:
+            raise RuntimeError(planted)
+        return real(db, user_id, *args)
 
-# --- the cron -----------------------------------------------------------------------------------
+    monkeypatch.setattr(tick, "start_clicks", broken)
+    with caplog.at_level(logging.INFO, logger="app.documents.tick"):
+        started = tick.tick(factory, AT, alex.settings, only=[alex.user, blake.user])
+    assert [g["run_id"] for g in posting_cv(blake.generations(blake_posting))] == started
+    failed = [r for r in caplog.records if r.getMessage() == "documents.tick.person_failed"]
+    assert [(r.user_id, r.error) for r in failed] == [(str(alex.user), "RuntimeError")]  # type: ignore[attr-defined]
+    assert planted not in caplog.text
 
 
 def test_the_worker_runs_the_tick_every_minute_on_the_documents_queue() -> None:
@@ -709,7 +583,7 @@ def test_the_worker_runs_the_tick_every_minute_on_the_documents_queue() -> None:
 def test_the_cron_job_takes_ids_only_and_queues_the_runs(world: World) -> None:
     import asyncio
 
-    world.posting(80)
+    click(world, world.posting(80), start=False)
     sent: list[tuple[str, tuple[Any, ...]]] = []
 
     class Pool:
@@ -726,567 +600,3 @@ def test_the_cron_job_takes_ids_only_and_queues_the_runs(world: World) -> None:
     assert asyncio.run(tick.run(ctx)) == 1
     assert [function for function, _ in sent] == ["run_agent"]
     assert all(isinstance(arg, str) and uuid.UUID(arg) for _, args in sent for arg in args)
-
-
-# --- never two starts: a click and the tick -----------------------------------------------------
-
-
-def click(who: World, posting: uuid.UUID) -> None:
-    """A "Write now" of the posting's CV, as `auto_router.write_now` does it, in its own session."""
-    with who.factory() as db:
-        store.lock_posting(db, who.user, posting)
-        document = store.get_or_create(db, who.user, posting, Kind.cv, at=AT)
-        auto_router._give_way(db, document, AT)
-        figures = estimate.for_posting(db, who.user, posting, None)
-        made = generate.create(
-            db,
-            document,
-            GenerationMode.posting,
-            GenerationTrigger.click,
-            None,
-            estimate.as_json(figures),
-            figures.ceiling,
-            at=AT,
-        )
-        generate.start(db, made, at=AT, settings=who.settings)
-        store.commit(db)
-
-
-def runs_of(who: World, posting: uuid.UUID) -> int:
-    with who.factory() as db:
-        return int(
-            db.execute(
-                sa.text("SELECT count(*) FROM agent_runs WHERE user_id = :u AND job_id = :j"),
-                {"u": who.user, "j": posting},
-            ).scalar_one()
-        )
-
-
-def triggers(
-    who: World, posting: uuid.UUID
-) -> set[tuple[GenerationTrigger, GenerationStatus, bool]]:
-    # one frozen clock: the rows share created_at, so compare them as a set
-    return {
-        (g["trigger"], g["status"], g["run_id"] is not None)
-        for g in posting_cv(who.generations(posting))
-    }
-
-
-def test_a_tick_during_a_clicks_read_is_held_off_and_one_run_starts(
-    factory: sessionmaker[Session],
-    migrated_url: str,
-    monkeypatch: pytest.MonkeyPatch,
-    short_locks: None,
-) -> None:
-    who = World(factory, migrated_url, USER_A, credential=False)
-    posting = who.posting(80)
-    who.tick()  # waiting with `credential`
-    who.credential()
-    with factory() as db:
-        cv_id = store.get_or_create(db, who.user, posting, Kind.cv, at=AT).id
-        db.commit()
-    real = store.open_generation
-    meanwhile: list[list[uuid.UUID]] = []
-
-    def read_then_tick(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> Any:
-        found = real(db, user_id, document_id)
-        if document_id == cv_id and not meanwhile:
-            meanwhile.append(who.tick())  # the cron, in its own transaction, between read and write
-        return found
-
-    monkeypatch.setattr(store, "open_generation", read_then_tick)
-    click(who, posting)
-    assert meanwhile == [[]]  # the click holds the document: the tick leaves it to the next pass
-    assert runs_of(who, posting) == 1
-    assert triggers(who, posting) == {
-        (GenerationTrigger.auto, GenerationStatus.cancelled, False),
-        (GenerationTrigger.click, GenerationStatus.running, True),
-    }
-    assert who.tick() == []
-
-
-def test_a_tick_that_started_first_makes_the_click_a_409(world: World) -> None:
-    posting = world.posting(80)
-    assert len(world.tick()) == 1
-    with pytest.raises(auto_router.HTTPException) as refused:
-        click(world, posting)
-    assert refused.value.status_code == 409
-    assert runs_of(world, posting) == 1
-
-
-@pytest.mark.parametrize("state", ["waiting", "queued"])
-def test_a_click_committed_between_the_ticks_read_and_its_start_wins_and_the_pass_goes_on(
-    factory: sessionmaker[Session],
-    migrated_url: str,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-    state: str,
-) -> None:
-    alex = World(factory, migrated_url, USER_A, credential=state == "queued")
-    blake = World(factory, migrated_url, USER_B)
-    settings = alex.settings.model_copy(update={"documents_auto_at_once": 1})
-    if state == "waiting":  # waiting with `credential`; the credential arrives before the pass
-        posting = alex.posting(80)
-        alex.tick()
-        alex.credential()
-    else:  # queued behind one running; that one fails, so the slot is free for this pass
-        alex.posting(90)
-        posting = alex.posting(80)
-        tick.tick(factory, AT, settings, only=[alex.user])
-        alex.finish("failed", "run_failed")
-    assert {g["status"].value for g in posting_cv(alex.generations(posting))} == {state}
-    blake_posting = blake.posting(85)
-    real = tick.not_started
-    clicked: list[uuid.UUID] = []
-
-    def read_then_click(db: Session, user_id: uuid.UUID) -> list[tick.Waiting]:
-        found = real(db, user_id)
-        if user_id == alex.user and not clicked:
-            click(alex, posting)  # committed after the tick's read, before its start
-            clicked.append(posting)
-        return found
-
-    monkeypatch.setattr(tick, "not_started", read_then_click)
-    with caplog.at_level(logging.INFO, logger="app.documents.tick"):
-        runs = tick.tick(factory, AT, settings, only=[alex.user, blake.user])
-    assert clicked == [posting]
-    # alex's pass skipped the cancelled generation and committed: no error, nothing held
-    held = ("documents.tick.person_failed", "documents.tick.busy")
-    assert not [r for r in caplog.records if r.getMessage() in held]
-    assert runs_of(alex, posting) == 1
-    assert triggers(alex, posting) == {
-        (GenerationTrigger.auto, GenerationStatus.cancelled, False),
-        (GenerationTrigger.click, GenerationStatus.running, True),
-    }
-    blake_cv = posting_cv(blake.generations(blake_posting))
-    assert [g["status"] for g in blake_cv] == [GenerationStatus.running]
-    assert runs == [blake_cv[0]["run_id"]]
-
-
-# --- a run that ended without its final hook ----------------------------------------------------
-
-
-def end_runs(who: World, status: str, error: str | None, finished: datetime | None) -> None:
-    """The person's runs end as the reaper, a killed worker or a cancel leave them: no hook."""
-    with who.factory() as db:
-        db.execute(
-            sa.text(
-                "UPDATE agent_runs SET status = CAST(:s AS agent_run_status), error = :e, "
-                "finished_at = :f WHERE user_id = :u"
-            ),
-            {"s": status, "e": error, "f": finished, "u": who.user},
-        )
-        db.commit()
-
-
-def test_the_grace_is_over_the_runners_final_hook_timeout() -> None:
-    assert runner.FINAL_HOOK_TIMEOUT_S < tick.HOOK_GRACE_S
-
-
-def test_a_reaped_run_is_settled_after_the_grace_the_next_posting_starts_and_it_is_retried_once(
-    world: World,
-) -> None:
-    first = world.posting(90)
-    world.tick()
-    ended = AT + timedelta(seconds=10)
-    end_runs(world, "failed", "The run stopped reporting.", ended)
-    second = world.posting(85)
-    grace = timedelta(seconds=tick.HOOK_GRACE_S)
-    assert world.tick(ended + grace) == []  # a hook merely late still settles its own run
-    assert [g["status"] for g in posting_cv(world.generations(first))] == [GenerationStatus.running]
-    started = world.tick(ended + grace + timedelta(seconds=1))
-    [failed] = posting_cv(world.generations(first))
-    assert failed["status"] is GenerationStatus.failed
-    with world.factory() as db:
-        row = db.get(DocumentGeneration, failed["id"])
-        assert row is not None
-        assert (row.error, row.finished_at) == ("run_failed", ended)
-    [running] = posting_cv(world.generations(second))
-    assert running["status"] is GenerationStatus.running
-    assert started == [running["run_id"]]
-    world.finish("failed", "run_failed", at=ended + grace)  # the second fails too
-    assert world.tick(ended + timedelta(seconds=599)) == []
-    assert len(world.tick(ended + timedelta(seconds=600))) == 1  # 600 s after the run ended
-    assert [g["status"] for g in posting_cv(world.generations(first))] == [
-        GenerationStatus.failed,
-        GenerationStatus.running,
-    ]
-
-
-def test_a_killed_run_without_a_finish_time_is_recovered_on_the_next_pass(world: World) -> None:
-    first = world.posting(90)
-    world.tick()
-    end_runs(world, "failed", "stale", None)  # its start time stands in for the end
-    second = world.posting(85)
-    started = world.tick(AT + timedelta(seconds=tick.HOOK_GRACE_S + 1))
-    assert [g["status"] for g in posting_cv(world.generations(first))] == [GenerationStatus.failed]
-    assert [g["run_id"] for g in posting_cv(world.generations(second))] == started
-    assert len(started) == 1
-
-
-@pytest.mark.parametrize(
-    ("run", "error", "status", "code"),
-    [
-        ("failed", failures.TOKEN_LIMIT, GenerationStatus.failed, "token_limit"),
-        ("failed", "The worker stopped.", GenerationStatus.failed, "run_failed"),
-        ("done", None, GenerationStatus.failed, "run_failed"),
-        ("cancelled", None, GenerationStatus.cancelled, None),
-        ("running", None, GenerationStatus.running, None),
-        ("queued", None, GenerationStatus.running, None),
-    ],
-)
-def test_a_run_settled_by_the_tick_takes_the_runs_outcome_and_a_live_run_is_never_touched(
-    world: World, run: str, error: str | None, status: GenerationStatus, code: str | None
-) -> None:
-    posting = world.posting(90)
-    world.tick()
-    end_runs(world, run, error, AT if run in ("failed", "done", "cancelled") else None)
-    world.tick(AT + timedelta(seconds=tick.HOOK_GRACE_S + 1))
-    found = posting_cv(world.generations(posting))[0]  # a stop at the ceiling retries at once
-    with world.factory() as db:
-        row = db.get(DocumentGeneration, found["id"])
-        assert row is not None
-        assert (row.status, row.error) == (status, code)
-
-
-def test_a_base_cv_build_that_ended_without_its_hook_is_settled_too(
-    factory: sessionmaker[Session], migrated_url: str
-) -> None:
-    who = World(factory, migrated_url, USER_A, base=False)
-    who.tick()
-    end_runs(who, "failed", "stale", AT)
-    who.tick(AT + timedelta(days=1))
-    base = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
-    assert [g["status"] for g in base] == [GenerationStatus.failed]
-
-
-# --- one person's failure, a start that raised, auto off, nothing to write from -----------------
-
-
-def test_an_unexpected_error_for_one_person_never_ends_the_pass_for_the_next(
-    factory: sessionmaker[Session],
-    migrated_url: str,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    alex = World(factory, migrated_url, USER_A)
-    blake = World(factory, migrated_url, USER_B)
-    alex.posting(90)
-    blake_posting = blake.posting(80)
-    planted = marker()
-    real = tick.eligible
-
-    def broken(db: Session, user_id: uuid.UUID, *args: Any) -> list[tick.Candidate]:
-        if user_id == alex.user:
-            raise RuntimeError(planted)
-        return real(db, user_id, *args)
-
-    monkeypatch.setattr(tick, "eligible", broken)
-    with caplog.at_level(logging.INFO, logger="app.documents.tick"):
-        runs = tick.tick(factory, AT, alex.settings, only=[alex.user, blake.user])
-    assert alex.generations() == []  # rolled back
-    assert [g["run_id"] for g in posting_cv(blake.generations(blake_posting))] == runs
-    assert len(runs) == 1
-    failed = [r for r in caplog.records if r.getMessage() == "documents.tick.person_failed"]
-    assert [(r.user_id, r.error) for r in failed] == [(str(alex.user), "RuntimeError")]  # type: ignore[attr-defined]
-    assert planted not in caplog.text
-
-
-def test_a_start_that_raised_is_never_counted_against_the_ceiling(
-    world: World, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    posting = world.posting(90)
-
-    def refuse(*_: Any, **__: Any) -> Any:
-        raise ValueError("refused")
-
-    monkeypatch.setattr(tick.generate, "start", refuse)
-    assert world.tick() == []
-    [found] = posting_cv(world.generations(posting))
-    assert (found["status"], found["ceiling_day"]) == (GenerationStatus.queued, None)
-    with world.factory() as db:
-        assert tick.started_today(db, world.user, TODAY) == 0
-
-
-def test_with_auto_off_a_waiting_automatic_base_cv_build_does_not_start(
-    factory: sessionmaker[Session], migrated_url: str
-) -> None:
-    who = World(factory, migrated_url, USER_A, base=False, credential=False)
-    who.tick()
-    [base] = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
-    assert (base["status"], base["wait_reason"]) == (
-        GenerationStatus.waiting,
-        GenerationWait.credential,
-    )
-    who.search(auto=False)
-    who.credential()
-    assert who.tick() == []
-    [base] = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
-    assert base["status"] is GenerationStatus.waiting
-    who.search(auto=True)
-    started = who.tick()
-    [base] = [g for g in who.generations() if g["mode"] is GenerationMode.base_profile]
-    assert (base["status"], started) == (GenerationStatus.running, [base["run_id"]])
-
-
-def test_without_a_base_cv_or_an_employer_what_waits_is_still_cancelled(
-    factory: sessionmaker[Session], migrated_url: str
-) -> None:
-    who = World(factory, migrated_url, USER_A, profile=False, credential=False)
-    posting = who.posting(80)
-    who.tick()  # a base CV exists: the posting waits for the credential
-    assert [g["status"] for g in posting_cv(who.generations(posting))] == [GenerationStatus.waiting]
-    with factory() as db:  # every base CV deleted, and the profile has no employer
-        store.delete_base(db, who.user, who.base, AT)
-        db.commit()
-    who.set_job(posting, status="skipped")
-    assert who.tick() == []
-    assert [g["status"] for g in posting_cv(who.generations(posting))] == [
-        GenerationStatus.cancelled
-    ]
-
-
-# --- the letter of a written CV -----------------------------------------------------------------
-
-
-def _letters(world: World, posting: uuid.UUID) -> list[dict[str, Any]]:
-    return [g for g in world.generations(posting) if g["kind"] is Kind.letter]
-
-
-def _busy(world: World) -> list[uuid.UUID]:
-    """The person's runs all taken by runs of another kind (as ingestion's or a chat's)."""
-    with world.factory() as db:
-        made = [
-            runs.create_run(db, world.user, "documents_cv", None, {}, "m", AT).id
-            for _ in range(runs.ACTIVE_PER_USER)
-        ]
-        db.commit()
-    return made
-
-
-def _free(world: World, busy: list[uuid.UUID]) -> None:
-    with world.factory() as db:
-        db.execute(sa.text("UPDATE agent_runs SET status = 'done' WHERE id = ANY(:r)"), {"r": busy})
-        db.commit()
-
-
-def test_a_letter_the_busy_chain_left_queued_starts_after_the_cv_moved_the_posting(
-    world: World,
-) -> None:
-    posting = world.posting(80)
-    (cv_run,) = world.tick()
-    world.finish()
-    busy = _busy(world)
-    assert generate.start_letter(world.factory, cv_run, AT, world.settings) is None
-    assert [(g["status"], g["trigger"]) for g in _letters(world, posting)] == [
-        (GenerationStatus.queued, GenerationTrigger.auto)
-    ]
-    world.set_job(posting, status=JobStatus.cv_ready)  # the CV's one page render
-    assert world.tick(AT + timedelta(minutes=1)) == []  # still busy: kept, not cancelled
-    assert [g["status"] for g in _letters(world, posting)] == [GenerationStatus.queued]
-    _free(world, busy)
-    started = world.tick(AT + timedelta(minutes=2))
-    (letter,) = _letters(world, posting)
-    assert letter["status"] is GenerationStatus.running
-    assert started == [letter["run_id"]]
-
-
-def test_a_cv_done_without_its_letter_gets_it_from_the_tick_once_the_posting_is_cv_ready(
-    world: World,
-) -> None:
-    posting = world.posting(80)
-    world.tick()
-    world.finish()  # the hook was cut short: no letter, nothing waits
-    world.set_job(posting, status=JobStatus.cv_ready)
-    started = world.tick(AT + timedelta(minutes=1))
-    (letter,) = _letters(world, posting)
-    assert (letter["status"], letter["trigger"]) == (
-        GenerationStatus.running,
-        GenerationTrigger.auto,
-    )
-    assert started == [letter["run_id"]]
-
-
-@pytest.mark.parametrize("status", [JobStatus.staged, JobStatus.applied, JobStatus.skipped])
-def test_a_queued_letter_of_a_posting_moved_past_cv_ready_is_cancelled_never_started(
-    world: World, status: JobStatus
-) -> None:
-    posting = world.posting(80)
-    (cv_run,) = world.tick()
-    world.finish()
-    busy = _busy(world)
-    generate.start_letter(world.factory, cv_run, AT, world.settings)
-    _free(world, busy)
-    world.set_job(posting, status=status)
-    assert world.tick(AT + timedelta(minutes=1)) == []
-    assert [g["status"] for g in _letters(world, posting)] == [GenerationStatus.cancelled]
-
-
-def _queued_letter(world: World) -> tuple[uuid.UUID, uuid.UUID]:
-    """A `cv_ready` posting whose letter the busy chain left `queued`, the runs free again:
-    (posting, letter generation)."""
-    posting = world.posting(80)
-    (cv_run,) = world.tick()
-    world.finish()
-    busy = _busy(world)
-    generate.start_letter(world.factory, cv_run, AT, world.settings)
-    _free(world, busy)
-    world.set_job(posting, status=JobStatus.cv_ready)
-    (letter,) = _letters(world, posting)
-    return posting, letter["id"]
-
-
-def test_a_move_to_applied_waits_behind_the_ticks_letter_start_and_both_commit(
-    world: World, engine: sa.Engine
-) -> None:
-    """The tick claims the letter, then its run's row needs the posting; a move to applied locks
-    the posting, then the freeze locks the letter. With the letter locked first, a circle
-    Postgres broke (the person's move answered 409). The claim now takes the posting first."""
-    posting, letter = _queued_letter(world)
-    outcome: dict[str, Any] = {}
-    with world.factory() as db:
-        generation = db.get(DocumentGeneration, letter)
-        assert generation is not None
-        assert tick._claim(db, generation, at=AT)
-        mover = in_thread(lambda: mark_applied(world.factory, world.user, posting, AT), outcome)
-        wait_until_blocked(engine, [mover], 1)
-        run = generate.start(db, generation, at=AT, settings=world.settings)
-        store.commit(db)
-    mover.join()
-    assert "error" not in outcome, outcome.get("error")
-    (row,) = _letters(world, posting)
-    assert (row["status"], row["run_id"]) == (GenerationStatus.running, run.id)
-    with world.factory() as db:
-        assert db.get(Job, posting).status is JobStatus.applied  # type: ignore[union-attr]
-
-
-def test_a_move_to_applied_waits_behind_a_recovered_cv_retried_at_once_and_both_commit(
-    world: World, engine: sa.Engine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The pass keeps the CV it recovered locked, and a CV that stopped at its ceiling is retried
-    at once: its run's row needs the posting. A move to applied in between locked the posting,
-    then waited for the CV: a circle. The recovery now takes the posting first."""
-    posting = world.posting(80)
-    world.tick()
-    ended = AT + timedelta(seconds=10)
-    end_runs(world, "failed", failures.TOKEN_LIMIT, ended)
-    real = tick.recover
-    outcome: dict[str, Any] = {}
-    movers: list[Any] = []
-
-    def recover_then_apply(db: Session, user_id: uuid.UUID, at: datetime) -> int:
-        settled = real(db, user_id, at)
-        movers.append(
-            in_thread(lambda: mark_applied(world.factory, world.user, posting, AT), outcome)
-        )
-        wait_until_blocked(engine, movers, 1)
-        return settled
-
-    monkeypatch.setattr(tick, "recover", recover_then_apply)
-    started = world.tick(ended + timedelta(seconds=tick.HOOK_GRACE_S + 1))
-    movers[0].join()
-    assert "error" not in outcome, outcome.get("error")
-    cv = posting_cv(world.generations(posting))
-    assert [g["status"] for g in cv] == [GenerationStatus.failed, GenerationStatus.running]
-    assert started == [cv[-1]["run_id"]]
-    with world.factory() as db:
-        assert db.get(Job, posting).status is JobStatus.applied  # type: ignore[union-attr]
-
-
-@pytest.mark.parametrize("kind", [Kind.cv, Kind.letter])
-def test_a_move_to_applied_after_the_ticks_read_cancels_what_it_would_start(
-    world: World, monkeypatch: pytest.MonkeyPatch, kind: Kind
-) -> None:
-    if kind is Kind.letter:
-        posting, _ = _queued_letter(world)
-    else:
-        posting = world.posting(80)
-    real = tick.eligible
-    moved: list[uuid.UUID] = []
-
-    def read_then_apply(*args: Any, **kwargs: Any) -> Any:
-        found = real(*args, **kwargs)
-        if not moved:
-            # committed after the pass read the status, before its start
-            mark_applied(world.factory, world.user, posting, AT)
-            moved.append(posting)
-        return found
-
-    monkeypatch.setattr(tick, "eligible", read_then_apply)
-    assert world.tick(AT + timedelta(minutes=1)) == []
-    assert moved == [posting]
-    owned = [g for g in world.generations(posting) if g["kind"] is kind]
-    assert [(g["status"], g["run_id"]) for g in owned][-1:] == [(GenerationStatus.cancelled, None)]
-    assert runs_of(world, posting) == (1 if kind is Kind.letter else 0)  # the CV's run only
-
-
-def test_a_pass_waits_behind_a_move_to_applied_holding_the_posting_and_cancels_the_letter(
-    world: World, engine: sa.Engine
-) -> None:
-    """The move holds the posting when the pass claims the letter: the claim waits for the
-    posting before it locks the letter, which the move's freeze locks next. The letter locked
-    first is a circle Postgres breaks (the pass rolled back, the letter left queued)."""
-    posting, _ = _queued_letter(world)
-    outcome: dict[str, Any] = {}
-    with world.factory() as mover:
-        job = jobs_service.lock_job(mover, world.user, posting)
-        assert job is not None
-        thread = in_thread(lambda: world.tick(AT + timedelta(minutes=1)), outcome)
-        wait_until_blocked(engine, [thread], 1)
-        jobs_service.set_status(mover, job, JobStatus.applied, AT)
-        store.commit(mover)
-    thread.join()
-    assert "error" not in outcome, outcome.get("error")
-    assert outcome["result"] == []
-    (row,) = _letters(world, posting)
-    assert (row["status"], row["run_id"]) == (GenerationStatus.cancelled, None)
-    assert runs_of(world, posting) == 1  # the CV's run only
-
-
-def test_a_cv_ready_posting_without_a_written_cv_gets_nothing(world: World) -> None:
-    posting = world.posting(80, status="cv_ready")
-    assert world.tick() == []
-    assert world.generations(posting) == []
-
-
-def test_the_ticks_letter_gets_what_the_pairs_ceiling_has_left_after_the_cvs_run(
-    world: World,
-) -> None:
-    posting = world.posting(80)
-    (cv_run,) = world.tick()
-    with world.factory() as db:
-        db.execute(
-            sa.text(
-                "UPDATE agent_runs SET input_tokens = 30000, output_tokens = 4000 WHERE id = :r"
-            ),
-            {"r": cv_run},
-        )
-        db.commit()
-    world.finish()
-    world.tick(AT + timedelta(minutes=1))
-    (cv,) = posting_cv(world.generations(posting))
-    (letter,) = _letters(world, posting)
-    assert letter["token_ceiling"] == cv["token_ceiling"] - 34_000
-
-
-def test_a_letter_after_a_cv_run_without_a_count_gets_no_budget_then_one_retry(
-    world: World,
-) -> None:
-    posting = world.posting(80)
-    world.tick()
-    world.finish(counted=False)  # the hook cut short, and the run wrote no count
-    world.set_job(posting, status=JobStatus.cv_ready)
-    assert world.tick(AT + timedelta(minutes=1)) == []
-    (letter,) = _letters(world, posting)
-    assert (letter["status"], letter["token_ceiling"], letter["run_id"]) == (
-        GenerationStatus.failed,
-        0,
-        None,
-    )
-    with world.factory() as db:
-        assert db.get(DocumentGeneration, letter["id"]).error == "token_limit"  # type: ignore[union-attr]
-        high = estimate.for_posting(db, world.user, posting, world.base).high
-    started = world.tick(AT + timedelta(minutes=2))
-    _, again = _letters(world, posting)
-    assert (again["status"], again["token_ceiling"]) == (GenerationStatus.running, high)
-    assert started == [again["run_id"]]

@@ -3,7 +3,7 @@
 The list is complete from the first day, one line per router of the plan, with the task that
 adds its file (tasks/documents/todo.md, "Who owns which shared file"). A file that does not
 exist yet is skipped; one that exists and fails to import fails the start. The literal paths
-(`settings`, `templates`, then `base-cvs` and `consent` of D9, `spend` of D10) come before D6's
+(`settings`, `templates`, then `base-cvs` and `consent` of D9, `write` of D10) come before D6's
 `router`, which serves `/api/documents/{document_id}`: FastAPI does not fall through to a
 later route when a path segment fails its type, so `/api/documents/settings` read as a document
 id would answer 422.
@@ -24,10 +24,11 @@ ROUTERS: tuple[tuple[str, str], ...] = (
     ("router", "settings_router"),  # D6: /api/documents/settings
     ("router", "templates_router"),  # D6: /api/document-templates
     ("base_router", "router"),  # D9: /api/documents/base-cvs, /api/documents/consent
-    ("auto_router", "router"),  # D10: /api/documents/spend
+    ("auto_router", "router"),  # D10, D29: /api/jobs/{id}/documents/write, Make it fit
     ("freeze_router", "router"),  # D14
     ("chat_router", "router"),  # D17
     ("design_router", "router"),  # D25b
+    ("panel_router", "router"),  # D29: /api/documents/{id}/panel
     ("router", "router"),  # D6: /api/jobs/{id}/documents, /api/documents/{id} and below, last
 )
 

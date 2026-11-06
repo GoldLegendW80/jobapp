@@ -89,7 +89,6 @@ from app.agents.models import AgentRun, RunStatus
 from app.config import Settings, get_settings
 from app.documents import content as c
 from app.documents import (
-    eligibility,
     render_job,
     rules,
     store,
@@ -115,9 +114,15 @@ from app.documents.models import (
     Origin,
     Scope,
 )
+from app.jobs.models import JobStatus
 from app.profile.models import Profile
 
 logger = logging.getLogger("app.documents.generate")
+
+# The statuses in which a posting's letter may still follow its CV: the CV's own render may have
+# moved the posting to `cv_ready`; past it (staged, applied, later, skipped) a letter is not what
+# was sent (D14).
+LETTER_STATUSES = frozenset({JobStatus.found, JobStatus.shortlisted, JobStatus.cv_ready})
 
 # What a failed generation records (`document_generations.error`).
 ERRORS = ("invalid_output", "no_result", "token_limit", "binding_gone", "run_failed")
@@ -149,12 +154,17 @@ DEFAULT_SCRIPTS = {
     (Kind.cv, GenerationMode.posting): "documents_cv_valid",
     (Kind.cv, GenerationMode.shorten): "documents_cv_shorten",
     (Kind.letter, GenerationMode.posting): "documents_letter_valid",
+    (Kind.cv, GenerationMode.panel): "documents_cv_panel",
+    (Kind.letter, GenerationMode.panel): "documents_letter_panel",
     (Kind.proposal, GenerationMode.posting): "documents_proposal_valid",
 }
 # The writer of each kind of posting document, and the modes it writes in.
 WRITERS = {
-    Kind.cv: (writer_cv.CV_WRITER, (GenerationMode.posting, GenerationMode.shorten)),
-    Kind.letter: (writer_letter.LETTER_WRITER, (GenerationMode.posting,)),
+    Kind.cv: (
+        writer_cv.CV_WRITER,
+        (GenerationMode.posting, GenerationMode.shorten, GenerationMode.panel),
+    ),
+    Kind.letter: (writer_letter.LETTER_WRITER, (GenerationMode.posting, GenerationMode.panel)),
     Kind.proposal: (writer_proposal.PROPOSAL_WRITER, (GenerationMode.posting,)),
 }
 
@@ -388,6 +398,7 @@ def start(
     script: str | None = None,
     long_fields: Iterable[str] = (),
     settings: Settings | None = None,
+    panel: str | None = None,
 ) -> AgentRun:
     """The writer run of a generation, `queued`, and the generation `running`. The caller
     commits, then `enqueue_run`. Raises agent_runs.ActiveRunsError when the person has their
@@ -416,6 +427,8 @@ def start(
     }
     if document.kind == Kind.cv:
         data["long_fields"] = list(long_fields)
+    if panel is not None:
+        data["panel"] = panel  # the hiring panel's rebuild (D29): its instructions' key
     chosen = _script(settings, document.kind, generation.mode, script)
     if chosen is not None:
         data["script"] = chosen
@@ -459,6 +472,11 @@ def _profile_revision(db: Session, user_id: uuid.UUID) -> int | None:
     return db.scalar(sa.select(Profile.revision).where(Profile.user_id == user_id))
 
 
+def _origin(generation: DocumentGeneration) -> Origin:
+    """A version of the hiring panel's rebuild says so (D29); every other write is generated."""
+    return Origin.panel if generation.mode is GenerationMode.panel else Origin.generated
+
+
 def finish(
     db: Session,
     generation: DocumentGeneration,
@@ -489,7 +507,7 @@ def finish(
             db,
             user_id,
             document.id,
-            Origin.generated,
+            _origin(generation),
             at=at,
             generation_id=generation.id,
             corrections=records,
@@ -508,7 +526,7 @@ def finish(
             db,
             user_id,
             document.id,
-            Origin.generated,
+            _origin(generation),
             at=at,
             generation_id=generation.id,
             corrections=records,
@@ -664,13 +682,15 @@ def start_letter(
             or cv.kind != Kind.cv
             or parent.mode is not GenerationMode.posting
             or parent.status is not GenerationStatus.done
-            or parent.trigger not in (GenerationTrigger.auto, GenerationTrigger.click)
+            # Only a click chains a letter: an `auto` CV left running across the deploy of D29
+            # writes no letter by itself.
+            or parent.trigger is not GenerationTrigger.click
         ):
             return None
         asked = parent.trigger is GenerationTrigger.click and bool(
             parent.estimate.get(LETTER_FOLLOWS)
         )
-        if posting_status not in eligibility.LETTER_STATUSES and not asked:
+        if posting_status not in LETTER_STATUSES and not asked:
             return None  # staged, sent or set aside: a letter now is not what was sent (D14)
         letter = store.get_or_create(db, cv.user_id, found.posting_id, Kind.letter, at=at)
         if _has_version(db, letter) and not asked:
@@ -753,10 +773,56 @@ async def on_final(final: FinalRun) -> None:
             "documents.generation.render_not_queued",
             run_id=str(final.run_id),
         )
-    if final.agent != writer_cv.NAME or final.status is not RunStatus.done:
+    if final.status is not RunStatus.done or final.agent == writer_proposal.NAME:
         return
+    from app.documents import panel  # panel imports this module
+
+    opened = await asyncio.to_thread(_begin_panel, final)
+    if opened is not None:
+        # The hiring panel reviews and rebuilds the first version; the letter of a CV follows
+        # the panel's end (panel.run, `after`), never before it (D29).
+        if await send_panel(final, opened):
+            return
+        await asyncio.to_thread(panel.close_unsent, final.sessions, opened, final.clock())
+    if final.agent != writer_cv.NAME:
+        return
+    await start_letter_after(final, final.run_id)
+
+
+def _begin_panel(final: FinalRun) -> uuid.UUID | None:
+    from app.documents import panel
+
+    with final.sessions() as db:
+        generation = db.scalar(
+            sa.select(DocumentGeneration).where(DocumentGeneration.run_id == final.run_id)
+        )
+        if generation is None:
+            return None
+        opened = panel.begin(
+            db, generation, at=final.clock(), enabled=final.settings.documents_panel_enabled
+        )
+        store.commit(db)
+        return opened.id if opened is not None else None
+
+
+async def send_panel(final: FinalRun, panel_id: uuid.UUID) -> bool:
+    """Queue the panel's job on the agents queue; False when the queue is down."""
+    from app.documents import panel
+
+    sent = False
+
+    async def send(queue: Any) -> None:
+        nonlocal sent
+        sent = await panel.enqueue(queue, panel_id)
+
+    await _send(final, send, "documents.panel.not_queued", panel_id=str(panel_id))
+    return sent
+
+
+async def start_letter_after(final: Any, run_id: uuid.UUID) -> None:
+    """Start the letter that follows the CV of `run_id` and queue its run (`start_letter`)."""
     letter = await asyncio.to_thread(
-        start_letter, final.sessions, final.run_id, final.clock(), final.settings
+        start_letter, final.sessions, run_id, final.clock(), final.settings
     )
     if letter is not None:
         logger.info("documents.generation.letter", extra={"run_id": str(letter)})

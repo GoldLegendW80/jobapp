@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 from app.agents import definitions
 from app.agents.models import AgentRun, CredentialKind
 from app.config import ConfigError, Settings, get_settings
+from app.documents import panel_hold
 from app.documents.models import (
     Document,
     DocumentGeneration,
@@ -53,7 +54,14 @@ NAME = "documents_cv"
 MODEL = "claude-opus-5-5"
 MODEL_API_KEY = "claude-sonnet-5-5"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "cv.md"
-TOOLS = ("get_job", "read_profile_section", "get_base_cv", "get_draft", "submit_cv")
+TOOLS = (
+    "get_job",
+    "get_job_brief",
+    "read_profile_section",
+    "get_base_cv",
+    "get_draft",
+    "submit_cv",
+)
 MODES = (GenerationMode.posting.value, GenerationMode.shorten.value)
 LANGUAGES = {"en": "English", "fr": "French"}
 # The person's `preferences.documents_tone` (opportunities O4), as the first message names it.
@@ -71,13 +79,15 @@ class CvInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     generation_id: uuid.UUID = Field(strict=False)
-    mode: Literal["posting", "shorten"] = "posting"
+    mode: Literal["posting", "shorten", "panel"] = "posting"
     language: Literal["en", "fr"] = "en"
     tone: Literal["plain", "formal", "warm"] = "plain"
     # The template's soft limits, in characters (rules.SoftLimits); null: no counter.
     limits: dict[str, int | None] = Field(default_factory=dict, max_length=12)
     # `shorten` only: the fields over their soft limits, longest first.
     long_fields: list[str] = Field(default_factory=list, max_length=40)
+    # `panel` only: the key of the hiring panel's instructions, held in this process (D29).
+    panel: str | None = Field(default=None, pattern=panel_hold.KEY_PATTERN)
     token_budget: int = Field(ge=0)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
 
@@ -145,7 +155,9 @@ class CvWriter(definitions.AgentDefinition):
         language = LANGUAGES.get(str(data.get("language")), "English")
         tone = tone_line(data)
         limits = limits_line(data.get("limits") or {})
-        if data.get("mode") == GenerationMode.shorten.value:
+        if data.get("mode") == GenerationMode.panel.value:
+            text = f"{panel_hold.read(data.get('panel'))}\n\nLanguage: {language}. {tone} {limits}"
+        elif data.get("mode") == GenerationMode.shorten.value:
             fields = ", ".join(str(path) for path in data.get("long_fields") or ()) or "the longest"
             text = (
                 "The CV of this posting overflows one page. Read the draft with get_draft, then "
@@ -157,6 +169,8 @@ class CvWriter(definitions.AgentDefinition):
         else:
             text = (
                 "Write the CV of this posting for the person, from their profile and base CV. "
+                "Read the job brief with get_job_brief first: the posting, the company, the "
+                "offer and the person's fit, so the CV speaks to this job. "
                 f"Language: {language}. {tone} {limits}"
             )
         if job_id is not None:

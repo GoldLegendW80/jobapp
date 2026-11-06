@@ -21,9 +21,11 @@ submitted, stays in the context of every later turn.
 - `low` and `high` are input plus output, rounded up once; the ceiling is `C = 2 * high`, the
   generation's `token_ceiling` (the run's `token_budget`, "Limits of one run").
 
-A posting's estimate is the pair the tick starts together: the CV and then the letter, which
+A posting's estimate is the pair a click starts together: the CV and then the letter, which
 reads the same sources plus the new CV (`O_low` more to read), with the letter writer's own
-prompt (`prompts/letter.md`).
+prompt (`prompts/letter.md`). What the person is shown adds the hiring panel of each
+(`with_panels`, D29: seven reviews and the merge at three turns and two submits each, one rebuild
+as a write, the screen again); the panel's runs have their own budgets.
 
 The estimates are `app.ingestion.estimate.RunEstimate` values, so `app.ingestion.pricing.costs`
 prices them as it prices an ingestion run. Pure but for the `*_chars` readers at the end, which
@@ -136,6 +138,16 @@ def posting(profile: int, base: int, posting_text: int, **limits: int) -> RunEst
     letter_prompt = prompt_chars("letter") or prompt_chars("cv")
     letter = writer(letter_prompt, reads + CONTENT_LOW_CHARS, **limits)
     return combine([cv, letter])
+
+
+def with_panels(pair: RunEstimate, posting_text: int, **limits: int) -> RunEstimate:
+    """A posting's pair and the hiring panel of each document (D29, `panel.cost`), as the
+    person is shown it before a click. The pair's ceiling stays the writers' own: each run of a
+    panel has its own budget."""
+    from app.documents import panel
+
+    panels = [panel.cost(CONTENT_LOW_CHARS, posting_text, **limits) for _ in range(2)]
+    return combine([pair, *panels])
 
 
 def as_json(estimate: RunEstimate) -> dict[str, int]:

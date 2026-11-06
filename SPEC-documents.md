@@ -55,10 +55,10 @@ Taken on 2026-10-14. The owner's words are quoted where he gave them.
 11. **Languages:** English and French (section labels, date format), chosen per document; a new posting document takes the profile's `preferences.documents_language`, and `auto` (the default) reads the posting's language. The writers also read `preferences.documents_tone` (`plain`, `formal`, `warm`), named in their first message; a tone changes the wording, never the facts (issue #473).
 12. **Revision is the chat attached to each document**, on the agents runtime, replacing the draft's instruction box.
 13. **The status move:** the first CV of a posting that fits one page moves `found` or `shortlisted` to `cv_ready`, whether it was written automatically or by a click.
-14. **Cost.** Automatic generation spends model calls without a click. It uses the consent pattern of ingestion and mail (one recorded consent per version of the text), the person's own credential, the agents runtime's per run limits, and a per user setting in the Advanced part of the profile's search options: the fit score threshold of Decision 15. The spend is shown. Nothing fails when a posting does not qualify or the safety ceiling is reached: the posting shows "Write now", or "Documents waiting" until the next day.
-15. **Automatic generation is limited by fit score, not by count.** "You can set the cap in advanced settings but not by number, it smarter to do it by fit score, you can change it." The Advanced settings hold a **fit score threshold**: a found posting gets its CV and letter automatically when its fit score is at or above it. Default 70, changeable (70 keeps the strong and the good matches and leaves the stretch roles to a click). A **safety ceiling** of 100 automatic generations a day stays, also in Advanced, as a protection against a broken sweep, not as the way to limit spend. A posting under the threshold gets its documents on demand with "Write now". See "Automatic generation".
+14. **Cost.** Revised on 2026-11-06 (D29): nothing is written without a click, see "Writing on a click". Before: automatic generation spends model calls without a click. It uses the consent pattern of ingestion and mail (one recorded consent per version of the text), the person's own credential, the agents runtime's per run limits, and a per user setting in the Advanced part of the profile's search options: the fit score threshold of Decision 15. The spend is shown. Nothing fails when a posting does not qualify or the safety ceiling is reached: the posting shows "Write now", or "Documents waiting" until the next day.
+15. **Automatic generation is limited by fit score, not by count.** Revised on 2026-11-06 (D29): there is no automatic generation, so no threshold and no safety ceiling. Before: "You can set the cap in advanced settings but not by number, it smarter to do it by fit score, you can change it." The Advanced settings hold a **fit score threshold**: a found posting gets its CV and letter automatically when its fit score is at or above it. Default 70, changeable (70 keeps the strong and the good matches and leaves the stretch roles to a click). A **safety ceiling** of 100 automatic generations a day stays, also in Advanced, as a protection against a broken sweep, not as the way to limit spend. A posting under the threshold gets its documents on demand with "Write now". See "Automatic generation".
 16. **A list of base CVs, with the design of an uploaded one.** "If no cv uploaded, jobapp will generate one for the job with a default template. If cv uploaded, cv is convert into editable file so every new generation will use the same template. Cv can be build in the app too. We can have a list of cv and select the one we want to generate the others." The profile holds a list of base CVs, one of them the default; the person picks the base CV a posting's CV is generated from, and can change it per posting. A base CV comes from the profile with the default template (none uploaded), from the editor, chat and template picker (built in the app), or from an upload (PDF or DOCX) converted into an editable base CV, its content as structured fields and its design captured as a template derived from the upload. A posting's CV inherits the template of its base CV; switching the template of one posting's CV does not change the base. See "Base CVs".
-17. **Postings found before the first base CV.** When a base CV first exists, the postings found in the last 30 days at or above the threshold that have no documents get them, highest fit first, the safety ceiling applying. (Owner, 2026-10-14.)
+17. **Postings found before the first base CV.** Revised on 2026-11-06 (D29): no backfill. Before: When a base CV first exists, the postings found in the last 30 days at or above the threshold that have no documents get them, highest fit first, the safety ceiling applying. (Owner, 2026-10-14.)
 18. **Filling the profile from an uploaded CV** is one click after the upload, never automatic: "Complete my profile from this CV" opens ingestion's run on that file, with its own review of each proposed change. (Owner, 2026-10-14.)
 
 ## Open points
@@ -232,23 +232,75 @@ The automatic generation setting is not a table: it is a block of the profile's 
 - `profile_revision` is the profile's `revision` when the version was made; a version made before a profile change is shown as "made from an older profile".
 - **A base CV's uploaded file** stays in `ingestion_documents`, so ingestion's limits, deletion and dedupe apply to it unchanged. Deleting that file there leaves the base CV, its versions and its user template (the original page for the Compare view is then no longer available).
 
-## Automatic generation (Decisions 14, 15, 17)
+## Writing on a click (D29, revising Decisions 14, 15, 17)
 
-**Eligible posting.** All of: automatic generation is on in the person's settings; a recorded consent of the current text and a model credential; a base CV exists (else see "Waiting, never failing"); the posting is `found` or `shortlisted`; its fit score is present and **at or above the threshold** (`search.documents.min_fit`, default 70); no never apply rule excludes it (`sweep.never_apply_rules` on `sweep.load_search`, matched with `sweep.term_matcher`, or the sweep's `never_apply` event); it has no document of that kind yet; it was found in the last 30 days (`DOCUMENTS_AUTO_LOOKBACK_DAYS`). A posting imported with the command line's documents has documents, so it is never written again. A posting under the threshold is never written automatically; it shows its fit and "Write now". Because the 30 day window is part of the rule, the backfill of Decision 17 needs no code of its own: when the first base CV exists, or when the person lowers the threshold, the next ticks pick up the postings of the last 30 days that now qualify, highest fit first. Raising the threshold removes nothing already written.
+The owner, 2026-11-06: "I don't want to automaticaly generate the cv and cover letter anymore. I want to generate them manually from the job detail page or when i click on apply to the job. For the cv, analyze deeply this project : https://github.com/alexyc9381/hiring-panel-skill you must understand how it works perfectly and implement it during the cv and cover letter build to have perfect cv and cover letter", "use also this project skills when the user upload his cv", and "also when generating the cv and cover letter for the jobs, hiring-panel-skill must know everything about the jobs to be perfectly specialise on the job, the company, the offer ect.."
 
-**The setting.** The block `documents` of the profile's `search` section (no table, defaulted when absent, as `sweep_schedule` is): `{auto: bool = true, min_fit: 0..100 = 70, daily_ceiling: 1..500 = 100}`. The page keeps them under "Advanced" in the search options. Before the person saves a lower threshold, the page shows how many postings of the last 30 days would newly qualify and their estimated tokens, from `GET /api/documents/spend?min_fit=`. A skills change rescores the postings by itself (SPEC-jobs, Scoring), so before the person saves one the Skills tab says the same for the draft ("This change brings 3 postings to a fit of 70 or more: their CV and letter are written automatically, about ..."), from `POST /api/documents/spend/skills`, only when automatic writing would start (on, with the consent and a credential) and the count is not 0.
+**The clicks that write.** The job page's Write (one button writes the CV, then the letter;
+each card keeps Write again, Write it again from this CV, Make it fit), and every Apply (one
+click, bulk, a Like, Full auto's apply after a Like) when the posting has no documents. Each is a
+generation of trigger `click`: started at once when the consent of the current text and a model
+credential are there, else `waiting` with `consent` or `credential`. A person with no base CV and
+a profile with an employer gets one built from the profile first (`writer_base.click_wait`,
+trigger `click`): the CV waits with `base_cv` and the card says so, then the CV is written from
+it and the letter follows. Nothing else writes: no eligible postings, no fit threshold, no daily
+safety ceiling, no backfill, no base CV built by the tick.
 
-**Why 70.** The fit score runs from 0 to 100 and is a keyword model; the command line staged forms at 85 and up, which is a high bar for a fully automatic default, so the default sits lower. At 70 the strong and the good matches get documents without a click and the stretch roles do not spend anything; the person raises it to spend less or lowers it to cover more, and the owner can change it. D10 measures how many postings of a typical sweep reach 70 on the Jetson and writes the figure under "Measurements".
+**The tick** (`documents.tick`, every minute) only finishes what a click left: it settles runs
+that ended without their final hook (`recover`) and closes a hiring panel whose job was lost
+(`panel.recover`, then its letter), starts the base CV builds, uploads and design captures that
+waited (`writer_base.start_ready`), and starts the clicks that waited for the consent, a
+credential, a base CV or the person's limit of active runs. A generation of trigger `auto` left
+open from before D29 is cancelled once, its document untouched.
 
-**The tick** (`documents.tick`, an arq cron job every minute, by ids only): for each person with something eligible, it creates the generations in order of highest fit, then newest, and starts at most one automatic generation per person at a time (`DOCUMENTS_AUTO_AT_ONCE` = 1), so the shared runner (two runs at a time on the Jetson, four active runs per person) always has room for a chat, a click or mail. A click or a chat goes before waiting automatic generations. When the list of base CVs is empty and the profile has at least one experience, the tick first creates the base CV from the profile (generation mode `base_profile`, trigger `auto`); the postings' generations wait with `base_cv` until it exists.
+**The setting.** The block `documents` of the profile's `search` section stays readable for old
+profiles; nothing reads it for writing. Full auto's threshold has its own default (70). The spend
+routes of D10 are gone; a run's tokens stay in `agent_runs` and in the panel record.
 
-**The safety ceiling.** `daily_ceiling` (default 100) is a protection against a broken sweep or a runaway loop, not the way to limit spend: the threshold does that. It counts postings, not runs: a posting counts once when its CV generation starts, and its letter and its shortening pass come with it. 100 is about five times a busy day on a typical set of boards, so a normal day never meets it. When today's count reaches it, new generations are created `waiting` with `daily_ceiling`, the posting shows "Documents waiting: today's safety ceiling is reached, they will be written tomorrow", and the first tick after midnight in the person's time zone (the one of `search.sweep_schedule.timezone`) starts them. A click ("Write now") and a chat are never limited: they are asked for.
+**Limits of one run.** Each writer run is one agent run: `internal`, bound to its document,
+`model_by_credential`, `private_io`, 10 turns, 5 minutes, and `token_budget` set to twice the high
+estimate of D9's formulas (`estimate.py`). What the person is shown before a click adds the
+hiring panel of each document (`estimate.with_panels`); each panel run has its own budget.
 
-**Waiting, never failing.** No credential: generations wait with `credential`, and the posting says "Documents waiting: add a model credential", linking to Account. No consent of the current text: they wait with `consent`. No base CV yet and one being built: `base_cv`. A profile with no experience and no uploaded CV: nothing can be built, nothing is created, and the CV tab says "Add your CV or fill your experience to get documents". None of these counts against the ceiling. A posting that becomes `skipped`, `applied` or later while waiting has its waiting generation cancelled. A posting whose fit drops under the threshold while waiting has it cancelled too. A failed automatic generation (the provider down) is retried once by the tick after 10 minutes, then shows "Writing failed" with "Try again".
+## The hiring panel (D29)
 
-**The spend.** The Advanced card shows, from `agent_runs` joined through `document_generations.run_id`: postings written today against the safety ceiling, postings waiting, how many postings of the last 30 days sit at or above the threshold, tokens today and over the last 30 days, and the cost (on an API key) or the estimate at API prices (on a subscription, the agents module's wording). The consent dialog shows the estimated tokens of one posting, and of a typical week at the threshold computed from the person's last 30 days. D10 measures the tokens of one posting on the Jetson and writes the figures under the plan's "Measurements".
+Adapted from hiring-panel-skill by Alex Chen (MIT, NOTICE). After a writer's first accepted
+version of a posting's CV or letter, and after the content conversion of an uploaded CV, a panel
+runs as the job `documents_panel` on the agents queue (`api/app/documents/panel.py`):
 
-**Limits of one run.** Each writer run is one agent run: `internal` (POST /api/agents/runs refuses it), bound to its document (the model never chooses a posting or a user), `model_by_credential` (`claude-opus-5-5` on a subscription, `claude-sonnet-5-5` on an API key, as ingestion and mail), `private_io`, 10 turns, 5 minutes, and `token_budget` set to twice the high estimate of D9's formulas (`estimate.py`, passed to the generation as an argument by its caller). The design capture is one run with images and gets the same limits with a budget from its own estimate. A run stopped at its ceiling keeps nothing; an automatic one is retried once with the ceiling raised by one high estimate.
+1. **The job brief** (`brief.py`): the posting's title, company, location, contract, pay, work
+   mode, language, source, address, its whole text, its requirement lines, the parts of the text
+   under their headings (`from_the_text`: about the company, the role, the profile asked for, the
+   benefits, the pay and the contract, as the posting writes them) and the person's fit (score,
+   matched and missing terms). The app has no fetch of a posting page outside the sweep and
+   stores nothing about a company beyond its name: what the brief knows of the company is what
+   the posting's own text says, and it says so.
+   For an upload, the person's target roles (the search titles) and headline stand in for a
+   posting. The writers read the same brief with `get_job_brief`.
+2. **Seven reviewers**, each its own agent under Documents in Admin (`documents_panel_screen`,
+   `_manager`, `_reader_manager`, `_reader_rival`, `_reader_ceo`, `_reader_recruiter`,
+   `_reader_teammate`), on Sonnet and the person's own credential, at most three at once. Each
+   reads only the document (its text in reading order, its template and columns, whether
+   contact details are printed), the brief and its own role at that company, and reports once
+   with a strict schema: the screen PASS or REJECT and at most five reasons; the hiring manager
+   INTERVIEW or NO, what decided it, three questions and the three weakest lines; each reader
+   HIRE, MAYBE or PASS, the line that hurt most and two problems, under 120 words. The recruiter
+   reads the top third only. A letter's readers read it beside the CV.
+3. **The merge** (`documents_panel_merge`): one numbered list of mistakes, worst first, each with
+   the quoted line, why it is rejected, who flagged it and the fix; the questions for facts the
+   profile lacks, each with the profile section that would hold it; the reviewer closest to
+   rejecting it. Code merges the duplicates left and numbers the list.
+4. **The rebuild**: a generation of mode `panel`, the document's own writer with the list as its
+   instructions, through `submit.handle` (the fact check corrects any unsupported claim); an
+   `[ADD: ...]` never prints (`corrections.drop_placeholders`). Its version has origin `panel`;
+   the first draft stays in the history. A base CV keeps its fixed facts.
+5. **The screen again** on the new version: the before and after verdicts.
+
+The record is a row of `document_panels` (migration 0036): the reviews, the mistakes, the
+questions, the screens, what failed, and the runs it spent. `GET /api/documents/{id}/panel`
+shows it. Correct, never block: a reviewer that fails is recorded missing; a failed merge or
+rebuild keeps the first version and says so. The apply module waits for a running panel as for a
+writing (`freeze.current`), within its own grace. Logs carry ids and counts only.
 
 ## The writers
 

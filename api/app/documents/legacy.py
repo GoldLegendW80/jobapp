@@ -39,8 +39,8 @@ the posting's CV and letter, once:
   so two imports of one person run one after the other; each posting row is locked before its
   documents (the lock order of store.py), so a status change waits for the import.
 
-Imported postings are never written again by the automatic generation: `eligibility` refuses a
-posting with legacy files. Logs carry ids and counts, never a document's text: the caller logs
+Imported postings are never written again by themselves: nothing writes a document without the
+person's click (D29). Logs carry ids and counts, never a document's text: the caller logs
 the run once its transaction ended (`log_run`), so a dry run never logs an import.
 """
 

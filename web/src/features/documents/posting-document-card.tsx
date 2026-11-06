@@ -23,6 +23,7 @@ import {
   type WaitReason,
 } from "./documents-api";
 import { failedSentence, formatWhen, WAIT_SENTENCES } from "./labels";
+import { PanelLine } from "./panel-panel";
 import { cardState, type CardState } from "./posting-documents-state";
 
 /** Width of the page 1 image on a card: sharp on a phone, light on a laptop. */
@@ -52,19 +53,16 @@ export function PostingDocumentCard({
   jobId,
   kind,
   document,
-  fit,
-  threshold,
   cvs,
   choice,
   onChoose,
   cvReady,
   letterWritten,
+  afterPanel = false,
 }: {
   jobId: string;
   kind: Kind;
   document: PostingDocument | undefined;
-  fit: number | null;
-  threshold: { auto: boolean; min: number } | undefined;
   /** The base CVs, for the CV card's "Based on". */
   cvs: BaseCv[];
   /** The base CV the person picked on the CV card, if any. */
@@ -74,10 +72,12 @@ export function PostingDocumentCard({
   cvReady: boolean;
   /** The posting's letter has a version: a CV written again takes the letter along. */
   letterWritten: boolean;
+  /** The CV's hiring panel runs: a letter not written yet follows its end (D29). */
+  afterPanel?: boolean;
 }) {
   const queryClient = useQueryClient();
   const selectId = useId();
-  const state = cardState(document, fit, threshold);
+  const state = cardState(document, afterPanel);
   const latest = document?.latest ?? null;
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: postingDocumentsKey(jobId) });
@@ -120,8 +120,6 @@ export function PostingDocumentCard({
   const canWrite =
     (kind === "cv" || cvReady) &&
     (state.tag === "empty" ||
-      state.tag === "under" ||
-      state.tag === "manual" ||
       (state.tag === "waiting" && !clickWouldWait) ||
       state.tag === "failed");
 
@@ -139,6 +137,7 @@ export function PostingDocumentCard({
       </div>
 
       <StateLine state={state} kind={kind} hasVersion={latest !== null} />
+      {latest !== null ? <PanelLine documentId={document?.id} /> : null}
 
       {document !== undefined && latest !== null && latest.has_preview ? (
         <img
@@ -339,22 +338,16 @@ function StateLine({
           {state.message ?? "Preview not available right now"}
         </p>
       );
-    case "under":
+    case "follows":
       return (
         <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Fit {state.fit} is under your threshold of {state.min}
-        </p>
-      );
-    case "manual":
-      return (
-        <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Documents are not written automatically. Write it when you want it.
+          Written after the CV: the hiring panel is reviewing the CV first.
         </p>
       );
     case "empty":
       return (
         <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Not written yet
+          Not written yet. It is written when you click Write or Apply.
         </p>
       );
   }

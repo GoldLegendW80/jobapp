@@ -27,6 +27,7 @@ from app.documents.models import (
     Channel,
     Document,
     DocumentGeneration,
+    DocumentPanel,
     DocumentUserTemplate,
     FitResult,
     FreezeReason,
@@ -1226,11 +1227,24 @@ def test_deleting_a_user_leaves_nothing_of_theirs(db: Session) -> None:
     file_id = add_job_file(db, frozen.posting_id)  # type: ignore[arg-type]
     made, _ = store.snapshot(db, a, frozen.id, Origin.legacy, at=AT, legacy_file_id=file_id)
     store.freeze(db, a, made.id, FreezeReason.legacy_applied, AT)
+    db.add(
+        DocumentPanel(
+            id=uuid.uuid4(),
+            user_id=a,
+            document_id=frozen.id,
+            kind="cv",
+            reviewed_version=1,
+            status="done",
+            created_at=AT,
+        )
+    )
+    db.flush()
     tables = rows_of(db, a)
     assert set(tables) == {
         "document_consents",
         "document_generations",
         "document_messages",
+        "document_panels",
         "document_settings",
         "document_user_templates",
         "document_versions",

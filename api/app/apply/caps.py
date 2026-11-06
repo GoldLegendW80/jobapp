@@ -95,7 +95,7 @@ from app.browser import linkedin_guard
 from app.jobs import service as jobs_service
 from app.jobs import sweep
 from app.jobs.models import Job
-from app.profile.schemas import SweepSchedule
+from app.profile.schemas import SearchSection, SweepSchedule
 
 S = State
 SENTENCES: dict[str, str] = {
@@ -290,16 +290,26 @@ class Values:
     review_before_send: bool = False
 
 
+def _saved_documents_min_fit(search: SearchSection | None) -> int | None:
+    """The `search.documents.min_fit` the person saved before D29, None when the stored section
+    holds none (the schema's default is not a saved value): read from the section already
+    loaded, so the check reads nothing more."""
+    if search is None or "min_fit" not in search.documents.model_fields_set:
+        return None
+    return search.documents.min_fit
+
+
 def settings_of(db: Session, user_id: uuid.UUID) -> Values:
     row = db.get(ApplySettings, user_id)
     try:
         search = sweep.load_search(db, user_id)
     except sweep.InvalidSearchError:
         search = None
-    write_from = search.documents.min_fit if search is not None else None
-    fit_default = (
-        write_from if write_from is not None else int(_setting("apply_full_auto_min_fit_default"))
-    )
+    # Full auto's default threshold (documents D29): a person with no value of their own keeps
+    # the documents threshold they saved before D29 (it was Full auto's default then), read only
+    # from the stored section; with none saved, Full auto's own default (70).
+    saved = _saved_documents_min_fit(search)
+    fit_default = saved if saved is not None else int(_setting("apply_full_auto_min_fit_default"))
 
     def stored(value: int | None, name: str) -> int:
         return value if value is not None else int(_setting(name))
@@ -316,7 +326,7 @@ def settings_of(db: Session, user_id: uuid.UUID) -> Values:
         rehearsals_done=row.rehearsals_done if row else 0,
         timezone=(search.sweep_schedule if search else SweepSchedule()).timezone,
         show_postings_from=search.min_fit if search is not None else None,
-        write_documents_from=write_from,
+        write_documents_from=None,  # documents are written on a click only (D29)
         review_before_send=bool(row and row.review_before_send),
     )
 

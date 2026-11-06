@@ -17,8 +17,9 @@ asked, one person after the other, and never two rescores of one person at once:
 2. `run`: every posting of the person, RESCORE_BATCH at a time, each batch committed, with the
    skills read when it starts (so at least the claimed revision): a fit set by hand is kept
    (`overwrite_manual` false), a posting another transaction holds is tried once more at the
-   end, then counted as busy. The fits that reached the documents threshold
-   (`search.documents.min_fit`, 70 by default) and those that fell under it are counted.
+   end, then counted as busy. The fits that reached the old documents threshold
+   (`search.documents.min_fit`, 70 by default) and those that fell under it are counted, for
+   the Skills tab's line only: nothing is written because of them (documents D29).
 3. `finish`: the claimed revision is done, the counts are the outcome, nothing runs. Only the
    claim that is still current finishes (a stale run that ends late changes nothing). A change
    saved during the run asked for a later revision: the next tick claims it, so it runs once more
@@ -26,9 +27,8 @@ asked, one person after the other, and never two rescores of one person at once:
 
 A profile whose skills section is missing or no longer validates scores nothing (outcome
 `no_skills`); a run that raises is logged and done with `failed`, so it is not tried every tick
-("Rescore all postings" in Jobs stays). The documents tick then writes the documents of the
-postings that reached the threshold under its own rules (SPEC-documents, Automatic generation);
-the Skills tab says that cost before the save (`POST /api/documents/spend/skills`).
+("Rescore all postings" in Jobs stays). No document is written because of a rescore: documents
+are written on a click only (SPEC-documents, "Writing on a click", D29).
 Logs carry ids and counts, never a skill.
 """
 

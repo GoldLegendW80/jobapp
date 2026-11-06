@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -52,59 +52,6 @@ async function changeYears(user: ReturnType<typeof userEvent.setup>) {
   await user.clear(years);
   await user.type(years, "6");
 }
-
-describe("the cost of a skills change, before the save", () => {
-  it("says how many postings get their documents and the estimate, from the draft", async () => {
-    const asked = spend();
-    const { user } = await openSkills();
-    await changeYears(user);
-    const line = await screen.findByTestId("skills-cost-line", {}, WAIT);
-    expect(line).toHaveTextContent(
-      "This change brings 3 postings to a fit of 70 or more: their CV and letter are written automatically, about 30,000 to 60,000 tokens, about USD 0.40 to USD 0.80.",
-    );
-    // The draft as typed, never saved, asked once the typing rested: the last one is the field.
-    await waitFor(() => {
-      expect(asked.at(-1)).toMatchObject({ skills: { years_experience: 6 } });
-    }, WAIT);
-    expect(asked.length).toBeLessThanOrEqual(2); // not one per key
-    expect(line.textContent).not.toMatch(/ [-–—] /);
-  });
-
-  it("says the tokens only on a subscription, as the documents card does", async () => {
-    spend({
-      newly: 1,
-      priced: false,
-      newly_estimate: { tokens: { low: 10000, high: 20000 }, cost: null },
-    });
-    const { user } = await openSkills();
-    await changeYears(user);
-    expect(
-      await screen.findByTestId("skills-cost-line", {}, WAIT),
-    ).toHaveTextContent(
-      "This change brings 1 posting to a fit of 70 or more: their CV and letter are written automatically, about 10,000 to 20,000 tokens.",
-    );
-  });
-
-  it.each([
-    ["no posting reaches the threshold", { newly: 0 }],
-    ["nothing would be written by itself", { writes: false }],
-  ])("says nothing when %s", async (_, overrides) => {
-    const asked = spend(overrides);
-    const { user } = await openSkills();
-    await changeYears(user);
-    await waitFor(() => {
-      expect(asked).toHaveLength(1);
-    }, WAIT);
-    expect(screen.queryByTestId("skills-cost-line")).not.toBeInTheDocument();
-  });
-
-  it("asks nothing while the draft is the saved skills", async () => {
-    const asked = spend();
-    await openSkills();
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    expect(asked).toEqual([]);
-  });
-});
 
 describe("the rescore after the save", () => {
   function status(answers: Record<string, unknown>[]) {

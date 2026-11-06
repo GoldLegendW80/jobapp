@@ -1,9 +1,14 @@
-"""The automatic generation of a found posting's CV and letter (task D10; SPEC-documents.md,
-Flow step 3, "Automatic generation", Decisions 14, 15 and 17).
+"""What the documents tick still does once nothing is written without a click (task D29; it
+replaced D10's automatic generation; SPEC-documents.md, "Writing on a click", Flow).
 
-`run(ctx)` is an arq cron job of the documents queue, every minute (app/worker.py registers it
-once this file exists). It holds ids only and returns a count. `python -m app.documents.tick
-<email>` runs one pass for one account, so a journey never waits a minute.
+The owner, 2026-11-06: "I don't want to automaticaly generate the cv and cover letter anymore."
+No CV, letter or base CV is written here on the tick's own initiative: no eligible postings, no
+fit threshold, no daily safety ceiling, no backfill, no first base CV from the profile. What
+stays is the work a click leaves for later.
+
+`run(ctx)` is an arq cron job of the documents queue, every minute (app/worker.py). It holds ids
+only and returns a count. `python -m app.documents.tick <email>` runs one pass for one account,
+so a journey never waits a minute.
 
 **One pass, per person** (`person`), in one transaction under the person's tick lock (a
 transaction level advisory lock taken with `try`: a second worker, or a second pass, finds it
@@ -13,52 +18,26 @@ held and leaves the person to the next tick, so two passes never start the same 
    run the reaper failed, one lost by a queue that was down, one cancelled while queued) and
    finished over `HOOK_GRACE_S` ago are settled as the hook would have (`recover`): the
    runner's contract is that whoever chains runs also looks on a timer, and the tick is it.
-1. A stored search section that no longer validates: nothing automatic for this person (fail
-   closed), and the reason is logged as a code.
-2. The base CV generations whose reason to wait is gone start (`writer_base.start_ready`), and
-   the person's clicks ("Write now") that met their limit of active runs start before anything
-   automatic.
-3. `auto` off: every automatic generation that has not started is cancelled; nothing else.
-4. No base CV and a profile with an employer: the first base CV is built from the profile
-   (`writer_base.build_from_profile`, source `profile`, trigger `auto`), started when it may.
-   No employer: nothing is created (the CV tab says what to fill), and steps 6 to 8 still run.
-   With `auto` off, an automatic base CV build that waits does not start either.
-5. The eligible postings (`eligibility.refusal`) are read in the order of `eligibility.order_key`.
-   Each gets a CV generation, or, once its CV has a version, a letter generation, unless one is
-   open, the person stopped one, or it failed already twice (`eligibility.next_try`, which also
-   raises the ceiling after a stop at the ceiling). Each is created with the estimate of D9's
-   `estimate.for_posting` and its ceiling, naming the default base CV; a letter gets what the
-   pair's ceiling has left after its CV's run (`generate.letter_ceiling`), none when that run
-   has no count (created `failed` at its limit; the one retry after a stop at the ceiling then
-   applies). A posting whose CV
-   moved it to `cv_ready` is still read for its letter (`eligibility.LETTER_STATUSES`): a letter
-   the chain could not start (the person's runs all busy, the hook cut short) is work here.
-6. Every automatic generation that has not started is cancelled when its posting is no longer
-   eligible (it left `found` and `shortlisted`, or `cv_ready` for a letter, its fit fell under
-   the threshold, it fell out of the window, a never apply rule now matches it).
-7. The others get their state: `waiting` with `consent` or `credential` (nothing spends without
-   both), `base_cv` while the default base CV is being built, `daily_ceiling` for the CVs past
-   today's room (`daily_ceiling` minus the postings whose CV started today in the person's time
-   zone), else `queued`. A letter never waits for the ceiling: its posting counted with its CV.
-8. While fewer than `DOCUMENTS_AUTO_AT_ONCE` automatic generations of the person run, the first
-   queued one starts: a letter whose CV is written first, then the CVs in posting order. A CV
-   that starts records `ceiling_day`, the day it counts against.
+   A hiring panel whose job died, or was cancelled, is closed the same way (`panel.recover`),
+   and the letter its CV waited for is started. A panel waiting its turn whose job was lost is
+   queued again after the pass (`panel.turns`).
+1. A generation of trigger `auto` that has not started (left by D10 at the deploy of D29, a
+   posting's or the first base CV's) is cancelled, once, its document untouched: nothing creates
+   one any more, and nothing starts one (`writer_base.start_ready` skips them too).
+2. The base CV builds, uploads and design captures whose reason to wait is gone start
+   (`writer_base.start_ready`). Every one of them was asked for by a click or an upload.
+3. The person's clicks ("Write", an Apply, a Like) that waited for the consent, a credential, a
+   base CV being built, or the person's limit of active runs start (`start_clicks`).
 
-**Never two starts.** A click ("Write now") cancels an automatic generation that has not
-started, under its document's lock. So the pass writes nothing to a generation, and starts none,
-before it holds the document's lock and has read the generation again (`_claim`): one the click
-cancelled meanwhile is left alone. The posting's lock (shared) comes first, as for the click,
-the chain and a move to `applied`, and its status is read under it: an automatic generation
-whose posting moved past the statuses of its kind since step 5 read them is cancelled there,
-never started (D14). One person whose pass fails for any other reason is rolled back and
-logged; the pass goes on with the next person.
+**Never two starts.** A click cancels a generation that has not started, under its document's
+lock. So the pass writes nothing to a generation, and starts none, before it holds the
+document's lock and has read the generation again (`_claim`): one the click cancelled meanwhile
+is left alone. The posting's lock (shared) comes first, as for the click, the chain and a move to
+`applied`. One person whose pass fails for any other reason is rolled back and logged; the pass
+goes on with the next person.
 
 The runs are queued on the agents queue after the commit. A queue that is down leaves the run
 `queued`, as the routes do. Logs carry ids and counts, never a text.
-
-**Latency.** The tick runs on the documents queue, one job at a time, behind a render: a
-render ends within render_job.JOB_TIMEOUT_S, so the tick waits at most that long behind one, and
-its own work is a handful of queries per person (no model call, no render).
 """
 
 from __future__ import annotations
@@ -68,10 +47,9 @@ import asyncio
 import logging
 import sys
 import uuid
-from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import sqlalchemy as sa
@@ -82,42 +60,37 @@ from app.agents import failures
 from app.agents import runs as agent_runs
 from app.agents.models import FINAL_STATUSES, AgentRun, RunStatus
 from app.config import Settings, get_settings
-from app.documents import eligibility, estimate, generate, render_job, store, writer_base
+from app.documents import generate, panel, render_job, store, writer_base
 from app.documents.models import (
-    BaseSource,
     Document,
     DocumentGeneration,
-    DocumentVersion,
     GenerationMode,
     GenerationStatus,
     GenerationTrigger,
-    GenerationWait,
     Kind,
     Scope,
 )
-from app.jobs import sweep
-from app.jobs.models import FileOrigin, Job, JobFile, JobStatus
+from app.jobs.models import JobStatus
 from app.profile.models import Profile
-from app.profile.schemas import DocumentsGeneration, SearchSection
 
 logger = logging.getLogger("app.documents.tick")
 
 LOCK_PREFIX = "documents.tick:"
 NOT_STARTED = (GenerationStatus.waiting, GenerationStatus.queued)
-# The modes the tick starts and counts.
-COUNTED_MODES = (GenerationMode.posting, GenerationMode.base_profile)
-# The modes `recover` settles: the counted ones, and an upload's conversion and capture.
-RECOVERY_MODES = (*COUNTED_MODES, GenerationMode.base_upload, GenerationMode.template_capture)
+# The modes `recover` settles: a posting's writes, its panel's rebuild, the base CV builds, an
+# upload's conversion and capture.
+RECOVERY_MODES = (
+    GenerationMode.posting,
+    GenerationMode.panel,
+    GenerationMode.base_profile,
+    GenerationMode.base_upload,
+    GenerationMode.template_capture,
+)
 # A run that ended without its final hook is settled once it finished this long ago: over
 # runner.FINAL_HOOK_TIMEOUT_S (30 s), so a hook that is merely late still settles its own result.
 HOOK_GRACE_S = 120
 # The code `generate.settle` gives a failed run, by the run's error; any other is `run_failed`.
 RUN_ERRORS = {failures.TOKEN_LIMIT: "token_limit", failures.BINDING_GONE: "binding_gone"}
-
-
-def setting_of(search: SearchSection | None) -> eligibility.Setting:
-    block = search.documents if search is not None else DocumentsGeneration()
-    return eligibility.Setting(block.auto, block.min_fit, block.daily_ceiling)
 
 
 def try_lock(db: Session, user_id: uuid.UUID) -> bool:
@@ -126,175 +99,20 @@ def try_lock(db: Session, user_id: uuid.UUID) -> bool:
     return bool(db.scalar(sa.select(sa.func.pg_try_advisory_xact_lock(key))))
 
 
-# --- what the pass reads ------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Candidate:
-    id: uuid.UUID
-    fit: int | None
-    found_on: date
-    status: JobStatus
-
-    def key(self) -> tuple[int, int, str]:
-        return eligibility.order_key(self.fit, self.found_on, str(self.id))
-
-
-def eligible(
-    db: Session,
-    user_id: uuid.UUID,
-    setting: eligibility.Setting,
-    search: SearchSection | None,
-    last_day: date,
-    lookback_days: int,
-    statuses: frozenset[JobStatus] = eligibility.OPEN_STATUSES,
-    fits: Mapping[uuid.UUID, int] | None = None,
-) -> list[Candidate]:
-    """The person's eligible postings, in order. The query narrows by status, fit and window;
-    `eligibility.refusal` decides on every row it returns. `fits`: the fits to read in place of
-    the stored ones (what a draft of the skills section would store, for the Skills tab's line
-    before a save); a posting it leaves out keeps its stored fit."""
-    if not setting.auto:
-        return []
-    legacy = (
-        sa.select(JobFile.id)
-        .where(JobFile.job_id == Job.id, JobFile.origin == FileOrigin.legacy)
-        .exists()
-    )
-    narrow = [
-        Job.user_id == user_id,
-        Job.status.in_(statuses),
-        Job.found_on >= eligibility.since(last_day, lookback_days),
-    ]
-    if fits is None:
-        narrow += [Job.fit.is_not(None), Job.fit >= setting.min_fit]
-    rows = db.execute(
-        sa.select(
-            Job.id, Job.status, Job.fit, Job.found_on, Job.company, Job.title, legacy.label("lg")
-        ).where(*narrow)
-    ).all()
-    rules = sweep.never_apply_rules(search) if search is not None else []
-    read = (lambda row: row.fit) if fits is None else (lambda row: fits.get(row.id, row.fit))
-    found = [
-        Candidate(row.id, read(row), row.found_on, row.status)
-        for row in rows
-        if eligibility.refusal(
-            eligibility.Posting(
-                row.status, read(row), row.found_on, row.company, row.title, row.lg
-            ),
-            setting,
-            rules,
-            last_day,
-            lookback_days,
-            statuses,
-        )
-        is None
-    ]
-    return sorted(found, key=Candidate.key)
-
-
-@dataclass
-class Docs:
-    """The posting documents of a person, by (posting, kind)."""
-
-    ids: dict[tuple[uuid.UUID, Kind], uuid.UUID] = field(default_factory=dict)
-    written: set[uuid.UUID] = field(default_factory=set)  # documents with a version
-    open: set[uuid.UUID] = field(default_factory=set)  # documents with an open generation
-    stopped: set[uuid.UUID] = field(default_factory=set)  # a writing the person stopped
-    done: dict[uuid.UUID, uuid.UUID] = field(default_factory=dict)  # the last done generation
-    failures: dict[uuid.UUID, list[eligibility.Failure]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
-
-
-def posting_docs(db: Session, user_id: uuid.UUID) -> Docs:
-    docs = Docs()
-    rows = db.execute(
-        sa.select(
-            Document.id,
-            Document.posting_id,
-            Document.kind,
-            sa.select(DocumentVersion.id)
-            .where(DocumentVersion.document_id == Document.id)
-            .exists()
-            .label("written"),
-        ).where(Document.user_id == user_id, Document.scope == Scope.posting)
-    ).all()
-    for row in rows:
-        if row.posting_id is None:
-            continue
-        docs.ids[(row.posting_id, row.kind)] = row.id
-        if row.written:
-            docs.written.add(row.id)
-    generations = db.execute(
-        sa.select(
-            DocumentGeneration.id,
-            DocumentGeneration.document_id,
-            DocumentGeneration.status,
-            DocumentGeneration.started_at,
-            DocumentGeneration.finished_at,
-            DocumentGeneration.error,
-            DocumentGeneration.token_ceiling,
-            DocumentGeneration.created_at,
-        )
-        .join(Document, Document.id == DocumentGeneration.document_id)
-        .where(
-            DocumentGeneration.user_id == user_id,
-            DocumentGeneration.mode == GenerationMode.posting,
-            Document.scope == Scope.posting,
-        )
-        .order_by(DocumentGeneration.created_at, DocumentGeneration.id)
-    ).all()
-    for g in generations:
-        if g.status in (*NOT_STARTED, GenerationStatus.running):
-            docs.open.add(g.document_id)
-        elif g.status is GenerationStatus.done:
-            docs.written.add(g.document_id)  # a done generation always made a version
-            docs.done[g.document_id] = g.id
-        elif g.status is GenerationStatus.cancelled and g.started_at is not None:
-            docs.stopped.add(g.document_id)
-        elif g.status is GenerationStatus.failed:
-            docs.failures[g.document_id].append(
-                eligibility.Failure(g.error, g.finished_at or g.created_at, g.token_ceiling)
-            )
-    return docs
-
-
-def started_today(db: Session, user_id: uuid.UUID, today: date) -> int:
-    """The postings whose automatic CV started on `today` (each counts once)."""
-    return int(
-        db.scalar(
-            sa.select(sa.func.count(sa.distinct(DocumentGeneration.document_id)))
-            .join(Document, Document.id == DocumentGeneration.document_id)
-            .where(
-                DocumentGeneration.user_id == user_id,
-                DocumentGeneration.ceiling_day == today,
-                DocumentGeneration.trigger == GenerationTrigger.auto,
-                DocumentGeneration.mode == GenerationMode.posting,
-                Document.kind == Kind.cv,
-            )
-        )
-        or 0
-    )
-
-
-# --- one pass for one person --------------------------------------------------------------------
-
-
 @dataclass
 class Outcome:
     runs: list[uuid.UUID] = field(default_factory=list)
-    created: int = 0
     cancelled: int = 0
     recovered: int = 0
+    # The CV runs whose panel was closed by `panel.recover`: their letter follows after the commit.
+    letters_after: list[uuid.UUID] = field(default_factory=list)
 
 
 def recover(db: Session, user_id: uuid.UUID, at: datetime) -> int:
     """Step 0 of the module docstring: each running generation whose run is final and finished
     over HOOK_GRACE_S ago gets the run's outcome, as `generate.settle` would have given it:
     `failed` with a code of RUN_ERRORS or `run_failed`, `cancelled` for a run cancelled while
-    queued. Capture and upload recovery does not add them to daily accounting or automatic
-    retry. Returns how many."""
+    queued. Returns how many."""
     ended = sa.func.coalesce(AgentRun.finished_at, AgentRun.created_at)
     rows = db.execute(
         sa.select(DocumentGeneration.id, DocumentGeneration.document_id)
@@ -361,126 +179,35 @@ def _lock(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> JobStatus 
     return status
 
 
-def _claim(db: Session, generation: DocumentGeneration, *, at: datetime | None = None) -> bool:
+def _claim(db: Session, generation: DocumentGeneration) -> bool:
     """Lock the generation's posting and document (`_lock`; the document is the lock a click
     takes), then read the generation again: True while it has still not started. A click may
     have cancelled it, and started its own, since the pass read it: the pass then writes nothing
-    to it. Given `at`, an automatic one whose posting left the statuses of its kind since the
-    pass read them (moved to `applied` meanwhile) is cancelled at `at`, and False (D14)."""
+    to it."""
     db.flush()  # what the pass already wrote to claimed rows, before the re-read replaces it
-    status = _lock(db, generation.user_id, generation.document_id)
+    _lock(db, generation.user_id, generation.document_id)
     fresh = db.execute(
         sa.select(DocumentGeneration)
         .where(DocumentGeneration.id == generation.id)
         .execution_options(populate_existing=True)
     ).scalar_one()
-    if fresh.status not in NOT_STARTED:
-        return False
-    if at is None or fresh.trigger is not GenerationTrigger.auto:
-        return True
-    kind = db.scalar(sa.select(Document.kind).where(Document.id == fresh.document_id))
-    allowed = eligibility.LETTER_STATUSES if kind == Kind.letter else eligibility.OPEN_STATUSES
-    if status in allowed:
-        return True
-    _cancel(fresh, at)
-    return False
+    return fresh.status in NOT_STARTED
 
 
-def _create(
-    db: Session,
-    user_id: uuid.UUID,
-    posting_id: uuid.UUID,
-    kind: Kind,
-    docs: Docs,
-    at: datetime,
-    settings: Settings,
-) -> bool:
-    """One automatic generation of a posting's document, `queued` for now (step 7 sets its
-    state). False when the document gets none now."""
-    document_id = docs.ids.get((posting_id, kind))
-    if document_id is not None and (
-        document_id in docs.written or document_id in docs.open or document_id in docs.stopped
-    ):
-        return False
-    failures = docs.failures.get(document_id, []) if document_id is not None else []
-    if len(failures) > eligibility.RETRIES:
-        return False
-    # A letter is written from the base CV of the posting's CV (generate.start_letter does
-    # the same); a CV from its document's base, else the default (generate.create).
-    base_id = None
-    cv_done: DocumentGeneration | None = None
-    if kind == Kind.letter:
-        cv_id = docs.ids[(posting_id, Kind.cv)]
-        cv = store.get(db, user_id, cv_id)
-        base_id = cv.base_document_id if cv is not None else None
-        cv_done = db.get(DocumentGeneration, docs.done[cv_id]) if cv_id in docs.done else None
-    figures = estimate.for_posting(db, user_id, posting_id, base_id)
-    # None: the CV's run has no count, so the letter gets no budget (generate.no_budget).
-    left = figures.ceiling if cv_done is None else generate.letter_ceiling(db, cv_done)
-    chosen = eligibility.next_try(
-        failures,
-        stopped=False,
-        now=at,
-        retry_after_s=settings.documents_auto_retry_after_s,
-        ceiling=left or 0,
-        high=figures.high,
-    )
-    if chosen is None:
-        return False
-    store.lock_posting(db, user_id, posting_id)  # before the document's row and lock (store.py)
-    document = store.get_or_create(db, user_id, posting_id, kind, at=at)
-    try:
-        made = generate.create(
-            db,
-            document,
-            GenerationMode.posting,
-            GenerationTrigger.auto,
-            base_id,
-            estimate.as_json(figures),
-            chosen.token_ceiling,
-            at=at,
-        )
-    except (store.GenerationOpenError, store.NotFoundError):
-        return False  # opened by a click since the read, or its base CV deleted meanwhile
-    if left is None and chosen.token_ceiling == 0:
-        generate.no_budget(db, made, at)
-    docs.ids[(posting_id, kind)] = document.id
-    docs.open.add(document.id)
-    return True
-
-
-@dataclass(frozen=True)
-class Waiting:
-    """An automatic posting generation that has not started, with what orders it."""
-
-    generation: DocumentGeneration
-    kind: Kind
-    posting_id: uuid.UUID
-    fit: int | None
-    found_on: date
-
-    def key(self) -> tuple[int, tuple[int, int, str]]:
-        # A letter first (its CV is written: finish the pair), then the postings' order.
-        first = 0 if self.kind == Kind.letter else 1
-        return (first, eligibility.order_key(self.fit, self.found_on, str(self.posting_id)))
-
-
-def not_started(db: Session, user_id: uuid.UUID) -> list[Waiting]:
-    rows = db.execute(
-        sa.select(DocumentGeneration, Document.kind, Job.id, Job.fit, Job.found_on)
-        .join(Document, Document.id == DocumentGeneration.document_id)
-        .join(Job, Job.id == Document.posting_id)
-        .where(
-            DocumentGeneration.user_id == user_id,
-            DocumentGeneration.trigger == GenerationTrigger.auto,
-            DocumentGeneration.mode == GenerationMode.posting,
-            DocumentGeneration.status.in_(NOT_STARTED),
-            Document.scope == Scope.posting,
-        )
-        .execution_options(populate_existing=True)
-    ).all()
-    found = [Waiting(row[0], row[1], row[2], row[3], row[4]) for row in rows]
-    return sorted(found, key=Waiting.key)
+def _name_default(db: Session, generation: DocumentGeneration, default: Document) -> None:
+    """A CV that waited for its base CV (none when it was clicked) is written from the default
+    one, which gives its template as `generate.create` does; the write records the template
+    given as its own, so no later write reads it as a switch by hand."""
+    document = store.lock_document(db, generation.user_id, generation.document_id)
+    if document.kind != Kind.cv or document.base_document_id is not None:
+        return
+    if generate.name_base(db, document, default):
+        # A new dict: an assignment is what marks the JSONB column changed.
+        generation.estimate = {
+            **generation.estimate,
+            generate.WRITE_TEMPLATE: document.template_slug,
+        }
+    generation.base_document_id = document.base_document_id
 
 
 def _cancel(generation: DocumentGeneration, at: datetime) -> None:
@@ -489,28 +216,13 @@ def _cancel(generation: DocumentGeneration, at: datetime) -> None:
     generation.finished_at = at
 
 
-def _name_base(db: Session, item: Waiting, default: Document) -> None:
-    """A CV that waited without a base CV (none yet, or its own deleted) is written from the
-    default one, which gives its template as `generate.create` does; the write records the
-    template given as its own, so no later write reads the tick's change as a switch by hand. A
-    switch by hand made while it waited stays one."""
-    document = store.lock_document(db, item.generation.user_id, item.generation.document_id)
-    if document.base_document_id is None and generate.name_base(db, document, default):
-        # A new dict: an assignment is what marks the JSONB column changed.
-        item.generation.estimate = {
-            **item.generation.estimate,
-            generate.WRITE_TEMPLATE: document.template_slug,
-        }
-    item.generation.base_document_id = document.base_document_id
-
-
 def start_clicks(
     db: Session, user_id: uuid.UUID, at: datetime, settings: Settings
 ) -> list[uuid.UUID]:
-    """The person's clicks ("Write now") that have not started, oldest first: started when the
-    consent and a credential are there (a click is never held by the threshold or the ceiling),
-    else kept waiting with the reason. One that meets the limit of active runs stays `queued`
-    for the next tick. Returns the runs to queue after the commit."""
+    """The person's clicks ("Write", an Apply, a Like) that have not started, oldest first:
+    started when the consent and a credential are there and no base CV is being built for them
+    (`writer_base.click_wait`), else kept waiting with the reason. One that meets the limit of
+    active runs stays `queued` for the next tick. Returns the runs to queue after the commit."""
     found = db.scalars(
         sa.select(DocumentGeneration)
         .join(Document, Document.id == DocumentGeneration.document_id)
@@ -524,7 +236,8 @@ def start_clicks(
         .order_by(DocumentGeneration.created_at, DocumentGeneration.id)
         .execution_options(populate_existing=True)
     ).all()
-    reason = writer_base.wait_reason(db, user_id) if found else None
+    reason = writer_base.click_wait(db, user_id, at) if found else None
+    default = store.default_base(db, user_id) if found else None
     runs: list[uuid.UUID] = []
     for generation in found:
         if reason is not None:
@@ -536,6 +249,8 @@ def start_clicks(
             continue
         if not _claim(db, generation):
             continue
+        if default is not None:
+            _name_default(db, generation, default)
         try:
             runs.append(generate.start(db, generation, at=at, settings=settings).id)
         except agent_runs.ActiveRunsError:
@@ -547,27 +262,33 @@ def start_clicks(
     return runs
 
 
-def _running_auto(db: Session, user_id: uuid.UUID) -> int:
-    return int(
-        db.scalar(
-            sa.select(sa.func.count())
-            .select_from(DocumentGeneration)
-            .where(
-                DocumentGeneration.user_id == user_id,
-                DocumentGeneration.trigger == GenerationTrigger.auto,
-                DocumentGeneration.status == GenerationStatus.running,
-            )
+def cancel_auto(db: Session, user_id: uuid.UUID, at: datetime) -> int:
+    """Step 1 of the module docstring: every generation of trigger `auto` that has not started
+    is cancelled, its document and its versions untouched. Returns how many."""
+    found = db.scalars(
+        sa.select(DocumentGeneration)
+        .where(
+            DocumentGeneration.user_id == user_id,
+            DocumentGeneration.trigger == GenerationTrigger.auto,
+            DocumentGeneration.status.in_(NOT_STARTED),
         )
-        or 0
-    )
+        .order_by(DocumentGeneration.id)
+        .execution_options(populate_existing=True)
+    ).all()
+    cancelled = 0
+    for generation in found:
+        if _claim(db, generation):
+            _cancel(generation, at)
+            cancelled += 1
+    return cancelled
 
 
-def lock_postings(db: Session, user_id: uuid.UUID, eligible_now: Sequence[Candidate]) -> None:
+def lock_postings(db: Session, user_id: uuid.UUID) -> None:
     """Lock 2 of every posting the rest of the pass may touch, shared and in id order, before
-    the first of them is claimed: the postings of the clicks and automatic generations not
-    started, and the eligible ones. Any other transaction that holds several job rows (an
-    import, a bulk) takes them in id order too (jobs.service lock order), so none waits for a
-    row the pass holds while holding one the pass asks for next."""
+    the first of them is claimed: the postings of the generations not started. Any other
+    transaction that holds several job rows (an import, a bulk) takes them in id order too
+    (jobs.service lock order), so none waits for a row the pass holds while holding one the pass
+    asks for next."""
     ids = {
         posting_id
         for posting_id in db.scalars(
@@ -582,146 +303,27 @@ def lock_postings(db: Session, user_id: uuid.UUID, eligible_now: Sequence[Candid
         )
         if posting_id is not None
     }
-    ids.update(posting.id for posting in eligible_now)
     store.lock_postings(db, user_id, ids)
 
 
 def person(db: Session, user_id: uuid.UUID, *, at: datetime, settings: Settings) -> Outcome | None:
-    """One pass for one person (module docstring). The caller commits, then queues the runs.
-    None when another pass holds the person."""
+    """One pass for one person (module docstring). The caller commits, then queues the runs and
+    starts the letters of `letters_after`. None when another pass holds the person."""
     if not try_lock(db, user_id):
         return None
+    # Lock 1 before any posting's: `start_clicks` may build a base CV (writer_base.click_wait).
+    store.lock_person(db, user_id)
     out = Outcome()
     out.recovered = recover(db, user_id, at)
-    try:
-        search = sweep.load_search(db, user_id)
-    except sweep.InvalidSearchError:
-        logger.warning("documents.tick.search_invalid", extra={"user_id": str(user_id)})
-        return out
-    setting = setting_of(search)
-    timezone = search.sweep_schedule.timezone if search is not None else None
-    today = eligibility.ceiling_day(at, timezone)
-    auto = setting.auto
-    out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings, auto=auto)
-    postings = eligible(
-        db,
-        user_id,
-        setting,
-        search,
-        eligibility.found_day(at),
-        settings.documents_auto_lookback_days,
-        eligibility.LETTER_STATUSES,
-    )
-    lock_postings(db, user_id, postings)
+    out.letters_after = panel.recover(db, user_id, at)
+    lock_postings(db, user_id)
+    # Before any start: an `auto` generation left by D10 (a posting's or the first base CV's)
+    # is cancelled, never started (D29).
+    out.cancelled = cancel_auto(db, user_id, at)
+    out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings)
     out.runs += start_clicks(db, user_id, at, settings)
-    create = auto
-    if auto and not store.base_cvs(db, user_id):
-        if writer_base.view_of(db, user_id, at).employers:
-            writer_base.build_from_profile(
-                db,
-                user_id,
-                at=at,
-                source=BaseSource.profile,
-                trigger=GenerationTrigger.auto,
-            )
-            out.created += 1
-            out.runs += writer_base.start_ready(db, user_id, at=at, settings=settings)
-        else:
-            create = False  # nothing to write from: nothing created, the rest still settled
-    if create:
-        docs = posting_docs(db, user_id)
-        for posting in postings:
-            cv = docs.ids.get((posting.id, Kind.cv))
-            if cv is not None and cv in docs.written:
-                kind = Kind.letter
-            elif posting.status in eligibility.OPEN_STATUSES:
-                kind = Kind.cv
-            else:
-                continue  # `cv_ready` without a written CV: nothing of the pair is owed
-            if _create(db, user_id, posting.id, kind, docs, at, settings):
-                out.created += 1
-    keep = {
-        Kind.letter: {posting.id for posting in postings},
-        Kind.cv: {p.id for p in postings if p.status in eligibility.OPEN_STATUSES},
-    }
-    waiting = []
-    for item in not_started(db, user_id):
-        if item.posting_id in keep[item.kind]:
-            waiting.append(item)
-        elif _claim(db, item.generation):
-            _cancel(item.generation, at)
-            out.cancelled += 1
-    if waiting:
-        out.runs += _settle_and_start(db, user_id, waiting, setting, today, at, settings)
     db.flush()
     return out
-
-
-def _settle_and_start(
-    db: Session,
-    user_id: uuid.UUID,
-    waiting: Sequence[Waiting],
-    setting: eligibility.Setting,
-    today: date,
-    at: datetime,
-    settings: Settings,
-) -> list[uuid.UUID]:
-    """Steps 7 and 8 of the module docstring."""
-    reason = writer_base.wait_reason(db, user_id)
-    default = store.default_base(db, user_id)
-    if reason is None and (
-        default is None or store.open_generation(db, user_id, default.id) is not None
-    ):
-        reason = GenerationWait.base_cv
-    room = eligibility.room(setting.daily_ceiling, started_today(db, user_id, today))
-    gone: set[uuid.UUID] = set()  # cancelled by a click since the pass read them
-    for item in waiting:
-        state = reason
-        took_room = False
-        if state is None and item.kind == Kind.cv:
-            if room > 0:
-                room -= 1
-                took_room = True
-            else:
-                state = GenerationWait.daily_ceiling
-        generation = item.generation
-        status = GenerationStatus.waiting if state else GenerationStatus.queued
-        to_name = state is None and item.kind == Kind.cv and default is not None
-        if (
-            generation.status is status
-            and generation.wait_reason is state
-            and not (to_name and generation.base_document_id is None)
-        ):
-            continue  # nothing to write
-        if not _claim(db, generation, at=at):
-            gone.add(generation.id)
-            room += 1 if took_room else 0
-            continue
-        generation.status = status
-        generation.wait_reason = state
-        if to_name and default is not None and generation.base_document_id is None:
-            _name_base(db, item, default)
-    slots = settings.documents_auto_at_once - _running_auto(db, user_id)
-    runs: list[uuid.UUID] = []
-    for item in waiting:
-        if slots <= 0:
-            break
-        generation = item.generation
-        if generation.id in gone or generation.status is not GenerationStatus.queued:
-            continue
-        if not _claim(db, generation, at=at) or generation.status is not GenerationStatus.queued:
-            continue
-        try:
-            run = generate.start(db, generation, at=at, settings=settings)
-        except agent_runs.ActiveRunsError:
-            break
-        except ValueError:
-            continue
-        if item.kind == Kind.cv:
-            generation.ceiling_day = today  # counted once it started, never before
-        runs.append(run.id)
-        slots -= 1
-    return runs
 
 
 # --- the cron and the command ---------------------------------------------------------------------
@@ -766,12 +368,16 @@ def tick(
         if out is None:
             continue
         runs += out.runs
-        if out.created or out.cancelled or out.runs or out.recovered:
+        for run_id in out.letters_after:
+            # The CV whose panel was closed: its letter follows, as the panel job's end does.
+            letter = generate.start_letter(sessions, run_id, at, settings)
+            if letter is not None:
+                runs.append(letter)
+        if out.cancelled or out.runs or out.recovered or out.letters_after:
             logger.info(
                 "documents.tick.person",
                 extra={
                     "user_id": str(user_id),
-                    "generations_created": out.created,
                     "generations_cancelled": out.cancelled,
                     "runs_started": len(out.runs),
                     "generations_recovered": out.recovered,
@@ -796,9 +402,18 @@ async def run(ctx: dict[str, Any]) -> int:
     """The cron job: one pass, then the runs queued. Returns how many runs started."""
     clock: Callable[[], datetime] = ctx["clock"]
     runs = await asyncio.to_thread(tick, ctx["sessions"], clock(), ctx["settings"])
+    # The hiring panels waiting their turn whose job was lost, or whose rebuild waited for an
+    # upload's design capture that has ended (panel.py, "One panel at a time per person").
+    turns = await asyncio.to_thread(panel.turns, ctx["sessions"], clock())
     pool = ctx.get("redis")
     if pool is not None and runs:
         await send(render_job.PoolQueue(pool), runs)
+    if pool is not None:
+        for panel_id in turns:
+            try:
+                await panel.enqueue(render_job.PoolQueue(pool), panel_id, turn=True)
+            except queues.QueueUnavailableError:
+                logger.warning("documents.panel.not_queued", extra={"panel_id": str(panel_id)})
     return len(runs)
 
 

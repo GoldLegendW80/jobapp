@@ -146,13 +146,15 @@ export const postingDocumentSchema = documentSchema.extend({
   approved: z.number().nullable(),
   sent: z.array(z.number()),
   generation: generationBriefSchema.nullable(),
+  /** The hiring panel is reviewing or rebuilding it (D29): a CV's letter follows its end. */
+  panel_running: z.boolean().default(false),
 });
-export type PostingDocument = z.infer<typeof postingDocumentSchema>;
+export type PostingDocument = z.input<typeof postingDocumentSchema>;
 
 export const postingDocumentsSchema = z.object({
   documents: z.array(postingDocumentSchema),
 });
-export type PostingDocuments = z.infer<typeof postingDocumentsSchema>;
+export type PostingDocuments = z.input<typeof postingDocumentsSchema>;
 
 export const generationSchema = z.object({
   id: z.string(),
@@ -221,12 +223,8 @@ export const consentSchema = z.object({
   accepted_at: z.string().nullable(),
   /** Null without a credential. */
   model: z.string().nullable(),
-  min_fit: z.number(),
+  /** One posting's CV and letter, their hiring panels included (documents D29). */
   posting: estimateSchema,
-  week: estimateSchema.extend({
-    postings: z.number(),
-    postings_30_days: z.number(),
-  }),
   cost_note: z.string(),
 });
 export type Consent = z.infer<typeof consentSchema>;
@@ -302,47 +300,6 @@ export type Template = z.infer<typeof templateSchema>;
 
 export const templatesSchema = z.object({ templates: z.array(templateSchema) });
 
-const tokensSpent = z.object({
-  input: z.number(),
-  output: z.number(),
-  cost_usd: decimal,
-});
-
-export const spendSchema = z.object({
-  day: z.string(),
-  auto: z.boolean(),
-  min_fit: z.number(),
-  daily_ceiling: z.number(),
-  written_today: z.number(),
-  waiting: z.number(),
-  postings_30_days: z.number(),
-  to_write: z.number(),
-  to_write_estimate: estimateSchema,
-  /** Of `to_write`, those under the person's own threshold: what lowering it would add. Optional
-   * because answers recorded before it (other tasks' test doubles) lack it; then nothing is shown. */
-  newly: z.number().optional(),
-  newly_estimate: estimateSchema.optional(),
-  priced: z.boolean(),
-  cost_note: z.string(),
-  today: tokensSpent,
-  last_30_days: tokensSpent,
-});
-export type Spend = z.infer<typeof spendSchema>;
-
-/** What saving a draft of the skills section would start (`POST /api/documents/spend/skills`). */
-export const skillsSpendSchema = z.object({
-  auto: z.boolean(),
-  min_fit: z.number(),
-  /** Automatic writing starts by itself: on, with the consent and a credential. */
-  writes: z.boolean(),
-  /** Postings the draft brings to the threshold that have no CV yet. */
-  newly: z.number(),
-  newly_estimate: estimateSchema,
-  priced: z.boolean(),
-  cost_note: z.string(),
-});
-export type SkillsSpend = z.infer<typeof skillsSpendSchema>;
-
 export const settingsSchema = z.object({
   no_dash_separators: z.boolean(),
   banned_phrases: z.array(z.string()),
@@ -360,8 +317,60 @@ export type StaleDraft = z.infer<typeof staleDraftSchema>;
 
 export const baseCvsKey = ["documents", "base-cvs"] as const;
 export const consentKey = ["documents", "consent"] as const;
+/** The hiring panel of a document (documents D29, `GET /api/documents/{id}/panel`). */
+const panelReviewSchema = z.object({
+  role: z.string(),
+  label: z.string(),
+  verdict: z.string().nullable(),
+  missing: z.string().nullable(),
+  line: z.string().nullable(),
+  why: z.string().nullable(),
+});
+const panelMistakeSchema = z.object({
+  number: z.number(),
+  quote: z.string(),
+  why: z.string(),
+  flagged_by: z.array(z.string()),
+  fix: z.string(),
+});
+export const panelSchema = z.object({
+  id: z.string(),
+  status: z.enum(["running", "done", "failed"]),
+  kind: z.enum(["cv", "letter", "base"]),
+  reviewed_version: z.number(),
+  rebuilt_version: z.number().nullable(),
+  reviews: z.array(panelReviewSchema),
+  mistakes: z.array(panelMistakeSchema),
+  questions: z.array(
+    z.object({
+      question: z.string(),
+      section: z.enum(["facts", "experience", "skills", "answers"]),
+    }),
+  ),
+  screen_before: z.string().nullable(),
+  screen_after: z.string().nullable(),
+  readers_hire: z.number(),
+  readers_answered: z.number(),
+  strong: z.boolean(),
+  closest: z
+    .object({ role: z.string(), label: z.string(), why: z.string() })
+    .nullable(),
+  failed: z.array(z.string()),
+  created_at: z.string(),
+  finished_at: z.string().nullable(),
+});
+export type Panel = z.infer<typeof panelSchema>;
+export const panelOutSchema = z.object({
+  panel: panelSchema.nullable(),
+  input_tokens: z.number(),
+  output_tokens: z.number(),
+});
+export type PanelOut = z.infer<typeof panelOutSchema>;
+
 export const documentKey = (id: string) =>
   ["documents", "document", id] as const;
+export const panelKey = (id: string) =>
+  ["documents", "document", id, "panel"] as const;
 export const versionsKey = (id: string) =>
   ["documents", "document", id, "versions"] as const;
 export const versionKey = (id: string, number: number) =>
@@ -373,8 +382,6 @@ export const postingDocumentsKey = (jobId: string) =>
 export const generationKey = (id: string) =>
   ["documents", "generation", id] as const;
 export const templatesKey = ["documents", "templates"] as const;
-export const spendKey = (minFit?: number) =>
-  ["documents", "spend", minFit ?? "current"] as const;
 export const settingsKey = ["documents", "settings"] as const;
 
 // --- calls --------------------------------------------------------------------------------------
@@ -466,6 +473,13 @@ export const getDocument = (
   signal?: AbortSignal,
 ): Promise<DocumentOut> =>
   get(`${ROOT}/${id(documentId)}`, documentSchema, signal);
+
+/** The latest hiring panel of a document, null when none ran (documents D29). */
+export const getPanel = (
+  documentId: string,
+  signal?: AbortSignal,
+): Promise<PanelOut> =>
+  get(`${ROOT}/${id(documentId)}/panel`, panelOutSchema, signal);
 
 /** Save the draft; a stale `revision` answers 409 with the current document (`staleDraft`). */
 export const saveDraft = (
@@ -630,28 +644,6 @@ export const acceptConsent = (version: number): Promise<Consent> =>
   send(`${ROOT}/consent`, "POST", consentSchema, { version });
 
 // Spend and settings
-
-export const getSkillsSpend = (
-  skills: unknown,
-  signal?: AbortSignal,
-): Promise<SkillsSpend> =>
-  request(`${ROOT}/spend/skills`, {
-    method: "POST",
-    body: { skills },
-    signal,
-    timeoutMs: TIMEOUT_MS,
-    validate: (answer) => skillsSpendSchema.parse(answer),
-  });
-
-export const getSpend = (
-  minFit?: number,
-  signal?: AbortSignal,
-): Promise<Spend> =>
-  get(
-    `${ROOT}/spend${minFit === undefined ? "" : `?min_fit=${String(minFit)}`}`,
-    spendSchema,
-    signal,
-  );
 
 export const getSettings = (signal?: AbortSignal): Promise<DocumentSettings> =>
   get(`${ROOT}/settings`, settingsSchema, signal);

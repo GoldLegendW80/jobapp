@@ -105,6 +105,14 @@ CATEGORY_OF: dict[str, str] = {
     "documents_cv": "documents",
     "documents_design": "documents",
     "documents_letter": "documents",
+    "documents_panel_manager": "documents",
+    "documents_panel_merge": "documents",
+    "documents_panel_reader_ceo": "documents",
+    "documents_panel_reader_manager": "documents",
+    "documents_panel_reader_recruiter": "documents",
+    "documents_panel_reader_rival": "documents",
+    "documents_panel_reader_teammate": "documents",
+    "documents_panel_screen": "documents",
     "documents_proposal": "documents",
     "echo": "test",
     "job_chat": "jobs",
@@ -171,6 +179,13 @@ FIRST_MESSAGES: dict[str, str] = {
         "person's uploaded CV into their base CV\", with <the language asked> and <the "
         "template's soft lengths>."
     ),
+    "app.documents.panel.PanelDefinition": (
+        "Held in the worker while the panel runs, never stored: one line saying what to do, then "
+        "data blocks: <the document: its text in reading order, its template and columns, "
+        "whether contact details are printed>, <the job brief: the posting, the company, the "
+        "offer, the fit>, <for a letter, the CV beside it>, <the reviewer's role at that "
+        "company>; for the merge, <the document> and <the reviews>."
+    ),
     "app.documents.writer_design.DesignWriter": (
         "A fixed message by <the kind of upload, PDF or Word document>: capture the design of "
         "the person's uploaded CV, then write the template."
@@ -201,6 +216,7 @@ def load() -> dict[str, definitions.AgentDefinition]:
     from app.apply import agents as _apply  # noqa: F401  (apply_answer, apply_form, apply_check)
     from app.browser import finder as _finder  # noqa: F401  (browser_finder, browser_discovery)
     from app.documents import chat as _chat  # noqa: F401  (documents_chat_<kind>)
+    from app.documents import panel as _panel  # noqa: F401  (documents_panel_<role>, merge)
     from app.documents import writer_base as _base  # noqa: F401
     from app.documents import writer_cv as _cv  # noqa: F401
     from app.documents import writer_design as _design  # noqa: F401

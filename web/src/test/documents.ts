@@ -24,14 +24,7 @@ export function fakeConsent(overrides: Partial<Consent> = {}): Consent {
     accepted: false,
     accepted_at: null,
     model: "claude-opus-5-5",
-    min_fit: 70,
     posting: { tokens: { low: 12_000, high: 20_000 }, cost: null },
-    week: {
-      tokens: { low: 60_000, high: 100_000 },
-      cost: null,
-      postings: 5,
-      postings_30_days: 18,
-    },
     cost_note:
       "On a Claude subscription, tokens count against your quota, not as money.",
     ...overrides,

@@ -107,6 +107,17 @@ def _submit(scope: app_tools.Scope, raw: object) -> tuple[str, bool]:
                 context = writer_base.upload_context(
                     db, scope.user_id, context, applied.fixed or c.Fixed(), text, scope.clock()
                 )
+        elif mode == GenerationMode.panel and context is not None:
+            # The hiring panel's rebuild (D29): the fixed facts kept as they are, by code.
+            document = store.get(db, scope.user_id, uuid.UUID(str(scope.binding["document_id"])))
+            own = c.parse("base", document.draft) if document is not None else None
+            if isinstance(data, dict) and isinstance(own, c.BaseCvContent):
+                data = {**data, "fixed": c.dump(own.fixed)}
+                text = writer_base.upload_text(db, scope.user_id, _upload_id(scope))
+                if text is not None:
+                    context = writer_base.upload_context(
+                        db, scope.user_id, context, own.fixed, text, scope.clock()
+                    )
         elif mode == GenerationMode.chat and context is not None:
             text = writer_base.upload_text(db, scope.user_id, _upload_id(scope))
             document = store.get(db, scope.user_id, uuid.UUID(str(scope.binding["document_id"])))

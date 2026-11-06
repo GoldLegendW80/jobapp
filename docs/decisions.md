@@ -219,6 +219,21 @@ choice made by the build that stands until the owner says otherwise.
   upload with the same method, is task D28. D28 built it: an upload is measured, its fonts chosen by
   name or by measurement, its template written from the numbers and rendered, compared and
   corrected over several passes, the best kept (SPEC-documents.md, "Design capture of an upload").
+- 2026-11-06 (D29), the owner wrote: "I don't want to automaticaly generate the cv and cover letter anymore. I want to generate them manually from the job detail page or when i click on apply to the job. For the cv, analyze deeply this project : https://github.com/alexyc9381/hiring-panel-skill you must understand how it works perfectly and implement it during the cv and cover letter build to have perfect cv and cover letter", "use also this project skills when the user upload his cv", and "also when generating the cv and cover letter for the jobs, hiring-panel-skill must know everything about the jobs to be perfectly specialise on the job, the company, the offer ect.."
+  Nothing writes a CV, a letter or a base CV without the person's click: the job page's Write, an
+  Apply (one click, bulk, a Like, Full auto's apply after a Like) or an upload. This revises
+  "Automatic generation is limited by a fit score threshold" above and SPEC-documents.md
+  Decisions 14, 15 and 17: no fit threshold for documents, no daily safety ceiling, no backfill;
+  the settings card leaves the page, `search.documents` stays readable and unread, Full auto keeps
+  its own default threshold of 70, and the consent gets text version 2. A click with no base CV
+  builds one from the profile first. Every CV and letter build, and the conversion of an uploaded
+  CV, goes through the hiring panel of hiring-panel-skill (MIT, credited in NOTICE): seven
+  reviewers on Sonnet that each try to reject it alone, with a job brief of the posting, the
+  company and the offer; one merged list of mistakes; a rebuild with the same facts through the
+  fact check; the screen again. A failing step never blocks: the first version stays. It also
+  revises item 4 of "Product audit: chapters 1 and 2" (2026-11-05): the rescore after a skills
+  change no longer says a possible document cost before saving, since no document is written
+  without a click.
 
 ## Interactive job search (2026-10-24, #626)
 

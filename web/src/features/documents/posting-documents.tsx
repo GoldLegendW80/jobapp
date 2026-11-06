@@ -13,11 +13,9 @@ import { describeError } from "@/lib/api";
 import {
   baseCvsKey,
   getPostingDocuments,
-  getSpend,
   listBaseCvs,
   postingDocumentsKey,
   failureSentence,
-  spendKey,
   writeNow,
 } from "./documents-api";
 import { isOpen } from "./labels";
@@ -32,9 +30,9 @@ import {
 
 /**
  * The "Documents" section of the job page (SPEC-documents.md, "Job detail page"): the posting's
- * CV and letter as two cards. The documents are read again while a generation is open or a page is
- * being drawn, and for a short while after the CV's generation closes, until the letter that follows
- * it has its own. The posting is read again when the work ends: the render that ends it may have
+ * CV and letter as two cards. The documents are read again while a generation is open, a page is
+ * being drawn or a hiring panel runs, and for a short while after the CV's generation and its panel
+ * end, until the letter that follows it has its own. The posting is read again when the work ends: the render that ends it may have
  * moved the posting to `cv_ready`.
  */
 export function PostingDocumentsSection({ job }: { job: JobDetail }) {
@@ -47,10 +45,6 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     queryFn: ({ signal }) => getPostingDocuments(job.id, signal),
     refetchInterval: (current) =>
       postingPollInterval(current.state.data, letterWindow > 0),
-  });
-  const spend = useQuery({
-    queryKey: spendKey(),
-    queryFn: ({ signal }) => getSpend(undefined, signal),
   });
   const cvs = useQuery({
     queryKey: baseCvsKey,
@@ -75,13 +69,14 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   useEffect(() => {
     if (wasOpen.current && !open) {
       void queryClient.invalidateQueries({ queryKey: jobKey(job.id) });
-      void queryClient.invalidateQueries({ queryKey: spendKey() });
     }
     wasOpen.current = open;
   }, [open, queryClient, job.id]);
 
   const cvGeneration = documentOf(documents.data, "cv")?.generation ?? null;
-  const cvOpen = isOpen(cvGeneration);
+  // The CV's hiring panel runs: the letter follows its end, not the CV generation's (D29).
+  const cvPanel = documentOf(documents.data, "cv")?.panel_running === true;
+  const cvOpen = isOpen(cvGeneration) || cvPanel;
   const letterOpen = isOpen(documentOf(documents.data, "letter")?.generation);
   const [cvWasOpen, setCvWasOpen] = useState(cvOpen);
   if (cvOpen !== cvWasOpen) {
@@ -101,10 +96,6 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     };
   }, [letterWindow]);
 
-  const threshold = spend.data
-    ? { auto: spend.data.auto, min: spend.data.min_fit }
-    : undefined;
-
   const write = useMutation({
     mutationFn: () =>
       writeNow(job.id, {
@@ -119,10 +110,10 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const cvReady = (cvDocument?.latest ?? null) !== null;
   const letterWritten =
     (documentOf(documents.data, "letter")?.latest ?? null) !== null;
-  const untouched = (["cv", "letter"] as const).every((kind) =>
-    ["empty", "under", "manual"].includes(
-      cardState(documentOf(documents.data, kind), job.fit, threshold).tag,
-    ),
+  const untouched = (["cv", "letter"] as const).every(
+    (kind) =>
+      cardState(documentOf(documents.data, kind), kind === "letter" && cvPanel)
+        .tag === "empty",
   );
 
   return (
@@ -175,13 +166,12 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                 jobId={job.id}
                 kind={kind}
                 document={documentOf(documents.data, kind)}
-                fit={job.fit}
-                threshold={threshold}
                 cvs={cvs.data?.base_cvs ?? []}
                 choice={choice}
                 onChoose={setChoice}
                 cvReady={cvReady}
                 letterWritten={letterWritten}
+                afterPanel={kind === "letter" && cvPanel}
               />
             ))}
           </div>

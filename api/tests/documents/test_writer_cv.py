@@ -126,6 +126,7 @@ def test_the_definition_asks_for_a_private_bound_internal_run() -> None:
     assert "get_profile_section" not in agent.tools
     assert set(agent.tools) == {
         "get_job",
+        "get_job_brief",
         "read_profile_section",
         "get_base_cv",
         "get_draft",
