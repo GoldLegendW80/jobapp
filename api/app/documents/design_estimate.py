@@ -6,15 +6,16 @@ the page images in it.
   (`prompts/design.md`), paid at every turn.
 - `R`, read once and sent again at every later turn: the layout extraction (`read_design`),
   LAYOUT_LOW_CHARS for a typical CV page, LAYOUT_HIGH_CHARS for two full pages of runs (the
-  tool's caps: 200 runs a page of 80 characters each, with their boxes and fonts).
+  tool's caps: 400 runs a page of 160 characters each, with their boxes, fonts and measures,
+  and the measured spec of design_spec, D28).
 - `I`, the images, each IMAGE_TOKENS (ingestion's figure for one page image, G0): for a PDF the
-  two pages and the render of the fidelity pass; the high case views each page twice. A DOCX
-  has no page: the render only.
+  two pages and, per fidelity pass, the render and its overlay on the original (two); the high
+  case views each page twice and makes every pass. A DOCX has no page: the render only.
 - `O`, one submit of the three files: TEMPLATE_LOW_CHARS (the bundled templates hold 6,000 to
   12,000 characters), TEMPLATE_HIGH_CHARS for files near their caps.
 - Low: `n = 5` turns (the reads, the pages, one submit, the render, the closing line), one
   submit: `input = n*(F+P) + (n-1)*(R_low + I_low) + (n-2)*O_low`, `output = O_low + n*T`.
-- High: `n = DOCUMENTS_GENERATION_MAX_TURNS`, `k = 1 + DOCUMENTS_DESIGN_PASSES` submits:
+- High: `n = DOCUMENTS_DESIGN_MAX_TURNS`, `k = 1 + DOCUMENTS_DESIGN_PASSES` submits:
   `input = n*(F+P) + (n-1)*(R_high + I_high + k*O_high)`, `output = k*O_high + n*T`.
 - The ceiling is twice the high figure, as for a writer.
 
@@ -38,13 +39,13 @@ from app.ingestion.models import IngestionDocument
 
 __all__ = ["as_json", "capture", "for_capture"]
 
-LAYOUT_LOW_CHARS = 12_000
-LAYOUT_HIGH_CHARS = 70_000
+LAYOUT_LOW_CHARS = 30_000
+LAYOUT_HIGH_CHARS = 250_000
 TEMPLATE_LOW_CHARS = 12_000
 TEMPLATE_HIGH_CHARS = 40_000
 TURNS_LOW = 5
-TURNS_HIGH_DEFAULT = 10  # DOCUMENTS_GENERATION_MAX_TURNS
-PASSES_DEFAULT = 2  # DOCUMENTS_DESIGN_PASSES
+TURNS_HIGH_DEFAULT = 18  # DOCUMENTS_DESIGN_MAX_TURNS
+PASSES_DEFAULT = 4  # DOCUMENTS_DESIGN_PASSES
 
 
 def capture(
@@ -58,8 +59,9 @@ def capture(
     (0 for a DOCX) (module docstring)."""
     fixed = F + text_tokens(prompt)
     read_low, read_high = text_tokens(LAYOUT_LOW_CHARS), text_tokens(LAYOUT_HIGH_CHARS)
-    images_low = IMAGE_TOKENS * (pages + 1)
-    images_high = IMAGE_TOKENS * (2 * pages + 1)
+    shown = 2 if pages else 1  # a pass shows the render and, over a page, its overlay
+    images_low = IMAGE_TOKENS * (pages + shown)
+    images_high = IMAGE_TOKENS * (2 * pages + shown * (1 + max(passes, 0)))
     o_low, o_high = text_tokens(TEMPLATE_LOW_CHARS), text_tokens(TEMPLATE_HIGH_CHARS)
     n_low, n_high, k = TURNS_LOW, max(turns, TURNS_LOW), 1 + max(passes, 0)
     low_input = n_low * fixed + (n_low - 1) * (read_low + images_low) + (n_low - 2) * o_low
@@ -96,6 +98,6 @@ def for_capture(db: Session, user_id: uuid.UUID, document: Document) -> RunEstim
     return capture(
         prompt_chars("design"),
         pages=0 if mime == DOCX_MIME else 2,
-        turns=int(setting("documents_generation_max_turns")),
+        turns=int(setting("documents_design_max_turns")),
         passes=int(setting("documents_design_passes")),
     )

@@ -4,8 +4,8 @@ read are the bundled `_base` ones.
 
 **The checks.** `check(files, photo, fonts, accent) -> [Problem]` is what D25b runs on the
 files the design model wrote, before anything renders: [] accepts; else the problems go back to
-the model once, then `classic` is kept. A Problem names a file, a line and a code of CODES, never
-text of the template, so it can be logged. On top of the authoring rules every template follows
+the model once, then the default template (`band`) is kept. A Problem names a file, a line and
+a code of CODES, never text of the template, so it can be logged. On top of the authoring rules every template follows
 (`templates.problems`; the manifest is `templates.from_files`'s, which D25b calls to store it):
 - each `.j2` file is read as Jinja's own parser reads it (never rendered at this stage), and
   only an allow list passes. At the top level: `extends` of `_base/page.html.j2`, `import` of

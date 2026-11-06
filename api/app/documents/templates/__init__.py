@@ -285,7 +285,9 @@ LABEL_KEYS = (
     "summary", "highlights", "competencies", "experience", "education", "skills", "languages",
     "contact", "subject",
 )  # fmt: skip
-_SEPARATOR = re.compile(r"[\u2013\u2014]| - ")
+# A dash used as a separator (hard rule 1): any dash but the hyphen, a spaced hyphen, or a hyphen
+# that opens or ends the label; a hyphenated word ("Self-employed") stays.
+LABEL_SEPARATOR = re.compile(r"[\u2012-\u2015\u2212]|\s-|-\s|^-|-$")
 
 
 def _labels(slug: str, value: object) -> dict[str, dict[str, str]]:
@@ -301,7 +303,7 @@ def _labels(slug: str, value: object) -> dict[str, dict[str, str]]:
                 raise TemplateError(
                     slug, f"labels: {language}.{key} is a text of 1 to 40 characters"
                 )
-            if _SEPARATOR.search(text) or "<" in text:
+            if LABEL_SEPARATOR.search(text) or "<" in text:
                 raise TemplateError(slug, f"labels: {language}.{key} holds a dash or a <")
         out[language] = dict(items)
     return out

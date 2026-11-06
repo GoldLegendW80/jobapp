@@ -989,6 +989,12 @@ def test_a_manifest_without_labels_is_valid_as_a_person_s_own_template_is(tmp_pa
         ({"en": {"summary": "About \u2013 me"}}, "a dash"),
         ({"en": {"summary": "About\u2014me"}}, "a dash"),
         ({"en": {"summary": "About - me"}}, "a dash"),
+        ({"en": {"summary": "About\u2012me"}}, "a dash"),
+        ({"en": {"summary": "About\u2015me"}}, "a dash"),
+        ({"en": {"summary": "About \u2212 me"}}, "a dash"),
+        ({"en": {"summary": "-About me"}}, "a dash"),
+        ({"en": {"summary": "About me-"}}, "a dash"),
+        ({"en": {"summary": "About -me"}}, "a dash"),
         ({"fr": {"summary": "<b>Profil"}}, "a <"),
     ],
 )

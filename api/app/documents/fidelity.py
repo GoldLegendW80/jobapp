@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from statistics import mean
 from typing import Any
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 from app.documents import render_client
 
@@ -165,6 +165,7 @@ def candidate_lines(pdf: bytes) -> list[Line]:
             for index in range(text.count_chars()):
                 ch = text.get_text_range(index, 1)
                 if not ch or ch.isspace():
+                    pieces.append((" ", 0.0, 0.0, 0.0, 0.0))  # a word ends
                     continue
                 left, _, right, _ = text.get_charbox(index, loose=True)
                 pdfium_c.FPDFText_GetCharOrigin(text.raw, index, ctypes.byref(x), ctypes.byref(y))
@@ -174,15 +175,20 @@ def candidate_lines(pdf: bytes) -> list[Line]:
             page.close()
         finally:
             document.close()
-    # characters into words: the next one starts where this one ends
+    # characters into words: a space, another baseline or a jump back ends one
     words: list[list] = []
+    joined = False
     for piece in pieces:
+        if piece[0] == " ":
+            joined = False
+            continue
         last = words[-1] if words else None
-        if last and abs(piece[3] - last[3]) <= 0.3 and 0 <= piece[1] - last[2] <= piece[4] * 0.15:
+        if joined and last and abs(piece[3] - last[3]) <= 0.3 and piece[1] >= last[2] - 0.5:
             last[0] += piece[0]
             last[2] = piece[2]
         else:
             words.append(list(piece))
+        joined = True
     return lines_of(tuple(word) for word in words)
 
 
@@ -229,8 +235,6 @@ def _pages(original: bytes, candidate: bytes) -> tuple[Image.Image, Image.Image]
 
 def page_score(original: bytes, candidate: bytes) -> float:
     first, second = (_ink(page) for page in _pages(original, candidate))
-    from PIL import ImageChops
-
     both = ImageChops.multiply(first, second).histogram()[255]
     either = ImageChops.lighter(first, second).histogram()[255]
     return both / either if either else 0.0
@@ -239,8 +243,6 @@ def page_score(original: bytes, candidate: bytes) -> float:
 def overlay(original: bytes, candidate: bytes) -> bytes:
     """The original's ink in red, the candidate's in blue, both in black: a JPEG."""
     first, second = (_ink(page) for page in _pages(original, candidate))
-    from PIL import ImageChops
-
     both = ImageChops.multiply(first, second)
     image = Image.new("RGB", first.size, (255, 255, 255))
     image.paste(ORIGINAL, mask=first)

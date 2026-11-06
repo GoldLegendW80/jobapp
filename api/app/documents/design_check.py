@@ -121,7 +121,7 @@ IDENTITY_MAX = {
     "linkedin_url": profile_schemas.URL_MAX,
     "website": profile_schemas.URL_MAX,
 }
-# The lone letter's paragraph: at PARAGRAPH_MAX the tallest bundled letter (sidebar's) passes
+# The lone letter's paragraph: at PARAGRAPH_MAX the tallest bundled letter passes
 # CHECK_MAX_HEIGHT; a text box has no fixed height (template_css), so length beyond is pages.
 LONE_PARAGRAPH = 1_200
 

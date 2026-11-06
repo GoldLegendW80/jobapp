@@ -32,6 +32,7 @@ from app.documents import (
     render_client,
     render_job,
     store,
+    template_rules,
     writer_base,
     writer_design_tools,
 )
@@ -600,8 +601,48 @@ def test_the_estimate_counts_the_images() -> None:
 
     pdf = design_estimate.capture(10_000)
     docx = design_estimate.capture(10_000, pages=0)
-    # 5 turns of (7,000 + 3,334) fixed, 4 of (4,000 + 3 images of 1,600), 3 of 4,000 output.
-    assert pdf.low == 5 * 10_334 + 4 * (4_000 + 4_800) + 3 * 4_000 + 4_000 + 5 * 500
-    assert pdf.high - docx.high == 9 * 1_600 * 4
+    # 5 turns of (7,000 + 3,334) fixed, 4 of (10,000 + 4 images of 1,600: two pages, the render
+    # and its overlay), 3 of 4,000 output.
+    assert pdf.low == 5 * 10_334 + 4 * (10_000 + 6_400) + 3 * 4_000 + 4_000 + 5 * 500
+    # each page twice and 5 renders with their overlays, against 5 renders: 9 images more, sent
+    # again at each of the 17 later turns
+    assert pdf.high - docx.high == 9 * 1_600 * 17
     assert pdf.ceiling == 2 * pdf.high
     assert asyncio.iscoroutinefunction(design_check.check_template)
+
+
+def _inputs_with(texts: set[str]) -> design_capture.Inputs:
+    tokens = template_rules.from_pdf(parser_client.DesignPdf(1, False, False, (), (), ()))
+    return design_capture.Inputs("pdf", tokens, "none", {}, (), (), texts=frozenset(texts))
+
+
+LABEL_CASES = [
+    ({"experience": "Expériences Professionnelles"}, None),
+    ({"summary": "About me", "languages": "Langues parlées"}, None),
+    ({"summary": "  About me  "}, None),  # trimmed, as the run's text is
+    ({"summary": "About you"}, "not a text of the upload"),
+    ({"summary": design_capture.REDACTED}, "not a text of the upload"),
+    ({"summary": "About - me"}, "a dash"),
+    ({"summary": "About – me"}, "a dash"),
+    ({"summary": "-About"}, "a dash"),
+    ({"summary": "About <b>"}, "a dash or a <"),
+    ({"summary": "x" * 41}, "1 to 40"),
+    ({"summary": ""}, "1 to 40"),
+    ({"photo": "About me"}, "no label key"),
+    ({"summary": 3}, "1 to 40"),
+    (["About me"], "an object"),
+]
+
+
+@pytest.mark.parametrize(("proposed", "said"), LABEL_CASES)
+def test_a_label_is_taken_only_as_the_exact_text_of_a_heading_of_the_upload(proposed, said):
+    texts = {"Expériences Professionnelles", "About me", "Langues parlées", "About - me",
+             "About – me", "-About", "About <b>", "x" * 41, design_capture.REDACTED}  # fmt: skip
+    labels, problems = design_capture.labels_of(proposed, _inputs_with(texts), "fr")
+    if said is None:
+        assert problems == ()
+        assert labels == {"fr": {k: v.strip() for k, v in proposed.items()}}
+    else:
+        assert labels is None
+        assert any(said in p.detail for p in problems), problems
+    assert design_capture.labels_of(None, _inputs_with(texts), "fr") == (None, ())

@@ -56,7 +56,6 @@ import asyncio
 import io
 import json
 import logging
-import re
 import secrets
 import threading
 import uuid
@@ -498,7 +497,7 @@ def decide(
     return f"{BETTER}\n{said(measure)}".strip()
 
 
-LABEL_DASH = re.compile(r"[\u2010-\u2015\u2212]|\s-|-\s|^-|-$")
+LABEL_DASH = templates.LABEL_SEPARATOR  # one rule for bundled and user labels
 
 
 def labels_of(
