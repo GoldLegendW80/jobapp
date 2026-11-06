@@ -836,7 +836,11 @@ def check_mail_html(answer: Any) -> MailHtml:
 
 # The caps of sandbox/design_pdf.py and design_docx.py, stated again (tests/ingestion/parser
 # keeps them in step): the child that read the file may be the process the file took over.
-# Together they hold an answer under DESIGN_MAX_ANSWER, the most a design call reads.
+# Together they hold an answer under DESIGN_MAX_ANSWER, the most a design call reads. Since D28
+# a design_pdf answer also carries the measures of each run (baseline, spacing, caps, pitch), of
+# each shape (radius), the dots, the page background, the round clips of images, and the word
+# samples (DESIGN_SAMPLES_PER_FONT a font, DESIGN_SAMPLE_BYTES of PNG crops in all, each crop
+# checked by its PNG header before the worker's font measure decodes it).
 DESIGN_KINDS = ("design_pdf", "design_docx")
 DESIGN_MAX_ANSWER = 1_700_000  # D28: the word samples' crops (base64) and the run measures
 DESIGN_PAGES = 2

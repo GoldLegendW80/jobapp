@@ -216,7 +216,9 @@ choice made by the build that stands until the owner says otherwise.
   the nearest of the three (migration 0035: `sidebar`, `split-right`, `portrait`, `banner`,
   `columns-header`, `cards`, `grid` to `photo-columns`; `serif`, `elegant`, `executive`, `nordic` to
   `ledger`; every other to `band`); versions keep theirs. The second half, the design capture of an
-  upload with the same method, is task D28.
+  upload with the same method, is task D28. D28 built it: an upload is measured, its fonts chosen by
+  name or by measurement, its template written from the numbers and rendered, compared and
+  corrected over several passes, the best kept (SPEC-documents.md, "Design capture of an upload").
 
 ## Interactive job search (2026-10-24, #626)
 
