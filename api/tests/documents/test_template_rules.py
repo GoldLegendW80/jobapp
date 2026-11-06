@@ -49,8 +49,6 @@ def _bundled():
 # D28 makes the rules accept the method of the three; until then a change shows here.
 REPOSITORY = {
     "band": {
-        ("cv.html.j2", "construct", "the expression Filter"),
-        ("letter.html.j2", "construct", "the expression Filter"),
         ("cv.html.j2", "attribute", "an attribute other than a class name"),
         ("cv.html.j2", "construct", "the expression Compare"),
         ("cv.html.j2", "construct", "the expression CondExpr"),
