@@ -95,6 +95,7 @@ from app.browser import linkedin_guard
 from app.jobs import service as jobs_service
 from app.jobs import sweep
 from app.jobs.models import Job
+from app.profile.models import Profile
 from app.profile.schemas import SweepSchedule
 
 S = State
@@ -290,15 +291,29 @@ class Values:
     review_before_send: bool = False
 
 
+def _saved_documents_min_fit(db: Session, user_id: uuid.UUID) -> int | None:
+    """The `search.documents.min_fit` the person saved before D29, None when the stored profile
+    holds none (the schema's default is not a saved value)."""
+    stored: Any = db.scalar(sa.select(Profile.sections).where(Profile.user_id == user_id)) or {}
+    search = stored.get("search") if isinstance(stored, dict) else None
+    documents = search.get("documents") if isinstance(search, dict) else None
+    found = documents.get("min_fit") if isinstance(documents, dict) else None
+    if isinstance(found, int) and not isinstance(found, bool) and 0 <= found <= 100:
+        return found
+    return None
+
+
 def settings_of(db: Session, user_id: uuid.UUID) -> Values:
     row = db.get(ApplySettings, user_id)
     try:
         search = sweep.load_search(db, user_id)
     except sweep.InvalidSearchError:
         search = None
-    # Full auto's own default (70, documents D29): no longer the documents threshold, since no
-    # document is written without a click; `search.documents` stays readable and unread here.
-    fit_default = int(_setting("apply_full_auto_min_fit_default"))
+    # Full auto's default threshold (documents D29): a person with no value of their own keeps
+    # the documents threshold they saved before D29 (it was Full auto's default then), read only
+    # from the stored section; with none saved, Full auto's own default (70).
+    saved = _saved_documents_min_fit(db, user_id)
+    fit_default = saved if saved is not None else int(_setting("apply_full_auto_min_fit_default"))
 
     def stored(value: int | None, name: str) -> int:
         return value if value is not None else int(_setting(name))

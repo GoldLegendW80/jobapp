@@ -820,12 +820,24 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
     a11.search(db, person_a.user_id, {"min_fit": 60, "documents": {"min_fit": 65}})
     db.commit()
     body = api.get("/api/apply/settings", token=token_a).json()
-    # Documents D29: the old documents threshold is read by nothing; Full auto keeps its own 70.
+    # Documents D29: no document is written from a threshold any more, but Full auto keeps the
+    # documents threshold the person saved as its default (it was before D29).
     assert (body["show_postings_from"], body["write_documents_from"], body["min_fit"]) == (
         60,
         None,
-        70,
+        65,
     )
+    assert body["min_fit_chosen"] is False
+    a11.search(db, person_a.user_id, {"min_fit": 60, "documents": {"min_fit": 85}})
+    db.commit()
+    assert api.get("/api/apply/settings", token=token_a).json()["min_fit"] == 85
+    assert caps.settings_of(db, person_a.user_id).min_fit == 85
+    a11.search(db, person_a.user_id, {"min_fit": 60})
+    db.commit()
+    # A section that holds no documents threshold: Full auto's own default.
+    assert api.get("/api/apply/settings", token=token_a).json()["min_fit"] == 70
+    a11.search(db, person_a.user_id, {"min_fit": 60, "documents": {"min_fit": 65}})
+    db.commit()
 
     changed = api.request(
         "PUT", "/api/apply/settings", token=token_a, json={"min_fit": 85, "paused": True}
