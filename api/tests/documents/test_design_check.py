@@ -119,7 +119,7 @@ def test_every_shape_is_checked_at_both_steps_in_the_page_box_of_the_step() -> N
 # #757 round 1 (B1): print paints the `@page` background, the check's screenshots do not, so
 # every page sent to /check carries it on `html`, before the sheet (whose own `html` or `body`
 # background still wins); a stored render never does (the PDF paints `@page` itself).
-def test_the_check_page_carries_the_page_background_before_the_sheet_and_a_render_does_not() -> None:
+def test_the_check_page_carries_the_page_background_and_a_stored_render_does_not() -> None:
     template = templates.registry()["band"]
     assert template_css.page_background(template.files["style.css"], template.accent) == "#f8f8f8"
     check = Recorded("render_failed")

@@ -96,8 +96,12 @@ def test_a_pdf_measured_against_itself_has_no_offset_and_no_sentence(built) -> N
     against the candidate's (candidate_lines) of the very same PDF."""
     from app.documents import design_capture
     from app.ingestion import parser_client as pc
-    from tests.ingestion.parser.helpers import Plenty, as_in_the_child, sandbox_handler
-    from tests.ingestion.parser.helpers import sandbox_module
+    from tests.ingestion.parser.helpers import (
+        Plenty,
+        as_in_the_child,
+        sandbox_handler,
+        sandbox_module,
+    )
 
     data = built()
     with as_in_the_child():

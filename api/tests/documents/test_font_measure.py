@@ -168,7 +168,8 @@ def test_the_pixels_compared_are_bounded_whatever_the_crops(monkeypatch) -> None
     assert len(compared) >= 30 * len(font_map.FAMILIES) // 2
     drawn = font_measure.DRAWN_MAX
     for (ink_width, ink_height), (drawn_width, drawn_height) in compared:
-        assert ink_width <= font_measure.INK_WIDTH and ink_height <= font_measure.INK_HEIGHT
+        assert ink_width <= font_measure.INK_WIDTH
+        assert ink_height <= font_measure.INK_HEIGHT
         assert drawn_width <= font_measure.DRAWN_WIDTH + 2 * drawn
         assert drawn_height <= 3 * drawn
 

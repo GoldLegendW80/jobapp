@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from statistics import median
@@ -30,6 +31,12 @@ from typing import Any
 from app.documents import font_map
 from app.ingestion.parser_client import DesignPdf
 
+# A contact line or a date, never a section heading's text (a heading left out falls back to
+# the app's own label)
+_NOT_A_HEADING = re.compile(r"[\d@/]")
+WRAP_PITCH = 1.6  # of a heading's size: the most from one of its lines to the next
+WRAP_EDGE = 10  # tenths of a point: the left edges of its lines
+MAX_WRAPPED = 3  # lines of one heading
 STYLES_MAX = 24
 HEADINGS_MAX = 20
 LABEL_MAX = 40
@@ -54,30 +61,41 @@ def _style_key(run, faces: Sequence[font_map.Mapped]) -> tuple:
     )
 
 
-def _roles(styles: list[dict], page_height: float) -> None:
+def _strength(style: dict) -> tuple:
+    return (style["size_pt"], style["caps"], style["weight"])
+
+
+def _roles(styles: list[dict]) -> None:
     if not styles:
         return
     body = max(styles, key=lambda s: s["characters"])
     body["role"] = "body"
-    top = [s for s in styles if s["top_pt"] <= page_height / 3 and s is not body]
-    by_size = sorted(top, key=lambda s: -s["size_pt"])
+    header = [s for s in styles if s["_header"] and s is not body]
+    by_size = sorted(header, key=lambda s: -s["size_pt"])
     if by_size and by_size[0]["size_pt"] > body["size_pt"]:
         by_size[0]["role"] = "name"
         if len(by_size) > 1 and by_size[1]["size_pt"] >= body["size_pt"]:
             by_size[1]["role"] = "headline"
+    candidates = []
     for style in styles:
-        if style.get("role"):
-            continue
         heavier = style["weight"] > body["weight"]
         larger = style["size_pt"] > body["size_pt"] + 0.5
         marked = style["caps"] or larger or (heavier and style["size_pt"] > body["size_pt"])
         short = style["lines"] >= 2 and style["longest"] <= LABEL_MAX
-        if marked and short and style["size_pt"] >= body["size_pt"]:
-            style["role"] = "section heading"
+        below = not style["_header"]  # a heading recurs down the page, the header does not
+        if style.get("role") or style["size_pt"] < body["size_pt"]:
             continue
-        if style["size_pt"] < body["size_pt"] - 0.4:
+        if marked and short and below:
+            candidates.append(style)
+    strongest = max(map(_strength, candidates), default=None)
+    for style in styles:
+        if style.get("role"):
+            continue
+        if style in candidates and _strength(style) == strongest:
+            style["role"] = "section heading"
+        elif style["size_pt"] < body["size_pt"] - 0.4:
             style["role"] = "small"
-        elif heavier:
+        elif style["weight"] > body["weight"]:
             style["role"] = "entry title"
         else:
             style["role"] = "meta line"
@@ -92,6 +110,7 @@ def measured(
     for p, page in enumerate(design.read):
         for i, run in enumerate(page.runs):
             clusters[_style_key(run, faces)].append((p, i, run))
+    header = design.read[0].height / 3 if design.read else 0.0  # tenths of a point
     styles = []
     for key, found in clusters.items():
         family, weight, italic, size, spacing, caps, colour = key
@@ -113,24 +132,73 @@ def measured(
                 "lines": len(found),
                 "longest": max(len(run.text) for _, _, run in found),
                 "_runs": [(p, i) for p, i, _ in found],
+                "_header": all(p == 0 and run.box[1] <= header for p, _, run in found),
             }
         )
     styles.sort(key=lambda s: (-s["characters"], -s["size_pt"]))
     styles = styles[:STYLES_MAX]
-    height = _pt(design.read[0].height) if design.read else 842.0
-    _roles(styles, height)
+    _roles(styles)
     headings: list[str] = []
     marked = sorted((p, i) for s in styles if s["role"] == "section heading" for p, i in s["_runs"])
-    for p, i in marked:
-        text = texts[p][i].strip() if p < len(texts) and i < len(texts[p]) else ""
-        if text != design.read[p].runs[i].text.strip():
+    for group in _wrapped(design, marked):
+        parts = [
+            texts[p][i].strip() if p < len(texts) and i < len(texts[p]) else "" for p, i in group
+        ]
+        if any(
+            part != design.read[p].runs[i].text.strip()
+            for part, (p, i) in zip(parts, group, strict=True)
+        ):
             continue  # a text the secret rules replaced is no heading the model may name
-        if 1 <= len(text) <= LABEL_MAX and text not in headings and len(headings) < HEADINGS_MAX:
+        text = " ".join(parts)
+        if not 1 <= len(text) <= LABEL_MAX or text in headings or _NOT_A_HEADING.search(text):
+            continue
+        if len(headings) < HEADINGS_MAX:
             headings.append(text)
     for style in styles:
-        del style["_runs"], style["longest"]
+        del style["_runs"], style["longest"], style["_header"]
     pages = [_page(page) for page in design.read]
     return {"styles": styles, "headings": headings, "pages": pages}
+
+
+def _continues(above, below) -> bool:
+    """Whether `below` is the next line of a heading `above` wraps onto: the same font, size,
+    colour and capitals (its letter spacing may read otherwise on a short word), the same left
+    edge, its baseline within WRAP_PITCH of the size below."""
+    drop = (below.baseline or below.box[3]) - (above.baseline or above.box[3])
+    same = (above.font, above.size, above.colour, above.caps) == (
+        below.font,
+        below.size,
+        below.colour,
+        below.caps,
+    )
+    aligned = abs(below.box[0] - above.box[0]) <= WRAP_EDGE
+    return same and aligned and 0 < drop <= WRAP_PITCH * above.size
+
+
+def _wrapped(design: DesignPdf, marked: list[tuple[int, int]]) -> list[list[tuple[int, int]]]:
+    """The heading runs, a heading wrapped onto lines below each other joined: the run next to
+    one in the page's order that `_continues` it ("Key" over "Achievements", "Professional"
+    over "Experience" in a narrow column), MAX_WRAPPED lines at most."""
+    groups: list[list[tuple[int, int]]] = []
+    taken: set[tuple[int, int]] = set()
+    for p, i in marked:
+        if (p, i) in taken:
+            continue
+        runs = design.read[p].runs
+        group = [(p, i)]
+        while group[0][1] > 0 and len(group) < MAX_WRAPPED:
+            j = group[0][1] - 1
+            if (p, j) in taken or not _continues(runs[j], runs[j + 1]):
+                break
+            group.insert(0, (p, j))
+        while group[-1][1] + 1 < len(runs) and len(group) < MAX_WRAPPED:
+            j = group[-1][1] + 1
+            if not _continues(runs[j - 1], runs[j]):
+                break
+            group.append((p, j))
+        taken.update(group)
+        groups.append(group)
+    return groups
 
 
 def _page(page) -> dict[str, Any]:

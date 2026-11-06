@@ -154,7 +154,7 @@ def test_a_sample_crop_at_the_area_cap_is_accepted() -> None:
     answer = broken(PDF, lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_000, 200)}]))
     (sample,) = pc.check_design_pdf(answer).samples
     assert pc._png_side(sample.crop) == (2_000, 200)
-    assert 2_000 * 200 == pc.DESIGN_SAMPLE_AREA
+    assert pc.DESIGN_SAMPLE_AREA == 2_000 * 200
 
 
 def test_the_text_of_all_runs_together_is_capped() -> None:

@@ -93,13 +93,13 @@ def design(
     *texts: str, scanned: bool = False, pages: int = 2, headings: tuple[str, ...] = ()
 ) -> DesignPdf:
     """A page of `texts` in one body style, then `headings` as section headings (capitals, at
-    the body's size, met twice or more: design_spec's role)."""
+    the body's size, met twice or more, below the header: design_spec's role)."""
     runs = tuple(
         TextRun(text, (600, 600 + 200 * n, 3000, 720 + 200 * n), 0, 100, "#1d232b")
         for n, text in enumerate(texts)
     ) + tuple(
-        TextRun(text, (600, 600 + 200 * n, 3000, 720 + 200 * n), 0, 100, "#1d232b", caps=True)
-        for n, text in enumerate(headings, start=len(texts))
+        TextRun(text, (600, 3000 + 600 * n, 3000, 3120 + 600 * n), 0, 100, "#1d232b", caps=True)
+        for n, text in enumerate(headings)
     )
     page = DesignPage(
         index=0,
