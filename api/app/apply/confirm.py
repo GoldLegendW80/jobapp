@@ -35,7 +35,7 @@ import json
 import re
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import sqlalchemy as sa
@@ -131,34 +131,10 @@ def write_ready(db: Session, application: Application, session: ApplySession, no
 def confirm(
     db: Session, user_id: uuid.UUID, application_id: uuid.UUID, sent: bytes, now: datetime
 ) -> Application:
-    """The person's Confirm and send (the caller commits). Raises gate.NotFoundError, or
-    gate.RefusedError: `not_ready`, `stale` (the list changed since the page read it) or
-    `session_lost` (the held session is gone: the application is `failed`, committed by the
-    caller, and the page offers Try again)."""
+    """The person's Confirm and send: the gate's own decision (`gate.confirm_review`)."""
     from app.apply import gate
 
-    application, _ = gate.lock(db, user_id, application_id)
-    if application.state is not State.ready or not review_agent(db, application):
-        raise gate.RefusedError("not_ready")
-    if application.answers_hash is None or sent != application.answers_hash:
-        raise gate.RefusedError("stale")
-    if (now - application.updated_at).total_seconds() > BEAT_S:
-        lost(db, application, now)
-        raise gate.RefusedError("session_lost")
-    authorisation = Authorisation(
-        id=uuid.uuid4(),
-        user_id=user_id,
-        application_id=application.id,
-        kind=AuthorisationKind.person_approval,
-        answers_hash=application.answers_hash,
-        created_at=now,
-        expires_at=now + timedelta(seconds=READY_WAIT_S),
-    )
-    db.add(authorisation)
-    db.flush()
-    states.move(application, State.approved, now, by_gate=True)
-    gate._event(db, application, "person_confirmed", now, authorisation_id=str(authorisation.id))
-    return application
+    return gate.confirm_review(db, user_id, application_id, sent, now)
 
 
 def lost(db: Session, application: Application, now: datetime) -> None:
@@ -260,7 +236,7 @@ async def hold(
 ) -> str:
     """The held session after `apply_ready`: wait for the person's Confirm, Cancel or the bound,
     keeping the lease alive; on Confirm the gate clicks. Returns the state written (or seen)."""
-    from app.browser.tools import gate_click
+    from app.apply import gate
 
     tools, ready = session.tools, session.ready or {}
     start = last_keep = session.monotonic()
@@ -301,7 +277,7 @@ async def hold(
     session.armed, session.phase, session.stopped, session.done = True, "confirm", "", None
     session.read_since_submit.clear()
     try:
-        clicked = await gate_click(tools, ref, capability, str(ready.get("label") or ""))
+        clicked = await gate.review_click(tools, ref, capability, str(ready.get("label") or ""))
     except BrowserError:
         clicked = {"ok": False}
     session.clicked = bool(clicked.get("ok"))

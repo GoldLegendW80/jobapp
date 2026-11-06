@@ -173,7 +173,8 @@ def test_the_agent_fills_the_person_confirms_and_the_gate_sends_once(
     # The agent's own click on Submit was refused by the lease, and never sent again with the
     # capability: the only call with it is the gate's click, after the Confirm.
     text, error = script.refused
-    assert error and "only the person's Confirm" in text
+    assert error
+    assert "only the person's Confirm" in text
     assert [c for c in site.calls if c[1]] == [("browser_click", True)]
     assert site.gate_clicks == [("e9", "Submit application")]
     assert len(site.submissions) == 1
@@ -212,7 +213,8 @@ def test_cancel_while_it_waits_sends_nothing(
 
     on_wait(services_, cancel)
     assert run(services_, app_id) == "cancelled"
-    assert site.submissions == [] and site.gate_clicks == []
+    assert site.submissions == []
+    assert site.gate_clicks == []
     assert not any(capability for _, capability in site.calls)
 
 
@@ -225,7 +227,8 @@ def test_a_lost_session_on_confirm_submits_nothing_and_offers_try_again(
     assert run(services_, app_id) == "failed"
     found = application(db, app_id)
     assert (found.state, found.error_code) == (State.failed, "session_lost")
-    assert site.submissions == [] and site.gate_clicks == []
+    assert site.submissions == []
+    assert site.gate_clicks == []
     assert "Try again" in gate.SENTENCES["session_lost"]
 
 
@@ -282,7 +285,8 @@ def test_a_page_changed_since_the_list_is_never_sent(
     on_wait(services_, lambda: confirm_now(factory, person_a, app_id, services_.fill.clock()))
     assert run(services_, app_id) == "form_changed"
     assert application(db, app_id).error_code == "form_changed"
-    assert site.submissions == [] and site.gate_clicks == []
+    assert site.submissions == []
+    assert site.gate_clicks == []
 
 
 def test_the_emergency_stop_at_the_confirm_sends_nothing(
@@ -295,7 +299,8 @@ def test_the_emergency_stop_at_the_confirm_sends_nothing(
     on_wait(services_, lambda: confirm_now(factory, person_a, app_id, services_.fill.clock()))
     assert run(services_, app_id) == "blocked"
     assert application(db, app_id).error_code == "paused"
-    assert site.submissions == [] and site.gate_clicks == []
+    assert site.submissions == []
+    assert site.gate_clicks == []
 
 
 def test_an_end_without_apply_ready_fails_and_nothing_waits(
@@ -312,7 +317,11 @@ def test_apply_ready_names_only_a_control_of_the_last_snapshot(
     db: Session, factory: sessionmaker[Session], person_a: Person
 ) -> None:
     session = applier.ApplySession(
-        tools=None, capability=None, stop=Stop(), arm=None, review=True  # type: ignore[arg-type]
+        tools=None,
+        capability=None,
+        stop=Stop(),
+        arm=None,
+        review=True,  # type: ignore[arg-type]
     )
     session.page = '- button "Submit application" [ref=e9]'
     assert session.ready_at("e99", [])[1] is True
@@ -391,7 +400,8 @@ def test_a_sign_in_wall_ends_failed_with_its_sentence_and_no_question(
     site = Wall(guest=False)
     assert run(svc(factory, site, wall_agent()), app_id) == "failed"
     found = application(db, app_id)
-    assert found.state is State.failed and found.needs is None
+    assert found.state is State.failed
+    assert found.needs is None
     assert "needs_person" not in kinds(db, app_id)
     report = db.get(ApplicationAnswer, (app_id, applier.REPORT_KEY))
     assert report.value["summary"].startswith("jobs.example.org asks you to sign in.")

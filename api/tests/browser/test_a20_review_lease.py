@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / "browser"))
 
 from browserd import config, detect  # noqa: E402
 from browserd.tools import actions, routes  # noqa: E402
+
 from tests.browser.test_a19_agent_lease import FIELD, SUBMIT, tab  # noqa: E402
 
 
@@ -101,7 +102,8 @@ def test_a_step_word_passes_only_as_a_click(action: str) -> None:
 
 def test_the_send_is_refused_to_the_agent_and_the_gate_s_click_passes() -> None:
     refused = tab("apply_review", gate=False).judge(SUBMIT, "click", "browser_click")
-    assert refused is not None and refused["error"] == "submit_permit"
+    assert refused is not None
+    assert refused["error"] == "submit_permit"
     gate = tab("apply_review", gate=True)
     assert gate.judge(SUBMIT, "click", "browser_click") is None
     assert gate.submitted
@@ -115,7 +117,8 @@ def test_the_send_is_refused_to_the_agent_and_the_gate_s_click_passes() -> None:
 def test_on_the_review_lease_the_capability_opens_a_click_only() -> None:
     assert "apply_review" in routes.GATE_PURPOSES
     assert config.LEASE_MAX_S["apply_review"] == 3600
-    assert tab("apply_review", gate=False).agent and tab("apply_review", gate=False).review
+    assert tab("apply_review", gate=False).agent
+    assert tab("apply_review", gate=False).review
     assert not tab("apply_agent", gate=False).review
     # routes.call_tool: `agent` (AGENT_ACTS with the capability) is One click Apply's lease only.
     source = Path(routes.__file__).read_text()
@@ -129,4 +132,5 @@ def test_the_api_and_browserd_know_the_same_purposes() -> None:
     assert set(leases.LEASE_MAX_S) == set(config.LEASE_MAX_S)
     assert leases.TIERS["apply_review"] == leases.TIERS["apply_agent"]
     lease = SimpleNamespace(request=SimpleNamespace(purpose="apply_review"), gate_hash=b"")
-    assert routes.issue_capability(lease) and lease.gate_hash
+    assert routes.issue_capability(lease)
+    assert lease.gate_hash

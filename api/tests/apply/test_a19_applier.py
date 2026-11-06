@@ -263,7 +263,8 @@ def test_a_required_field_the_profile_does_not_answer_is_filled_never_asked(
     site = Site()
     assert apply(svc(factory, site, agent()), app_id) == "submitted"
     found = application(db, app_id)
-    assert found.state is State.submitted and found.needs is None
+    assert found.state is State.submitted
+    assert found.needs is None
     assert applier.open_question(db, found) is None
     assert applier._questions(db, found) == []
     assert "needs_person" not in kinds(db, app_id)
@@ -656,7 +657,8 @@ def test_the_agent_has_no_ask_tool_and_an_ask_that_reaches_the_session_is_refuse
     site = Site()
     assert apply(svc(factory, site, go), app_id) == "failed"
     text, error = go.asked  # type: ignore[attr-defined]
-    assert error and text.startswith("Refused: nobody answers questions")
+    assert error
+    assert text.startswith("Refused: nobody answers questions")
     assert all(name != "browser_ask_person" for name, _ in site.calls)
     assert applier._questions(db, application(db, app_id)) == []
     assert "needs_person" not in kinds(db, app_id)

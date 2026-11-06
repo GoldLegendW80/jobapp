@@ -568,6 +568,46 @@ def decide(
 # --- the freeze and the person's other decisions ------------------------------------------------
 
 
+def confirm_review(
+    db: Session, user_id: uuid.UUID, application_id: uuid.UUID, sent: bytes, now: datetime
+) -> Application:
+    """Review first with the apply agent (A20, apply/confirm.py): the person's Confirm and send
+    is this gate's decision, bound to the hash of the list the page showed (the caller
+    commits). Raises NotFoundError, or RefusedError: `not_ready`, `stale` (the list changed
+    since the page read it) or `session_lost` (the held session is gone: the application is `failed`, committed by the
+    caller, and the page offers Try again)."""
+    from app.apply import confirm
+
+    application, _ = lock(db, user_id, application_id)
+    if application.state is not State.ready or not confirm.review_agent(db, application):
+        raise RefusedError("not_ready")
+    if application.answers_hash is None or sent != application.answers_hash:
+        raise RefusedError("stale")
+    if (now - application.updated_at).total_seconds() > confirm.BEAT_S:
+        confirm.lost(db, application, now)
+        raise RefusedError("session_lost")
+    authorisation = Authorisation(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        application_id=application.id,
+        kind=AuthorisationKind.person_approval,
+        answers_hash=application.answers_hash,
+        created_at=now,
+        expires_at=now + timedelta(seconds=confirm.READY_WAIT_S),
+    )
+    db.add(authorisation)
+    db.flush()
+    states.move(application, State.approved, now, by_gate=True)
+    _event(db, application, "person_confirmed", now, authorisation_id=str(authorisation.id))
+    return application
+
+
+async def review_click(tools: Any, ref: str, capability: str, element: str) -> dict[str, Any]:
+    """The gate's click on the control Review first's apply agent named (A20), after the
+    person's Confirm, in the held session (apply/confirm.py `hold`)."""
+    return await _click(tools, ref, capability, element)
+
+
 def freeze_sent(db: Session, application: Application, at: datetime) -> int:
     """Every version sent with this application frozen (documents D14), in the caller's
     transaction. A version that is gone (its document deleted) is skipped in its own savepoint;
