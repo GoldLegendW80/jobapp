@@ -18,7 +18,7 @@ li, p, h3 { overflow-wrap: anywhere; }
 
 /* the text is 9.4pt inside the page margin, the photo 2.9pt under its top */
 .head, .rule, .profile, .cols, .letter-body { margin-left: 9.4pt; margin-right: 9.4pt; }
-.head { display: flex; align-items: flex-start; margin-top: 2.9pt; }
+.head { display: flex; flex-wrap: wrap; align-items: flex-start; margin-top: 2.9pt; }  /* the contact lines go under the name only when the two cannot stand side by side whole */
 .photo {
   flex: 0 0 auto;
   width: 101.7pt;
@@ -26,7 +26,7 @@ li, p, h3 { overflow-wrap: anywhere; }
   object-fit: cover;
   margin-right: 21.8pt;
 }
-.who { flex: 1 1 auto; padding-top: 16.3pt; min-width: min-content; }
+.who { flex: 1 1 0; padding-top: 16.3pt; min-width: min-content; }
 .name {
   font-size: 2.6em;
   font-weight: 700;
@@ -43,7 +43,7 @@ li, p, h3 { overflow-wrap: anywhere; }
   text-transform: uppercase;
 }
 .contact {
-  flex: 0 0.001 auto;  /* gives way only once the name is at its narrowest */
+  flex: 0 0 auto;
   min-width: 158pt;
   display: flex;
   flex-direction: column;

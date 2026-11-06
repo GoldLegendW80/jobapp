@@ -17,6 +17,7 @@ li, p, h3 { overflow-wrap: anywhere; }
 
 .band {
   display: flex;
+  flex-wrap: wrap;  /* the contact lines go under the name only when the two cannot stand side by side whole */
   align-items: flex-start;
   gap: 12pt;
   margin: 10.5pt 2pt 0 0;
