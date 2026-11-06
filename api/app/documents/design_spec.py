@@ -7,12 +7,12 @@
   size (pt), letter spacing (em), capitals and colour, most characters first, STYLES_MAX at
   most; each with its line pitch in pt (the median of its runs' `pitch`), the x where its lines
   start (the most common, pt), its count of characters and a guessed role: `name` (the largest,
-  in the top third of page 0), `headline` (the next one up there), `section heading` (capitals
-  or a weight over the body's, at the body's size or more, short lines met twice or more),
+  in the top third of page 0), `headline` (the next one up there), `section heading` (capitals,
+  larger than the body, or heavier and larger; short lines met twice or more),
   `body` (the most characters), `entry title` (the body's size, heavier), `small` (smaller
   than the body), else `meta line`.
 - `headings`: the texts of the runs of the section heading styles, in reading order, as `texts`
-  gives them (scrubbed: design_capture.scrub), HEADINGS_MAX at most, LABEL_MAX characters each:
+  gives them (scrubbed: design_capture.scrub, a replaced text left out), HEADINGS_MAX at most, LABEL_MAX characters each:
   what a template's `labels` may print (design_capture.labels_of accepts nothing else).
 - `pages`: per page the background, the four margins, the rules (thickness, colour, extent),
   the filled boxes (colour, corner radius), the bullet dots (diameter, colour, x), the photo
@@ -68,7 +68,8 @@ def _roles(styles: list[dict], page_height: float) -> None:
         if style.get("role"):
             continue
         heavier = style["weight"] > body["weight"]
-        marked = style["caps"] or heavier or style["size_pt"] > body["size_pt"] + 0.5
+        larger = style["size_pt"] > body["size_pt"] + 0.5
+        marked = style["caps"] or larger or (heavier and style["size_pt"] > body["size_pt"])
         short = style["lines"] >= 2 and style["longest"] <= LABEL_MAX
         if marked and short and style["size_pt"] >= body["size_pt"]:
             style["role"] = "section heading"
@@ -121,6 +122,8 @@ def measured(
     marked = sorted((p, i) for s in styles if s["role"] == "section heading" for p, i in s["_runs"])
     for p, i in marked:
         text = texts[p][i].strip() if p < len(texts) and i < len(texts[p]) else ""
+        if text != design.read[p].runs[i].text.strip():
+            continue  # a text the secret rules replaced is no heading the model may name
         if 1 <= len(text) <= LABEL_MAX and text not in headings and len(headings) < HEADINGS_MAX:
             headings.append(text)
     for style in styles:
