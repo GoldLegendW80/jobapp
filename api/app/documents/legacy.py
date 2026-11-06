@@ -9,7 +9,7 @@ The jobs import attached each posting folder's `cv.json`, `letter.json`, `cv.pdf
 `letter.pdf` as `job_files` with origin `legacy` (app.jobs.importer). This module turns them into
 the posting's CV and letter, once:
 
-- **A JSON file** becomes the document of its kind: template `classic`, the draft written by
+- **A JSON file** becomes the document of its kind: the default template, the draft written by
   `import`, and version 1 with origin `legacy`. The language is the one of the content's printed
   text (`store.language_of`), the posting text's when the content prints nothing.
 - **A sent posting** (the jobs module's `is_sent`: `applied`, or an `applied_on` date, as its
@@ -401,7 +401,7 @@ def _insert(
             posting_id=posting.id,
             kind=kind,
             language=store.language_of(printed or posting.posting_text or ""),
-            template_slug=store.CLASSIC,
+            template_slug=store.DEFAULT_TEMPLATE,
             draft=c.dump(reading.content),
             draft_schema=c.SCHEMA,
             draft_revision=1,
@@ -464,7 +464,7 @@ def _import_one(
         document_id,
         Origin.legacy,
         at=at,
-        template_version=templates.registry()[store.CLASSIC].version,
+        template_version=templates.registry()[store.DEFAULT_TEMPLATE].version,
         legacy_file_id=sent_pdf[0] if sent_pdf is not None else None,
         pdf_sha256=sent_pdf[1] if sent_pdf is not None else None,
     )

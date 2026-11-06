@@ -1,5 +1,5 @@
 {
- "description": "D17: \"use the banner template\": switches the template, submits nothing.",
+ "description": "D17: \"use the photo columns template\": switches the template, submits nothing.",
  "steps": [
   {
    "message": {
@@ -83,7 +83,7 @@
        "id": "toolu_docs_chat_003_0_set_template",
        "name": "mcp__app__set_template",
        "input": {
-        "slug": "banner"
+        "slug": "photo-columns"
        }
       }
      ],
@@ -111,7 +111,7 @@
      "content": [
       {
        "type": "text",
-       "text": "The CV will use banner."
+       "text": "The CV will use photo-columns."
       }
      ],
      "stop_reason": "end_turn",
@@ -133,7 +133,7 @@
     "duration_api_ms": 5,
     "num_turns": 3,
     "session_id": "{session_id}",
-    "result": "The CV will use banner.",
+    "result": "The CV will use photo-columns.",
     "total_cost_usd": 0.05,
     "usage": {
      "input_tokens": 3000,

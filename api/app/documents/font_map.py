@@ -41,6 +41,7 @@ from itertools import pairwise
 REGULAR, BOLD = 400, 700
 _FULL = frozenset({(400, False), (400, True), (600, False), (700, False), (700, True)})
 _FOUR = frozenset({(400, False), (400, True), (700, False), (700, True)})
+_SIX = _FULL | {(500, False)}  # the families of the three templates (D27) carry a medium too
 
 
 @dataclass(frozen=True)
@@ -58,12 +59,15 @@ FAMILIES = {
         Family("carlito", "Carlito", _FOUR),
         Family("dm-sans", "DM Sans", _FULL),
         Family("eb-garamond", "EB Garamond", _FULL),
+        Family("gantari", "Gantari", _SIX),
         Family("ibm-plex-mono", "IBM Plex Mono", _FULL),
         Family("ibm-plex-sans", "IBM Plex Sans", _FULL),
         Family("inter", "Inter", _FULL),
+        Family("inter-tight", "Inter Tight", _SIX),
         Family("lora", "Lora", _FULL),
         Family("nunito-sans", "Nunito Sans", _FULL),
         Family("playfair-display", "Playfair Display", _FULL),
+        Family("raleway", "Raleway", _SIX),
         Family("source-serif-4", "Source Serif 4", _FULL),
         Family("tinos", "Tinos", _FOUR),
         Family("work-sans", "Work Sans", _FULL),
@@ -104,6 +108,8 @@ KNOWN: dict[str, str] = {
     **_names("nunito-sans", "avenir", "avenirnext", "nunito", "mulish", "muli"),
     **_names("source-serif-4", "sourceserifpro", "sourceserif"),
     **_names("eb-garamond", "garamond", "ebgaramond12"),
+    **_names("inter-tight", "ttcommons", "ttcommonspro"),  # the stand in of the band template
+    **_names("gantari", "tthazelnuts"),  # the stand in of the ledger template
     **_names("ui", "roboto", "segoeui", "sfprotext", "sfprodisplay", "sanfrancisco", "aptos",
              "systemui", "notosansui"),
     **_names("humanist", "opensans", "lato", "sourcesanspro", "sourcesans3", "notosans",
@@ -111,7 +117,7 @@ KNOWN: dict[str, str] = {
              "tahoma", "trebuchetms", "trebuchet", "lucidagrande", "lucidasans", "gillsans",
              "candara", "corbel", "dejavusans", "segoe", "optima", "seravek"),
     **_names("geometric", "futura", "centurygothic", "avantgarde", "itcavantgardegothic",
-             "montserrat", "poppins", "gotham", "proximanova", "raleway", "questrial",
+             "montserrat", "poppins", "gotham", "proximanova", "questrial",
              "quicksand", "comfortaa", "kumbhsans", "outfit", "urbanist", "manrope"),
     **_names("serif", "georgia", "baskerville", "librebaskerville", "charter", "merriweather",
              "ptserif", "notoserif", "constantia", "centuryschoolbook", "newcenturyschlbk",

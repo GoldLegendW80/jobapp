@@ -78,7 +78,7 @@ from app.documents.template_css import ENFORCED_CSS
 ROOT = Path(__file__).resolve().parent
 BASE = ROOT / "_base"
 FONTS = ROOT.parent / "fonts"
-DEFAULT = "classic"
+DEFAULT = "band"
 KINDS = ("cv", "letter")
 LANGUAGES = ("en", "fr")
 PHOTO = ("required", "optional", "none")
