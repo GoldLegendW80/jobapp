@@ -140,7 +140,7 @@ describe("the Panel tab", () => {
     const link = within(view).getByRole("link", {
       name: "Add it in Experience",
     });
-    expect(link).toHaveAttribute("href", "/profile/experience");
+    expect(link).toHaveAttribute("href", "/profile?tab=experience");
     expect(view.textContent).not.toMatch(DASHES);
   });
 
@@ -186,6 +186,23 @@ describe("the Panel tab", () => {
       expect(container.textContent).not.toMatch(DASHES);
       unmount();
     }
+  });
+
+  it("never says a mistake was fixed when the rewrite did not finish", async () => {
+    serve(
+      fakePanel({
+        status: "failed",
+        failed: ["rebuild"],
+        rebuilt_version: null,
+        screen_after: null,
+      }),
+    );
+    show(<PanelPanel document={document} generation={null} />);
+    const mistakes = await screen.findByRole("list", {
+      name: "What was wrong, and how it was fixed",
+    });
+    expect(mistakes).toHaveTextContent("To fix: Name the payments platform.");
+    expect(mistakes).not.toHaveTextContent("Fixed:");
   });
 
   it("says no panel has read it yet", async () => {

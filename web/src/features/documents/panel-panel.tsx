@@ -33,10 +33,10 @@ export const PANEL_POLL_MS = 5_000;
 
 /** Where each kind of fact lives in the profile. */
 const SECTION_PATH: Record<Panel["questions"][number]["section"], string> = {
-  facts: "/profile",
-  experience: "/profile/experience",
-  skills: "/profile/skills",
-  answers: "/profile/answers",
+  facts: "/profile?tab=facts",
+  experience: "/profile?tab=experience",
+  skills: "/profile?tab=skills",
+  answers: "/profile?tab=answers",
 };
 const SECTION_LABEL: Record<Panel["questions"][number]["section"], string> = {
   facts: "Facts",
@@ -195,7 +195,12 @@ export function PanelPanel({ document }: PanelProps) {
                   {mistake.number}. “{mistake.quote}”
                 </span>
                 <span className="text-muted-foreground">{mistake.why}</span>
-                {mistake.fix ? <span>Fixed: {mistake.fix}</span> : null}
+                {mistake.fix ? (
+                  <span>
+                    {panel.rebuilt_version !== null ? "Fixed" : "To fix"}:{" "}
+                    {mistake.fix}
+                  </span>
+                ) : null}
               </li>
             ))}
           </ol>
