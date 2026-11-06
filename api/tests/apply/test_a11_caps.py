@@ -804,7 +804,7 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
         "mode_after_like": "review",
         "full_auto_available": True,
         "paused": False,
-        "min_fit": 80,
+        "min_fit": 70,
         "min_fit_chosen": False,
         "safety_ceiling": 30,
         "hold_s": 900,
@@ -820,10 +820,11 @@ def test_the_settings_routes(api: Api, db: Session, person_a: Person, person_b: 
     a11.search(db, person_a.user_id, {"min_fit": 60, "documents": {"min_fit": 65}})
     db.commit()
     body = api.get("/api/apply/settings", token=token_a).json()
+    # Documents D29: the old documents threshold is read by nothing; Full auto keeps its own 70.
     assert (body["show_postings_from"], body["write_documents_from"], body["min_fit"]) == (
         60,
-        65,
-        65,
+        None,
+        70,
     )
 
     changed = api.request(

@@ -393,32 +393,31 @@ def test_the_like_reads_the_documents_under_their_locks(
     assert refused == ["LockNotAvailable", "LockNotAvailable"]
 
 
-def test_a_like_before_the_consent_is_not_held_by_the_ceiling_after_it(
+def test_a_like_before_the_consent_writes_once_the_consent_is_given_and_nothing_else_is(
     factory: sessionmaker[Session], migrated_url: str, stub: str
 ) -> None:
-    """The Like takes over the automatic write waiting for the consent: once the consent comes,
-    the tick starts the Like's click though the daily ceiling holds the automatic writes."""
-    who = World(factory, migrated_url, "e2e-apply-ceiling@example.org", consent=False)
-    who.search(daily_ceiling=1)
+    """Documents D29: nothing is written without a click. The Like's click waits for the
+    consent; once it comes, the tick starts the Like's CV, and a posting nobody clicked gets
+    nothing whatever its fit."""
+    who = World(factory, migrated_url, "e2e-apply-consent@example.org", consent=False)
     first, liked = who.posting(95), who.posting(90)
     who.set_job(liked, url=form(stub))
     who.tick()
-    assert {(g["trigger"], g["wait_reason"]) for g in posting_cv(who.generations())} == {
-        (GenerationTrigger.auto, GenerationWait.consent)
-    }
+    assert posting_cv(who.generations()) == []
     with factory() as db:
         assert likes.on_like(db, who.user, liked, now=AT).documents == (Kind.cv, Kind.letter)
+    who.tick()
+    assert {(g["trigger"], g["wait_reason"]) for g in posting_cv(who.generations(liked))} == {
+        (GenerationTrigger.click, GenerationWait.consent)
+    }
     who.consent()
     who.tick()
     assert {
         (g["trigger"], g["status"], g["wait_reason"]) for g in posting_cv(who.generations(liked))
-    } == {
-        (GenerationTrigger.auto, GenerationStatus.cancelled, None),
-        (GenerationTrigger.click, GenerationStatus.running, None),
-    }
+    } == {(GenerationTrigger.click, GenerationStatus.running, None)}
     with factory() as db:
         assert documents.current(db, who.user, liked).cv.coming == documents.WRITING
-    assert [g["status"] for g in posting_cv(who.generations(first))] == [GenerationStatus.running]
+    assert posting_cv(who.generations(first)) == []
 
 
 @pytest.mark.parametrize(
