@@ -230,7 +230,10 @@ choice made by the build that stands until the owner says otherwise.
   CV, goes through the hiring panel of hiring-panel-skill (MIT, credited in NOTICE): seven
   reviewers on Sonnet that each try to reject it alone, with a job brief of the posting, the
   company and the offer; one merged list of mistakes; a rebuild with the same facts through the
-  fact check; the screen again. A failing step never blocks: the first version stays.
+  fact check; the screen again. A failing step never blocks: the first version stays. It also
+  revises item 4 of "Product audit: chapters 1 and 2" (2026-11-05): the rescore after a skills
+  change no longer says a possible document cost before saving, since no document is written
+  without a click.
 
 ## Interactive job search (2026-10-24, #626)
 
