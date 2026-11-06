@@ -28,7 +28,7 @@ from app.apply import applier, confirm, gate, service, submit
 from app.apply.models import ApplicationAnswer, Mode, State
 from app.browser.client import BrowserError
 from tests.apply.conftest import AT, Person
-from tests.apply.test_a5_run import application, located
+from tests.apply.test_a5_run import application
 from tests.apply.test_a19_applier import CHOSEN, STEP_2, Leases, Site, Stop, svc
 from tests.apply.test_a20_review_first import (
     ReviewSite,

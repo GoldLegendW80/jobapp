@@ -482,7 +482,7 @@ def test_on_the_review_lease_the_agent_never_sends_and_the_gate_s_click_sends_on
     assert chosen.get("step_submit") is True, chosen
     page = chosen["page"]
     assert sent(a19, "a20-review") == []  # neither sent the form
-    assert 'textbox "Link"' in page and page.count('textbox "Link"') == 2, page
+    assert page.count('textbox "Link"') == 2, page
     moved = act(review, "browser_click", ref=ref(page, "button", "Next"))
     assert moved["ok"], moved  # a submit button of the step, named Next: a wizard's step
     assert moved.get("step_submit") is True, moved
