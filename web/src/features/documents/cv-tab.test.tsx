@@ -189,7 +189,7 @@ describe("the CV tab", () => {
           name: "French CV",
           is_default: false,
           source: "built",
-          template_slug: "compact",
+          template_slug: "ledger",
         }),
       ],
       consent: { accepted: true, min_fit: 65 },
@@ -200,9 +200,9 @@ describe("the CV tab", () => {
     expect(first).toHaveTextContent("Main CV");
     expect(first).toHaveTextContent("Default");
     expect(first).toHaveTextContent("From your profile");
-    expect(first).toHaveTextContent("Template: Classic");
+    expect(first).toHaveTextContent("Template: Band");
     expect(second).toHaveTextContent("Built in the app");
-    expect(second).toHaveTextContent("Template: Compact");
+    expect(second).toHaveTextContent("Template: Ledger");
     expect(second).not.toHaveTextContent("Default");
     expect(
       within(first!).queryByRole("button", { name: /^Make default/ }),

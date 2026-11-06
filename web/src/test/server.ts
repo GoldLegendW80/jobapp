@@ -145,7 +145,7 @@ export const handlers = [
           id: "cv-default",
           name: "My CV",
           source: "profile",
-          template_slug: "classic",
+          template_slug: "band",
           language: "en",
           is_default: true,
           created_at: "2026-10-14T08:00:00Z",

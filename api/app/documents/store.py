@@ -706,8 +706,8 @@ def get_or_create(
     """The posting's CV or letter, made empty the first time. Its language is the person's
     `preferences.documents_language`, the posting text's (`language_of`) when it is `auto`
     (`language_for`). A CV takes the template of the base CV it is written from (the one named,
-    else the default), a letter the template of the posting's CV; else the default template. Two calls at
-    once make one row: the second insert waits for the first and does nothing."""
+    else the default), a letter the template of the posting's CV; else the default template. Two
+    calls at once make one row: the second insert waits for the first and does nothing."""
     existing = _posting_document(db, user_id, posting_id, kind)
     if existing is not None:
         return existing

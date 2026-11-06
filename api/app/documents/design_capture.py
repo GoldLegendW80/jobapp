@@ -23,8 +23,8 @@ runs, a DOCX's style names, ids and `based_on`) go through ingestion's secret ru
 REDACTED before the model reads it.
 
 **The checks** (`validate`): the manifest is written by code (`manifest_of`: the captured
-density ladder, the mapped fonts, the accent, the default template's soft limits), never by the model;
-the three files the model wrote pass `template_rules.check` (the static allow list), the
+density ladder, the mapped fonts, the accent, the default template's soft limits), never by the
+model; the three files the model wrote pass `template_rules.check` (the static allow list), the
 template system's `from_files`, then `design_check.check_template` (the render check in the
 renderer's Chromium: every field visible, uncovered, inside the page, contrasted, and the
 density read). A refusal goes back to the model once (`decide`); a second refusal ends the

@@ -151,7 +151,7 @@ function doc(overrides: Partial<DocumentOut> = {}): DocumentOut {
     base_document_id: null,
     name: null,
     language: "en",
-    template_slug: "classic",
+    template_slug: "band",
     draft: CV,
     draft_revision: 3,
     draft_written_by: "writer",
@@ -195,10 +195,10 @@ function fake(start: DocumentOut, versions: VersionSummary[] = []) {
       HttpResponse.json({
         templates: [
           {
-            slug: "classic",
+            slug: "band",
             version: 1,
             user: false,
-            name: { en: "Classic", fr: "Classique" },
+            name: { en: "Band", fr: "Classique" },
             description: { en: "One column", fr: "Une colonne" },
             tags: [],
             photo: "optional",

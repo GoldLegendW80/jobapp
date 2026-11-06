@@ -4,9 +4,9 @@ fake backend (`documents_chat_*` streams). Two e2e people; real Postgres at head
 A message makes a generation of mode chat whose result goes through D7's pipeline: "shorter
 summary" changes the summary only; "say I managed 20 people" is written, then corrected away, and
 the answer says so and suggests the profile; "use the photo columns template" switches with the
-content unchanged; an unknown template lists the gallery; a message while the person edits is kept as a
-version; a frozen version stays as it was; a base CV keeps its fixed block. Refused: an empty or
-too long message, the design channel, a second message while one runs, a message without the
+content unchanged; an unknown template lists the gallery; a message while the person edits is kept
+as a version; a frozen version stays as it was; a base CV keeps its fixed block. Refused: an empty
+or too long message, the design channel, a second message while one runs, a message without the
 consent or a credential (nothing stored), another person's chat (404). The 201st message prunes
 the oldest; the canary of a message reaches no log, no arq argument and no run event; a tool the
 chat writer does not have is refused; a run whose hook was missed is settled by the next read."""

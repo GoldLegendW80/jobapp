@@ -424,7 +424,7 @@ describe("the Documents section of a posting", () => {
     const { section } = await openSection();
     const letter = within(section).getByTestId("posting-letter");
     expect(letter).toHaveTextContent(
-      "Longer than one page. Shorten the longest fields in Edit, or choose a more compact template.",
+      "Longer than one page. Shorten the longest fields in Edit, or choose a more ledger template.",
     );
     expect(
       within(letter).queryByRole("button", { name: "Make it fit" }),
