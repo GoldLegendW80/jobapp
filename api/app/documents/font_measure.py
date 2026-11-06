@@ -107,8 +107,11 @@ def _face_path(family: str, weight: int, italic: bool) -> str | None:
     found = templates.fonts().get(family)
     if found is None:
         return None
-    for face in found.faces:  # the latin subset: the letters of a CV of a Latin script
-        if face.weight == weight and face.style == style and face.path.name.startswith("latin-"):
+    # the latin subset, which holds the letters of a CV of a Latin script: never latin-ext, whose
+    # file holds no basic letter (each would be drawn as the same empty box)
+    name = f"latin-{weight}-{style}.woff2"
+    for face in found.faces:
+        if face.weight == weight and face.style == style and face.path.name == name:
             return str(face.path)
     return None
 

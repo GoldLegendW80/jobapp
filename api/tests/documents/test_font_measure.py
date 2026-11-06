@@ -9,7 +9,7 @@ import io
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
-from app.documents import font_measure, templates
+from app.documents import font_map, font_measure, templates
 from app.ingestion.parser_client import DesignFont, DesignPage, DesignPdf, TextRun, WordSample
 
 WORDS = (
@@ -23,7 +23,9 @@ def _path(family: str, weight: int = 400) -> str:
     return next(
         str(face.path)
         for face in templates.fonts()[family].faces
-        if face.weight == weight and face.style == "normal" and face.path.name.startswith("latin-")
+        if face.weight == weight
+        and face.style == "normal"
+        and face.path.name == f"latin-{weight}-normal.woff2"
     )
 
 
@@ -111,3 +113,16 @@ def test_the_crop_scale_is_the_sandboxs() -> None:
         design_pdf = sandbox_handler("design_pdf")
         long_side = design_pdf.pdf_render.LONG_SIDE
         assert design_pdf.SAMPLE_SCALE * long_side == font_measure.CROP_LONG_SIDE
+
+
+@pytest.mark.parametrize("family", sorted(font_map.FAMILIES))
+def test_each_family_is_measured_with_a_face_that_draws_latin_letters(family: str) -> None:
+    """The review of D28: the face measured was the latin-ext file, which holds no basic letter,
+    so every family drew the same empty box for each letter and the measure chose at random."""
+    weight, italic = font_map.nearest_face(family, 400, False)
+    path = font_measure._face_path(family, weight, italic)
+    assert path is not None
+    assert "latin-ext" not in path, path
+    face = ImageFont.truetype(path, 100, layout_engine=ImageFont.Layout.BASIC)
+    shapes = {bytes(face.getmask(letter)) for letter in "Iamo"}
+    assert len(shapes) == 4, f"{family}: its letters are drawn alike"
