@@ -8,7 +8,7 @@ import {
 } from "@playwright/test";
 
 import { waitForPostingDocuments } from "./apply-document-helpers";
-import { atsFormsUrl, stub } from "./apply-helpers";
+import { stub } from "./apply-helpers";
 import { setReviewBeforeSend } from "./apply-one-click-helpers";
 import {
   CSRF,
@@ -27,7 +27,10 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * offer, fill in the form and click on apply. I want a checkbox in settings to set if I want to
  * review the form filled. By default its no (full auto)"; then (2026-11-05) "do it exactly like
  * Mac: Claude Code + Playwright CLI. no screenshot, no guardrails, submit without asking. only
- * asking if the agent do not know what to fill", and "The agent clicks it".
+ * asking if the agent do not know what to fill", and "The agent clicks it"; then (2026-11-06, A20)
+ * "I just want that the agent do all the work to apply and he never ask me a question. when I'm
+ * not in full auto mode, I want to see all the input he filled in but don't matter of the website
+ * or whatever, then a button to confirm."
  *
  * Two invented people with the consent, a base CV and the documents of each posting written by
  * the documents pipeline on the fake backend. The box unticked runs the apply agent on its
@@ -38,10 +41,11 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * - the review box unticked, the notice period in the first person's Saved answers: one click on
  *   Apply, no screenshot, no Approve step, and the page says "Sent."; the fake holds exactly one
  *   submission of that form, with the answer and the CV;
- * - the review box ticked: Apply stops at the filled Greenhouse form with "Approve and submit",
- *   and the fake holds no submission for that form (Review first is unchanged);
- * - the second person's profile lacks the notice period: the agent asks, the job page shows the
- *   question and its box, the answer is typed and remembered, the agent goes on and sends.
+ * - the review box ticked (A20): the same agent fills the same site on the review lease and
+ *   stops before Submit application; the job page lists every field it filled with one "Confirm
+ *   and send", nothing is sent until the click, then the gate sends it once;
+ * - the second person's profile lacks the notice period: the agent never asks (A20), it types
+ *   its own answer, sends, and the job page shows it under "Answers the assistant chose".
  *
  * Locally, as apply-all.config.ts says (the fake forms compose file, AGENTS_FAKE_BACKEND=1 on
  * the worker, the stack's browser up with COMPOSE_PROFILES=browser), then:
@@ -62,9 +66,8 @@ const SEND_MS = 600_000;
 const AGENT_SITE = `${STACK_FORMS}/forms/a19/posting.html`;
 const QUESTION = "What is your notice period?";
 const ANSWER = "Six weeks";
-
-/** The fake Greenhouse form of Review first's posting, and what its title adds to the role. */
-const REVIEW = { job: "4012347", suffix: ", Controls" } as const;
+/** What the stream types when nothing is saved: the agent's own answer (A20). */
+const CHOSEN = "One month";
 
 type Who = {
   person: Person;
@@ -108,13 +111,6 @@ async function postingOn(
 async function agentSent() {
   return (await stub.submissions()).filter(
     (one) => one.ats === "custom" && one.org === "a19" && one.accepted,
-  );
-}
-
-/** The accepted submissions of Review first's Greenhouse form. */
-async function reviewSent() {
-  return (await stub.submissions()).filter(
-    (one) => one.ats === "greenhouse" && one.job === REVIEW.job && one.accepted,
   );
 }
 
@@ -173,14 +169,17 @@ async function applyNow(who: Who, job: string) {
 }
 
 /** What the agent sent, as the stream types it, and nothing a screenshot would show. */
-async function sentByTheAgent(who: Who, job: string, section: Locator) {
+async function sentByTheAgent(
+  who: Who,
+  job: string,
+  section: Locator,
+  notice = ANSWER,
+  mode = "direct",
+) {
   await expect(
     section.getByRole("status").filter({ hasText: /^Sent\./ }),
   ).toBeVisible({ timeout: FILL_MS + SEND_MS });
-  expect(await latest(who, job)).toMatchObject({
-    state: "submitted",
-    mode: "direct",
-  });
+  expect(await latest(who, job)).toMatchObject({ state: "submitted", mode });
   await expect(
     section.getByRole("button", { name: "Approve and submit" }),
   ).toHaveCount(0);
@@ -188,7 +187,7 @@ async function sentByTheAgent(who: Who, job: string, section: Locator) {
   const last = (await agentSent()).at(-1);
   expect(last?.fields).toMatchObject({
     email: "e2e-a19@example.org",
-    notice: ANSWER,
+    notice,
   });
   expect(last?.files.map((file) => [file.field, file.filename])).toEqual([
     ["resume", "cv.pdf"],
@@ -229,55 +228,63 @@ test("box unticked: the agent fills both steps and clicks Submit itself, exactly
   expect(await agentSent()).toHaveLength(1);
 });
 
-test("box ticked: Apply stops at the filled form, and nothing is sent", async () => {
+test("box ticked: the agent fills, the page lists every field, Confirm sends it once", async () => {
   const { page } = first;
   await setReviewBeforeSend(page.request, true);
-  const posting = (
-    await stub.posting("greenhouse", "plain", REVIEW.job)
-  ).replace(atsFormsUrl ?? "", STACK_FORMS);
-  const job = await postingOn(first, posting, REVIEW.suffix);
+  const job = await postingOn(first, AGENT_SITE, ", Controls");
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply", exact: true });
   await expect(section).toContainText(
     "The assistant fills the form, then you check it and send it.",
   );
   await section.getByRole("button", { name: "Apply", exact: true }).click();
-  await expect(
-    section.getByRole("button", { name: "Approve and submit", exact: true }),
-  ).toBeVisible({ timeout: FILL_MS });
+  const confirm = section.getByRole("button", {
+    name: "Confirm and send",
+    exact: true,
+  });
+  await expect(confirm).toBeVisible({ timeout: FILL_MS });
   expect(await latest(first, job)).toMatchObject({
     state: "ready",
     mode: "review",
   });
-  expect(await reviewSent()).toHaveLength(0);
-  // The agent's submission is still the only one.
+  // Every field the agent filled, from its own acts, with the value it gave.
+  const list = section.getByRole("region", {
+    name: "What the assistant filled",
+  });
+  const shown: [string, string][] = [
+    ["First name", "Adaline"],
+    ["Email", "e2e-a19@example.org"],
+    ["Resume", "cv.pdf"],
+    [QUESTION, ANSWER],
+  ];
+  for (const [label, value] of shown)
+    await expect(
+      list.getByRole("row").filter({ hasText: label }).first(),
+    ).toContainText(value);
+  await expect(
+    section.getByRole("button", { name: "Approve and submit" }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("agent-question")).toHaveCount(0);
+  // Nothing leaves before the Confirm: the agent's submission is still the only one.
   expect(await agentSent()).toHaveLength(1);
+  await confirm.click();
+  await sentByTheAgent(first, job, section, ANSWER, "review");
+  expect(await agentSent()).toHaveLength(2);
 });
 
-test("the profile lacks an answer: the job page asks, the answer is typed, the agent sends", async () => {
+test("the profile lacks an answer: the agent never asks, chooses one and sends", async () => {
   const { page } = second;
   await setReviewBeforeSend(page.request, false);
   const job = await postingOn(second, AGENT_SITE, ", Arms");
   const section = await applyNow(second, job);
-  // Nobody watches: the agent's question waits on the job page, in the server's fixed words.
-  const asked = page.getByTestId("agent-question");
-  await expect(asked).toContainText(
-    `The assistant needs your answer for "${QUESTION}" on atsforms.`,
-    { timeout: FILL_MS },
-  );
-  expect(await latest(second, job)).toMatchObject({
-    state: "needs_person",
-    mode: "direct",
+  await sentByTheAgent(second, job, section, CHOSEN);
+  await expect(page.getByTestId("agent-question")).toHaveCount(0);
+  const chosen = section.getByRole("region", {
+    name: "Answers the assistant chose",
   });
-  expect(await agentSent()).toHaveLength(1);
-  await asked.getByRole("textbox", { name: "Your answer" }).fill(ANSWER);
-  await asked.getByRole("checkbox", { name: "Remember this answer" }).check();
-  await asked.getByRole("button", { name: "Send the answer" }).click();
-  // The next run gets the answer, types it and sends the form.
-  await sentByTheAgent(second, job, section);
-  expect(await agentSent()).toHaveLength(2);
-  const bank = await page.request.get("/api/apply/answer-bank");
-  expect(JSON.stringify(await bank.json())).toContain(ANSWER);
+  await expect(chosen).toContainText(QUESTION);
+  await expect(chosen).toContainText(CHOSEN);
+  expect(await agentSent()).toHaveLength(3);
 });
 
 test("no page error was logged", () => {

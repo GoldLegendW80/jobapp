@@ -164,6 +164,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
   // the detail; a Review first item waits for the detail before the older approval view loads.
   const reviewReady =
     application?.mode === "review" && application.state === "ready";
+  // A ticked Apply fills with the agent: no screenshot, its list comes after (A20).
+  const reviewFilling =
+    application?.mode === "review" && phaseOf(application) === "filling";
   const agentEnded =
     application?.state === "failed" &&
     (direct || application.mode === "review");
@@ -199,6 +202,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
       id !== undefined &&
       (hasReport(application) ||
         reviewReady ||
+        reviewFilling ||
         agentEnded ||
         application?.state === "held" ||
         onPage ||
@@ -210,6 +214,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
       return wait && !wait.over ? APPLY_POLL_MS : false;
     },
   });
+
+  const agentFill = reviewFilling && detail.data?.review_agent === true;
 
   // A question asked after a control that may have sent the form (A19): its answer is the
   // person's Try again, in place of the plain button.
@@ -462,7 +468,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
               idle={
                 direct
                   ? "The assistant is filling the form. You can watch it live here, then it sends it."
-                  : "The assistant is filling the form. A screenshot of the filled form appears here when it is done."
+                  : agentFill
+                    ? "The assistant is filling the form. You can watch it live here, then you check what it filled and confirm."
+                    : "The assistant is filling the form. A screenshot of the filled form appears here when it is done."
               }
               leaseOf="any"
             />

@@ -113,7 +113,9 @@ export function QueueCard({
   const rehearsal = item.rehearsal === true;
   // Behind a sign in wall the answers wait for the fill after the sign in, which replaces them.
   const signingIn = item.state === "needs_person" && item.needs === "signin";
-  const withAnswers = (reviewable || rehearsal) && !signingIn;
+  // A20: the list of what the agent filled and its Confirm are on the job page.
+  const agentList = item.review_agent === true;
+  const withAnswers = (reviewable || rehearsal) && !signingIn && !agentList;
 
   const approvalQuery = useQuery({
     queryKey: approvalKey(item.id),
@@ -480,7 +482,14 @@ export function QueueCard({
       ) : null}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-start">
-        {item.state === "ready" && reviewable ? (
+        {item.state === "ready" && agentList ? (
+          <Button asChild className="w-full sm:w-fit">
+            <Link to={`/jobs/${item.posting_id}`}>
+              Check what the assistant filled and confirm
+            </Link>
+          </Button>
+        ) : null}
+        {item.state === "ready" && reviewable && !agentList ? (
           <div className="flex w-full flex-col gap-1 sm:w-fit">
             <Button
               disabled={

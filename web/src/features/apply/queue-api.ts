@@ -32,6 +32,8 @@ const queueItemSchema = applicationSchema.extend({
   // A Full auto rehearsal waiting for "Does this look right?".
   rehearsal: z.boolean().optional(),
   hold_until: z.string().nullable().optional(),
+  // Review first's apply agent (A20): confirmed on the job page, where its list is.
+  review_agent: z.boolean().optional(),
 });
 export type QueueItem = z.infer<typeof queueItemSchema>;
 
