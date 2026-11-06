@@ -216,12 +216,8 @@ export const consentSchema = z.object({
   accepted_at: z.string().nullable(),
   /** Null without a credential. */
   model: z.string().nullable(),
-  min_fit: z.number(),
+  /** One posting's CV and letter, their hiring panels included (documents D29). */
   posting: estimateSchema,
-  week: estimateSchema.extend({
-    postings: z.number(),
-    postings_30_days: z.number(),
-  }),
   cost_note: z.string(),
 });
 export type Consent = z.infer<typeof consentSchema>;
@@ -297,46 +293,8 @@ export type Template = z.infer<typeof templateSchema>;
 
 export const templatesSchema = z.object({ templates: z.array(templateSchema) });
 
-const tokensSpent = z.object({
-  input: z.number(),
-  output: z.number(),
-  cost_usd: decimal,
-});
 
-export const spendSchema = z.object({
-  day: z.string(),
-  auto: z.boolean(),
-  min_fit: z.number(),
-  daily_ceiling: z.number(),
-  written_today: z.number(),
-  waiting: z.number(),
-  postings_30_days: z.number(),
-  to_write: z.number(),
-  to_write_estimate: estimateSchema,
-  /** Of `to_write`, those under the person's own threshold: what lowering it would add. Optional
-   * because answers recorded before it (other tasks' test doubles) lack it; then nothing is shown. */
-  newly: z.number().optional(),
-  newly_estimate: estimateSchema.optional(),
-  priced: z.boolean(),
-  cost_note: z.string(),
-  today: tokensSpent,
-  last_30_days: tokensSpent,
-});
-export type Spend = z.infer<typeof spendSchema>;
 
-/** What saving a draft of the skills section would start (`POST /api/documents/spend/skills`). */
-export const skillsSpendSchema = z.object({
-  auto: z.boolean(),
-  min_fit: z.number(),
-  /** Automatic writing starts by itself: on, with the consent and a credential. */
-  writes: z.boolean(),
-  /** Postings the draft brings to the threshold that have no CV yet. */
-  newly: z.number(),
-  newly_estimate: estimateSchema,
-  priced: z.boolean(),
-  cost_note: z.string(),
-});
-export type SkillsSpend = z.infer<typeof skillsSpendSchema>;
 
 export const settingsSchema = z.object({
   no_dash_separators: z.boolean(),
@@ -368,8 +326,6 @@ export const postingDocumentsKey = (jobId: string) =>
 export const generationKey = (id: string) =>
   ["documents", "generation", id] as const;
 export const templatesKey = ["documents", "templates"] as const;
-export const spendKey = (minFit?: number) =>
-  ["documents", "spend", minFit ?? "current"] as const;
 export const settingsKey = ["documents", "settings"] as const;
 
 // --- calls --------------------------------------------------------------------------------------
@@ -625,28 +581,6 @@ export const acceptConsent = (version: number): Promise<Consent> =>
   send(`${ROOT}/consent`, "POST", consentSchema, { version });
 
 // Spend and settings
-
-export const getSkillsSpend = (
-  skills: unknown,
-  signal?: AbortSignal,
-): Promise<SkillsSpend> =>
-  request(`${ROOT}/spend/skills`, {
-    method: "POST",
-    body: { skills },
-    signal,
-    timeoutMs: TIMEOUT_MS,
-    validate: (answer) => skillsSpendSchema.parse(answer),
-  });
-
-export const getSpend = (
-  minFit?: number,
-  signal?: AbortSignal,
-): Promise<Spend> =>
-  get(
-    `${ROOT}/spend${minFit === undefined ? "" : `?min_fit=${String(minFit)}`}`,
-    spendSchema,
-    signal,
-  );
 
 export const getSettings = (signal?: AbortSignal): Promise<DocumentSettings> =>
   get(`${ROOT}/settings`, settingsSchema, signal);

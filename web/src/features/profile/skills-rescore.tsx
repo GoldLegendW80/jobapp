@@ -1,77 +1,22 @@
 /**
  * The two lines beside "Save skills" (product audit, chapter 2, owner answer 4 of 2026-11-05:
  * "Postings are rescored by themselves after a skills change, with the possible document cost
- * said before saving"). While the draft differs from the saved skills, `SkillsCostLine` asks the
- * api what saving it would start (`POST /api/documents/spend/skills`, the documents module's own
- * count and estimate) and says it only when automatic writing would really start. After a save,
+ * said before saving"). Since documents D29 nothing is written without a click, so a skills
+ * change costs no document and no cost line is shown before the save. After a save,
  * `RescoreLine` follows the rescore the server runs by itself (`GET /api/jobs/rescore/status`)
  * and says what changed, with a link to the postings at the threshold. No dashes as separators.
  */
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { useWatch, type Control } from "react-hook-form";
 import { Link } from "react-router";
 
 import { Spinner } from "@/components/ui/spinner";
-import { getSkillsSpend } from "@/features/documents/documents-api";
-import { estimateSentence } from "@/features/documents/labels";
 import { getRescoreStatus, rescoreStatusKey } from "@/features/jobs/api";
 
-import { fromSkillsForm, type SkillsForm } from "./editor-forms";
-
-/** How long typing rests before the draft is counted. */
-export const DRAFT_SETTLE_MS = 600;
 /** How often the rescore after a save is read again while it runs. */
 export const RESCORE_POLL_MS = 1500;
 
 const postings = (count: number) =>
   count === 1 ? "1 posting" : `${String(count)} postings`;
-
-function useSettled<T>(value: T, ms: number): T {
-  const [settled, setSettled] = useState(value);
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setSettled(value);
-    }, ms);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [value, ms]);
-  return settled;
-}
-
-/** What saving the draft would cost in documents, or nothing. */
-export function SkillsCostLine({
-  control,
-  dirty,
-}: {
-  control: Control<SkillsForm>;
-  dirty: boolean;
-}) {
-  const values = useWatch({ control });
-  const draft = dirty
-    ? JSON.stringify(fromSkillsForm(values as SkillsForm))
-    : null;
-  const settled = useSettled(draft, DRAFT_SETTLE_MS);
-  const asked = dirty && settled !== null ? settled : null;
-  const query = useQuery({
-    queryKey: ["documents", "spend", "skills", asked] as const,
-    queryFn: ({ signal }) =>
-      getSkillsSpend(JSON.parse(asked as string) as unknown, signal),
-    enabled: asked !== null,
-    retry: false,
-    staleTime: 30_000,
-  });
-  const answer = asked !== null ? query.data : undefined;
-  if (!answer || !answer.writes || answer.newly === 0) return null;
-  return (
-    <p data-testid="skills-cost-line">
-      This change brings {postings(answer.newly)} to a fit of {answer.min_fit}{" "}
-      or more: their CV and letter are written automatically,{" "}
-      {estimateSentence(answer.newly_estimate)}.
-    </p>
-  );
-}
 
 /** Where the rescore after the save of `revision` stands, then what it changed. */
 export function RescoreLine({ revision }: { revision: number }) {

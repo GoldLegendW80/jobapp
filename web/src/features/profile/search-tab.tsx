@@ -25,7 +25,6 @@ import {
 } from "@/components/ui/form";
 import { NativeSelect } from "@/components/ui/native-select";
 import { JobWebsitesSignIn } from "@/features/browser/site-signin";
-import { DocumentsSearchOptions } from "@/features/documents/generation-settings-card";
 import { cn } from "@/lib/utils";
 import { REMOTE_WORDS, contractWord } from "@/lib/wording";
 
@@ -198,7 +197,6 @@ function SearchForms({
             )}
           />
           <NeverApply form={form} />
-          <DocumentsSearchOptions form={form} />
           <SaveBar
             label="Search"
             saving={saving}

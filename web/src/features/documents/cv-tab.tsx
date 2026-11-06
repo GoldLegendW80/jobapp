@@ -242,7 +242,6 @@ export function CvTab() {
           max={max}
           building={create.isPending}
           consentMissing={consent.data?.accepted === false}
-          minFit={consent.data?.min_fit}
           consentReady={consent.data !== undefined}
           consentError={consent.isError}
           noExperience={
@@ -307,7 +306,6 @@ function Overview({
   consentReady,
   consentError,
   noExperience,
-  minFit,
   onNew,
   onBuild,
 }: {
@@ -318,7 +316,6 @@ function Overview({
   consentReady: boolean;
   consentError: boolean;
   noExperience: boolean;
-  minFit: number | undefined;
   onNew: () => void;
   onBuild: () => void;
 }) {
@@ -410,18 +407,9 @@ function Overview({
         </ul>
       )}
 
-      {minFit !== undefined ? (
-        <p className="text-sm text-muted-foreground" data-testid="threshold">
-          Documents are written for new postings with a fit of {minFit} or more.{" "}
-          <Link
-            to="/settings/search"
-            className="font-medium text-foreground underline underline-offset-4"
-          >
-            Change it in the Search options
-          </Link>
-          .
-        </p>
-      ) : null}
+      <p className="text-sm text-muted-foreground" data-testid="written-on-click">
+        A posting's CV and letter are written when you click Write on the job page, or Apply.
+      </p>
     </>
   );
 }

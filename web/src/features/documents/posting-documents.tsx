@@ -13,11 +13,9 @@ import { describeError } from "@/lib/api";
 import {
   baseCvsKey,
   getPostingDocuments,
-  getSpend,
   listBaseCvs,
   postingDocumentsKey,
   failureSentence,
-  spendKey,
   writeNow,
 } from "./documents-api";
 import { isOpen } from "./labels";
@@ -48,10 +46,6 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     refetchInterval: (current) =>
       postingPollInterval(current.state.data, letterWindow > 0),
   });
-  const spend = useQuery({
-    queryKey: spendKey(),
-    queryFn: ({ signal }) => getSpend(undefined, signal),
-  });
   const cvs = useQuery({
     queryKey: baseCvsKey,
     queryFn: ({ signal }) => listBaseCvs(signal),
@@ -75,7 +69,6 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   useEffect(() => {
     if (wasOpen.current && !open) {
       void queryClient.invalidateQueries({ queryKey: jobKey(job.id) });
-      void queryClient.invalidateQueries({ queryKey: spendKey() });
     }
     wasOpen.current = open;
   }, [open, queryClient, job.id]);
@@ -101,10 +94,6 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     };
   }, [letterWindow]);
 
-  const threshold = spend.data
-    ? { auto: spend.data.auto, min: spend.data.min_fit }
-    : undefined;
-
   const write = useMutation({
     mutationFn: () =>
       writeNow(job.id, {
@@ -120,9 +109,7 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const letterWritten =
     (documentOf(documents.data, "letter")?.latest ?? null) !== null;
   const untouched = (["cv", "letter"] as const).every((kind) =>
-    ["empty", "under", "manual"].includes(
-      cardState(documentOf(documents.data, kind), job.fit, threshold).tag,
-    ),
+    cardState(documentOf(documents.data, kind)).tag === "empty",
   );
 
   return (
@@ -175,8 +162,6 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                 jobId={job.id}
                 kind={kind}
                 document={documentOf(documents.data, kind)}
-                fit={job.fit}
-                threshold={threshold}
                 cvs={cvs.data?.base_cvs ?? []}
                 choice={choice}
                 onChoose={setChoice}

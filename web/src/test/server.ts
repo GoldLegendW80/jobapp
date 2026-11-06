@@ -203,37 +203,6 @@ export const handlers = [
       max: 10,
     }),
   ),
-  http.get("*/api/documents/spend", () =>
-    HttpResponse.json({
-      day: "2026-10-14",
-      auto: true,
-      min_fit: 70,
-      daily_ceiling: 100,
-      written_today: 0,
-      waiting: 0,
-      postings_30_days: 0,
-      to_write: 0,
-      to_write_estimate: { tokens: { low: 0, high: 0 }, cost: null },
-      newly: 0,
-      newly_estimate: { tokens: { low: 0, high: 0 }, cost: null },
-      priced: false,
-      cost_note: "",
-      today: { input: 0, output: 0, cost_usd: "0" },
-      last_30_days: { input: 0, output: 0, cost_usd: "0" },
-    }),
-  ),
-  // A skills draft that starts nothing (the line beside Save skills stays empty).
-  http.post("*/api/documents/spend/skills", () =>
-    HttpResponse.json({
-      auto: true,
-      min_fit: 70,
-      writes: false,
-      newly: 0,
-      newly_estimate: { tokens: { low: 0, high: 0 }, cost: null },
-      priced: false,
-      cost_note: "",
-    }),
-  ),
   // No skills change rescored yet (the line after Save skills).
   http.get("*/api/jobs/rescore/status", () =>
     HttpResponse.json({

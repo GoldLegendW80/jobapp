@@ -192,7 +192,7 @@ describe("the CV tab", () => {
           template_slug: "ledger",
         }),
       ],
-      consent: { accepted: true, min_fit: 65 },
+      consent: { accepted: true },
     });
     await openCvs();
     const list = await screen.findByRole("list", { name: "Your CVs" });
@@ -207,13 +207,9 @@ describe("the CV tab", () => {
     expect(
       within(first!).queryByRole("button", { name: /^Make default/ }),
     ).toBeNull();
-    const line = await screen.findByTestId("threshold");
+    const line = await screen.findByTestId("written-on-click");
     expect(line).toHaveTextContent(
-      "Documents are written for new postings with a fit of 65 or more.",
-    );
-    expect(within(line).getByRole("link")).toHaveAttribute(
-      "href",
-      "/settings/search",
+      "A posting's CV and letter are written when you click Write on the job page, or Apply.",
     );
   });
 

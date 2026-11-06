@@ -21,21 +21,6 @@ const generation = {
   wait_reason: null,
   error: null,
 };
-const spend = {
-  day: "2026-10-14",
-  auto: true,
-  min_fit: 70,
-  daily_ceiling: 100,
-  written_today: 3,
-  waiting: 0,
-  postings_30_days: 12,
-  to_write: 2,
-  to_write_estimate: { tokens: { low: 1, high: 2 }, cost: null },
-  priced: false,
-  cost_note: "Quota.",
-  today: { input: 1, output: 2, cost_usd: "0.10" },
-  last_30_days: { input: 3, output: 4, cost_usd: "1.00" },
-};
 const template = {
   slug: "band",
   version: 1,
@@ -286,29 +271,7 @@ const CASES: Case[] = [
     body: { version: 1 },
     reply: fakeConsent({ accepted: true }),
   },
-  {
-    name: "getSpend",
-    run: () => api.getSpend(55),
-    method: "GET",
-    url: "/api/documents/spend?min_fit=55",
-    reply: spend,
-  },
-  {
-    name: "getSkillsSpend",
-    run: () => api.getSkillsSpend({ years_experience: 4 }),
-    method: "POST",
-    url: "/api/documents/spend/skills",
-    body: { skills: { years_experience: 4 } },
-    reply: {
-      auto: true,
-      min_fit: 70,
-      writes: true,
-      newly: 2,
-      newly_estimate: { tokens: { low: 1, high: 2 }, cost: null },
-      priced: false,
-      cost_note: "",
-    },
-  },
+
   {
     name: "getSettings",
     run: () => api.getSettings(),

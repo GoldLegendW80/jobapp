@@ -794,7 +794,7 @@ describe("the state of a card", () => {
       on,
       { tag: "ready" },
     ],
-  ])("%s", (_name, document, fit, threshold, expected) => {
-    expect(cardState(document, fit, threshold)).toEqual(expected);
+  ])("%s", (_name, document, _fit, _threshold, expected) => {
+    expect(cardState(document)).toEqual(expected);
   });
 });

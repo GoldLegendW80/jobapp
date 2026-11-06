@@ -48,7 +48,7 @@ import {
   SaveBar,
   TextField,
 } from "./section-ui";
-import { RescoreLine, SkillsCostLine } from "./skills-rescore";
+import { RescoreLine } from "./skills-rescore";
 import { TermChips } from "./term-chips";
 import { useSectionForm } from "./use-section-form";
 
@@ -170,9 +170,7 @@ export function SkillsTab({
             saving={saving}
             dirty={dirty}
             note={
-              dirty ? (
-                <SkillsCostLine control={form.control} dirty={dirty} />
-              ) : savedAt !== null ? (
+              !dirty && savedAt !== null ? (
                 <RescoreLine revision={savedAt} />
               ) : null
             }

@@ -52,8 +52,6 @@ export function PostingDocumentCard({
   jobId,
   kind,
   document,
-  fit,
-  threshold,
   cvs,
   choice,
   onChoose,
@@ -63,8 +61,6 @@ export function PostingDocumentCard({
   jobId: string;
   kind: Kind;
   document: PostingDocument | undefined;
-  fit: number | null;
-  threshold: { auto: boolean; min: number } | undefined;
   /** The base CVs, for the CV card's "Based on". */
   cvs: BaseCv[];
   /** The base CV the person picked on the CV card, if any. */
@@ -77,7 +73,7 @@ export function PostingDocumentCard({
 }) {
   const queryClient = useQueryClient();
   const selectId = useId();
-  const state = cardState(document, fit, threshold);
+  const state = cardState(document);
   const latest = document?.latest ?? null;
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: postingDocumentsKey(jobId) });
@@ -120,8 +116,6 @@ export function PostingDocumentCard({
   const canWrite =
     (kind === "cv" || cvReady) &&
     (state.tag === "empty" ||
-      state.tag === "under" ||
-      state.tag === "manual" ||
       (state.tag === "waiting" && !clickWouldWait) ||
       state.tag === "failed");
 
@@ -339,22 +333,10 @@ function StateLine({
           {state.message ?? "Preview not available right now"}
         </p>
       );
-    case "under":
-      return (
-        <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Fit {state.fit} is under your threshold of {state.min}
-        </p>
-      );
-    case "manual":
-      return (
-        <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Documents are not written automatically. Write it when you want it.
-        </p>
-      );
     case "empty":
       return (
         <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Not written yet
+          Not written yet. It is written when you click Write or Apply.
         </p>
       );
   }
