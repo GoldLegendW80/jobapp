@@ -196,9 +196,7 @@ test("a posting's CV switches to ledger in the Template view, and its base CV is
     page.getByRole("img", { name: "Page 1 of version 2" }),
   ).toBeVisible({ timeout: 30_000 });
   keep(EVIDENCE, "cv-ledger.png", await page.screenshot({ fullPage: true }));
-  expect((await readDocument(page.request, base)).template_slug).toBe(
-    "band",
-  );
+  expect((await readDocument(page.request, base)).template_slug).toBe("band");
 });
 
 test("photo-columns set on the base CV from the gallery is taken by a posting's CV made afterwards", async () => {
