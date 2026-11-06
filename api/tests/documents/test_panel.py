@@ -418,7 +418,8 @@ def test_every_bracketed_placeholder_in_english_or_french_is_dropped(placeholder
     content = c.parse(Kind.cv, {**CV, "summary": text})
     fixed, records = corrections.drop_placeholders(Kind.cv, content)
     assert fixed.summary is not None
-    assert "[" not in fixed.summary and "{" not in fixed.summary
+    assert "[" not in fixed.summary
+    assert "{" not in fixed.summary
     assert fixed.summary.startswith("Runs the platform")
     assert [r.code for r in records] == [corrections.PLACEHOLDER]
 

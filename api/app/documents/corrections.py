@@ -98,7 +98,7 @@ _ASKING = (
 )
 PLACEHOLDER_PATTERN = re.compile(
     r"\s*(?:[\[{]\s*(?:" + _ASKING + r")\b[^\]}]*[\]}]?"
-    r"|(?-i:\[\s*[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9 _/'’.-]{2,}(?::[^\]]*)?\]))",
+    r"|(?-i:\[\s*[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9 _/'\u2019.-]{2,}(?::[^\]]*)?\]))",
     re.IGNORECASE,
 )
 # A claim ambiguous by construction (`rules.POLICY`) that no token cut could take: the sentence
