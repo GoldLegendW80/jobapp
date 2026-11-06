@@ -71,9 +71,7 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.CheckConstraint("reviewed_version >= 1", name="reviewed_version_positive"),
-        sa.CheckConstraint(
-            "status IN ('running', 'done', 'failed')", name="status_known"
-        ),
+        sa.CheckConstraint("status IN ('running', 'done', 'failed')", name="status_known"),
     )
     op.create_index(
         "ix_document_panels_document_id", "document_panels", ["document_id", "created_at"]

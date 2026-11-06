@@ -293,9 +293,6 @@ export type Template = z.infer<typeof templateSchema>;
 
 export const templatesSchema = z.object({ templates: z.array(templateSchema) });
 
-
-
-
 export const settingsSchema = z.object({
   no_dash_separators: z.boolean(),
   banned_phrases: z.array(z.string()),

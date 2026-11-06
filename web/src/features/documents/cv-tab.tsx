@@ -407,8 +407,12 @@ function Overview({
         </ul>
       )}
 
-      <p className="text-sm text-muted-foreground" data-testid="written-on-click">
-        A posting's CV and letter are written when you click Write on the job page, or Apply.
+      <p
+        className="text-sm text-muted-foreground"
+        data-testid="written-on-click"
+      >
+        A posting's CV and letter are written when you click Write on the job
+        page, or Apply.
       </p>
     </>
   );

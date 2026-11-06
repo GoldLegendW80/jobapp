@@ -108,8 +108,8 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const cvReady = (cvDocument?.latest ?? null) !== null;
   const letterWritten =
     (documentOf(documents.data, "letter")?.latest ?? null) !== null;
-  const untouched = (["cv", "letter"] as const).every((kind) =>
-    cardState(documentOf(documents.data, kind)).tag === "empty",
+  const untouched = (["cv", "letter"] as const).every(
+    (kind) => cardState(documentOf(documents.data, kind)).tag === "empty",
   );
 
   return (
