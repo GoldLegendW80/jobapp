@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app import worker
-from app.apply import manual, run, submit
+from app.apply import applier, manual, run, submit
 from app.jobs.service import JobBusyError
 from tests.apply.conftest import AT
 
@@ -37,6 +37,7 @@ def test_busy_manual_startup_cannot_rollback_other_resets(monkeypatch: pytest.Mo
         raise JobBusyError
 
     monkeypatch.setattr(run, "_in_db", transaction)
+    monkeypatch.setattr(applier, "reset_interrupted", reset("review_hold"))  # A20
     monkeypatch.setattr(run, "reset_interrupted", reset("fill"))
     monkeypatch.setattr(submit, "reset_interrupted", reset("submit_unknown"))
     monkeypatch.setattr(manual, "reset_interrupted", busy)
@@ -44,7 +45,7 @@ def test_busy_manual_startup_cannot_rollback_other_resets(monkeypatch: pytest.Mo
     monkeypatch.setattr(worker, "clock_of", lambda ctx: lambda: AT)
     with pytest.raises(JobBusyError):
         asyncio.run(worker.reset_fills_at_start({}))
-    assert committed == ["fill", "submit_unknown"]
+    assert committed == ["review_hold", "fill", "submit_unknown"]
 
 
 def test_exhausted_close_keeps_a_durable_recovery_marker(monkeypatch: pytest.MonkeyPatch) -> None:

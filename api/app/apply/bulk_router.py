@@ -13,7 +13,9 @@ with the multi select to apply at all selected"; SPEC-apply, "API").
   `LIMIT`, each once): the person's approval of exactly the postings the confirmation named and
   nothing else (CLAUDE.md rule 4). Each goes through the path of its own Apply click
   (`likes.on_apply`: the documents it lacks asked, `service.start`'s refusals, its events, then
-  the fill, the apply agent or Review first), one transaction per posting, in the order given;
+  the fill, the apply agent or, with the review box ticked, Review first's apply agent of A20,
+  each `ready` in turn with its list and one Confirm), one transaction per posting, in the
+  order given;
   the answer holds a result per posting. A posting that changed since (`changed`: its company,
   title, form address or mode, or documents to write that the confirmation did not show), that
   is gone (`not_found`) or that now meets a refusal is left out with its sentence; the others go
@@ -338,6 +340,9 @@ def _start_one(
         False,
         now=deps.clock(request),
         stub_base=request.app.state.settings.apply_stub_base_url,
+        # A20: as from its own Apply: with the box ticked the apply agent fills each one, and
+        # each waits for the person's Confirm in its held session, one at a time (one browser).
+        agent_review=True,
     )
     application = started.application
     return ResultOut(

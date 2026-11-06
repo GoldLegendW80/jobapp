@@ -101,6 +101,10 @@ SENTENCES = {
     "submit_disabled": "Submissions are switched off on this server for now. Nothing was sent.",
     "paused": "Submissions are paused by the administrator for now. Nothing was sent.",
     "not_ready": "This application is not waiting for your approval.",
+    "session_lost": (
+        "The browser session ended before you confirmed, so nothing was sent. Try again fills "
+        "the form again and shows you a new list."
+    ),
     "stale": (
         "The form or your documents changed since you looked. Check the answers shown now and "
         "approve again."
@@ -278,7 +282,8 @@ def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
     return [
         row
         for row in rows
-        if row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label)
+        if row.field_key != "agent:filled"  # A20: the list of confirm.py, shown on its own
+        and (row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label))
     ]
 
 
@@ -356,6 +361,10 @@ def authorise_approval(
         raise RefusedError("manual")
     if application.state is not State.ready:
         raise RefusedError("not_ready")
+    from app.apply import confirm
+
+    if confirm.review_agent(db, application):
+        raise RefusedError("not_ready")  # A20: its Confirm is the one approval (confirm.confirm)
     current = current_hash(db, application)
     if answers_hash_sent != current:
         raise StaleError(current)
@@ -563,6 +572,47 @@ def decide(
 
 
 # --- the freeze and the person's other decisions ------------------------------------------------
+
+
+def confirm_review(
+    db: Session, user_id: uuid.UUID, application_id: uuid.UUID, sent: bytes, now: datetime
+) -> Application:
+    """Review first with the apply agent (A20, apply/confirm.py): the person's Confirm and send
+    is this gate's decision, bound to the hash of the list the page showed (the caller
+    commits). Raises NotFoundError, or RefusedError: `not_ready`, `stale` (the list changed
+    since the page read it) or `session_lost` (the held session is gone: the application is
+    `failed`, committed by the caller, and the page offers Try again)."""
+    from app.apply import confirm
+
+    application, _ = lock(db, user_id, application_id)
+    if application.state is not State.ready or not confirm.review_agent(db, application):
+        raise RefusedError("not_ready")
+    if application.answers_hash is None or sent != application.answers_hash:
+        raise RefusedError("stale")
+    if not confirm.live(db, application, now):
+        # No held session of the current run waits (A20): it ends as `confirm.lost` ends it.
+        confirm.lost(db, application, now)
+        raise RefusedError("session_lost")
+    authorisation = Authorisation(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        application_id=application.id,
+        kind=AuthorisationKind.person_approval,
+        answers_hash=application.answers_hash,
+        created_at=now,
+        expires_at=now + timedelta(seconds=confirm.READY_WAIT_S),
+    )
+    db.add(authorisation)
+    db.flush()
+    states.move(application, State.approved, now, by_gate=True)
+    _event(db, application, "person_confirmed", now, authorisation_id=str(authorisation.id))
+    return application
+
+
+async def review_click(tools: Any, ref: str, capability: str, element: str) -> dict[str, Any]:
+    """The gate's click on the control Review first's apply agent named (A20), after the
+    person's Confirm, in the held session (apply/confirm.py `hold`)."""
+    return await _click(tools, ref, capability, element)
 
 
 def freeze_sent(db: Session, application: Application, at: datetime) -> int:
@@ -854,8 +904,9 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
         from app.apply import applier
 
         if applier.ran_agent(db, application):
-            # One click Apply's agent (A19): one more run of the agent, which looks on the site
-            # for the earlier send first; never an empty Review first item.
+            # The apply agent's run (One click Apply, A19; Review first's, A20): one more run of
+            # the agent, which looks on the site for the earlier send first; never an empty
+            # Review first item, nor the old list with a Confirm no held session waits for.
             applier.retry(db, application, now)
             return application
     if application.ats == "email" and application.mail_send_id is not None:

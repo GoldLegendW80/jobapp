@@ -24,6 +24,7 @@ LEASE_MAX_S = {
     # A19: One click Apply's agent fills, writes, uploads and clicks Submit itself, as on the
     # owner's Mac; an hour of active time, the idle timer still ends a stuck one.
     "apply_agent": 3600,
+    "apply_review": 3600,  # A20: Review first's agent, its fill and the wait for the Confirm
     "sweep": 86_400,  # B20: as long as the search takes; the idle timer still ends a stuck one
 }
 PURPOSES = tuple(LEASE_MAX_S)

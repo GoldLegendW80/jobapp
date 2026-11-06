@@ -238,6 +238,8 @@ FACTS_JS = r"""
     return {
       tag: control.tagName.toLowerCase(),
       type: kindOf(control),
+      // A20: whether the type is written: a <button> without one is a form's default submit.
+      typed: !!(control.hasAttribute && control.hasAttribute("type")),
       role: (control.getAttribute("role") || "").toLowerCase(),
       in_form: !!form,
       in_control: !!(up(control) && closest(up(control), "a, button, [role=button], [role=link]")),
@@ -442,6 +444,63 @@ def agent_verdict(facts: Any, *, action: str = "click") -> str | None:
     if typing:
         return "submit" if _submits(targets[-1], "click") and len(targets) > 1 else None
     return "submit" if any(_submits(f, action) for f in targets) else None
+
+
+# A20: the review lease (`apply_review`, Review first's apply agent) moves through a wizard
+# without the capability, so a model never sends the form there: a button (never a link, a key
+# or a script) whose every name, folded, is one of these whole phrases, a step's own word, and
+# no word of a send. Anything else that submits stays refused without the capability: the agent
+# names it to the app (`apply_ready`), and the gate clicks it after the person's Confirm.
+STEP_PHRASES = frozenset({
+    "next", "next step", "continue", "save and continue", "save continue", "continue to next step",
+    "go to next step", "review", "review application", "review my application",
+    "suivant", "etape suivante", "continuer", "valider et continuer", "enregistrer et continuer",
+    "weiter", "nachster schritt", "naechster schritt", "speichern und weiter",
+    "siguiente", "continuar", "avanti", "continua", "volgende", "verder",
+})  # fmt: skip
+
+
+def review_step(facts: Any, *, action: str = "click") -> bool:
+    """A wizard's step button on the review lease (A20): True only when the clicked element and
+    the element under the click point are buttons whose names are all step phrases, or a form's
+    default submit (a `<button>` with no type: an upload picker, "Add another", Yes or No) whose
+    names hold no word of a send (REVIEW_SEND). Fail closed: no name, an unreadable fact, a
+    selector hit, a wrapper of a submit, a send word, a link: False. A pass may still send the
+    form: the caller marks the result `step_submit`, and the api counts it as a possible send."""
+    if action != "click" or not isinstance(facts, dict):
+        return False
+    targets = [facts]
+    if "point" in facts:
+        targets.append(facts["point"])
+    return all(_review_target(target) for target in targets)
+
+
+# A20: on the review lease, what a default submit's name must not hold: the words of a send
+# (says_submit, says_agent_send) and those a last step says alone ("Confirm", "Complete",
+# "Save", "Finalise", "Validate"), as stems over the glued words. A wizard's "Save and continue"
+# is a step phrase, read first.
+REVIEW_SEND = CONFIRM_VERBS + PROFILE_STEMS + ("bestatig",)
+
+
+def _review_target(target: Any) -> bool:
+    if not isinstance(target, dict) or not isinstance(target.get("names"), list):
+        return False
+    if target.get("selector_error") or target.get("selector_hit") or target.get("custom_submit"):
+        return False
+    if target.get("tag") == "a" or target.get("role") == "link":
+        return False
+    names = [n for n in target["names"] if isinstance(n, str) and n.strip()]
+    if not names or len(names) > NAMES_MAX:
+        return False
+    if says_agent_send(names):
+        return False
+    if all(" ".join(words(n[:NAME_MAX], camel=False)) in STEP_PHRASES for n in names):
+        return True
+    if target.get("holds_submit") or says_submit(names) or _starts(_glued(names), REVIEW_SEND):
+        return False
+    default = target.get("tag") == "button" and target.get("typed") is False
+    # The element under the point inside that button (its text, an icon) does not submit alone.
+    return default or not _submits(target, "click")
 
 
 # A19: what else marks a send on the agent's lease, read on a button (never a link): German

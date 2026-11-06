@@ -53,8 +53,34 @@ const questionSchema = z.object({
 });
 export type Question = z.infer<typeof questionSchema>;
 
+// Review first with the apply agent (A20): every field it filled, by step, as its acts recorded.
+const filledFieldSchema = z.object({
+  step: z.string(),
+  label: z.string(),
+  kind: z.string(),
+  value: z.string(),
+  chosen: z.string().nullable().optional(),
+});
+export type FilledField = z.infer<typeof filledFieldSchema>;
+const filledSchema = z.object({
+  fields: z.array(filledFieldSchema),
+  submit: z.string(),
+  fields_hash: z.string().nullable(),
+});
+export type Filled = z.infer<typeof filledSchema>;
+const chosenSchema = z.object({
+  label: z.string(),
+  value: z.string(),
+  why: z.string(),
+});
+export type Chosen = z.infer<typeof chosenSchema>;
+
 const detailSchema = applicationSchema.extend({
   events: z.array(eventSchema),
+  review_agent: z.boolean().optional(),
+  filled: filledSchema.nullable().optional(),
+  chosen: z.array(chosenSchema).optional(),
+  summary: z.string().nullable().optional(),
   question: questionSchema.nullable().optional(),
   // One click Apply's agent may have sent it: Try again runs the agent once more.
   agent: z.boolean().optional(),
@@ -238,6 +264,9 @@ export const cancelApplication = (applicationId: string) =>
 /** "It was submitted": the person confirms what the app could not. */
 export const confirmSubmitted = (applicationId: string) =>
   decide(applicationId, "submitted");
+/** Confirm and send (A20): the list of filled fields the hash covers, exactly as shown. */
+export const confirmApplication = (applicationId: string, fieldsHash: string) =>
+  decide(applicationId, "confirm", { fields_hash: fieldsHash });
 /** "Try again": back to the approval, nothing is sent without a new one. */
 export const retryApplication = (applicationId: string) =>
   decide(applicationId, "retry");

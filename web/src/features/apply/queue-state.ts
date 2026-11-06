@@ -73,7 +73,7 @@ export const isReviewable = (item: QueueItem) =>
  * waiting for the person's approval, with every required answer given and saved, its documents
  * written and needing no look, read just now (`approval`, the form the confirmation shows). An
  * e-mail application keeps its own Approve, where its recipient is confirmed; a rehearsal its
- * own question.
+ * own question; Review first's apply agent (A20) its Confirm on the job page.
  */
 export function readyForAll(
   item: QueueItem,
@@ -85,6 +85,8 @@ export function readyForAll(
     item.state === "ready" &&
     approval.state === "ready" &&
     item.mode === "review" &&
+    // Review first's apply agent (A20): its one approval is Confirm and send on the job page.
+    item.review_agent !== true &&
     !item.dry_run &&
     !approval.dry_run &&
     item.rehearsal !== true &&

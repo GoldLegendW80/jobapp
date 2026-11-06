@@ -51,6 +51,7 @@ CASES = (
     Case("POST", "/api/applications/{application_id}/submitted"),
     Case("POST", "/api/applications/{application_id}/retry"),
     Case("POST", "/api/applications/{application_id}/question", {"answer": "Example"}),
+    Case("POST", "/api/applications/{application_id}/confirm", {"fields_hash": "0" * 64}),
     Case("GET", "/api/apply/settings", foreign_status=200, exception="authenticated settings"),
     Case("PUT", "/api/apply/settings", {"paused": True}, 200, "authenticated settings"),
     Case("GET", "/api/apply/caps", foreign_status=200, exception="authenticated caps"),

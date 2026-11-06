@@ -229,6 +229,12 @@ def test_review_first_is_unchanged_and_a_changed_review_box_starts_nothing(
         [found] = applications(db, user)
         assert found.mode is Mode.review
         assert "apply_click" not in [e.kind for e in events(db, found.id)]
+        # A20: as from its own Apply with the box ticked, the apply agent fills it and the
+        # person confirms its list on the job page.
+        from app.apply import applier, confirm
+
+        assert confirm.review_agent(db, found)
+        assert applier.runs_agent(db, found)
 
         # The box unticked after the confirmation opened: what it said is no longer what the
         # click does, so nothing starts.

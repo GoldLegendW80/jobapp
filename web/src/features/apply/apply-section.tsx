@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
@@ -22,6 +27,7 @@ import {
   startApplication,
   type Answer,
   type Application,
+  type ApplicationDetail,
   type Approval,
 } from "./apply-api";
 import {
@@ -47,6 +53,7 @@ import { serverOffset } from "./full-auto-state";
 import { HeldCountdown } from "./held-countdown";
 import { LiveViewSlot, type LeaseOf } from "./live-view-slot";
 import { ManualPanel } from "./manual-panel";
+import { AgentFields, ChosenAnswers } from "./agent-fields";
 import { AgentQuestion } from "./agent-question";
 import { NeedsPerson } from "./needs-person";
 import { ON_PAGE, retrySentence, waitOf } from "./needs-person-state";
@@ -92,6 +99,14 @@ const DOCUMENTS_WAIT_LINKS: Partial<
  * says why. Everything that matters lives on the server, so leaving the page and coming back
  * shows the same state.
  */
+/** The detail read says this application is Review first's apply agent's (A20). */
+function reviewAgentOf(queryClient: QueryClient, applicationId: string) {
+  const detail = queryClient.getQueryData<ApplicationDetail>(
+    applicationKey(applicationId),
+  );
+  return detail?.review_agent === true;
+}
+
 export function ApplySection({ job }: { job: JobDetail }) {
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
@@ -131,10 +146,24 @@ export function ApplySection({ job }: { job: JobDetail }) {
     enabled: phase === "idle",
   });
 
+  // Review first with the apply agent (A20): its list of filled fields and one Confirm, read from
+  // the detail; a Review first item waits for the detail before the older approval view loads.
+  const reviewReady =
+    application?.mode === "review" && application.state === "ready";
+  // A ticked Apply fills with the agent: no screenshot, its list comes after (A20).
+  const reviewFilling =
+    application?.mode === "review" && phaseOf(application) === "filling";
+  const agentEnded =
+    application?.state === "failed" &&
+    (direct || application.mode === "review");
   const approvalQuery = useQuery({
     queryKey: approvalKey(id ?? ""),
     queryFn: ({ signal }) => getApproval(id as string, signal),
-    enabled: id !== undefined && hasForm(application),
+    enabled:
+      id !== undefined &&
+      hasForm(application) &&
+      !reviewAgentOf(queryClient, id) &&
+      !(reviewReady && !queryClient.getQueryData(applicationKey(id))),
     refetchInterval: pollInterval(application),
     retry: (failures) =>
       queryClient.getQueryData(approvalKey(id ?? "")) !== undefined &&
@@ -158,6 +187,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
     enabled:
       id !== undefined &&
       (hasReport(application) ||
+        reviewReady ||
+        reviewFilling ||
+        agentEnded ||
         application?.state === "held" ||
         onPage ||
         retrying ||
@@ -168,6 +200,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
       return wait && !wait.over ? APPLY_POLL_MS : false;
     },
   });
+
+  const agentFill = reviewFilling && detail.data?.review_agent === true;
 
   // A question asked after a control that may have sent the form (A19): its answer is the
   // person's Try again, in place of the plain button.
@@ -412,12 +446,27 @@ export function ApplySection({ job }: { job: JobDetail }) {
           {application && afterSend && !manual ? (
             <AgentQuestion application={application} question={afterSend} />
           ) : null}
+          {application && detail.data?.review_agent && detail.data.filled ? (
+            <AgentFields
+              application={application}
+              filled={detail.data.filled}
+              onChanged={settle}
+            />
+          ) : null}
+          {application && agentEnded && detail.data?.summary ? (
+            <p className="text-sm">{detail.data.summary}</p>
+          ) : null}
+          {application && !manual && detail.data?.chosen?.length ? (
+            <ChosenAnswers chosen={detail.data.chosen} />
+          ) : null}
           {phase === "filling" && !manual ? (
             <LiveViewSlot
               idle={
                 direct
                   ? "The assistant is filling the form. You can watch it live here, then it sends it."
-                  : "The assistant is filling the form. A screenshot of the filled form appears here when it is done."
+                  : agentFill
+                    ? "The assistant is filling the form. You can watch it live here, then you check what it filled and confirm."
+                    : "The assistant is filling the form. A screenshot of the filled form appears here when it is done."
               }
               leaseOf="any"
             />
@@ -586,7 +635,13 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     className="w-full sm:w-fit"
                     disabled={busy}
                     onClick={() => {
-                      ask(detail.data?.agent ? "retryAgent" : "retry");
+                      ask(
+                        detail.data?.review_agent
+                          ? "retryReview"
+                          : detail.data?.agent
+                            ? "retryAgent"
+                            : "retry",
+                      );
                     }}
                   >
                     Try again

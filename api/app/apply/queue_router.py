@@ -112,6 +112,8 @@ class QueueItem(ApplicationOut):
     reason: ReasonOut | None
     rehearsal: bool
     hold_until: datetime | None
+    # A20: Review first's apply agent: the person confirms the list on the job page.
+    review_agent: bool = False
 
 
 class QueueOut(BaseModel):
@@ -336,6 +338,18 @@ def read_queue(request: Request, user: CurrentUser, db: Db) -> QueueOut:
     shots = _shots(db, user.id, ids)
     left = _left(db, user.id, ids)
     refused = _refused_decisions(db, user.id, ids)
+    from app.apply import confirm
+    from app.apply.models import ApplicationEvent
+
+    agents = set(
+        db.scalars(
+            sa.select(ApplicationEvent.application_id).where(
+                ApplicationEvent.user_id == user.id,
+                ApplicationEvent.application_id.in_(ids),
+                ApplicationEvent.kind == confirm.EVENT,
+            )
+        )
+    )
     items = []
     for application, company, title in rows:
         versions = application.document_versions or {}
@@ -355,6 +369,7 @@ def read_queue(request: Request, user: CurrentUser, db: Db) -> QueueOut:
                 hold_until=(
                     full_auto.hold_until(db, application) if application.state is S.held else None
                 ),
+                review_agent=application.id in agents,
             )
         )
     return QueueOut(

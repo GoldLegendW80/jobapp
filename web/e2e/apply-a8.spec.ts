@@ -18,7 +18,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, newContext, watchErrors } from "./stack";
-import { reviewFirst } from "./apply-one-click-helpers";
+import { startReviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Apply A8 against the real stack through Caddy plus the fake ATS forms server: an
@@ -117,8 +117,7 @@ test("apply on the fake Lever form: the parse corrected, approve, submitted once
 
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply" });
-  await reviewFirst(page.request);
-  await section.getByRole("button", { name: "Apply", exact: true }).click();
+  await startReviewFirst(page);
   await expect(
     section.getByRole("img", { name: /before the click/ }),
   ).toBeVisible({ timeout: 180_000 });
@@ -217,8 +216,7 @@ test("apply on the fake custom form: the submit designated and outlined, submitt
 
   await page.goto(`/jobs/${job}`);
   const section = page.getByRole("region", { name: "Apply" });
-  await reviewFirst(page.request);
-  await section.getByRole("button", { name: "Apply", exact: true }).click();
+  await startReviewFirst(page);
   const before = section.getByRole("img", { name: /before the click/ });
   await expect(before).toBeVisible({ timeout: 300_000 });
   // The form agent's fake stream (apply_form) designated "Submit application"; the app drew

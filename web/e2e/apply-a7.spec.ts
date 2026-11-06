@@ -12,7 +12,7 @@ import {
   type Person,
 } from "./documents-helpers";
 import { clearAttempts, newContext, watchErrors } from "./stack";
-import { reviewFirst } from "./apply-one-click-helpers";
+import { startReviewFirst } from "./apply-one-click-helpers";
 
 /**
  * Apply A7 against the real stack through Caddy plus the fake ATS forms server: the first end to
@@ -123,8 +123,7 @@ for (const ats of ["greenhouse", "ashby"] as const) {
     const job = await postingOn(ats);
     await page.goto(`/jobs/${job}`);
     const section = page.getByRole("region", { name: "Apply" });
-    await reviewFirst(page.request);
-    await section.getByRole("button", { name: "Apply", exact: true }).click();
+    await startReviewFirst(page);
     const fillStarted = Date.now();
 
     // The worker's tick starts the fill within 30 seconds; the page follows it by itself. The

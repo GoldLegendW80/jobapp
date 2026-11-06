@@ -249,14 +249,17 @@ def on_apply(
     *,
     now: datetime,
     stub_base: str | None = None,
+    agent_review: bool = False,
 ) -> service.Started:
     """The Apply button on one of the person's postings (module docstring). Commits on success
-    (`service.start`); the caller rolls back on an error."""
+    (`service.start`); the caller rolls back on an error. `agent_review`: the button's Review
+    first (the review box ticked) is the apply agent's (A20, apply/confirm.py)."""
     posting = jobs_service.lock_job(db, user_id, posting_id)
     if posting is None:
         raise service.PostingNotFoundError(str(posting_id))
     service._lock_person(db, user_id)
     asked = ask_documents(db, user_id, posting.id, now)
     return service.start(
-        db, user_id, posting.id, mode, dry_run, now=now, stub_base=stub_base, documents=asked
-    )
+        db, user_id, posting.id, mode, dry_run, now=now, stub_base=stub_base, documents=asked,
+        agent_review=agent_review,
+    )  # fmt: skip
