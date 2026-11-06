@@ -203,6 +203,10 @@ export const handlers = [
       max: 10,
     }),
   ),
+  // No hiring panel read the document yet (documents D29).
+  http.get("*/api/documents/:id/panel", () =>
+    HttpResponse.json({ panel: null, input_tokens: 0, output_tokens: 0 }),
+  ),
   // No skills change rescored yet (the line after Save skills).
   http.get("*/api/jobs/rescore/status", () =>
     HttpResponse.json({

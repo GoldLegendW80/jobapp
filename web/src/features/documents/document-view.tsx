@@ -21,6 +21,7 @@ import {
 import * as chat from "./chat-panel";
 import * as compare from "./compare-panel";
 import * as edit from "./edit-panel";
+import * as panel from "./panel-panel";
 import { SeePanel } from "./see-panel";
 import * as template from "./template-panel";
 import { isOpen, pollInterval, templateLabel } from "./labels";
@@ -32,13 +33,13 @@ export interface PanelProps {
 }
 
 interface View {
-  id: "see" | "edit" | "chat" | "template" | "compare";
+  id: "see" | "edit" | "chat" | "template" | "compare" | "panel";
   label: string;
   available: boolean;
   Panel: ComponentType<PanelProps>;
 }
 
-/** The five views; a placeholder that is not available yet is hidden. */
+/** The six views; a placeholder that is not available yet is hidden. */
 const VIEWS: View[] = [
   { id: "see", label: "See", available: true, Panel: SeePanel },
   {
@@ -64,6 +65,12 @@ const VIEWS: View[] = [
     label: "Compare",
     available: compare.available,
     Panel: compare.ComparePanel,
+  },
+  {
+    id: "panel",
+    label: "Panel",
+    available: panel.available,
+    Panel: panel.PanelPanel,
   },
 ];
 

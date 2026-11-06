@@ -23,6 +23,7 @@ import {
   type WaitReason,
 } from "./documents-api";
 import { failedSentence, formatWhen, WAIT_SENTENCES } from "./labels";
+import { PanelLine } from "./panel-panel";
 import { cardState, type CardState } from "./posting-documents-state";
 
 /** Width of the page 1 image on a card: sharp on a phone, light on a laptop. */
@@ -133,6 +134,7 @@ export function PostingDocumentCard({
       </div>
 
       <StateLine state={state} kind={kind} hasVersion={latest !== null} />
+      {latest !== null ? <PanelLine documentId={document?.id} /> : null}
 
       {document !== undefined && latest !== null && latest.has_preview ? (
         <img
