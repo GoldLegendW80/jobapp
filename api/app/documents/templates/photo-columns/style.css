@@ -134,3 +134,8 @@ li, p, h3 { overflow-wrap: anywhere; }
 
 /* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
 .word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+/* The name: a word never breaks, at its hyphen either; up to 22 characters it stands on one
+   line, a longer one wraps between its words (D27). */
+.name { white-space: nowrap; }
+.name.long { white-space: normal; }
+.name .word { white-space: nowrap; }

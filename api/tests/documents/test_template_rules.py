@@ -50,6 +50,7 @@ def _bundled():
 REPOSITORY = {
     "band": {
         ("cv.html.j2", "attribute", "an attribute other than a class name"),
+        ("cv.html.j2", "construct", "the expression Compare"),
         ("cv.html.j2", "construct", "the expression CondExpr"),
         ("cv.html.j2", "literal", "markup cut by a Jinja construct"),
         ("cv.html.j2", "name", "a field that contact[] has not"),
@@ -61,6 +62,7 @@ REPOSITORY = {
             "schools[].location is not printed, or only under another test",
         ),
         ("letter.html.j2", "attribute", "an attribute other than a class name"),
+        ("letter.html.j2", "construct", "the expression Compare"),
         ("letter.html.j2", "literal", "markup cut by a Jinja construct"),
         ("letter.html.j2", "name", "a field that contact[] has not"),
         ("letter.html.j2", "tag", "a tag outside the allowed list"),
@@ -85,16 +87,19 @@ REPOSITORY = {
         ("style.css", "property", "min-width: a value outside the allowed list"),
         ("style.css", "property", "position: a ::before or ::after holds punctuation only, no box"),
         ("style.css", "property", "top: it can lay a box over another"),
+        ("style.css", "property", "white-space: a value outside the allowed list"),
         ("style.css", "property", "width: a ::before or ::after holds punctuation only, no box"),
     },
     "ledger": {
         ("cv.html.j2", "attribute", "an attribute other than a class name"),
+        ("cv.html.j2", "construct", "the expression Compare"),
         ("cv.html.j2", "construct", "the expression Filter"),
         ("cv.html.j2", "literal", "markup cut by a Jinja construct"),
         ("cv.html.j2", "name", "a field that contact[] has not"),
         ("cv.html.j2", "tag", "a tag outside the allowed list"),
         ("cv.html.j2", "unprinted", "contact[].text is not printed, or only under another test"),
         ("letter.html.j2", "attribute", "an attribute other than a class name"),
+        ("letter.html.j2", "construct", "the expression Compare"),
         ("letter.html.j2", "construct", "the expression Filter"),
         ("letter.html.j2", "literal", "markup cut by a Jinja construct"),
         ("letter.html.j2", "name", "a field that contact[] has not"),
@@ -106,6 +111,7 @@ REPOSITORY = {
         ),
         ("style.css", "page", "@page: only size: A4 and margin: var(--margin)"),
         ("style.css", "property", "min-width: a value outside the allowed list"),
+        ("style.css", "property", "white-space: a value outside the allowed list"),
         ("style.css", "selector", "a selector outside the allowed forms"),
     },
     "photo-columns": {

@@ -10,7 +10,7 @@
 <header class="head">
 {{ base.portrait() }}
 <div class="who">
-<h1 class="name{% if name.split()|map("length")|select(">", 14)|list %} longword{% endif %}">{{ base.words(name) }}</h1>
+<h1 class="name{% if name|length > 22 %} long{% endif %}{% if name.split()|map("length")|select(">", 14)|list %} longword{% endif %}">{{ base.words(name) }}</h1>
 {% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
 </div>
 {% if contact %}

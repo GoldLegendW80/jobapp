@@ -386,10 +386,17 @@ def test_an_ats_friendly_template_reads_in_the_order_of_the_page(
     # pdfium reads a hyphen that ends a line as U+FFFE, in every template.
     text = " ".join(pdf_text(result.pdf).replace("\ufffe", "-").split())
     assert text.casefold().startswith("alex example"), text[:60]
-    labels = templates.labels()[language]
-    keys = ("summary", "highlights", "competencies", "experience", "education", "skills")
+    # The sections in the order the template prints them (its own labels over the shared ones,
+    # D27); a heading split over two lines of its column is read word by word.
+    labels = templates.labels()[language] | found.labels.get(language, {})
+    html = templates.build_html(found, "cv", content, d1_view(), language, result.step, ON)
+    page = "".join(html.split("<body", 1)[1].split()).casefold()
+    keys = ["summary", "highlights", "competencies", "experience", "education", "skills"]
+    keys = [k for k in keys if ">" + "".join(labels[k].split()).casefold() + "<" in page]
+    keys.sort(key=lambda k: page.index(">" + "".join(labels[k].split()).casefold() + "<"))
+    assert len(keys) >= 4, keys
     folded = text.casefold()  # a heading in small caps may be extracted in capitals
-    places = [folded.index(labels[key].casefold()) for key in keys]
+    places = [folded.index(labels[key].split()[0].casefold()) for key in keys]
     assert places == sorted(places), dict(zip(keys, places, strict=True))
     titles = [text.index(employer.title) for employer in d1_view().employers]
     assert titles == sorted(titles), titles
