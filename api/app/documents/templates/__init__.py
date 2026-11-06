@@ -77,6 +77,8 @@ from app.documents.template_css import ENFORCED_CSS
 
 ROOT = Path(__file__).resolve().parent
 BASE = ROOT / "_base"
+ICONS = ROOT / "_icons"  # the contact line icons every template may read (D28)
+ICON_KINDS = ("email", "phone", "place", "link")  # template_css.CONTACT_KINDS
 FONTS = ROOT.parent / "fonts"
 DEFAULT = "band"
 KINDS = ("cv", "letter")
@@ -414,10 +416,12 @@ def registry() -> Mapping[str, Template]:
     return found
 
 
-def thumbnail_hash(folder: Path, base: Path = BASE, library: Path = FONTS) -> str:
+def thumbnail_hash(
+    folder: Path, base: Path = BASE, library: Path = FONTS, icons: Path = ICONS
+) -> str:
     """The hash of what a thumbnail is drawn from: the folder's files other than the
     thumbnails, the manifest without its `thumbnail_of`, the files of `_base/` (the macros, the
-    labels, the sample) and the fonts of its families (each `family.json` and face file). What
+    labels, the sample), the icons of `_icons/` and the fonts of its families (each `family.json` and face file). What
     `thumbnail_of` must equal: a change to any of them makes the thumbnails stale."""
     digest = hashlib.sha256()
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
@@ -425,6 +429,7 @@ def thumbnail_hash(folder: Path, base: Path = BASE, library: Path = FONTS) -> st
     parts = [("manifest.json", json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode())]
     parts += [(name, (folder / name).read_bytes()) for name in FILES]
     parts += [(f"_base/{p.name}", p.read_bytes()) for p in sorted(base.iterdir()) if p.is_file()]
+    parts += [(f"_icons/{p.name}", p.read_bytes()) for p in sorted(icons.iterdir()) if p.is_file()]
     for family in manifest.get("fonts", []):
         parts += [
             (f"fonts/{family}/{p.name}", p.read_bytes())
@@ -503,6 +508,23 @@ def _points(text: str) -> frozenset[int]:
         bounds = part.strip().upper().removeprefix("U+").split("-")
         out.update(range(int(bounds[0], 16), int(bounds[-1], 16) + 1))
     return frozenset(out)
+
+
+@cache
+def icon_css() -> str:
+    """The contact line icons as custom properties, `--icon-<kind>`, each one of the SVG files
+    of `_icons/` as a `data:` address: build_html sets them before every sheet, so a bundled
+    template and one written from an upload (template_css: only as the `background-image` of a
+    contact line's `::before`) read the same four drawings and embed nothing of their own."""
+    found = []
+    for kind in ICON_KINDS:
+        svg = (ICONS / f"{kind}.svg").read_bytes()
+        if not svg.startswith(b"<svg ") or b"<script" in svg or b"href" in svg:
+            raise TemplateError("icons", f"the icon {kind} is not a plain drawing")
+        found.append(
+            f"--icon-{kind}:url(data:image/svg+xml;base64,{base64.b64encode(svg).decode()})"
+        )
+    return ":root{" + ";".join(found) + "}"
 
 
 @cache
@@ -1041,7 +1063,8 @@ def build_html(
     page = environment(template).get_template(f"{kind}.html.j2").render(context)
     if page.count(token) != 1:
         raise TemplateError(template.slug, "the style is not printed exactly once")
-    css = step.css() + f":root{{--accent:{template.accent}}}" + template.files["style.css"]
+    css = step.css() + f":root{{--accent:{template.accent}}}" + icon_css()
+    css += template.files["style.css"]
     css += ENFORCED_CSS
     faces, names = font_css(template.fonts, html.unescape(page.replace(token, "")) + css)
     page = page.replace(token, faces + with_fallbacks(css, names), 1)

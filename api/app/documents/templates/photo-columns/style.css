@@ -67,10 +67,10 @@ li, p, h3 { overflow-wrap: anywhere; }
   background-repeat: no-repeat;
   background-size: contain;
 }
-.contact .email::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNiAxNiI+PHBhdGggZmlsbD0iIzFhMTkxNyIgZD0iTTAgMGgyNnYxNkgweiIvPjxwYXRoIGQ9Ik0xIDEuMmwxMiA4LjMgMTItOC4zIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMS43Ii8+PC9zdmc+); height: 7.9pt; top: 1.6pt; }
-.contact .phone::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAyMiI+PHBhdGggZmlsbD0iIzFhMTkxNyIgZD0iTTMuMiAxLjFjMS0uOSAyLjQtLjcgMy4xLjRsMS43IDNjLjUgMSAuMyAyLjEtLjYgMi43TDYgOC4xYy43IDIuNCAxLjkgNC42IDMuNiA2LjNsMS40LS44YzEtLjUgMi4xLS4zIDIuNy42bDEuOSAyLjhjLjcgMSAuNSAyLjMtLjUgMy4xbC0xLjQgMUM4LjggMjIuNC45IDEyLjkuOSA0LjUuOSAzLjEgMS45IDIgMy4yIDEuMXoiLz48L3N2Zz4=); }
-.contact .link::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMiAyMiI+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMWExOTE3IiBzdHJva2Utd2lkdGg9IjEuNyI+PGNpcmNsZSBjeD0iMTEiIGN5PSIxMSIgcj0iOS42Ii8+PGVsbGlwc2UgY3g9IjExIiBjeT0iMTEiIHJ4PSI0LjMiIHJ5PSI5LjYiLz48cGF0aCBkPSJNMS40IDExaDE5LjJNMi44IDYuMmgxNi40TTIuOCAxNS44aDE2LjQiLz48L2c+PC9zdmc+); }
-.contact .place::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxOCAyNiI+PHBhdGggZmlsbD0iIzFhMTkxNyIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNOSAwQzQgMCAwIDQgMCA5YzAgNi41IDkgMTcgOSAxN3M5LTEwLjUgOS0xN2MwLTUtNC05LTktOXptMCAxMi42YTMuNiAzLjYgMCAxIDEgMC03LjIgMy42IDMuNiAwIDAgMSAwIDcuMnoiLz48L3N2Zz4=); height: 12.8pt; top: -0.6pt; }
+.contact .email::before { background-image: var(--icon-email); height: 7.9pt; top: 1.6pt; }
+.contact .phone::before { background-image: var(--icon-phone); }
+.contact .link::before { background-image: var(--icon-link); }
+.contact .place::before { background-image: var(--icon-place); height: 12.8pt; top: -0.6pt; }
 .contact .email { order: 1; }
 .contact .phone { order: 2; }
 .contact .link { order: 3; }

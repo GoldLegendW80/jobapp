@@ -273,6 +273,23 @@ def nearest_face(family: str, weight: int, italic: bool) -> tuple[int, bool]:
     return order[0], style_found
 
 
+def asked(name: str, weight: int = 0, italic: bool = False) -> tuple[int, bool, str | None]:
+    """The weight and italic a font of the file asks for (its name's style words, else the
+    file's weight, else 400), and the family of FAMILIES its name is exactly ("Raleway-Medium"
+    is raleway; "Calibri", drawn by Carlito, is no family of the library): None otherwise."""
+    parts = words(name)
+    known = _known(_key("".join(parts)))
+    exact = None
+    if known is not None:
+        matched, target, said_weight, said_italic = known
+        if target in FAMILIES and matched == _key(FAMILIES[target].name):
+            exact = target
+    else:
+        _, said_weight, said_italic = _style_tail(parts)
+    wanted = said_weight or (weight if 100 <= weight <= 900 else 0) or REGULAR
+    return wanted, bool(said_italic or italic), exact
+
+
 def face(
     name: str,
     weight: int = 0,

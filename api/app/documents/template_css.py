@@ -43,6 +43,14 @@ everything is held to allow lists:
   either that or a length of at least TRACK_MIN, `minmax()` of a floor and such a track;
 - the density: each property of DENSITY but `--margin` read (the page's margin is always the
   step's), `--body-size` by a `font-size`, `--line-height` by a `line-height`;
+- what a copy of a CV needs (D28), each in its one form: `@page` may set `background` (or
+  `background-color`) to one flat `#rrggbb`; a `font-size` may be in pt from FONT_PT; `order`
+  only on a contact line (a rule whose every selector's subject holds a class of CONTACT_KINDS,
+  the `kind` the macro prints on each line), within -20..20; an icon only as `background-image:
+  var(--icon-<kind>)`, one of ICONS (custom properties the app sets: templates.icons), on a
+  `::before` of a contact line, which then may also take a `width` and a `height` up to ICON_MAX,
+  `background-size`, `background-repeat` and `background-position` of ICON_VALUES, and
+  `display: inline-block`; nothing else reads an icon, and the sheet sets none;
 - the fonts: a `font-family` starts with a family of the manifest;
 - the contrast: a rule that sets both a text colour and a background holds them at 4.5:1 (WCAG 2
   AA). A colour on a background another rule sets is the render check's;
@@ -107,6 +115,14 @@ MAX_CLASSES = 4
 CAPS = {"pt": 850.0, "px": 1134.0, "mm": 300.0, "em": 40.0, "%": 100.0}  # about one A4 height
 TRACK_MIN = {"pt": 56.7, "px": 75.6, "mm": 20.0, "em": 5.0, "%": 10.0}  # a column of a word or two
 ENFORCED = (("overflow-wrap", "anywhere"), ("word-break", "normal"))
+CONTACT_KINDS = frozenset(("email", "phone", "place", "link"))  # templates.contact_lines
+ICONS = frozenset(f"--icon-{kind}" for kind in CONTACT_KINDS)
+ICON_MAX = 24.0  # points: the widest or highest icon
+FONT_PT = (5.0, 48.0)
+ICON_PROPS = frozenset(
+    ("background-image", "background-size", "background-repeat", "background-position", "width",
+     "height", "display")
+)  # fmt: skip
 ENFORCED_CSS = "*,*::before,*::after{" + "".join(f"{p}:{v}!important;" for p, v in ENFORCED) + "}"
 PSEUDO_CLASSES = frozenset(("root", "first-child", "last-child"))
 PSEUDO_ELEMENTS = frozenset(("before", "after", "marker"))
@@ -513,6 +529,8 @@ def _var(inner: list[Token], customs: Mapping[str, Part], accent: str) -> Part:
         return ("colour", accent)
     if name in DENSITY:
         return ("var", name)
+    if name in ICONS:
+        return ("icon", name)
     if name in customs:
         return customs[name]
     raise _Bad("property", "var() of a property the sheet does not set")
@@ -723,8 +741,9 @@ def _special(prop: str, found: list[Part], names: frozenset[str]) -> tuple[str, 
     one = found[0] if len(found) == 1 else None
     if prop == "font-size":
         relative = one and (_within(one, "em", 0.5, 4) or _within(one, "%", 50, 400))
+        relative = relative or (one and _within(one, "pt", *FONT_PT))
         if not (relative or one == ("var", "--body-size")):
-            return "size", "font-size: em from 0.5 to 4, % or var(--body-size)"
+            return "size", "font-size: em from 0.5 to 4, %, pt from 5 to 48 or var(--body-size)"
     elif prop == "line-height":
         plain = one and (_within(one, None, 0.9, 2.5) or one in (("kw", "normal"),))
         if not (plain or one == ("var", "--line-height")):
@@ -805,6 +824,44 @@ OVERLAY = frozenset(
 )  # fmt: skip
 
 
+def contact_line(selector: Selector) -> bool:
+    """Whether a selector's subject is a contact line: a class of CONTACT_KINDS on it."""
+    subject = selector.compounds[-1]
+    return subject.tag in (None, "li") and bool(subject.classes & CONTACT_KINDS)
+
+
+def _icon_rule(selectors: tuple[Selector, ...]) -> bool:
+    """Every selector is the ::before of a contact line: the one place an icon is drawn."""
+    return bool(selectors) and all(s.element == "before" and contact_line(s) for s in selectors)
+
+
+def _icon_problem(prop: str, found: list[Part]) -> tuple[str, str] | None:
+    one = found[0] if len(found) == 1 else None
+    if prop == "background-image":
+        if not (one and one[0] == "icon"):
+            return "property", "background-image: only var(--icon-email, phone, place or link)"
+    elif prop in ("width", "height"):
+        if not (one and (one == ("num", 0.0) or _within(one, "pt", 0, ICON_MAX))):
+            return "property", f"{prop}: an icon up to {ICON_MAX:g}pt"
+    elif (
+        prop not in ICON_VALUES
+        or not all(p[0] == "kw" for p in found)
+        or not found
+        or not {p[1] for p in found} <= ICON_VALUES[prop]
+        or len(found) > 2
+    ):
+        return "property", f"{prop}: a value outside the allowed list"
+    return None
+
+
+ICON_VALUES = {
+    "background-size": frozenset(("contain", "cover", "auto")),
+    "background-repeat": frozenset(("no-repeat",)),
+    "background-position": frozenset(("center", "left", "right", "top", "bottom")),
+    "display": frozenset(("inline-block",)),
+}
+
+
 def _target_problem(prop: str, targets: frozenset[str | None]) -> tuple[str, str] | None:
     """What a property may not set on what the rule's selectors match: `targets` holds their
     pseudo-elements, None for an element."""
@@ -832,17 +889,23 @@ def value_problem(
     names: frozenset[str],
     targets: frozenset[str | None] = frozenset((None,)),
     photo: bool = False,
+    selectors: tuple[Selector, ...] = (),
 ) -> tuple[str, str] | None:
     """The code and the detail of what is wrong with one declaration of a rule whose selectors
     match `targets` (see _target_problem), None when nothing. `photo`: every selector of the
     rule has the photo for subject (`on_photo`), the one box a fixed height may hold."""
     if d.prop in DENSITY or d.prop == "--accent":
         return "density_pinned", f"{d.prop} is set by the density step, not by the sheet"
+    if d.prop in ICONS:
+        return "property", f"{d.prop} is set by the app, not by the sheet"
     if d.prop in OVERLAY:
         return "property", f"{d.prop}: it can lay a box over another"
-    if not d.prop.startswith("--") and d.prop not in PROPERTIES:
+    icon = _icon_rule(selectors) and d.prop in ICON_PROPS
+    if not d.prop.startswith("--") and d.prop not in PROPERTIES and not icon:
         return "property", "a property outside the allowed list"
-    if not d.prop.startswith("--") and (wrong := _target_problem(d.prop, targets)):
+    if d.prop == "order" and not (selectors and all(map(contact_line, selectors))):
+        return "property", "order: only among the contact lines"
+    if not icon and not d.prop.startswith("--") and (wrong := _target_problem(d.prop, targets)):
         return wrong
     if d.important and d.prop in dict(ENFORCED):
         return "property", f"{d.prop}: no !important, the app's own rule comes after the sheet"
@@ -858,6 +921,10 @@ def value_problem(
         if _custom(found):
             return None
         return "property", "a custom property: one length, number or #rrggbb"
+    if icon:
+        return _icon_problem(d.prop, found)
+    if any(p[0] == "icon" for p in found):
+        return "property", f"{d.prop}: an icon only as the background-image of a contact line"
     if found == [("kw", "inherit")]:
         return None
     if any(p[0] == "fn" for p in found):
@@ -881,7 +948,10 @@ def _page_problem(d: Declaration, customs: Mapping[str, Part], accent: str) -> t
         return None if a4 else ("page", "@page: a size other than A4")
     if d.prop == "margin":
         return None if found == [("var", "--margin")] else ("page", "@page: margin: var(--margin)")
-    return "page", "@page: only size: A4 and margin: var(--margin)"
+    if d.prop in ("background", "background-color"):
+        flat = len(found) == 1 and _colour(found[0]) and not d.important
+        return None if flat else ("page", f"@page: {d.prop}: one flat colour #rrggbb")
+    return "page", "@page: only size: A4, margin: var(--margin) and a background colour"
 
 
 # --- the contrast -------------------------------------------------------------------------------
@@ -951,7 +1021,7 @@ def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css"
         for d in rule.declarations:
             if rule.selectors is None or not d.prop.startswith("--"):
                 continue
-            if d.prop in DENSITY or d.prop == "--accent":
+            if d.prop in DENSITY or d.prop == "--accent" or d.prop in ICONS:
                 continue
             if not rule.selectors or not all(map(_on_root, rule.selectors)):
                 detail = "a custom property set on another selector than :root"
@@ -978,7 +1048,7 @@ def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css"
             else:
                 targets = frozenset(s.element for s in rule.selectors)
                 photo = bool(rule.selectors) and all(map(on_photo, rule.selectors))
-                wrong = value_problem(d, customs, accent, names, targets, photo)
+                wrong = value_problem(d, customs, accent, names, targets, photo, rule.selectors)
             if wrong:
                 problems.append(Problem(file, d.line, *wrong))
     problems += _density(rules, file)
