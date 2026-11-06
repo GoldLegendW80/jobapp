@@ -103,6 +103,7 @@ import re
 import signal
 import sys
 import threading
+import time
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Collection, Sequence
@@ -772,10 +773,12 @@ def apply_services(ctx: dict[str, Any]) -> Any:
 
 
 async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
+    from app.apply import applier as apply_applier
     from app.apply import email as apply_email
     from app.apply import run as apply_run
-    from app.apply.models import Application
+    from app.apply.models import Application, Mode
 
+    agent_run = False
     given = ctx.get("apply_services")
     sessions = given.sessions if given is not None else sessions_of(ctx)
     with sessions() as db:
@@ -786,7 +789,43 @@ async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
             )
             db.commit()
             return
+        # One click Apply (A19): the apply agent fills and clicks Submit itself. A rehearsal
+        # (never one today: `_mode_of` makes it Review first) keeps the fill, which stops at ready.
+        agent_run = (
+            application is not None and application.mode is Mode.direct and not application.dry_run
+        )
+    if agent_run:
+        await apply_applier.apply(applier_services(ctx), uuid.UUID(application_id))
+        return
     await apply_run.fill(apply_services(ctx), uuid.UUID(application_id))
+
+
+def applier_services(ctx: dict[str, Any]) -> Any:
+    """One click Apply's agent run (A19, app/apply/applier.py): the fill's services, the agent on
+    the runtime and the emergency stop, read for each act on a submit element."""
+    from app.apply import admin
+    from app.apply import applier as apply_applier
+    from app.browser.sources.interactive import await_person
+
+    given = ctx.get("applier_services")
+    if given is not None:
+        return given
+    settings: Settings = ctx["settings"]
+
+    async def stop() -> str | None:
+        if not settings.apply_submit_enabled:
+            return "submit_disabled"
+        return "paused" if await admin.paused(ctx.get("redis")) else None
+
+    async def waited(tools: Any, left: int) -> str:
+        return await await_person(tools, left, time.monotonic, asyncio.sleep)
+
+    return apply_applier.Services(
+        fill=apply_services(ctx),
+        agent=apply_applier.RuntimeApplier(lambda: agent_context(ctx)),
+        stop=stop,
+        await_person=waited,
+    )
 
 
 async def apply_submit(ctx: dict[str, Any], application_id: str) -> None:

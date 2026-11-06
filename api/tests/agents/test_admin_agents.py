@@ -687,7 +687,10 @@ def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
     # The decision's bound is the agents queue's job timeout, built from the agents a worker
     # registers when it starts: every agent but a sweep's.
     assert sorted(set(ceilings) - set(found["at_start"])) == sorted(catalog.SWEEP_AGENTS)
+    from app.apply import applier
+
     inside = {
+        "apply_agent": applier.APPLY_AGENT.wall_time_s,  # One click Apply's fill (A19)
         "apply_check": agents["apply_decide"] - margin,
         "apply_form": form_agent.APPLY_FORM.wall_time_s,  # the fill's form deadline
         "apply_answer": leases.LEASE_MAX_S["apply_fill"],  # the fill's browser lease

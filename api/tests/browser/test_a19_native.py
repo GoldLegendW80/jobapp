@@ -1,0 +1,333 @@
+"""A19 on real Chromium in the browser container: One click Apply's lease (purpose `apply_agent`)
+driven by a scripted agent the way the apply agent drives it, on an invented company's job site
+(tests/ats_forms/a19/, served by the fake ATS forms server, tests/ats_forms_stub.py, under
+invented `.test` hosts and under `atsforms`, the name the apply journeys' stack gives it).
+
+- The posting's Apply link, a two step form (Next, a button of the page's script, then the final
+  Submit application), the CV uploaded from the documents placed on the lease, a free text
+  answer: the agent's click on Submit leaves only with the lease's capability, and the fake site
+  records exactly one submission with what was typed and the PDF's bytes.
+- The emergency stop: the api sends the capability only while the stop is off; without it the
+  click on Submit, Enter in a field and a script are refused `submit_permit`, and nothing leaves.
+- A password box and a one time code box are never typed into, capability or not.
+- A sweep lease on the same browserd (B20's line) still refuses the same Submit.
+- The recorded stream of the apply journey (app/agents/fake_streams/apply_agent.json) replayed
+  call by call, as the apply agent's session sends it: its refs name the elements it means.
+
+The server's log is GET /_stub/submissions. Needs an existing BROWSER_TEST_IMAGE; never builds
+or pulls one.
+"""
+
+import hashlib
+import json
+import os
+import uuid
+from typing import Any
+
+import pytest
+
+from tests.browser.test_b5_container import Lease, ref
+from tests.browser.test_browser_container import ROOT, Stack
+
+pytestmark = pytest.mark.docker
+NAMES = ["careers.a19-robotics.test", "jobs.a19-hire.test"]
+POSTING = "http://careers.a19-robotics.test:8080/forms/a19/posting.html"
+FORM = "http://careers.a19-robotics.test:8080/forms/a19/apply.html"
+ACCOUNT = "http://jobs.a19-hire.test:8080/forms/a19/account.html"
+CONFIRMATION = "http://careers.a19-robotics.test:8080/forms/a19/confirmation.html"
+WHY = (
+    "I have built robot arms for warehouses for five years, and Example Robotics ships the arms "
+    "I would want to work on: ROS 2, C++ and field trials in Bordeaux."
+)
+
+
+def pdf() -> str:
+    """A small real PDF of one page (offsets right), as text: the lease's PUT sends a string."""
+    objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>",
+    ]
+    out, offsets = "%PDF-1.7\n", []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n{body}\nendobj\n"
+    table = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n"
+    out += "".join(f"{offset:010d} 00000 n \n" for offset in offsets)
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{table}\n%%EOF\n"
+    return out
+
+
+CV = pdf()
+STUB = ["python", "-I", "/fake/ats_forms_stub.py"]
+
+
+@pytest.fixture(scope="module")
+def a19(tmp_path_factory):
+    image = os.environ.get("BROWSER_TEST_IMAGE")
+    assert image, "Provide an existing BROWSER_TEST_IMAGE, this test never builds or pulls."
+    override = tmp_path_factory.mktemp("a19") / "a19.yml"
+    override.write_text(
+        json.dumps(
+            {
+                "services": {
+                    "browser": {
+                        "pull_policy": "never",
+                        "volumes": [f"{ROOT}/browser/browserd:/opt/browserd/browserd:ro"],
+                        "environment": {
+                            "BROWSER_PROXY_ALLOW_PRIVATE": ",".join(["pages", "atsforms", *NAMES])
+                        },
+                    },
+                    "client": {"pull_policy": "never"},
+                    "pages": {"pull_policy": "never"},
+                    # The fake ATS forms server, as tests/ats-forms-stub.compose.yml runs it.
+                    "atsforms": {
+                        "image": image,
+                        "pull_policy": "never",
+                        "user": "1000:1000",
+                        # The container's address, on the egress network the browser reaches.
+                        "command": [*STUB, "--host", "0.0.0.0", "--port", "8080"],  # noqa: S104
+                        "read_only": True,
+                        "cap_drop": ["ALL"],
+                        "volumes": [f"{ROOT}/tests:/fake:ro"],
+                        "networks": {"egress": {"aliases": ["atsforms", *NAMES]}},
+                    },
+                }
+            }
+        )
+    )
+    stack = Stack("a19-native-" + uuid.uuid4().hex[:8], image)
+    stack.redactions = [stack.secret]
+    stack.compose[8:8] = ["-f", str(override)]
+    try:
+        stack.run("up", "-d", "--wait", "--wait-timeout", "120", "--no-build", "--pull", "never")
+        yield stack
+    finally:
+        stack.run("down", "-v", "--remove-orphans", "--timeout", "0", check=False)
+
+
+def fetched(stack: Stack, url: str, method: str = "GET") -> Any:
+    """`url` of the fake site as the browser container reads it with plain Python."""
+    code = (
+        "import sys, urllib.request; request = urllib.request.Request(sys.argv[1], method="
+        "sys.argv[2], data=b'' if sys.argv[2] == 'POST' else None);"
+        " print(urllib.request.urlopen(request).read().decode())"
+    )
+    return json.loads(stack.execute("browser", "python", "-I", "-c", code, url, method))
+
+
+def sent(stack: Stack, name: str = "a19") -> list[dict]:
+    return [s for s in fetched(stack, "http://atsforms:8080/_stub/submissions") if s["org"] == name]
+
+
+@pytest.fixture
+def agent(a19):
+    fetched(a19, "http://atsforms:8080/_stub/reset", "POST")
+    lease = Lease(a19, "apply_agent")  # the lease's hosts are ["pages"]: no host list applies
+    a19.redactions.append(lease.token)
+    assert lease.capability, "the agent's lease has the capability, held by the api"
+    a19.redactions.append(lease.capability)
+    yield lease
+    lease.end()
+
+
+def act(lease: Lease, name: str, capability: str | None = None, **args: Any) -> dict:
+    """One act and the snapshot after it, as the apply agent's session takes it."""
+    done = lease.tool(name, capability, **args)
+    if done.get("ok"):
+        done["page"] = lease.snapshot()
+    return done
+
+
+def test_the_agent_applies_on_a_two_step_form_and_clicks_submit_itself(a19, agent):
+    assert agent.put("cv.pdf", CV)["status"] == 200
+    opened = act(agent, "browser_navigate", url=POSTING)
+    assert opened["ok"], opened  # a host off the lease's list: any public address opens
+    page = opened["page"]
+    print("POSTING\n" + page)
+    applied = act(agent, "browser_click", ref=ref(page, "link", "Apply for this job"))
+    assert applied["ok"], applied  # a link, not a submit: no capability needed
+    assert "submit_clicked" not in applied, applied
+    page = applied["page"]
+    print("STEP 1\n" + page)
+    for label, text in (
+        ("First name", "Adaline"),
+        ("Last name", "Example"),
+        ("Email", "e2e-a19@example.org"),
+        ("Phone", "+33 5 00 00 00 19"),
+    ):
+        typed = act(agent, "browser_type", ref=ref(page, "textbox", label), text=text)
+        assert typed["ok"], (label, typed)
+        page = typed["page"]
+    uploaded = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "Resume"), paths=["cv.pdf"]
+    )
+    assert uploaded["ok"], uploaded
+    assert uploaded["uploaded"] == ["cv.pdf"], uploaded
+    moved = act(agent, "browser_click", ref=ref(uploaded["page"], "button", "Next"))
+    assert moved["ok"], moved  # the page's own button, not a submit of the form
+    assert "submit_clicked" not in moved, moved
+    page = moved["page"]
+    print("STEP 2\n" + page)
+    assert "Step 2 of 2" in page, page
+    why = act(agent, "browser_type", ref=ref(page, "textbox", "Why do you want"), text=WHY)
+    assert why["ok"], why
+    notice = ref(why["page"], "textbox", "notice period")
+    assert act(agent, "browser_type", ref=notice, text="Six weeks")["ok"]
+    page = agent.snapshot()
+    submit = ref(page, "button", "Submit application")
+
+    # The emergency stop on: the api sends no capability, and nothing of the form leaves.
+    refused = agent.tool("browser_click", ref=submit)
+    assert refused["error"] == "submit_permit", refused
+    entered = agent.tool("browser_press_key", ref=notice, key="Enter")
+    assert entered["error"] == "submit_permit", entered
+    typed = agent.tool("browser_type", ref=notice, text=" ", submit=True)
+    assert typed["error"] == "submit_permit", typed
+    script = agent.tool(
+        "browser_evaluate", function="() => document.querySelector('form').requestSubmit()"
+    )
+    assert script["error"] == "submit_permit", script
+    assert sent(a19) == []
+
+    # The stop off: the api sends the act again with the capability; the agent's own click.
+    clicked = agent.tool(
+        "browser_click", agent.capability, ref=ref(agent.snapshot(), "button", "Submit application")
+    )
+    assert clicked["ok"], clicked
+    assert clicked["submit_clicked"] is True, clicked
+    assert agent.tool("browser_wait_for", text="Thank you for applying")["ok"]
+    confirmed = agent.tool("browser_snapshot")
+    assert confirmed["url"] == CONFIRMATION, confirmed.get("url")
+    [one] = sent(a19)
+    assert one["fields"] == {
+        "first_name": "Adaline",
+        "last_name": "Example",
+        "email": "e2e-a19@example.org",
+        "phone": "+33 5 00 00 00 19",
+        "motivation": WHY,
+        "notice": "Six weeks",
+    }, one["fields"]
+    [file] = one["files"]
+    assert file["field"] == "resume", file
+    assert file["filename"] == "cv.pdf", file
+    assert file["sha256"] == hashlib.sha256(CV.encode()).hexdigest(), file
+
+
+def test_a_password_box_and_a_one_time_code_box_are_never_typed_into(a19, agent):
+    opened = act(agent, "browser_navigate", url=ACCOUNT)
+    assert opened["ok"], opened
+    page = opened["page"]
+    print("ACCOUNT\n" + page)
+    assert act(
+        agent, "browser_type", ref=ref(page, "textbox", "Email"), text="e2e-a19@example.org"
+    )["ok"]
+    page = agent.snapshot()
+    # A box whose facts a page script breaks ("Your PIN") is refused too (round 1 of the review).
+    for label in ("Password", "Code sent to your email", "Your PIN"):
+        box = ref(page, "textbox", label)
+        for capability in (None, agent.capability):
+            typed = agent.tool("browser_type", capability, ref=box, text="Invented42!")
+            assert typed["error"] == "credential", (label, capability is None, typed)
+    values = agent.tool(
+        "browser_evaluate",
+        agent.capability,
+        function="() => [password.value, code.value, pin.value, email.value]",
+    )
+    assert json.loads(values["result"]) == ["", "", "", "e2e-a19@example.org"], values
+    assert sent(a19, "a19-account") == []
+
+
+def test_a_sweep_lease_on_the_same_browserd_still_refuses_the_submit(a19):
+    fetched(a19, "http://atsforms:8080/_stub/reset", "POST")
+    sweep = Lease(a19, "sweep", hosts=["a19-robotics.test"])
+    a19.redactions.append(sweep.token)
+    assert sweep.capability is None
+    marker = {"_discovery": "native_get", "_discovery_scope": {"start": FORM}}
+    try:
+        assert sweep.tool("browser_navigate", url=FORM, **marker)["ok"]
+        page = sweep.tool("browser_snapshot", **marker)["snapshot"]
+        moved = sweep.tool("browser_click", ref=ref(page, "button", "Next"), **marker)
+        print("SWEEP NEXT", moved)
+        shown = sweep.tool(
+            "browser_evaluate",
+            function="() => { step1.hidden = true; step2.hidden = false; return 'shown'; }",
+            **marker,
+        )
+        assert shown["ok"], shown
+        page = sweep.tool("browser_snapshot", **marker)["snapshot"]
+        refused = sweep.tool(
+            "browser_click", ref=ref(page, "button", "Submit application"), **marker
+        )
+        assert refused["error"] in ("submit", "line"), refused
+        script = sweep.tool(
+            "browser_evaluate",
+            function="() => document.querySelector('form').requestSubmit()",
+            **marker,
+        )
+        assert script["error"] == "line", script
+        assert sent(a19) == []
+    finally:
+        sweep.end()
+
+
+def calls_of(prompt: str) -> list[tuple[str, dict]]:
+    """The tool calls the recorded stream makes for a run of this first message."""
+    from app.agents import fake_backend
+
+    made = []
+    for step in fake_backend.load_script("apply_agent"):
+        if "message" not in step or not fake_backend.kept(step, prompt):
+            continue
+        for block in step["message"].get("message", {}).get("content", []):
+            if block.get("type") == "tool_use":
+                made.append((block["name"].removeprefix("mcp__app__"), block["input"]))
+    return made
+
+
+def replay(lease: Lease, calls: list[tuple[str, dict]]) -> tuple[str, dict | None]:
+    """The calls as the apply agent's session sends them (applier.ApplySession): an act refused
+    `submit_permit` again with the capability, a snapshot after each act; the ask and the report
+    end the replay. Returns the last page's address and the report or the ask."""
+    url = ""
+    for name, args in calls:
+        if name in ("browser_ask_person", "apply_done"):
+            return url, {"tool": name, **args}
+        done = lease.tool(name, **args)
+        if done.get("error") == "submit_permit":
+            done = lease.tool(name, lease.capability, **args)
+        assert done.get("ok"), (name, args, done)
+        if name != "browser_wait_for":
+            url = lease.tool("browser_snapshot")["url"]
+    return url, None
+
+
+def test_the_journey_s_recorded_stream_on_real_chromium(a19, agent):
+    """The apply journey's stream (apply_agent.json) on the same pages under `atsforms`: a run
+    whose first message lacks the notice period asks for it on step 2 and sends nothing; a run
+    whose first message holds the person's answer types it, clicks Submit itself and reports the
+    confirmation page it read; the site records one submission."""
+    from app.apply import applier
+
+    assert agent.put("cv.pdf", CV)["status"] == 200
+    url, asked = replay(agent, calls_of('{"answers_to_your_questions": []}'))
+    assert asked is not None, url
+    assert asked["tool"] == "browser_ask_person", asked
+    assert asked["field"] == "What is your notice period?", asked
+    assert asked["kind"] == "fact", asked
+    page = agent.snapshot()
+    assert 'textbox "What is your notice period?" [ref=e22]' in page, page
+    assert applier.shown(asked["field"], page)  # the label the job page shows is the page's
+    assert sent(a19) == []
+    answered = '{"answers_to_your_questions": [{"answer": "Six weeks"}]}'
+    url, report = replay(agent, calls_of(answered))
+    assert report is not None, url
+    assert report["tool"] == "apply_done", report
+    assert report["outcome"] == "submitted", report
+    assert report["confirmation_url"] == url == "http://atsforms:8080/forms/a19/confirmation.html"
+    [one] = sent(a19)
+    assert one["fields"]["notice"] == "Six weeks", one["fields"]
+    assert one["fields"]["email"] == "e2e-a19@example.org", one["fields"]
+    assert one["fields"]["motivation"].startswith("I have built robot arms"), one["fields"]
+    assert [f["sha256"] for f in one["files"]] == [hashlib.sha256(CV.encode()).hexdigest()]

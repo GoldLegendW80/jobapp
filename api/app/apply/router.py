@@ -26,7 +26,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
@@ -99,6 +99,24 @@ class ApplicationOut(BaseModel):
     submitted_at: datetime | None
 
 
+class QuestionOut(BaseModel):
+    """One Click Apply's open question (A19): a fixed sentence with the field's label and the
+    page's host, never the agent's words; `kind` fact (a text answer) or action. `after_send`:
+    asked after a control that may have sent the form (`submit_unknown`): the answer is the
+    person's Try again, and the page says the application may have been sent already."""
+
+    sentence: str
+    label: str
+    host: str
+    kind: str
+    after_send: bool = False
+
+
+class QuestionIn(BaseModel):
+    answer: str = Field(default="", max_length=5000)
+    remember: bool = False
+
+
 class StartedOut(ApplicationOut):
     warnings: list[WarningOut]
 
@@ -113,6 +131,9 @@ class EventOut(BaseModel):
 
 class ApplicationDetail(ApplicationOut):
     events: list[EventOut]
+    question: QuestionOut | None = None
+    # One click Apply's agent may have sent it (A19): Try again runs the agent once more.
+    agent: bool = False
     hold_until: datetime | None
     now: datetime
 
@@ -220,6 +241,59 @@ def read_application(
     return ApplicationDetail(
         **_out(application),
         events=[EventOut.model_validate(e) for e in timeline],
+        question=_question(db, application),
+        agent=_agent(db, application),
         hold_until=full_auto.hold_until(db, application) if held else None,
         now=deps.clock(request),
     )
+
+
+def _question(db: Session, application: Application) -> QuestionOut | None:
+    from app.apply import applier
+
+    row = applier.open_question(db, application)
+    if row is None:
+        return None
+    kind = "action" if row.kind == "question:action" else "fact"
+    host = (row.options or [""])[0]
+    return QuestionOut(
+        sentence=applier.sentence(row),
+        label=row.label,
+        host=host,
+        kind=kind,
+        after_send=applier.after_send(application),
+    )
+
+
+def _agent(db: Session, application: Application) -> bool:
+    from app.apply import applier
+
+    return application.mode is Mode.direct and applier.ran_agent(db, application)
+
+
+@router.post(
+    "/api/applications/{application_id}/question",
+    response_model=ApplicationOut,
+    responses={**_404, 409: {"model": ErrorOut, "description": "No question waits"}},
+)
+def answer_question(
+    application_id: str, body: QuestionIn, request: Request, user: CurrentUser, db: Db
+) -> dict[str, Any]:
+    """The person's answer to One click Apply's question (A19): the application goes on."""
+    from app.apply import applier
+
+    try:
+        application = applier.answer_question(
+            db,
+            user.id,
+            _uuid_or_404(application_id, NO_APPLICATION),
+            body.answer,
+            body.remember,
+            deps.clock(request),
+        )
+    except applier.QuestionError as exc:
+        db.rollback()
+        detail = NO_APPLICATION if exc.status == 404 else exc.detail
+        raise HTTPException(status_code=exc.status, detail=detail) from None
+    db.commit()
+    return _out(application)

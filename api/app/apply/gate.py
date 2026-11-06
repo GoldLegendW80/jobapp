@@ -850,6 +850,14 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
     if application.state not in (State.submit_unknown, State.refused_by_site):
         raise RefusedError("not_retryable")
     previous = application.state.value
+    if application.state is State.submit_unknown:
+        from app.apply import applier
+
+        if applier.ran_agent(db, application):
+            # One click Apply's agent (A19): one more run of the agent, which looks on the site
+            # for the earlier send first; never an empty Review first item.
+            applier.retry(db, application, now)
+            return application
     if application.ats == "email" and application.mail_send_id is not None:
         from app.mail.draft_models import MailDraft, MailSend
 

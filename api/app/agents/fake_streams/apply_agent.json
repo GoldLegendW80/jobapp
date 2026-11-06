@@ -1,0 +1,664 @@
+{
+ "description": "One click Apply's agent (apply A19), the apply journey's: on the invented job site of tests/ats_forms/a19/ (the fake ATS forms server, http://atsforms:8080) it opens the posting, follows its Apply link, fills step 1 (the name, the e-mail, the phone, the CV uploaded), clicks Next, writes the free text answer of step 2, then the notice period: a run whose first message lacks the answer \"Six weeks\" (no saved answer, no answer of the person) asks the person with browser_ask_person and stops; a run whose first message holds it types it, clicks Submit application itself, reads the confirmation page and reports submitted. Refs are those browserd's snapshot gives on Chrome for Testing 153 (api/tests/browser/test_a19_native.py replays these calls on real Chromium).",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__browser_navigate",
+     "mcp__app__browser_navigate_back",
+     "mcp__app__browser_navigate_forward",
+     "mcp__app__browser_snapshot",
+     "mcp__app__browser_take_screenshot",
+     "mcp__app__browser_click",
+     "mcp__app__browser_hover",
+     "mcp__app__browser_type",
+     "mcp__app__browser_press_key",
+     "mcp__app__browser_scroll",
+     "mcp__app__browser_select_option",
+     "mcp__app__browser_check",
+     "mcp__app__browser_tabs",
+     "mcp__app__browser_wait_for",
+     "mcp__app__browser_evaluate",
+     "mcp__app__browser_file_upload",
+     "mcp__app__browser_ask_person",
+     "mcp__app__apply_done"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_01",
+       "name": "mcp__app__browser_navigate",
+       "input": {
+        "url": "http://atsforms:8080/forms/a19/posting.html"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000102",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_02",
+       "name": "mcp__app__browser_click",
+       "input": {
+        "ref": "e5"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000103",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_3",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_03",
+       "name": "mcp__app__browser_type",
+       "input": {
+        "ref": "e7",
+        "text": "Adaline"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000104",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_4",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_04",
+       "name": "mcp__app__browser_type",
+       "input": {
+        "ref": "e9",
+        "text": "Example"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000105",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_5",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_05",
+       "name": "mcp__app__browser_type",
+       "input": {
+        "ref": "e11",
+        "text": "e2e-a19@example.org"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000106",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_6",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_06",
+       "name": "mcp__app__browser_type",
+       "input": {
+        "ref": "e13",
+        "text": "+33 5 00 00 00 19"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000107",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_7",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_07",
+       "name": "mcp__app__browser_file_upload",
+       "input": {
+        "ref": "e15",
+        "paths": [
+         "cv.pdf"
+        ]
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000108",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_8",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_08",
+       "name": "mcp__app__browser_click",
+       "input": {
+        "ref": "e16"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000109",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_9",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_09",
+       "name": "mcp__app__browser_type",
+       "input": {
+        "ref": "e20",
+        "text": "I have built robot arms for warehouses for five years, and Example Robotics ships the arms I would want to work on: ROS 2, C++ and field trials in Bordeaux."
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05,
+   "unless_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000110",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_10",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_10",
+       "name": "mcp__app__browser_ask_person",
+       "input": {
+        "reason": "The form asks for the notice period, which the profile does not hold.",
+        "field": "What is your notice period?",
+        "kind": "fact"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "unless_prompt": "\"Six weeks\""
+  },
+  {
+   "sleep": 0.05,
+   "unless_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000111",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_11",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The person is asked for the notice period."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "unless_prompt": "\"Six weeks\""
+  },
+  {
+   "sleep": 0.05,
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000112",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_12",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_12",
+       "name": "mcp__app__browser_type",
+       "input": {
+        "ref": "e22",
+        "text": "Six weeks"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "sleep": 0.05,
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000113",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_13",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_13",
+       "name": "mcp__app__browser_click",
+       "input": {
+        "ref": "e23"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "sleep": 0.05,
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000114",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_14",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_14",
+       "name": "mcp__app__browser_wait_for",
+       "input": {
+        "text": "Thank you for applying"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "sleep": 0.05,
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000115",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_15",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_15",
+       "name": "mcp__app__browser_snapshot",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "sleep": 0.05,
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000116",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_16",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_apply_agent_16",
+       "name": "mcp__app__apply_done",
+       "input": {
+        "outcome": "submitted",
+        "summary": "I filled the name, the e-mail and the phone, uploaded the CV, wrote why the person wants to join, gave the notice period and clicked Submit application. The site thanked the person for applying.",
+        "confirmation_url": "http://atsforms:8080/forms/a19/confirmation.html"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "sleep": 0.05,
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000117",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_apply_agent_17",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Applied."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "if_prompt": "\"Six weeks\""
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 9000,
+    "duration_api_ms": 8000,
+    "num_turns": 17,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0,
+    "usage": {
+     "input_tokens": 51000,
+     "output_tokens": 680,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "result": "Done."
+   }
+  }
+ ]
+}

@@ -42,8 +42,22 @@ const eventSchema = z.object({
 });
 export type ApplicationEvent = z.infer<typeof eventSchema>;
 
+// One click Apply's open question (A19): a fixed sentence with the field's label and the host.
+const questionSchema = z.object({
+  sentence: z.string(),
+  label: z.string(),
+  host: z.string(),
+  kind: z.enum(["fact", "action"]),
+  // Asked after a control that may have sent the form: the answer is a Try again.
+  after_send: z.boolean().optional(),
+});
+export type Question = z.infer<typeof questionSchema>;
+
 const detailSchema = applicationSchema.extend({
   events: z.array(eventSchema),
+  question: questionSchema.nullable().optional(),
+  // One click Apply's agent may have sent it: Try again runs the agent once more.
+  agent: z.boolean().optional(),
   // The end of a Full auto hold and the server's time, for the countdown.
   hold_until: z.string().nullable().optional(),
   now: z.string().optional(),
@@ -266,6 +280,19 @@ export const rememberAnswer = (
     body: { field_key: fieldKey, value },
     timeoutMs: TIMEOUT_MS,
     validate: (body) => rememberedSchema.parse(body),
+  });
+
+/** One click Apply (A19): the person's answer to the assistant's question; it goes on then. */
+export const answerQuestion = (
+  applicationId: string,
+  answer: string,
+  remember: boolean,
+): Promise<Application> =>
+  request(`/applications/${id(applicationId)}/question`, {
+    method: "POST",
+    body: { answer, remember },
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => applicationSchema.parse(body),
   });
 
 /** The image is fetched by the browser with the session cookie. */

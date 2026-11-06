@@ -91,6 +91,7 @@ CATEGORIES: tuple[Category, ...] = (
 # The category of each agent, by its name: set here, never read from what the agent says of
 # itself. tests/agents/test_admin_agents.py fails when a registered agent is missing.
 CATEGORY_OF: dict[str, str] = {
+    "apply_agent": "applying",
     "apply_answer": "applying",
     "apply_check": "applying",
     "apply_form": "applying",
@@ -137,6 +138,12 @@ FIRST_MESSAGES: dict[str, str] = {
         'signed in there>. For a careers page, the fixed message: "{FIRST_MESSAGE}"'
     ),
     "app.apply.form_agent.FormDefinition": 'The fixed message: "{FIRST_MESSAGE}"',
+    "app.apply.applier.ApplierDefinition": (
+        "A JSON object held in the worker: <the posting: title, company, address, location, "
+        "text>, <the person's profile, contact details included>, <the Saved answers>, <the "
+        "person's answers to its earlier questions>, <the letter's text>, <the documents on "
+        "the browser>."
+    ),
     "app.apply.agents.AnswerDefinition": (
         "One line saying what to do, then four data blocks taken from the fill held in the "
         "worker: <the form's open questions: label, kind, options, required>, <the person's "
@@ -274,8 +281,20 @@ def _in_an_import() -> Ceiling:
     )
 
 
+def _in_an_agent_fill() -> Ceiling:
+    from app.apply import applier
+
+    # One click Apply's agent (apply A19) runs inside the fill job, which ends it at the code's
+    # wall time (applier.WALL_TIME_S, its lease's hour).
+    return Ceiling(
+        applier.APPLY_AGENT.wall_time_s,
+        "It runs inside One click Apply's fill, which ends it at the code's wall time.",
+    )
+
+
 # The agents that run inside another module's job: the bound of that job, from its constants.
 _INSIDE: dict[str, Callable[[], Ceiling]] = {
+    "apply_agent": _in_an_agent_fill,
     "apply_answer": _in_a_fill,
     "apply_check": _in_a_decision,
     "apply_form": _in_a_fill_form,

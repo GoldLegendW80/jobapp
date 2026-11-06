@@ -101,7 +101,7 @@ def test_every_recorded_stream_parses(name: str) -> None:
     variables = {"model": "claude-opus-5-5", "session_id": "s", "message": "m", "job_id": "j"}
     seen = []
     for step in steps:
-        assert set(step) <= {"sleep", "message", "raise"}, step
+        assert set(step) <= {"sleep", "message", "raise", "if_prompt", "unless_prompt"}, step
         if "message" in step:
             message = fake_backend.parse_message(fake_backend._fill(step["message"], variables))
             seen.append(type(message))
