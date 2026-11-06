@@ -20,6 +20,7 @@ ROUTER_MODULES: tuple[str, ...] = (
     "manual_router",  # A9: Apply myself's panel
     "profile_router",  # A18a: Complete my profile on this site, the run
     "profile_approve_router",  # A18b: its gate and its save
+    "bulk_router",  # Apply to the selected postings of the Jobs list and the map
 )
 
 

@@ -118,21 +118,43 @@ def _cv_base(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> uuid.UUI
     return None
 
 
+def lock_documents(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> None:
+    """Lock 2 then lock 3 on each of the posting's documents, CV then letter (store.py, as
+    `freeze.on_status`): no run settles or starts under them until the transaction ends."""
+    store.lock_posting(db, user_id, posting_id)
+    for found in store.posting_documents(db, user_id, posting_id):
+        store.lock_document(db, user_id, found.id)
+
+
+def kinds_to_ask(current: documents.Current) -> tuple[Kind, ...]:
+    """What a click asks of the documents module for the documents `current` shows: the CV and
+    its letter, the letter alone once a CV is there, or nothing (a document there, or being
+    rendered). A running generation keeps its document (`generate.give_way`), so what is asked
+    in the end is this or less."""
+    if _missing(current.cv):
+        return (Kind.cv, Kind.letter) if _missing(current.letter) else (Kind.cv,)
+    if current.cv.version is not None and _missing(current.letter):
+        return (Kind.letter,)
+    return ()
+
+
+def writing_estimate(
+    db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, kinds: tuple[Kind, ...]
+) -> estimate.RunEstimate:
+    """The estimate `ask_documents` stores on the generation it starts for `kinds`."""
+    base_id = _cv_base(db, user_id, posting_id) if kinds[0] is Kind.letter else None
+    return estimate.for_posting(db, user_id, posting_id, base_id)
+
+
 def ask_documents(
     db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, at: datetime
 ) -> tuple[Kind, ...]:
     """Step 2 of the module docstring, in the caller's transaction, under the posting's row lock
     (so no posting document appears meanwhile). Every choice below reads the documents under
-    lock 3, CV then letter (store.py, as `freeze.on_status`): no run settles or starts under it."""
-    store.lock_posting(db, user_id, posting_id)
-    for found in store.posting_documents(db, user_id, posting_id):
-        store.lock_document(db, user_id, found.id)
-    current = documents.current(db, user_id, posting_id)
-    if _missing(current.cv):
-        kinds = (Kind.cv, Kind.letter) if _missing(current.letter) else (Kind.cv,)
-    elif current.cv.version is not None and _missing(current.letter):
-        kinds = (Kind.letter,)
-    else:
+    lock 3 (`lock_documents`)."""
+    lock_documents(db, user_id, posting_id)
+    kinds = kinds_to_ask(documents.current(db, user_id, posting_id))
+    if not kinds:
         return ()
     first = store.get_or_create(db, user_id, posting_id, kinds[0], at=at)
     if not generate.give_way(db, first, at):
@@ -141,7 +163,7 @@ def ask_documents(
         # The letter follows the new CV (generate.start_letter); an automatic one gives way.
         generate.give_way(db, store.get_or_create(db, user_id, posting_id, Kind.letter, at=at), at)
     base_id = _cv_base(db, user_id, posting_id) if kinds[0] is Kind.letter else None
-    figures = estimate.for_posting(db, user_id, posting_id, base_id)
+    figures = writing_estimate(db, user_id, posting_id, kinds)
     stored: dict[str, object] = dict(estimate.as_json(figures))
     if len(kinds) == 2:
         stored[generate.LETTER_FOLLOWS] = True
