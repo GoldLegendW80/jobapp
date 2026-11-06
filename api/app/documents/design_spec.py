@@ -12,8 +12,9 @@
   `body` (the most characters), `entry title` (the body's size, heavier), `small` (smaller
   than the body), else `meta line`.
 - `headings`: the texts of the runs of the section heading styles, in reading order, as `texts`
-  gives them (scrubbed: design_capture.scrub, a replaced text left out), HEADINGS_MAX at most, LABEL_MAX characters each:
-  what a template's `labels` may print (design_capture.labels_of accepts nothing else).
+  gives them (scrubbed: design_capture.scrub, a replaced text left out), HEADINGS_MAX at most,
+  LABEL_MAX characters each: what a template's `labels` may print (design_capture.labels_of
+  accepts nothing else).
 - `pages`: per page the background, the four margins, the rules (thickness, colour, extent),
   the filled boxes (colour, corner radius), the bullet dots (diameter, colour, x), the photo
   boxes and their shape, every length in pt.
