@@ -55,7 +55,7 @@ import re
 import secrets
 import unicodedata
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from datetime import date
 from functools import cache
 from html.parser import HTMLParser
@@ -165,6 +165,8 @@ class Template:
     thumbnail_of: str
     files: Mapping[str, str]  # FILES: their text
     folder: Path | None = None  # None: a person's own template (a row, D25b)
+    # The template's own section labels per language, over the shared ones of labels.json.
+    labels: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     def steps(self, kind: str) -> tuple[Step, ...]:
         return self.kinds[kind].steps
@@ -276,6 +278,31 @@ MANIFEST_KEYS = frozenset(
         "thumbnail_of",
     )
 )
+OPTIONAL_KEYS = frozenset(("labels",))
+LABEL_KEYS = (
+    "summary", "highlights", "competencies", "experience", "education", "skills", "languages",
+    "contact", "subject",
+)  # fmt: skip
+_SEPARATOR = re.compile(r"[\u2013\u2014]| - ")
+
+
+def _labels(slug: str, value: object) -> dict[str, dict[str, str]]:
+    """A manifest's own labels: per language some of LABEL_KEYS, each a short plain text."""
+    if not isinstance(value, dict) or not set(value) <= set(LANGUAGES):
+        raise TemplateError(slug, "labels: per language, en or fr")
+    out: dict[str, dict[str, str]] = {}
+    for language, items in value.items():
+        if not isinstance(items, dict) or not set(items) <= set(LABEL_KEYS):
+            raise TemplateError(slug, f"labels: {language} names only {', '.join(LABEL_KEYS)}")
+        for key, text in items.items():
+            if not isinstance(text, str) or not 0 < len(text.strip()) <= 40 or text != text.strip():
+                raise TemplateError(
+                    slug, f"labels: {language}.{key} is a text of 1 to 40 characters"
+                )
+            if _SEPARATOR.search(text) or "<" in text:
+                raise TemplateError(slug, f"labels: {language}.{key} holds a dash or a <")
+        out[language] = dict(items)
+    return out
 
 
 def from_files(
@@ -287,7 +314,7 @@ def from_files(
     missing = sorted(MANIFEST_KEYS - set(manifest))
     if missing:
         raise TemplateError(slug, f"manifest without {', '.join(missing)}")
-    extra = sorted(set(manifest) - MANIFEST_KEYS)
+    extra = sorted(set(manifest) - MANIFEST_KEYS - OPTIONAL_KEYS)
     if extra:
         raise TemplateError(slug, f"manifest with unknown {', '.join(extra)}")
     if not isinstance(manifest["slug"], str) or not SLUG.match(slug):
@@ -335,6 +362,7 @@ def from_files(
         thumbnail_of=manifest["thumbnail_of"],
         files={name: files[name] for name in FILES},
         folder=folder,
+        labels=_labels(slug, manifest.get("labels", {})),
     )
     try:
         environment(template)
@@ -881,17 +909,23 @@ def contact_lines(view: ProfileView) -> list[dict[str, str | None]]:
     identity = view.identity
     lines: list[dict[str, str | None]] = []
     if identity.email:
-        lines.append({"text": identity.email, "href": "mailto:" + quote(identity.email, "@.+_-")})
+        lines.append(
+            {
+                "text": identity.email,
+                "href": "mailto:" + quote(identity.email, "@.+_-"),
+                "kind": "email",
+            }
+        )
     if identity.phone:
-        lines.append({"text": identity.phone, "href": None})
+        lines.append({"text": identity.phone, "href": None, "kind": "phone"})
     place = ", ".join(part for part in (identity.city, identity.country) if part)
     if place:
-        lines.append({"text": place, "href": None})
+        lines.append({"text": place, "href": None, "kind": "place"})
     seen: set[str] = set()
     for url in (identity.linkedin_url, identity.website, *(url for _, url in identity.links)):
         if url and url not in seen:
             seen.add(url)
-            lines.append({"text": _shown(url), "href": _https(url)})
+            lines.append({"text": _shown(url), "href": _https(url), "kind": "link"})
     return lines
 
 
@@ -983,7 +1017,7 @@ def build_html(
     style = Markup(token)  # noqa: S704
     context = {
         "lang": language,
-        "labels": labels()[language],
+        "labels": {**labels()[language], **template.labels.get(language, {})},
         "kind": kind,
         "content": data,
         "name": profile_view.identity.full_name,

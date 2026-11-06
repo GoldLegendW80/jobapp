@@ -1,0 +1,108 @@
+/* band: a light grey page, a dark band with rounded corners across the top, a label column on
+   the left and the body on the right, round bullets. Inter Tight is the bundled stand in for
+   the original's TT Commons Pro, measured closest in shape and width. The density comes from
+   the step on :root: --body-size, --line-height, --section-gap, --item-gap, --margin. */
+@page { size: A4; background: #f8f8f8; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Inter Tight", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #262525;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; font-weight: inherit; font-size: inherit; }
+a { color: inherit; text-decoration: none; }
+li, p, h3 { overflow-wrap: anywhere; }
+
+.band {
+  display: flex;
+  align-items: flex-start;
+  gap: 12pt;
+  margin: 10.5pt 2pt 0 0;
+  padding: 1.43em 13pt 1.36em 14.9pt;
+  background: #262525;
+  color: #f8f8f8;
+  border-radius: 8pt;
+  margin-bottom: 0.3pt;
+}
+.photo {
+  width: 40pt;
+  height: 40pt;
+  object-fit: cover;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+.who { flex: 1 1 0; min-width: 0; }
+.name { font-size: 1.8em; font-weight: 700; line-height: 1.1; }
+.headline { font-size: 1.3em; font-weight: 700; line-height: 1.15; }
+.contact {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  text-align: right;
+  line-height: 1.35;
+  margin-top: 1.5pt;
+  flex: 0 0 auto;
+  max-width: 55%;
+}
+.contact .phone { order: 1; }
+.contact .email { order: 2; }
+.contact .place { order: 3; }
+.contact .link { order: 4; }
+
+/* the band is 14.9pt wider than the text on the left and 13pt on the right */
+.row, .letter-body { margin: 0 15pt 0 14.9pt; }
+.row {
+  display: flex;
+  margin-top: 2.4pt;
+  padding-top: var(--section-gap);
+}
+.row.group { margin-top: 0; padding-top: var(--item-gap); }
+.summary { line-height: 1.35; }
+.label {
+  flex: 0 0 92.7pt;
+  padding-right: 8pt;
+  font-weight: 700;
+}
+.body { flex: 1 1 auto; min-width: 0; }
+.dots { list-style: none; font-size: 0.9em; }
+.dots li { position: relative; padding-left: 15.3pt; }
+.dots li::before {
+  content: "";
+  position: absolute;
+  left: 3.8pt;
+  top: 0.5em;
+  width: 3pt;
+  height: 3pt;
+  border-radius: 50%;
+  background: #262525;
+}
+.rule {
+  margin: var(--section-gap) 15pt 0 107.6pt;
+  border-top: 1.5pt solid #262525;
+}
+.rule + .row { margin-top: 4.1pt; padding-top: var(--item-gap); }
+
+.entry + .entry { margin-top: var(--item-gap); }
+.entry .dots { padding-bottom: 4.2pt; }
+.entry:last-child .dots { padding-bottom: 2.5pt; }
+.title { font-weight: 700; }
+.meta { font-size: 0.8em; font-style: italic; margin-top: 3pt; line-height: 1.34; }
+.meta + .meta { margin-top: 0; }
+.entry .dots { margin-top: 3.8pt; }
+.items { font-size: 0.9em; }
+
+.letter-body { padding: 28pt 0 0 92.7pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.subject strong { font-weight: 700; }
+.paragraph { white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }

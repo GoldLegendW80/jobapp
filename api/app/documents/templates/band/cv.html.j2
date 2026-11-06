@@ -1,0 +1,104 @@
+{#- band: a dark band with rounded corners across the top holds the name, the headline and the
+    contact lines on the right; under it one row per section, its label on the left and its
+    body on the right, and a rule over the body column after the skills and after the
+    education. Each skill group is a row of its own, under its own label. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<header class="band">
+{{ base.portrait() }}
+<div class="who">
+<h1 class="name">{{ base.words(name) }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+</div>
+{% if contact %}
+<ul class="contact">
+{% for line in contact %}
+<li class="{{ line.kind }}">{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+</header>
+
+{% if content.summary %}
+<section class="row">
+<h2 class="label">{{ base.label("summary") }}</h2>
+<div class="body"><p class="summary">{{ content.summary }}</p></div>
+</section>
+{% endif %}
+
+{% if content.competencies or languages %}
+<section class="row">
+<h2 class="label">{{ base.label("competencies") }}</h2>
+<div class="body">
+<ul class="dots">
+{% for item in content.competencies %}
+<li>{{ item }}</li>
+{% endfor %}
+{% if languages %}
+<li class="langs">{{ base.label("languages") }}{{ " :" if lang == "fr" else ":" }} {% for item in languages %}{{ item.name }}{% if item.level %} ({{ item.level }}){% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</li>
+{% endif %}
+</ul>
+</div>
+</section>
+<div class="rule"></div>
+{% endif %}
+
+{% if roles %}
+<section class="row">
+<h2 class="label">{{ base.label("experience") }}</h2>
+<div class="body">
+{% for role in roles %}
+<article class="entry">
+<h3 class="title">{{ role.title }}{% if role.title and role.organisation %}, {% endif %}{{ role.organisation }}</h3>
+{% if role.period %}<p class="meta">{{ role.period }}</p>{% endif %}
+{% if role.location %}<p class="meta">{{ role.location }}</p>{% endif %}
+{% if role.bullets %}
+<ul class="dots">
+{% for item in role.bullets %}
+<li>{{ item }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+</article>
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if schools %}
+<section class="row">
+<h2 class="label">{{ base.label("education") }}</h2>
+<div class="body">
+{% for item in schools %}
+<article class="entry school">
+<h3 class="title">{{ item.degree }}</h3>
+{% if item.school %}<p class="meta">{{ item.school }}{% if item.location %}, {{ item.location }}{% endif %}</p>{% elif item.location %}<p class="meta">{{ item.location }}</p>{% endif %}
+{% if item.period %}<p class="meta">{{ item.period }}</p>{% endif %}
+</article>
+{% endfor %}
+</div>
+</section>
+<div class="rule"></div>
+{% endif %}
+
+{% if content.highlights %}
+<section class="row">
+<h2 class="label">{{ base.label("highlights") }}</h2>
+<div class="body">
+<ul class="dots">
+{% for item in content.highlights %}
+<li>{{ item }}</li>
+{% endfor %}
+</ul>
+</div>
+</section>
+{% endif %}
+
+{% for group in content.skills %}
+<section class="row group">
+<h2 class="label">{{ group.label }}</h2>
+<div class="body"><p class="items">{{ group["items"] | join(", ") }}</p></div>
+</section>
+{% endfor %}
+{% endblock %}

@@ -1,0 +1,133 @@
+/* photo-columns: Raleway throughout (the original's own font), capitals with wide tracking for
+   the name and the headings, thin rules that open each section, two columns under the profile.
+   The density comes from the step on :root: --body-size, --line-height, --section-gap,
+   --item-gap, --margin. */
+@page { size: A4; background: #ffffff; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Raleway", sans-serif;
+  font-weight: 500;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #1a1917;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; font-weight: inherit; font-size: inherit; }
+a { color: inherit; text-decoration: none; }
+li, p, h3 { overflow-wrap: anywhere; }
+
+/* the text is 9.4pt inside the page margin, the photo 2.9pt under its top */
+.head, .rule, .profile, .cols, .letter-body { margin-left: 9.4pt; margin-right: 9.4pt; }
+.head { display: flex; align-items: flex-start; margin-top: 2.9pt; }
+.photo {
+  flex: 0 0 auto;
+  width: 101.7pt;
+  height: 118.8pt;
+  object-fit: cover;
+  margin-right: 21.8pt;
+}
+.who { flex: 1 1 auto; padding-top: 16.3pt; min-width: 0; }
+.name {
+  font-size: 2.6em;
+  font-weight: 700;
+  line-height: 1.127;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.headline {
+  margin-top: 11.3pt;
+  font-size: 1.205em;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.contact {
+  flex: 0 0 158pt;
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  margin: 22.7pt 0 0 12pt;
+  font-size: 0.9em;
+  line-height: 1.25;
+  letter-spacing: 0.03em;
+}
+.contact li { position: relative; padding-left: 23.2pt; margin-bottom: 9.75pt; }
+.contact li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 13.1pt;
+  height: 11.2pt;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+.contact .email::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNiAxNiI+PHBhdGggZmlsbD0iIzFhMTkxNyIgZD0iTTAgMGgyNnYxNkgweiIvPjxwYXRoIGQ9Ik0xIDEuMmwxMiA4LjMgMTItOC4zIiBmaWxsPSJub25lIiBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMS43Ii8+PC9zdmc+); height: 7.9pt; top: 1.6pt; }
+.contact .phone::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAyMiI+PHBhdGggZmlsbD0iIzFhMTkxNyIgZD0iTTMuMiAxLjFjMS0uOSAyLjQtLjcgMy4xLjRsMS43IDNjLjUgMSAuMyAyLjEtLjYgMi43TDYgOC4xYy43IDIuNCAxLjkgNC42IDMuNiA2LjNsMS40LS44YzEtLjUgMi4xLS4zIDIuNy42bDEuOSAyLjhjLjcgMSAuNSAyLjMtLjUgMy4xbC0xLjQgMUM4LjggMjIuNC45IDEyLjkuOSA0LjUuOSAzLjEgMS45IDIgMy4yIDEuMXoiLz48L3N2Zz4=); }
+.contact .link::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMiAyMiI+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMWExOTE3IiBzdHJva2Utd2lkdGg9IjEuNyI+PGNpcmNsZSBjeD0iMTEiIGN5PSIxMSIgcj0iOS42Ii8+PGVsbGlwc2UgY3g9IjExIiBjeT0iMTEiIHJ4PSI0LjMiIHJ5PSI5LjYiLz48cGF0aCBkPSJNMS40IDExaDE5LjJNMi44IDYuMmgxNi40TTIuOCAxNS44aDE2LjQiLz48L2c+PC9zdmc+); }
+.contact .place::before { background-image: url(data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxOCAyNiI+PHBhdGggZmlsbD0iIzFhMTkxNyIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNOSAwQzQgMCAwIDQgMCA5YzAgNi41IDkgMTcgOSAxN3M5LTEwLjUgOS0xN2MwLTUtNC05LTktOXptMCAxMi42YTMuNiAzLjYgMCAxIDEgMC03LjIgMy42IDMuNiAwIDAgMSAwIDcuMnoiLz48L3N2Zz4=); height: 12.8pt; top: -0.6pt; }
+.contact .email { order: 1; }
+.contact .phone { order: 2; }
+.contact .link { order: 3; }
+.contact .place { order: 4; }
+
+.rule { border-top: 0.75pt solid #1a1917; margin-top: var(--section-gap); }
+.heading {
+  font-size: 1.3em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+.profile { padding-top: 19.5pt; }
+.head { padding-bottom: 8.5pt; }
+.profile .heading { margin-bottom: 9.4pt; }
+.summary { line-height: 1.575; }
+
+.cols { display: flex; margin-top: 3.5pt; padding-top: var(--section-gap); }
+.left { flex: 0 0 199.9pt; margin-right: 32.2pt; }
+.right { flex: 1 1 auto; min-width: 0; }
+.block { border-top: 0.75pt solid #1a1917; padding: 4.2pt 0 1.6pt; margin-bottom: var(--section-gap); }
+.block > .heading { margin-top: var(--section-gap); }
+.block:last-child { margin-bottom: 0; padding-bottom: 0; }
+.block .heading { margin-bottom: 10.2pt; }
+.title {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.org { font-weight: 400; letter-spacing: 0.05em; }
+.period, .lines { letter-spacing: 0.05em; }
+.entry .title, .entry .org, .entry .period { padding-bottom: 0.03em; }
+.entry + .entry { margin-top: var(--item-gap); }
+.role + .role { margin-top: var(--section-gap); }
+.role .text + .text { margin-top: 1.5pt; }
+.role .org + .text { margin-top: 3.3pt; }
+.group + .group { margin-top: 8.3pt; }
+.lines { list-style: none; }
+.dots { list-style: none; color: #07113c; }
+.dots li { padding-bottom: 0.15em; }
+.dots li { position: relative; padding-left: 6.5pt; }
+.dots li::before {
+  content: "";
+  position: absolute;
+  left: -4.5pt;
+  top: 0.6em;
+  width: 3pt;
+  height: 3pt;
+  border-radius: 50%;
+  background: #07113c;
+}
+
+.letter-body { padding-top: 26pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.subject strong { font-weight: 700; }
+.paragraph { white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); letter-spacing: 0.05em; text-transform: uppercase; }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
