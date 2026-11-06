@@ -421,8 +421,9 @@ def thumbnail_hash(
 ) -> str:
     """The hash of what a thumbnail is drawn from: the folder's files other than the
     thumbnails, the manifest without its `thumbnail_of`, the files of `_base/` (the macros, the
-    labels, the sample), the icons of `_icons/` and the fonts of its families (each `family.json` and face file). What
-    `thumbnail_of` must equal: a change to any of them makes the thumbnails stale."""
+    labels, the sample), the icons of `_icons/` and the fonts of its families (each
+    `family.json` and face file). What `thumbnail_of` must equal: a change to any of them makes
+    the thumbnails stale."""
     digest = hashlib.sha256()
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     manifest.pop("thumbnail_of", None)
