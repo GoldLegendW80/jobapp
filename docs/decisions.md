@@ -406,3 +406,8 @@ The owner's answers during the product audit, in the session that built them.
 - 2026-11-06, the job title ideas: "I don't want day limit for more ideas". "More ideas" and the
   messages to the assistant have no daily limit; one run at a time and five clicks a minute stay
   as guards against repeated clicks.
+- 2026-11-06, Apply on a Jobs list row and Apply to a selection (owner: "yes confirmation, no
+  caps"): a row's Apply opens the confirmation of a selection of one (the posting, its documents
+  ready or written first, what the review box makes it do) and starts on "Apply to 1"; the
+  posting page's Apply keeps its one click. Apply to a selection leaves the company caps and the
+  daily safety ceiling out, as one click Apply does.

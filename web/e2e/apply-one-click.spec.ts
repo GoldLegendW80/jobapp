@@ -314,7 +314,15 @@ test("box unticked, no documents: Apply on the Jobs list row writes them, then t
       name: `Apply to ${title} at ${person.posting.company}`,
     })
     .click();
-  // One click, still on the list: the row links to the application under way.
+  // A confirmation first (owner, 2026-11-06: "yes confirmation"): it names the posting and
+  // that its CV and letter are written first; its Apply to 1 starts it.
+  const confirm = page.getByRole("alertdialog", {
+    name: "Apply to 1 posting?",
+  });
+  await expect(confirm).toContainText(`${person.posting.company}, ${title}`);
+  await confirm.getByRole("button", { name: "Apply to 1" }).click();
+  await confirm.getByRole("button", { name: "Close" }).click();
+  // Still on the list: the row links to the application under way.
   await expect(
     page.getByRole("link", {
       name: `Applying: the application to ${title} at ${person.posting.company}`,

@@ -1,17 +1,17 @@
 /**
- * Apply on a row of the Jobs list (owner, 2026-11-05: "Apply also appears on Jobs list rows"): the
- * posting page's Apply in one click, offered under the same conditions (no application under way,
- * LinkedIn allowed, the apply settings read) with the same reasons in a Tooltip while it waits.
- * The click is the same call as the posting page's Apply (`startApplication(id, "apply")`): the
- * person's approval in one click Apply, the review in Review first, the documents written first
- * when the posting has none. A row with an application under way links to it instead.
+ * Apply on a row of the Jobs list (owner, 2026-11-05: "Apply also appears on Jobs list rows"),
+ * offered under the posting page's conditions (no application under way, LinkedIn allowed, the
+ * apply settings read) with the same reasons in a Tooltip while it waits. A misclick is easier on
+ * a list, so the click opens a confirmation first (owner, 2026-11-06: "yes confirmation"): the
+ * list's one dialog of Apply to a selection (`BulkApplyDialog`, opened by `onApply` with this
+ * posting alone), which names the posting, its documents ready or written first, and what the
+ * review box makes it do; its "Apply to 1" starts it as one Apply click. A row with an
+ * application under way links to it instead.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,
   TooltipContent,
@@ -19,14 +19,10 @@ import {
 } from "@/components/ui/tooltip";
 import { getLinkedIn, linkedinKey } from "@/features/browser/linkedin-api";
 import type { JobListItem } from "@/features/jobs/api";
-import { describeError } from "@/lib/api";
 
 import {
-  applicationsKey,
   recentApplications,
   recentApplicationsKey,
-  refusalOf,
-  startApplication,
   type Application,
 } from "./apply-api";
 import { applyDoesFromList, applyWaits, linkedInOf } from "./apply-offer";
@@ -54,14 +50,16 @@ export function ApplyRow({
   job,
   from,
   focusable,
+  onApply,
 }: {
   job: JobListItem;
   /** The list's query string, so the posting page can come back to the same view. */
   from: string;
   /** The row has the list's focus: its button is the next tab stop. */
   focusable: boolean;
+  /** Opens the list's confirmation for this posting. */
+  onApply: (postingId: string) => void;
 }) {
-  const queryClient = useQueryClient();
   const recent = useQuery({
     queryKey: recentApplicationsKey,
     queryFn: ({ signal }) => recentApplications(signal),
@@ -80,23 +78,6 @@ export function ApplyRow({
     queryFn: ({ signal }) => getLinkedIn(signal),
     enabled: onLinkedIn,
   });
-  const start = useMutation({
-    mutationFn: () => startApplication(job.id, "apply"),
-    onSuccess: (started) => {
-      queryClient.setQueryData(applicationsKey(job.id), started);
-      toast.success(`Applying to ${job.company}. Follow it on the posting.`);
-    },
-    onError: (error) => {
-      toast.error(refusalOf(error)?.detail ?? describeError(error));
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: recentApplicationsKey });
-      void queryClient.invalidateQueries({
-        queryKey: applicationsKey(job.id),
-      });
-    },
-  });
-
   const latest = recent.data ? latestOf(recent.data, job.id) : null;
   const phase = phaseOf(latest);
   if (recent.data && phase !== "idle") {
@@ -123,7 +104,7 @@ export function ApplyRow({
     : recent.isError
       ? "Your applications could not be read. Open the posting to apply."
       : "Reading your applications";
-  const disabled = waits !== null || start.isPending;
+  const disabled = waits !== null;
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -135,16 +116,13 @@ export function ApplyRow({
             variant="outline"
             className="h-7 px-2.5 text-xs"
             disabled={disabled}
-            aria-busy={start.isPending}
             tabIndex={focusable ? 0 : -1}
             aria-label={`Apply to ${job.title} at ${job.company}`}
+            aria-haspopup="dialog"
             onClick={() => {
-              start.mutate();
+              onApply(job.id);
             }}
           >
-            {start.isPending ? (
-              <Spinner aria-hidden="true" role={undefined} />
-            ) : null}
             Apply
           </Button>
         </span>
