@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import uuid
 from typing import Any
@@ -27,6 +28,7 @@ from app.documents import (
     consent,
     design_capture,
     design_check,
+    fidelity,
     render_client,
     render_job,
     store,
@@ -531,21 +533,66 @@ def test_the_docx_names_and_fonts_go_through_the_secret_rules() -> None:
     assert layout["theme"]["minor"] == "Arimo"  # mapped by code, never the file's string
 
 
-def test_decide_allows_one_repair_and_one_fidelity_pass() -> None:
+def _measured(score: float) -> fidelity.Measure:
+    """A measure whose score is `score`: the page ink and the share of lines in place alike."""
+    return fidelity.Measure(score, 100, 100, round(score * 100), 0.5, 0.5, 1.0, 1.0, ())
+
+
+def test_decide_allows_one_repair_then_fidelity_passes_that_keep_the_best() -> None:
     bad = (Problem("style.css", 0, "covered", "name at the loosest step"),)
-    files = {"style.css": "a"}
 
-    def run(*answers: tuple[Problem, ...], passes: int = 2) -> list[str]:
+    def run(*answers, passes: int = 4) -> tuple[list[str], design_capture.RunState]:
         state = design_capture.RunState()
-        return [design_capture.decide(state, files, found, passes) for found in answers]
+        said = []
+        for at, (found, score) in enumerate(answers):
+            files = {"style.css": f"version {at}"}
+            measure = None if score is None else _measured(score)
+            said.append(design_capture.decide(state, files, found, passes, measure))
+            said[-1] = said[-1].split("\n")[0]
+        return said, state
 
-    assert run((), ()) == [design_capture.ACCEPTED, design_capture.STORED]
-    assert run((), bad) == [design_capture.ACCEPTED, design_capture.KEPT]
-    assert run(bad, (), ())[1:] == [design_capture.ACCEPTED, design_capture.STORED]
-    assert run(bad, bad, ())[1:] == [design_capture.REFUSED, design_capture.NO_MORE]
-    assert run(bad, (), (), ())[3] == design_capture.NO_MORE
-    assert run((), passes=0) == [design_capture.STORED]
-    assert run(bad, (), passes=1)[1] == design_capture.STORED
+    first = design_capture.ACCEPTED.split("\n")[0]
+    better, not_better = design_capture.BETTER, design_capture.NOT_BETTER
+    # the passes stop when the score stops rising, and the best is the one kept
+    said, state = run(((), 0.60), ((), 0.70), ((), 0.80), ((), 0.803))
+    assert said == [first, better, better, not_better]
+    assert state.accepted == {"style.css": "version 2"}
+    assert state.best == pytest.approx(0.80)
+    assert state.closed
+    # a later pass that is worse leaves the best in place
+    said, state = run(((), 0.70), ((), 0.50))
+    assert said == [first, not_better]
+    assert state.accepted == {"style.css": "version 0"}
+    # a pass that breaks the rules keeps the best
+    said, state = run(((), 0.60), ((), 0.75), (bad, None))
+    assert said == [first, better, design_capture.KEPT]
+    assert state.accepted == {"style.css": "version 1"}
+    # at most `passes` fidelity passes after the first accepted template
+    said, state = run(((), 0.1), ((), 0.2), ((), 0.3), passes=2)
+    assert said == [first, better, design_capture.STORED]
+    assert run(((), 0.1), ((), 0.2), ((), 0.3), ((), 0.4), passes=2)[0][3] == design_capture.NO_MORE
+    # one repair, then the end
+    assert run((bad, None), ((), 0.5))[0] == [run((bad, None))[0][0], first]
+    assert run((bad, None), (bad, None), ((), 0.9))[0][1:] == [
+        design_capture.REFUSED,
+        design_capture.NO_MORE,
+    ]
+    assert run(((), 0.5), passes=0)[0] == [design_capture.STORED]
+    # a DOCX has no page to measure on: its one correction is taken as before
+    said, state = run(((), None), ((), None), passes=1)
+    assert said == [first, design_capture.STORED]
+    assert state.accepted == {"style.css": "version 1"}
+
+
+def test_the_measure_reaches_the_writer_in_words_and_the_row_in_numbers() -> None:
+    offset = fidelity.Offset("EXPERIENCE", 0.2, 4.8, 0.0)
+    found = fidelity.Measure(0.81, 50, 49, 47, 0.4, 0.7, 1.2, 4.8, (offset,))
+    words = design_capture.said(found)
+    assert "47 of 50 lines in place" in words
+    assert 'The line "EXPERIENCE" is 4.8pt lower than in the CV.' in words
+    summary = found.summary()
+    assert summary["in_place"] == 47
+    assert "EXPERIENCE" not in json.dumps(summary)
 
 
 def test_the_estimate_counts_the_images() -> None:
