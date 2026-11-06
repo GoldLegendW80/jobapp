@@ -285,9 +285,16 @@ LABEL_KEYS = (
     "summary", "highlights", "competencies", "experience", "education", "skills", "languages",
     "contact", "subject",
 )  # fmt: skip
-# A dash used as a separator (hard rule 1): any dash but the hyphen, a spaced hyphen, or a hyphen
-# that opens or ends the label; a hyphenated word ("Self-employed") stays.
-LABEL_SEPARATOR = re.compile(r"[\u2012-\u2015\u2212]|\s-|-\s|^-|-$")
+# A dash used as a separator (hard rule 1): any dash but the hyphen (Unicode's dash punctuation,
+# the minus sign, the small and the two and three em dashes, the wave dashes), a spaced hyphen,
+# or a hyphen that opens or ends the label, in any of its forms (U+002D, U+2010, U+2011, the
+# small and the full width hyphen-minus); a hyphenated word ("Self-employed") stays.
+_HYPHENS = "\\-\u2010\u2011\ufe63\uff0d"
+_DASHES = "\u058a\u05be\u1400\u1806\u2012-\u2015\u2212\u2e17\u2e1a\u2e3a\u2e3b\u2e40\u2e5d"
+_DASHES += "\u301c\u3030\u30a0\ufe31\ufe32\ufe58"
+LABEL_SEPARATOR = re.compile(
+    f"[{_DASHES}]|\\s[{_HYPHENS}]|[{_HYPHENS}]\\s|^[{_HYPHENS}]|[{_HYPHENS}]$"
+)
 
 
 def _labels(slug: str, value: object) -> dict[str, dict[str, str]]:
