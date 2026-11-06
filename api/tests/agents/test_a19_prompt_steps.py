@@ -1,6 +1,7 @@
 """The fake backend's steps kept for one prompt (`if_prompt`, `unless_prompt`), and One click
-Apply's recorded stream (apply A19, `apply_agent.json`): its first run, whose first message lacks
-the person's answer, asks and stops; the run after the answer types it and reports submitted."""
+Apply's recorded stream (apply A19 and A20, `apply_agent.json`): a run whose first message lacks
+the answer never asks (A20): it types its own and names it as chosen; a run with the answer types
+it; with review_first it names the send (`apply_ready`); with gate_clicked it only reads."""
 
 from __future__ import annotations
 
@@ -37,17 +38,14 @@ def tools(prompt: str) -> list[tuple[str, dict]]:
     return made
 
 
-def test_the_apply_agent_stream_asks_then_uses_the_answer() -> None:
-    asked = tools(ASKED)
-    assert asked[-1] == (
-        "browser_ask_person",
-        {
-            "reason": "The form asks for the notice period, which the profile does not hold.",
-            "field": "What is your notice period?",
-            "kind": "fact",
-        },
-    )
-    assert "apply_done" not in [name for name, _ in asked]
+def test_the_apply_agent_stream_never_asks_and_uses_the_answer_it_has() -> None:
+    chose = tools(ASKED)
+    names = [name for name, _ in chose]
+    assert "browser_ask_person" not in names
+    assert ("browser_type", {"ref": "e22", "text": "One month"}) in chose
+    assert chose[-1][0] == "apply_done"
+    assert chose[-1][1]["outcome"] == "submitted"
+    assert chose[-1][1]["chosen"][0]["field"] == "What is your notice period?"
     for prompt in (ANSWERED, SAVED):
         made = tools(prompt)
         names = [name for name, _ in made]
@@ -57,5 +55,17 @@ def test_the_apply_agent_stream_asks_then_uses_the_answer() -> None:
         assert made[-1][1]["outcome"] == "submitted"
         # Every call is one of the agent's own tools (an unknown name would be denied).
         assert set(names) <= set(applier.TOOLS)
-    # The first run's calls are the second's first ones: the same page, the same refs.
-    assert tools(ANSWERED)[: len(asked) - 1] == asked[:-1]
+    # The same page, the same refs, up to the notice period.
+    assert tools(ANSWERED)[:9] == chose[:9]
+
+
+def test_review_first_names_the_send_and_after_the_gate_only_reads() -> None:
+    review = tools(json.dumps({"review_first": True, "saved_answers": {"q": "Six weeks"}}))
+    names = [name for name, _ in review]
+    assert names[-1] == "apply_ready"
+    assert review[-1][1]["submit_ref"] == "e23"
+    assert ("browser_click", {"ref": "e23"}) not in review
+    assert "apply_done" not in names
+    gate = tools(json.dumps({"gate_clicked": True, "review_first": True, "posting": {}}))
+    assert [name for name, _ in gate] == ["browser_wait_for", "browser_snapshot", "apply_done"]
+    assert set(names) | {"apply_done"} <= set(applier.TOOLS)

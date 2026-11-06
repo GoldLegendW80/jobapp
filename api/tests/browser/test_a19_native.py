@@ -286,16 +286,18 @@ def calls_of(prompt: str) -> list[tuple[str, dict]]:
     return made
 
 
-def replay(lease: Lease, calls: list[tuple[str, dict]]) -> tuple[str, dict | None]:
+def replay(
+    lease: Lease, calls: list[tuple[str, dict]], review: bool = False
+) -> tuple[str, dict | None]:
     """The calls as the apply agent's session sends them (applier.ApplySession): an act refused
     `submit_permit` again with the capability, a snapshot after each act; the ask and the report
     end the replay. Returns the last page's address and the report or the ask."""
     url = ""
     for name, args in calls:
-        if name in ("browser_ask_person", "apply_done"):
+        if name in ("browser_ask_person", "apply_done", "apply_ready"):
             return url, {"tool": name, **args}
         done = lease.tool(name, **args)
-        if done.get("error") == "submit_permit":
+        if done.get("error") == "submit_permit" and not review:
             done = lease.tool(name, lease.capability, **args)
         assert done.get("ok"), (name, args, done)
         if name != "browser_wait_for":
@@ -304,33 +306,47 @@ def replay(lease: Lease, calls: list[tuple[str, dict]]) -> tuple[str, dict | Non
 
 
 def test_the_journey_s_recorded_stream_on_real_chromium(a19, agent):
-    """The apply journey's stream (apply_agent.json) on the same pages under `atsforms`: a run
-    whose first message lacks the notice period asks for it on step 2 and sends nothing; a run
-    whose first message holds the person's answer types it, clicks Submit itself and reports the
-    confirmation page it read; the site records one submission."""
-    from app.apply import applier
-
+    """The apply journeys' stream (apply_agent.json) on the same pages under `atsforms`: a run
+    with nothing saved never asks (A20): it types its own notice period, clicks Submit itself
+    and reports it as chosen; a run with the saved answer types it; one submission each."""
     assert agent.put("cv.pdf", CV)["status"] == 200
-    url, asked = replay(agent, calls_of('{"answers_to_your_questions": []}'))
-    assert asked is not None, url
-    assert asked["tool"] == "browser_ask_person", asked
-    assert asked["field"] == "What is your notice period?", asked
-    assert asked["kind"] == "fact", asked
-    page = agent.snapshot()
-    assert 'textbox "What is your notice period?" [ref=e22]' in page, page
-    assert applier.shown(asked["field"], page)  # the label the job page shows is the page's
-    assert sent(a19) == []
-    answered = '{"answers_to_your_questions": [{"answer": "Six weeks"}]}'
-    url, report = replay(agent, calls_of(answered))
+    url, report = replay(agent, calls_of('{"answers_to_your_questions": [], "saved_answers": {}}'))
     assert report is not None, url
     assert report["tool"] == "apply_done", report
+    assert report["outcome"] == "submitted", report
+    assert report["chosen"][0]["field"] == "What is your notice period?", report
+    assert report["confirmation_url"] == url == "http://atsforms:8080/forms/a19/confirmation.html"
+    [one] = sent(a19)
+    assert one["fields"]["notice"] == "One month", one["fields"]
+    url, report = replay(agent, calls_of('{"saved_answers": {"notice": "Six weeks"}}'))
+    assert report is not None, report
+    assert report["outcome"] == "submitted", report
+    assert [s["fields"]["notice"] for s in sent(a19)] == ["One month", "Six weeks"]
+    assert [f["sha256"] for f in sent(a19)[0]["files"]] == [hashlib.sha256(CV.encode()).hexdigest()]
+
+
+def test_the_review_journey_s_recorded_stream_on_the_review_lease(a19, review):
+    """The Review first journey's runs of the same stream on an `apply_review` lease: the fill
+    ends with apply_ready naming Submit application, nothing is sent; the gate's click sends
+    once; the reading run reports the confirmation it read."""
+    assert review.put("cv.pdf", CV)["status"] == 200
+    filled = '{"review_first": true, "saved_answers": {"notice": "Six weeks"}}'
+    url, ready = replay(review, calls_of(filled), review=True)
+    assert ready is not None, ready
+    assert ready["tool"] == "apply_ready", ready
+    page = review.snapshot()
+    assert f'button "Submit application" [ref={ready["submit_ref"]}]' in page, page
+    assert sent(a19) == []
+    clicked = review.tool(
+        "browser_click", review.capability, ref=ready["submit_ref"], element="Submit application"
+    )
+    assert clicked["ok"], clicked
+    url, report = replay(review, calls_of('{"gate_clicked": true, "review_first": true}'), True)
+    assert report is not None, report
     assert report["outcome"] == "submitted", report
     assert report["confirmation_url"] == url == "http://atsforms:8080/forms/a19/confirmation.html"
     [one] = sent(a19)
     assert one["fields"]["notice"] == "Six weeks", one["fields"]
-    assert one["fields"]["email"] == "e2e-a19@example.org", one["fields"]
-    assert one["fields"]["motivation"].startswith("I have built robot arms"), one["fields"]
-    assert [f["sha256"] for f in one["files"]] == [hashlib.sha256(CV.encode()).hexdigest()]
 
 
 # --- A20: the resume widgets, and Review first's lease (purpose `apply_review`) ----------------

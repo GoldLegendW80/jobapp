@@ -1216,7 +1216,7 @@ async def _confirmed(
         return held
     read = Ran(stopped="no_agent")
     if services.agent is not None and session.clicked:
-        message = {"gate_clicked": True, "posting": brief.posting}
+        message = {"gate_clicked": True, "review_first": True, "posting": brief.posting}
         read = await services.agent(session, json.dumps(message, ensure_ascii=False))
     total = Ran(
         ran.input_tokens + read.input_tokens, ran.output_tokens + read.output_tokens, read.stopped
