@@ -18,7 +18,14 @@ from pathlib import Path
 import pypdfium2 as pdfium
 import pytest
 
-from app.documents import design_capture, design_check, render_client, template_rules, templates
+from app.documents import (
+    design_capture,
+    design_check,
+    render_client,
+    template_css,
+    template_rules,
+    templates,
+)
 from app.documents.render_client import Checked, RenderError
 from app.ingestion.parser_client import DesignPdf
 from app.profile.schemas import URL_MAX, IdentitySection
@@ -143,6 +150,16 @@ def test_a_style_that_hides_a_field_is_refused_with_its_field(
 ) -> None:
     found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
     assert any(p.code == code and p.detail.startswith(f"{field} ") for p in found), (name, found)
+
+
+# #757 round 1 (B1): print paints an `@page` background under every page, and the check's
+# screenshots never did, so a text in the page's own colour passed while the PDF was black on
+# black. The check page now carries the colour on `html`.
+def test_a_page_background_in_the_text_colour_is_refused_with_contrast(stack: Stack) -> None:
+    css = "@page { background: #111111; } body { color: #111111; }"
+    assert template_css.page_background(css, "#2563eb") == "#111111"
+    found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
+    assert any(p.code == "contrast" for p in found), found
 
 
 # PR #518 round 2: what only another content shape shows (both refused statically too, by

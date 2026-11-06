@@ -73,7 +73,7 @@ from app.documents import content as c
 from app.documents import corrections
 from app.documents.profile_view import ProfileView
 from app.documents.rules import SoftLimits
-from app.documents.template_css import ENFORCED_CSS
+from app.documents.template_css import ENFORCED_CSS, page_background
 
 ROOT = Path(__file__).resolve().parent
 BASE = ROOT / "_base"
@@ -1014,9 +1014,13 @@ def build_html(
     rendered_on: date,
     *,
     photo: str | None = None,
+    paint_page: bool = False,
 ) -> str:
     """The HTML of one document at one density step (see the module docstring). `photo` is a
-    `data:` address made by `photo.embed`, printed only when the template has a photo slot."""
+    `data:` address made by `photo.embed`, printed only when the template has a photo slot.
+    `paint_page`: the page of design_check's `/check` only, never a stored render: print paints
+    an `@page` background the check's screenshots do not, so it is set on `html` before the
+    sheet, where a sheet's own `html` or `body` background still wins as it does in print."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind}")
     if language not in LANGUAGES:
@@ -1074,7 +1078,10 @@ def build_html(
     if page.count(token) != 1:
         raise TemplateError(template.slug, "the style is not printed exactly once")
     css = step.css() + f":root{{--accent:{template.accent}}}" + icon_css()
-    css += template.files["style.css"]
+    sheet = template.files["style.css"]
+    if paint_page and (colour := page_background(sheet, template.accent)):
+        css += f"html{{background-color:{colour}}}"
+    css += sheet
     css += ENFORCED_CSS
     faces, names = font_css(template.fonts, html.unescape(page.replace(token, "")) + css)
     page = page.replace(token, faces + with_fallbacks(css, names), 1)

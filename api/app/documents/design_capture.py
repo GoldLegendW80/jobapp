@@ -136,10 +136,10 @@ class Inputs:
     pages: tuple[bytes, ...]  # JPEG, image boxes grey; () for a DOCX
     notes: tuple[str, ...]  # codes of CAPTURE_NOTES
     # D28, for a PDF: the extraction itself (the fidelity measure matches its lines; never
-    # stored, never logged) and the original's section headings as scrubbed (labels_of)
+    # stored, never logged) and the original's section headings as scrubbed, a replaced one
+    # left out (design_spec.measured): the only texts labels_of accepts
     design: parser_client.DesignPdf | None = None
     headings: tuple[str, ...] = ()
-    texts: frozenset[str] = frozenset()  # every run's text, trimmed and scrubbed: labels_of
 
 
 def scrub(texts: list[str]) -> list[str]:
@@ -291,12 +291,7 @@ async def read_inputs(raw: bytes, mime: str) -> Inputs:
     notes += ["two_pages"] if design.pages > 1 else []
     layout = _pdf_layout(design, faces)
     headings = tuple(layout["measured"]["headings"])
-    texts = frozenset(t.strip() for page in layout["read"] for t in _texts(page) if t.strip())
-    return Inputs("pdf", tokens, photo, layout, pages, _notes(notes), design, headings, texts)
-
-
-def _texts(page: Mapping[str, Any]) -> list[str]:
-    return [run[0] for run in page["runs"]]
+    return Inputs("pdf", tokens, photo, layout, pages, _notes(notes), design, headings)
 
 
 def _notes(codes: Any) -> tuple[str, ...]:
@@ -513,14 +508,16 @@ def labels_of(
     proposed: object, inputs: Inputs, language: str
 ) -> tuple[dict[str, dict[str, str]] | None, tuple[Problem, ...]]:
     """The labels the writer proposes for the template (key: the original's heading), each
-    accepted only when its text is exactly, trimmed, the text of a run of the upload (as the
-    model read it, scrubbed), of 1 to design_spec.LABEL_MAX characters, without a dash used as
-    a separator or a `<`; given for the base CV's `language` only."""
+    accepted only when its text is exactly, trimmed, one of the upload's own section headings
+    (`inputs.headings`: as the model read them, scrubbed, a replaced one left out), of 1 to
+    design_spec.LABEL_MAX characters, without a dash used as a separator or a `<`; given for
+    the base CV's `language` only. Any other text of the upload (the name, a headline, an
+    organisation) would print on every later document outside the fact check: refused."""
     if proposed is None or proposed == {}:
         return None, ()
     if not isinstance(proposed, dict) or len(proposed) > len(template_rules.LABELS):
         return None, (Problem("labels", 0, "labels", "labels: an object of label keys"),)
-    texts = inputs.texts
+    headings = frozenset(inputs.headings)
     problems = []
     for key, text in proposed.items():
         if key not in template_rules.LABELS:
@@ -529,9 +526,9 @@ def labels_of(
             problems.append(Problem("labels", 0, "labels", f"labels: {key}: 1 to 40 characters"))
         elif LABEL_DASH.search(text.strip()) or "<" in text:
             problems.append(Problem("labels", 0, "labels", f"labels: {key} holds a dash or a <"))
-        elif text.strip() not in texts or text.strip() == REDACTED:
+        elif text.strip() not in headings or text.strip() == REDACTED:
             problems.append(
-                Problem("labels", 0, "labels", f"labels: {key} is not a text of the upload")
+                Problem("labels", 0, "labels", f"labels: {key} is not a heading of the upload")
             )
     if problems:
         return None, tuple(problems)

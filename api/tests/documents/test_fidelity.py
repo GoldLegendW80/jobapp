@@ -76,6 +76,44 @@ def test_the_lines_of_a_pdf_are_read_with_their_baselines_and_sizes() -> None:
     assert second.y - first.y == pytest.approx(14, abs=0.2)
 
 
+# #757 round 1 (B3): Chromium sets its text through a 0.75 matrix; the font size alone read
+# every rendered line 4/3 of its size, and those phantom sizes ranked first.
+def test_the_size_of_a_line_is_read_through_its_text_matrix() -> None:
+    by_text = {line.text: line for line in fidelity.candidate_lines(fx.scaled())}
+    assert by_text["ALEX EXAMPLE"].size == pytest.approx(18, abs=0.05)
+    assert by_text["EXPERIENCE"].size == pytest.approx(12, abs=0.05)
+    assert by_text["Wrote their software"].size == pytest.approx(10, abs=0.05)
+    assert by_text["ALEX EXAMPLE"].x == pytest.approx(60, abs=0.2)
+    assert by_text["ALEX EXAMPLE"].y == pytest.approx(842 - 750, abs=0.2)
+    assert fidelity.text_height(0.75, 0, 0, 0.75) == pytest.approx(0.75)
+    assert fidelity.text_height(0, 2, -2, 0) == pytest.approx(2)  # turned a quarter
+    assert fidelity.text_height(1, 0, 0.3, 1) == pytest.approx(1)  # slanted
+
+
+@pytest.mark.parametrize("built", [fx.scaled, fx.measured], ids=["scaled", "identity"])
+def test_a_pdf_measured_against_itself_has_no_offset_and_no_sentence(built) -> None:
+    """The original's lines as design_capture gives them (design_pdf, then `_pdf_layout`)
+    against the candidate's (candidate_lines) of the very same PDF."""
+    from app.documents import design_capture
+    from app.ingestion import parser_client as pc
+    from tests.ingestion.parser.helpers import Plenty, as_in_the_child, sandbox_handler
+    from tests.ingestion.parser.helpers import sandbox_module
+
+    data = built()
+    with as_in_the_child():
+        main, design_pdf = sandbox_module("main"), sandbox_handler("design_pdf")
+        read = pc.check_design_pdf(pc.loads(main.encode(design_pdf.handle(data, {}, Plenty()))))
+    original = fidelity.original_lines(design_capture._pdf_layout(read))
+    candidate = fidelity.candidate_lines(data)
+    assert len(original) >= 3
+    found = fidelity.measure_lines(original, candidate, 1.0)
+    assert found.matched == found.lines == len(original)
+    assert found.in_place == found.lines
+    assert found.max_dx == found.max_dy == 0
+    assert all(abs(a.size - b.size) < 0.25 for a, b in fidelity.match(original, candidate))
+    assert found.sentences() == []
+
+
 def test_the_overlay_is_a_jpeg_of_the_originals_size() -> None:
     jpeg = fidelity.overlay(page(), page(5))
     with Image.open(io.BytesIO(jpeg)) as image:

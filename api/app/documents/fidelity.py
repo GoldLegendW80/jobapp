@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import difflib
 import io
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from statistics import mean
@@ -148,8 +149,17 @@ def original_lines(layout: Mapping[str, Any], page: int = 0) -> list[Line]:
     return lines_of(pieces)
 
 
+def text_height(a: float, b: float, c: float, d: float) -> float:
+    """How far the text matrix (a, b, c, d) puts one unit of text space from the baseline, as
+    design_pdf reads a run's size (its `_height`): Chromium sets its text through a 0.75
+    matrix, so the font size alone reads every line 4/3 of its size (B3 of #757)."""
+    advance = math.hypot(a, b)
+    return abs(a * d - b * c) / advance if advance > 0 else math.hypot(c, d)
+
+
 def candidate_lines(pdf: bytes) -> list[Line]:
-    """The lines of page 1 of a PDF the app's renderer made (our own file, never an upload)."""
+    """The lines of page 1 of a PDF the app's renderer made (our own file, never an upload);
+    each character's size is its font size through its text matrix, as design_pdf reads it."""
     import ctypes
 
     import pypdfium2 as pdfium
@@ -163,6 +173,7 @@ def candidate_lines(pdf: bytes) -> list[Line]:
             top = page.get_size()[1]
             text = page.get_textpage()
             x, y = ctypes.c_double(), ctypes.c_double()
+            matrix = pdfium_c.FS_MATRIX()
             for index in range(text.count_chars()):
                 ch = text.get_text_range(index, 1)
                 if not ch or ch.isspace():
@@ -170,8 +181,10 @@ def candidate_lines(pdf: bytes) -> list[Line]:
                     continue
                 left, _, right, _ = text.get_charbox(index, loose=True)
                 pdfium_c.FPDFText_GetCharOrigin(text.raw, index, ctypes.byref(x), ctypes.byref(y))
-                size = pdfium_c.FPDFText_GetFontSize(text.raw, index)
-                pieces.append((ch, left, right, top - y.value, abs(size)))
+                size = abs(pdfium_c.FPDFText_GetFontSize(text.raw, index))
+                if pdfium_c.FPDFText_GetMatrix(text.raw, index, ctypes.byref(matrix)):
+                    size *= text_height(matrix.a, matrix.b, matrix.c, matrix.d)
+                pieces.append((ch, left, right, top - y.value, size))
             text.close()
             page.close()
         finally:

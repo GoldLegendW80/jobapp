@@ -432,7 +432,15 @@ async def _one(
     sample = canary(kind, shape)
     photo = grey_photo() if template.photo != "none" else None
     html = templates.build_html(
-        template, kind, sample.content, sample.view, "en", step, sample.rendered_on, photo=photo
+        template,
+        kind,
+        sample.content,
+        sample.view,
+        "en",
+        step,
+        sample.rendered_on,
+        photo=photo,
+        paint_page=True,
     )
     texts = tuple(text for _, text in sample.needles)
     file = f"{kind}.html.j2"

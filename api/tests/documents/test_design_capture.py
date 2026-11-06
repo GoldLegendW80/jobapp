@@ -89,10 +89,17 @@ def jpeg(width: int = 300, height: int = 424) -> bytes:
     return out.getvalue()
 
 
-def design(*texts: str, scanned: bool = False, pages: int = 2) -> DesignPdf:
+def design(
+    *texts: str, scanned: bool = False, pages: int = 2, headings: tuple[str, ...] = ()
+) -> DesignPdf:
+    """A page of `texts` in one body style, then `headings` as section headings (capitals, at
+    the body's size, met twice or more: design_spec's role)."""
     runs = tuple(
         TextRun(text, (600, 600 + 200 * n, 3000, 720 + 200 * n), 0, 100, "#1d232b")
         for n, text in enumerate(texts)
+    ) + tuple(
+        TextRun(text, (600, 600 + 200 * n, 3000, 720 + 200 * n), 0, 100, "#1d232b", caps=True)
+        for n, text in enumerate(headings, start=len(texts))
     )
     page = DesignPage(
         index=0,
@@ -614,17 +621,25 @@ def test_the_estimate_counts_the_images() -> None:
     assert asyncio.iscoroutinefunction(design_check.check_template)
 
 
-def _inputs_with(texts: set[str]) -> design_capture.Inputs:
+def _inputs_with(headings: tuple[str, ...]) -> design_capture.Inputs:
     tokens = template_rules.from_pdf(parser_client.DesignPdf(1, False, False, (), (), ()))
-    return design_capture.Inputs("pdf", tokens, "none", {}, (), (), texts=frozenset(texts))
+    return design_capture.Inputs("pdf", tokens, "none", {}, (), (), headings=headings)
 
 
 LABEL_CASES = [
     ({"experience": "Expériences Professionnelles"}, None),
     ({"summary": "About me", "languages": "Langues parlées"}, None),
     ({"summary": "  About me  "}, None),  # trimmed, as the run's text is
-    ({"summary": "About you"}, "not a text of the upload"),
-    ({"summary": design_capture.REDACTED}, "not a text of the upload"),
+    ({"summary": "About you"}, "not a heading of the upload"),
+    ({"summary": design_capture.REDACTED}, "not a heading of the upload"),
+    # #757 round 1 (B2): a run text of the upload that is no heading would print on every later
+    # document, outside the fact check
+    ({"summary": "Morgan Exampleton"}, "not a heading of the upload"),  # the name
+    ({"summary": "Platform Engineer"}, "not a heading of the upload"),  # a headline
+    ({"experience": "Example Robotics"}, "not a heading of the upload"),  # an organisation
+    ({"summary": "About me", "skills": "Led a team of 12"}, "not a heading of the upload"),
+    ({"summary": "about me"}, "not a heading of the upload"),  # case: exact text only
+    ({"summary": "About  me"}, "not a heading of the upload"),
     ({"summary": "About - me"}, "a dash"),
     ({"summary": "About – me"}, "a dash"),
     ({"summary": "-About"}, "a dash"),
@@ -639,16 +654,35 @@ LABEL_CASES = [
 
 @pytest.mark.parametrize(("proposed", "said"), LABEL_CASES)
 def test_a_label_is_taken_only_as_the_exact_text_of_a_heading_of_the_upload(proposed, said):
-    texts = {"Expériences Professionnelles", "About me", "Langues parlées", "About - me",
-             "About – me", "-About", "About <b>", "x" * 41, design_capture.REDACTED}  # fmt: skip
-    labels, problems = design_capture.labels_of(proposed, _inputs_with(texts), "fr")
+    headings = ("Expériences Professionnelles", "About me", "Langues parlées", "About - me",
+                "About – me", "-About", "About <b>", "x" * 41, design_capture.REDACTED)  # fmt: skip
+    labels, problems = design_capture.labels_of(proposed, _inputs_with(headings), "fr")
     if said is None:
         assert problems == ()
         assert labels == {"fr": {k: v.strip() for k, v in proposed.items()}}
     else:
         assert labels is None
         assert any(said in p.detail for p in problems), problems
-    assert design_capture.labels_of(None, _inputs_with(texts), "fr") == (None, ())
+    assert design_capture.labels_of(None, _inputs_with(headings), "fr") == (None, ())
+
+
+def test_the_name_a_headline_and_an_organisation_of_a_real_layout_are_no_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inputs as read_inputs builds them from an extraction: only the section heading runs
+    are labels; every other run text is refused."""
+    found = design(
+        "Morgan Exampleton", "Platform Engineer", "Example Robotics", headings=("PROFILE", "SKILLS")
+    )
+    Services(monkeypatch, found)
+    inputs = asyncio.run(design_capture.read_inputs(PDF, "application/pdf"))
+    assert inputs.headings == ("PROFILE", "SKILLS")
+    labels, problems = design_capture.labels_of({"summary": "PROFILE"}, inputs, "en")
+    assert (labels, problems) == ({"en": {"summary": "PROFILE"}}, ())
+    for text in ("Morgan Exampleton", "Platform Engineer", "Example Robotics"):
+        labels, problems = design_capture.labels_of({"summary": text}, inputs, "en")
+        assert labels is None
+        assert [p.detail for p in problems] == ["labels: summary is not a heading of the upload"]
 
 
 def test_several_measured_passes_keep_the_best_with_the_uploads_heading_as_label(
@@ -656,7 +690,8 @@ def test_several_measured_passes_keep_the_best_with_the_uploads_heading_as_label
 ) -> None:
     """documents_design_passes: four accepted submits; the measure rises, then falls: the
     second best is stored with its label, the numbers of its measure, and no text of the CV."""
-    services = Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    layout = design("Morgan Exampleton", "Platform Engineer", headings=("PROFILE", "SKILLS"))
+    services = Services(monkeypatch, layout)
     # the score of each version, read from the sheet the renderer was given last (a submit and
     # a view_render measure the same version alike)
     scores = {".pass0 ": 0.50, ".pass1 ": 0.62, ".pass2 ": 0.70, ".pass3 ": 0.40}
@@ -675,7 +710,7 @@ def test_several_measured_passes_keep_the_best_with_the_uploads_heading_as_label
     (row,) = own_templates(who.factory, who.user)
     assert ".pass2 " in row.css
     assert ".pass3 " not in row.css
-    assert row.manifest["labels"] == {"en": {"summary": "Platform Engineer"}}
+    assert row.manifest["labels"] == {"en": {"summary": "PROFILE"}}
     kept = row.manifest["capture"]["fidelity"]
     assert kept["score"] == pytest.approx(0.70)
     assert kept["in_place"] == 70

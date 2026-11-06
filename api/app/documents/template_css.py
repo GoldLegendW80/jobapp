@@ -1007,12 +1007,9 @@ def _on_root(selector: Selector) -> bool:
     return root and not part.classes and part.pseudo <= {"root"}
 
 
-def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css") -> list[Problem]:
-    """The problems of a template's style sheet (see the module docstring)."""
-    rules, problems = parse(css, file)
-    if not rules:
-        return problems or _density(rules, file)
-    names = frozenset(font_map.FAMILIES[f].name.casefold() for f in fonts if f in font_map.FAMILIES)
+def _customs(rules: Sequence[Rule], accent: str, file: str, problems: list[Problem]) -> dict:
+    """The custom properties a sheet sets on `:root` (or `html`), once each, to a value of
+    `_custom`; what is wrong with the others goes to `problems`."""
     customs: dict[str, Part] = {}
     seen: set[str] = set()
     for rule in rules:
@@ -1035,6 +1032,38 @@ def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css"
                 continue
             if _custom(found):
                 customs[d.prop] = found[0]
+    return customs
+
+
+def page_background(css: str, accent: str) -> str | None:
+    """The `#rrggbb` an `@page` rule of the sheet paints the page with (the last one, as the
+    cascade reads it), or None. Print paints it under every page while the render check's
+    screenshots never do, so design_check paints it on the check page itself (B1 of #757)."""
+    rules, _ = parse(css, "style.css")
+    customs = _customs(rules, accent, "style.css", [])
+    colour: str | None = None
+    for rule in rules:
+        if rule.selectors is not None or rule.first:
+            continue
+        for d in rule.declarations:
+            if d.prop not in ("background", "background-color"):
+                continue
+            try:
+                found = parts(d.value, customs, accent)
+            except _Bad:
+                continue
+            if len(found) == 1 and _colour(found[0]):
+                colour = found[0][1]
+    return colour
+
+
+def check(css: str, fonts: tuple[str, ...], accent: str, file: str = "style.css") -> list[Problem]:
+    """The problems of a template's style sheet (see the module docstring)."""
+    rules, problems = parse(css, file)
+    if not rules:
+        return problems or _density(rules, file)
+    names = frozenset(font_map.FAMILIES[f].name.casefold() for f in fonts if f in font_map.FAMILIES)
+    customs = _customs(rules, accent, file, problems)
     for rule in rules:
         if rule.first:  # refused whole, its declarations are not judged one by one
             detail = "@page :first: the repository's templates only"

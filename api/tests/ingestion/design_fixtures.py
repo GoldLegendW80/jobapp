@@ -368,3 +368,17 @@ def measured() -> bytes:
             + b"Q\n"
         ]
     )
+
+
+def scaled() -> bytes:
+    """Lines set as Chromium prints them: through a 0.75 matrix (`q 0.75 0 0 0.75 0 0 cm`), so
+    a font size of 24 is an 18pt line, 13.333 a 10pt one, and the positions scale too."""
+    lines = (
+        ("ALEX EXAMPLE", 80, 1000, 24, "F1"),
+        ("Lead engineer at Example Robotics", 80, 960, 14.6667, "F2"),
+        ("EXPERIENCE", 80, 880, 16, "F1"),
+        ("Planned the robots of Example", 80, 850, 13.3333, "F2"),
+        ("Wrote their software", 80, 830, 13.3333, "F2"),
+    )
+    body = b"".join(text(words, x, y, font=font, size=size) for words, x, y, size, font in lines)
+    return build([b"q 0.75 0 0 0.75 0 0 cm\n" + body + b"Q\n"])
