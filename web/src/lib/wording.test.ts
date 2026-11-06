@@ -78,12 +78,8 @@ describe("wording", () => {
     ]).toEqual(["Job titles", "Unwanted titles", "Places", "Unwanted places"]);
   });
 
-  it("names the three thresholds apart", () => {
-    const names = [
-      WORDING.showPostingsFrom,
-      WORDING.writeDocumentsFrom,
-      WORDING.applyAutomaticallyFrom,
-    ];
-    expect(new Set(names).size).toBe(3);
+  it("names the two thresholds apart", () => {
+    const names = [WORDING.showPostingsFrom, WORDING.applyAutomaticallyFrom];
+    expect(new Set(names).size).toBe(2);
   });
 });

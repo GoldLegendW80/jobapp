@@ -21,7 +21,8 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * sends is given the `journey` streams (`documents_cv_journey`, `documents_letter_journey`) on
  * its way out: the default ones are written for another profile (their employer keys are no
  * fixed employer of this one) and would end without a result. Add a posting with fit 80, open
- * it, write its CV and letter with one click, see both page 1 previews and "Based on" naming the
+ * it, write its CV and letter with one click (each rebuilt by its hiring panel, the letter after
+ * the CV's panel, the page reading meanwhile), see both page 1 previews and "Based on" naming the
  * base CV; the posting is `cv_ready` and its badge says so without a reload. Open the CV, download
  * the PDF. Write the CV again from a copy of the base CV: the letter follows it. A posting with
  * fit 40 says it is written on a click (D29) and "Write now" writes its CV.
@@ -138,17 +139,20 @@ test("both cards are written with one click and show a one page preview", async 
   );
   await section.getByRole("button", { name: "Write both now" }).click();
 
+  // Each document goes through the hiring panel (D29): its version 2 is the panel's rebuild, and
+  // the letter is written after the CV's panel ends.
   await expect
     .poll(
       async () =>
         (await documentsOf(high)).map((one) => one.latest?.number ?? 0),
       { timeout: 150_000, intervals: [500, 1_000, 2_000] },
     )
-    .toEqual([1, 1]);
+    .toEqual([2, 2]);
   const [cv] = (await documentsOf(high)).filter((one) => one.kind === "cv");
-  await waitForRender(page.request, cv?.id ?? "", 1);
+  await waitForRender(page.request, cv?.id ?? "", 2);
 
-  // No reload from here on: the page reads the letter that follows the CV, and the posting.
+  // No reload from here on: the page reads while the panels run, the letter that follows the CV,
+  // and the posting.
   for (const [card, noun] of [
     ["posting-cv", "CV"],
     ["posting-letter", "letter"],
@@ -156,7 +160,7 @@ test("both cards are written with one click and show a one page preview", async 
     const one = section.getByTestId(card);
     await expect(one).toContainText("Ready, on one page", { timeout: 60_000 });
     await expect(
-      one.getByRole("img", { name: `Page 1 of the ${noun}, version 1` }),
+      one.getByRole("img", { name: `Page 1 of the ${noun}, version 2` }),
     ).toBeVisible();
     await expect(
       one.getByRole("link", { name: `Open the ${noun}`, exact: true }),
@@ -221,7 +225,7 @@ test("the CV written again from another base CV takes the letter along", async (
         (await documentsOf(high)).map((one) => one.latest?.number ?? 0),
       { timeout: 150_000, intervals: [500, 1_000, 2_000] },
     )
-    .toEqual([2, 2]);
+    .toEqual([4, 4]); // written again (3), then rebuilt by the hiring panel (4)
   expect(written.at(-1)).toEqual({
     kinds: ["cv", "letter"],
     base_document_id: copy.id,
@@ -253,7 +257,7 @@ test("a posting at a low fit says it is written on a click, and Write now writes
           ?.number ?? 0,
       { timeout: 150_000, intervals: [500, 1_000, 2_000] },
     )
-    .toBe(1);
+    .toBe(2); // version 2: the hiring panel's rebuild of the CV
   await expect(cv).toContainText("Ready, on one page", { timeout: 60_000 });
   expect(errors).toEqual([]);
 });

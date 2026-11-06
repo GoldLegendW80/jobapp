@@ -188,6 +188,23 @@ describe("the Panel tab", () => {
     }
   });
 
+  it("says a posting sent during the panel keeps the version sent", async () => {
+    serve(
+      fakePanel({
+        status: "failed",
+        failed: ["posting_applied"],
+        rebuilt_version: null,
+        screen_after: null,
+      }),
+    );
+    show(<PanelPanel document={document} generation={null} />);
+    const failed = await screen.findByTestId("panel-failed");
+    expect(failed).toHaveTextContent(
+      "No rewrite: the posting was sent meanwhile, so the version sent stays",
+    );
+    expect(failed.textContent).not.toMatch(DASHES);
+  });
+
   it("never says a mistake was fixed when the rewrite did not finish", async () => {
     serve(
       fakePanel({

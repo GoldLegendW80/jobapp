@@ -388,6 +388,56 @@ def test_a_placeholder_never_reaches_a_cv() -> None:
     assert {r.reason for r in records} == {corrections.PLACEHOLDER_REASON}
 
 
+@pytest.mark.parametrize(
+    "placeholder",
+    [
+        "[ADD: team size]",
+        "[add the team size",
+        "[À AJOUTER : taille de l'équipe]",
+        "[a ajouter]",
+        "[AJOUTER le nombre]",
+        "[À compléter]",
+        "[INSERT number]",
+        "[TBD]",
+        "[TBC: dates]",
+        "[TODO]",
+        "[to do: metrics]",
+        "[Your title]",
+        "[Votre poste]",
+        "[Nom de l'entreprise]",
+        "[XX]",
+        "[COMPANY NAME]",
+        "[NOMBRE D'ANNÉES]",
+        "{ADD: a number}",
+        "[ à préciser ]",
+        "[Insérer le chiffre]",
+    ],
+)
+def test_every_bracketed_placeholder_in_english_or_french_is_dropped(placeholder: str) -> None:
+    text = f"Runs the platform {placeholder} for payments."
+    content = c.parse(Kind.cv, {**CV, "summary": text})
+    fixed, records = corrections.drop_placeholders(Kind.cv, content)
+    assert fixed.summary is not None
+    assert "[" not in fixed.summary and "{" not in fixed.summary
+    assert fixed.summary.startswith("Runs the platform")
+    assert [r.code for r in records] == [corrections.PLACEHOLDER]
+
+
+@pytest.mark.parametrize(
+    "kept",
+    [
+        "Moved 12 services to Kubernetes [2023].",
+        "Led the API guild [internal], then the platform team.",
+        "Wrote the billing service in Go.",
+        "Added tracing to every service.",  # "Added" outside a bracket is a fact
+    ],
+)
+def test_a_line_without_a_placeholder_is_kept(kept: str) -> None:
+    content = c.parse(Kind.cv, {**CV, "summary": kept})
+    fixed, records = corrections.drop_placeholders(Kind.cv, content)
+    assert (fixed.summary, records) == (kept, [])
+
+
 def test_the_brief_holds_every_field_of_an_invented_posting(world: World) -> None:
     text = "About Example Corp.\n- Five years of Go\n* Kubernetes in production\nWe pay well."
     posting = world.posting(72, text=text)
@@ -634,3 +684,14 @@ def test_strong_only_when_no_reviewer_chose_its_rejecting_verdict() -> None:
         assert panel.view(done)["strong"] is False, role.key
     done.reviews = {**good, "reader_ceo": {"verdict": "MAYBE"}}
     assert panel.view(done)["strong"] is True
+
+
+def test_the_writers_brief_leaves_the_whole_text_to_get_job() -> None:
+    from app.documents import writer_tools
+
+    planted = marker()
+    found = {"title": "Platform engineer", "text": f"{planted} " * 5_000, "requirements": ["Go"]}
+    shown = writer_tools.for_writer(found)
+    assert planted not in str(shown)
+    assert shown["text"] == writer_tools.BRIEF_TEXT_WHERE
+    assert (shown["title"], shown["requirements"]) == ("Platform engineer", ["Go"])

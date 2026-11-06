@@ -58,6 +58,7 @@ export function PostingDocumentCard({
   onChoose,
   cvReady,
   letterWritten,
+  afterPanel = false,
 }: {
   jobId: string;
   kind: Kind;
@@ -71,10 +72,12 @@ export function PostingDocumentCard({
   cvReady: boolean;
   /** The posting's letter has a version: a CV written again takes the letter along. */
   letterWritten: boolean;
+  /** The CV's hiring panel runs: a letter not written yet follows its end (D29). */
+  afterPanel?: boolean;
 }) {
   const queryClient = useQueryClient();
   const selectId = useId();
-  const state = cardState(document);
+  const state = cardState(document, afterPanel);
   const latest = document?.latest ?? null;
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: postingDocumentsKey(jobId) });
@@ -333,6 +336,12 @@ function StateLine({
       return (
         <p className="text-sm text-muted-foreground" data-testid="card-state">
           {state.message ?? "Preview not available right now"}
+        </p>
+      );
+    case "follows":
+      return (
+        <p className="text-sm text-muted-foreground" data-testid="card-state">
+          Written after the CV: the hiring panel is reviewing the CV first.
         </p>
       );
     case "empty":

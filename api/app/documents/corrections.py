@@ -86,7 +86,21 @@ NOT_PRINTABLE = "not_printable"
 # The hiring panel's `[ADD: ...]` (D29): a fix that needs a fact the profile lacks. The question
 # goes to the panel record; the bracket never reaches a CV or a letter (`drop_placeholders`).
 PLACEHOLDER = "placeholder"
-PLACEHOLDER_PATTERN = re.compile(r"\s*\[\s*ADD\b[^\]]*\]?", re.IGNORECASE)
+# The family, in English and French: a square or curly bracket opened on a word that asks for a
+# fact ([ADD: ...], [À AJOUTER], [AJOUTER], [INSERT], [TBD], [TODO], [Your title], [Nom de
+# l'entreprise], [XX], ...), closed or not, case and accents as the writer typed them; and any
+# bracket of capitals alone ([COMPANY NAME], [NOMBRE D'ANNÉES]), which no CV line holds.
+_ASKING = (
+    r"ADD|ADDS|ADDED|INSERT|FILL(?:\s+IN)?|TBD|TBC|TBA|TODO|TO\s+DO|PLACEHOLDER|MISSING|"
+    r"UNKNOWN|YOUR|X{2,}|(?:[AÀ]\s+)?AJOUTER|AJOUT|(?:[AÀ]\s+)?COMPL[EÉ]TER|INS[EÉ]RER|"
+    r"[AÀ]\s+(?:D[EÉ]FINIR|PR[EÉ]CISER|CONFIRMER|RENSEIGNER)|PR[EÉ]CISER|MANQUANT|INCONNU|"
+    r"VOTRE|NOM\s+DE|NOMBRE\s+DE"
+)
+PLACEHOLDER_PATTERN = re.compile(
+    r"\s*(?:[\[{]\s*(?:" + _ASKING + r")\b[^\]}]*[\]}]?"
+    r"|(?-i:\[\s*[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9 _/'’.-]{2,}(?::[^\]]*)?\]))",
+    re.IGNORECASE,
+)
 # A claim ambiguous by construction (`rules.POLICY`) that no token cut could take: the sentence
 # is kept as written and the record shows the person the claim (`before` equals `after`).
 NEEDS_REWRITE = rules.NEEDS_REWRITE

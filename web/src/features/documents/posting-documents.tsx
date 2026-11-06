@@ -30,9 +30,9 @@ import {
 
 /**
  * The "Documents" section of the job page (SPEC-documents.md, "Job detail page"): the posting's
- * CV and letter as two cards. The documents are read again while a generation is open or a page is
- * being drawn, and for a short while after the CV's generation closes, until the letter that follows
- * it has its own. The posting is read again when the work ends: the render that ends it may have
+ * CV and letter as two cards. The documents are read again while a generation is open, a page is
+ * being drawn or a hiring panel runs, and for a short while after the CV's generation and its panel
+ * end, until the letter that follows it has its own. The posting is read again when the work ends: the render that ends it may have
  * moved the posting to `cv_ready`.
  */
 export function PostingDocumentsSection({ job }: { job: JobDetail }) {
@@ -74,7 +74,9 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   }, [open, queryClient, job.id]);
 
   const cvGeneration = documentOf(documents.data, "cv")?.generation ?? null;
-  const cvOpen = isOpen(cvGeneration);
+  // The CV's hiring panel runs: the letter follows its end, not the CV generation's (D29).
+  const cvPanel = documentOf(documents.data, "cv")?.panel_running === true;
+  const cvOpen = isOpen(cvGeneration) || cvPanel;
   const letterOpen = isOpen(documentOf(documents.data, "letter")?.generation);
   const [cvWasOpen, setCvWasOpen] = useState(cvOpen);
   if (cvOpen !== cvWasOpen) {
@@ -109,7 +111,9 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const letterWritten =
     (documentOf(documents.data, "letter")?.latest ?? null) !== null;
   const untouched = (["cv", "letter"] as const).every(
-    (kind) => cardState(documentOf(documents.data, kind)).tag === "empty",
+    (kind) =>
+      cardState(documentOf(documents.data, kind), kind === "letter" && cvPanel)
+        .tag === "empty",
   );
 
   return (
@@ -167,6 +171,7 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                 onChoose={setChoice}
                 cvReady={cvReady}
                 letterWritten={letterWritten}
+                afterPanel={kind === "letter" && cvPanel}
               />
             ))}
           </div>

@@ -50,6 +50,8 @@ const FAILED: Record<string, string> = {
   merge: "The list of mistakes could not be made",
   rebuild: "The rewrite did not finish",
   rebuild_busy: "The rewrite could not start while another change was running",
+  posting_applied:
+    "No rewrite: the posting was sent meanwhile, so the version sent stays",
   screen_after: "The screen could not read the new version",
   panel_error: "The panel stopped before its end",
   not_queued: "The panel could not start",

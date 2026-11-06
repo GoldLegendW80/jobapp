@@ -265,9 +265,9 @@ export const WORDING = {
   findNewPostings: "Find new postings",
   rolesToNeverApplyFor: "Roles to never apply for",
   fitScore: "Fit score",
-  // The three thresholds, each card names its own so nobody confuses them.
+  // The two thresholds, each card names its own so nobody confuses them (documents are
+  // written on a click only since D29: no threshold of their own).
   showPostingsFrom: "Show postings from",
-  writeDocumentsFrom: "Write documents from",
   applyAutomaticallyFrom: "Apply automatically from",
   // The deck.
   like: "Like",

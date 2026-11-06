@@ -22,11 +22,21 @@ export type CardState =
   | { tag: "overflow" }
   | { tag: "ready" }
   | { tag: "unrendered"; message: string | null }
+  | { tag: "follows" }
   | { tag: "empty" };
 
-/** A document is written only on a click (documents D29): with none, the card says so. */
-export function cardState(document: PostingDocument | undefined): CardState {
+/**
+ * A document is written only on a click (documents D29): with none, the card says so. A letter
+ * not written yet while the CV's hiring panel runs (`afterPanel`) follows the panel's end: the
+ * card says so and offers no Write meanwhile.
+ */
+export function cardState(
+  document: PostingDocument | undefined,
+  afterPanel = false,
+): CardState {
   const generation = document?.generation ?? null;
+  if (afterPanel && !isOpen(generation) && (document?.latest ?? null) === null)
+    return { tag: "follows" };
   if (isOpen(generation) && generation !== null) {
     return generation.status === "waiting"
       ? { tag: "waiting", reason: generation.wait_reason }
@@ -48,14 +58,22 @@ export function cardState(document: PostingDocument | undefined): CardState {
   return { tag: "empty" };
 }
 
-/** True while a document still changes by itself: a generation open or a page being drawn. */
+/**
+ * True while a document still changes by itself: a generation open, a page being drawn, or the
+ * hiring panel reviewing and rebuilding it.
+ */
 export function isBusy(document: PostingDocument): boolean {
-  return isOpen(document.generation) || document.render.state !== "idle";
+  return (
+    isOpen(document.generation) ||
+    document.render.state !== "idle" ||
+    document.panel_running === true
+  );
 }
 
 /**
  * How soon to read the posting's documents again: the soonest of what each one is waiting for,
- * and every POLL_MS while a letter is expected and its generation is not there yet.
+ * every POLL_MS while a hiring panel runs, and while a letter is expected and its generation is
+ * not there yet.
  */
 export function postingPollInterval(
   documents: PostingDocuments | undefined,
@@ -66,7 +84,11 @@ export function postingPollInterval(
       ? POLL_MS
       : false;
   for (const one of documents?.documents ?? []) {
-    const every = pollInterval(one.render.state, one.generation);
+    // A running panel ends with a new version and, after a CV, its letter: read until it ends.
+    const every =
+      one.panel_running === true
+        ? POLL_MS
+        : pollInterval(one.render.state, one.generation);
     if (every !== false && (next === false || every < next)) next = every;
   }
   return next;

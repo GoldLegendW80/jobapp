@@ -146,13 +146,15 @@ export const postingDocumentSchema = documentSchema.extend({
   approved: z.number().nullable(),
   sent: z.array(z.number()),
   generation: generationBriefSchema.nullable(),
+  /** The hiring panel is reviewing or rebuilding it (D29): a CV's letter follows its end. */
+  panel_running: z.boolean().default(false),
 });
-export type PostingDocument = z.infer<typeof postingDocumentSchema>;
+export type PostingDocument = z.input<typeof postingDocumentSchema>;
 
 export const postingDocumentsSchema = z.object({
   documents: z.array(postingDocumentSchema),
 });
-export type PostingDocuments = z.infer<typeof postingDocumentsSchema>;
+export type PostingDocuments = z.input<typeof postingDocumentsSchema>;
 
 export const generationSchema = z.object({
   id: z.string(),
