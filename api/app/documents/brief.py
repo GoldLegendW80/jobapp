@@ -10,7 +10,9 @@ of the hiring panel gets it in its data block (panel.py).
 work mode, language, source and address, the whole posting text (the sweep stores up to
 `sweep.POSTING_TEXT_MAX` characters; a text at that size is marked `text_cut`: the app has no
 fetch of a posting page outside the sweep, so nothing is fetched again), the requirement lines
-drawn from the text (`requirement_lines`), and the fit analysis of the jobs module (the score,
+drawn from the text (`requirement_lines`), the parts of the text the brief names
+(`parts_of`: what the posting says about the company, the role, the profile, the benefits, the
+pay and the contract, under their headings), and the fit analysis of the jobs module (the score,
 the matched terms `competencies` and the missing ones `gaps`). The app stores nothing about a
 company beyond its name: `company.known` says so, and no reviewer may assume more.
 
@@ -25,6 +27,7 @@ in escaped data blocks, held in process, never logged.
 from __future__ import annotations
 
 import re
+import unicodedata
 import uuid
 from typing import Any
 
@@ -42,6 +45,68 @@ REQUIREMENT_CHARS = 300
 # A requirement line: a bullet, a dash, a star or a number that opens a line of the posting.
 _BULLET = re.compile(r"^\s*(?:[-*•●▪‣⁃]|\d{1,2}[.)])\s+(\S.*)$")  # noqa: RUF001 (bullet characters)
 TARGETS_MAX = 12
+SECTION_CHARS = 3_000
+HEADING_CHARS = 60
+# The parts of a posting the brief names, by the words of their heading (English and French,
+# case and accents folded by `_fold`). A heading is a short line that names one of them, alone
+# or before a colon ("About us", "Benefits:", "Salary: 50,000 EUR a year").
+PARTS: dict[str, tuple[str, ...]] = {
+    "about_company": (
+        "about us",
+        "about the company",
+        "who we are",
+        "our company",
+        "the company",
+        "qui sommes nous",
+        "a propos",
+        "l entreprise",
+        "notre entreprise",
+    ),
+    "responsibilities": (
+        "responsibilities",
+        "what you will do",
+        "what you ll do",
+        "your role",
+        "the role",
+        "your mission",
+        "missions",
+        "vos missions",
+        "le poste",
+        "about the role",
+        "about the job",
+        "about the position",
+    ),
+    "requirements_text": (
+        "requirements",
+        "qualifications",
+        "what you bring",
+        "who you are",
+        "your profile",
+        "you have",
+        "about you",
+        "profil recherche",
+        "votre profil",
+        "competences",
+    ),
+    "benefits": (
+        "benefits",
+        "perks",
+        "what we offer",
+        "why join us",
+        "why join",
+        "avantages",
+        "nous offrons",
+        "ce que nous offrons",
+    ),
+    "salary_text": ("salary", "compensation", "pay", "remuneration", "salaire"),
+    "contract_text": (
+        "contract",
+        "type of contract",
+        "employment type",
+        "contrat",
+        "type de contrat",
+    ),
+}
 
 
 def requirement_lines(text: str) -> list[str]:
@@ -59,6 +124,53 @@ def requirement_lines(text: str) -> list[str]:
         if len(found) >= REQUIREMENTS_MAX:
             break
     return found
+
+
+def _fold(text: str) -> str:
+    plain = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", plain.casefold()).split())
+
+
+def _heading(line: str) -> tuple[str, str] | None:
+    """The part a heading line opens and what follows its colon on the same line, else None."""
+    stripped = line.strip().strip("#*_ ").strip()
+    if not stripped:
+        return None
+    head, _, rest = stripped.partition(":")
+    if len(head) > HEADING_CHARS:
+        return None
+    folded = _fold(head)
+    for part, words in PARTS.items():
+        if folded in words:
+            return part, rest.strip()
+    # "About Example Robotics": the company's own name after "About".
+    if folded.startswith("about ") and len(folded) <= 40:
+        return "about_company", rest.strip()
+    return None
+
+
+def parts_of(text: str) -> dict[str, str]:
+    """The named parts of a posting's own text (`PARTS`): the lines under each heading up to the
+    next heading, each part at most SECTION_CHARS, the first of each name kept. A heuristic that
+    only adds: the whole text is in the brief too, so a part it misses is still read."""
+    found: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in text.splitlines():
+        opened = _heading(line)
+        if opened is not None:
+            part, rest = opened
+            current = part if part not in found else None
+            if current is not None:
+                found[current] = [rest] if rest else []
+            continue
+        if current is not None and line.strip():
+            found[current].append(line.strip())
+    out = {}
+    for part, lines in found.items():
+        joined = "\n".join(lines).strip()[:SECTION_CHARS]
+        if joined:
+            out[part] = joined
+    return out
 
 
 def _pay(job: Job) -> dict[str, Any] | None:
@@ -86,7 +198,10 @@ def for_posting(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> dict[
         "title": job.title,
         "company": {
             "name": job.company,
-            "known": "Only the name: the app stores nothing else about this company.",
+            "known": (
+                "The app stores nothing about this company beyond its name: what the posting "
+                "text says of it is in from_the_text.about_company when the text has that part."
+            ),
         },
         "location": job.location or None,
         "contract": job.contract_type.value,
@@ -99,6 +214,9 @@ def for_posting(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> dict[
         "text": text,
         "text_cut": len(text) >= TEXT_MAX,
         "requirements": requirement_lines(text),
+        # What the posting itself says of the company, the role, the profile, the benefits,
+        # the pay and the contract, when its text has such a part (`parts_of`).
+        "from_the_text": parts_of(text),
         "fit": {
             "score": job.fit,
             "matched": list(job.competencies or ()),

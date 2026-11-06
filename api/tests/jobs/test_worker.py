@@ -173,6 +173,7 @@ def test_a_queued_sweep_runs_and_the_worker_reports_healthy(
             queues.INGESTION,
             queues.DOCUMENTS,
             queues.APPLY,
+            queues.APPLY_HOLD,  # apply A20: Review first's held session
         ]
         assert await api_queue.enqueue(
             "run_sweep", str(sweep_id), queue=queues.SWEEPS, job_id=queues.sweep_job_id(sweep_id)
@@ -343,7 +344,7 @@ def test_stop_while_a_job_is_being_picked_up_closes_every_worker(settings: Setti
             )
 
     serve_until(settings, context(settings), scenario)
-    assert len(workers_seen) == 5  # sweeps, agents, ingestion, documents, apply
+    assert len(workers_seen) == 6  # sweeps, agents, ingestion, documents, apply, apply hold
     for item in workers_seen:
         assert item._pool is None  # closed, health key deleted
         assert all(task.done() for task in item.tasks.values())

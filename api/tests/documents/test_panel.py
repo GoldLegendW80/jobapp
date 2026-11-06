@@ -413,3 +413,42 @@ def test_a_version_that_no_longer_reads_fails_the_panel_and_the_letter_still_fol
     assert row(world, panel_id).failed == ["panel_error"]
     assert fakes.after == [(source_run, "failed")]
     assert fakes.prompts == {}
+
+
+INVENTED_POSTING = """Platform engineer at Example Robotics
+
+About Example Robotics
+We build warehouse robots for small shops in Lyon.
+
+About the role
+You run the deployment platform.
+
+What you bring:
+- Five years of Go
+- Kubernetes in production
+
+Benefits
+Lunch, a train pass and 30 days off.
+
+Salary: 50,000 to 60,000 EUR a year
+Contract: permanent, full time
+"""
+
+
+def test_the_brief_names_what_the_posting_says_of_the_company_the_offer_and_the_pay() -> None:
+    parts = brief.parts_of(INVENTED_POSTING)
+    assert parts == {
+        "about_company": "We build warehouse robots for small shops in Lyon.",
+        "responsibilities": "You run the deployment platform.",
+        "requirements_text": "- Five years of Go\n- Kubernetes in production",
+        "benefits": "Lunch, a train pass and 30 days off.",
+        "salary_text": "50,000 to 60,000 EUR a year",
+        "contract_text": "permanent, full time",
+    }
+    assert brief.parts_of("No headings here, only one line of text.") == {}
+    # A heading in French, accents and case folded; the first part of a name is kept.
+    french = "QUI SOMMES-NOUS ?\nUne entreprise de Lyon.\nAvantages\nTickets.\nAvantages\nAutre."
+    assert brief.parts_of(french) == {
+        "about_company": "Une entreprise de Lyon.",
+        "benefits": "Tickets.",
+    }
