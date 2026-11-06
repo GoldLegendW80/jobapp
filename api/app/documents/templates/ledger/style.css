@@ -39,6 +39,7 @@ li, p, h3 { overflow-wrap: anywhere; }
 .contact {
   flex: 0 0 auto;
   min-width: 211.2pt;
+  max-width: 100%;  /* a line longer than the page still wraps inside it */
   display: grid;
   grid-template-columns: minmax(105.6pt, max-content) minmax(105.6pt, max-content);
   grid-auto-flow: column;

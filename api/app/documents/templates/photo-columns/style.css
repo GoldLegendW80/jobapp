@@ -44,11 +44,13 @@ li, p, h3 { overflow-wrap: anywhere; }
 }
 .contact {
   flex: 0 0 auto;
-  min-width: 158pt;
+  min-width: 170pt;  /* 158pt of lines beside a gap of 12pt */
+  max-width: 100%;  /* a line longer than the page still wraps inside it */
   display: flex;
   flex-direction: column;
   list-style: none;
-  margin: 22.7pt 0 0 12pt;
+  margin: 22.7pt 0 0 0;
+  padding-left: 12pt;
   font-size: 0.9em;
   line-height: 1.25;
   letter-spacing: 0.03em;
