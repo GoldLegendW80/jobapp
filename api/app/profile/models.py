@@ -93,7 +93,6 @@ class TitleSuggestions(Base):
     __tablename__ = "profile_title_suggestions"
     __table_args__ = (
         sa.CheckConstraint("jsonb_typeof(suggestions) = 'array'", name="suggestions_is_array"),
-        sa.CheckConstraint("asks >= 0", name="asks_not_negative"),
         sa.CheckConstraint("error IS NULL OR char_length(error) <= 40", name="error_length"),
         sa.CheckConstraint("basis IS NULL OR char_length(basis) = 64", name="basis_length"),
         sa.CheckConstraint("jsonb_typeof(dismissed) = 'array'", name="dismissed_is_array"),
@@ -120,9 +119,6 @@ class TitleSuggestions(Base):
     # The last automatic run (one a day at most), and how far the tick has read the triggers.
     auto_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     seen_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
-    # "More ideas" clicks on the UTC day `asks_on`.
-    asks_on: Mapped[date | None] = mapped_column(sa.Date)
-    asks: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
     # Why the last ask gave nothing (a code of titles.ERRORS, or `nothing_new` of titles.NOTES);
     # null after an answer that added ideas.
     error: Mapped[str | None] = mapped_column(sa.Text)

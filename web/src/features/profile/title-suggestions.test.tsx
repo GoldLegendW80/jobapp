@@ -39,8 +39,6 @@ function answer(patch: Partial<Data> = {}): Data {
     note: null,
     messages: [],
     message_max: 300,
-    asks_left: 3,
-    asks_per_day: 3,
     estimate: {
       tokens: { low: 18816, high: 29424 },
       cost: { currency: "USD", low: "0.03", high: "0.07" },
@@ -323,21 +321,17 @@ describe("TitleSuggestions: the states", () => {
     ).toBeInTheDocument();
   });
 
-  it("the day's clicks used up: no More ideas, and it says when", async () => {
-    fakeIdeas(answer({ asks_left: 0 }));
+  it("has no daily limit: More ideas and the message box stay open", async () => {
+    // Owner, 2026-11-06: "I don't want day limit for more ideas".
+    fakeIdeas(answer());
     renderWithQuery(<Harness />);
     expect(
-      await screen.findByText(
-        "You asked for more ideas 3 times today. More tomorrow.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "More ideas" })).toBeNull();
-    expect(screen.queryByText(/USD/)).toBeNull();
-    // A message is one ask too: the box waits for tomorrow.
+      await screen.findByRole("button", { name: "More ideas" }),
+    ).toBeEnabled();
+    expect(screen.queryByText(/times today/)).toBeNull();
     expect(
       screen.getByLabelText("Tell the assistant what you want to do"),
-    ).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    ).toBeEnabled();
   });
 
   it("on a subscription nothing is said about money", async () => {
@@ -356,7 +350,7 @@ describe("TitleSuggestions: the states", () => {
     fakeIdeas(answer(), () =>
       HttpResponse.json(
         {
-          detail: "You asked for more ideas 3 times today. Try again tomorrow.",
+          detail: "Too many clicks. Try again in 40 seconds.",
         },
         { status: 429 },
       ),
@@ -365,7 +359,7 @@ describe("TitleSuggestions: the states", () => {
     renderWithQuery(<Harness />);
     await user.click(await screen.findByRole("button", { name: "More ideas" }));
     expect(await screen.findByRole("status")).toHaveTextContent(
-      /3 times today/,
+      /Too many clicks/,
     );
   });
 

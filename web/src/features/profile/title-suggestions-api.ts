@@ -35,8 +35,6 @@ export const titleSuggestionsSchema = z.object({
   /** What the person told the assistant, oldest first (the last few are kept). */
   messages: z.array(z.object({ text: z.string(), at: z.string() })),
   message_max: z.number(),
-  asks_left: z.number(),
-  asks_per_day: z.number(),
   /** Null without a model key; `cost` on an API key only. */
   estimate: z
     .object({

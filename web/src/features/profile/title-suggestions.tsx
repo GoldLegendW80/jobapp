@@ -161,7 +161,8 @@ export function TitleSuggestions({
   const running = data.status === "running" || more.isPending;
   const failed = data.status === "failed" && !running;
   const never = data.refreshed_at === null;
-  const canAsk = data.asks_left > 0 && !running;
+  // No daily limit (owner, 2026-11-06): one run at a time only.
+  const canAsk = !running;
   const cost = costLine(data);
   const message = draft.trim();
   const send = () => {
@@ -289,9 +290,6 @@ export function TitleSuggestions({
           </Button>
         ) : null}
         {canAsk && cost ? <span className={MUTED}>{cost}</span> : null}
-        {!running && data.asks_left === 0 ? (
-          <span className={MUTED}>{W.askedEnough(data.asks_per_day)}</span>
-        ) : null}
       </div>
       <div className="flex flex-col gap-1.5 pt-1">
         <Label htmlFor={`${id}-message`} className="text-xs">

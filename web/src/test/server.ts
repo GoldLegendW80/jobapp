@@ -88,8 +88,6 @@ export const noTitleSuggestions = {
   note: null,
   messages: [],
   message_max: 300,
-  asks_left: 3,
-  asks_per_day: 3,
   estimate: null,
   cost_note: null,
 };

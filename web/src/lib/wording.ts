@@ -387,7 +387,5 @@ export const SUGGESTION_WORDS = {
     `It also reads your ${count} earlier ${count === 1 ? "message" : "messages"}.`,
   clear: "Clear",
   clearName: "Clear what you told the assistant",
-  askedEnough: (perDay: number) =>
-    `You asked for more ideas ${perDay} times today. More tomorrow.`,
   fromProfile: "from your profile",
 } as const;

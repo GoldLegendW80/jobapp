@@ -238,16 +238,14 @@ def test_one_run_at_a_time(factory: sessionmaker[Session]) -> None:
     assert isinstance(start(factory, user_id, later, auto=False), uuid.UUID)
 
 
-def test_more_ideas_is_bounded_per_day(factory: sessionmaker[Session]) -> None:
+def test_more_ideas_has_no_daily_limit(factory: sessionmaker[Session]) -> None:
+    # Owner, 2026-11-06: "I don't want day limit for more ideas". One run at a time still.
     user_id = ready(factory)
-    for _ in range(titles.ASKS_PER_DAY):
+    for _ in range(10):
         made = start(factory, user_id, T0, auto=False)
         assert isinstance(made, uuid.UUID)
         end(factory, made, "Analytics engineer")
-    assert titles.ASKS_PER_DAY == 3
-    assert start(factory, user_id, T0 + timedelta(hours=1), auto=False) == "asked_enough"
-    tomorrow = datetime(2026, 11, 6, 0, 0, 1, tzinfo=UTC)
-    assert isinstance(start(factory, user_id, tomorrow, auto=False), uuid.UUID)
+    assert not hasattr(titles, "ASKS_PER_DAY")
 
 
 def test_an_automatic_run_is_at_most_daily_and_only_on_a_change(
@@ -754,7 +752,7 @@ def test_get_says_what_is_missing_and_never_calls_a_model(
     save(factory, user_id, "skills", SKILLS)
     body = api.get(URL, token=token).json()
     assert body["needs"] is None
-    assert body["asks_left"] == 3
+    assert "asks_left" not in body
     assert body["estimate"]["cost"]["currency"] == "USD"
     assert body["cost_note"] is not None
     assert recorded.jobs == []
@@ -791,7 +789,7 @@ def test_more_ideas_starts_one_run_and_counts_the_click(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "running"
-    assert body["asks_left"] == 2
+    assert "asks_left" not in body
     [run] = runs_of(factory, user_id)
     assert recorded.jobs == [(agents.JOB, (str(run.id),), queues.AGENTS, agents.job_id(run.id))]
     again = api.post(URL, token=token)
@@ -799,20 +797,16 @@ def test_more_ideas_starts_one_run_and_counts_the_click(
     assert again.json()["detail"] == "Suggestions are already on their way."
 
 
-def test_more_ideas_past_the_day_s_clicks_is_refused(
+def test_more_ideas_past_three_clicks_still_runs(
     factory: sessionmaker[Session], api: Api, recorded: RecordingQueue
 ) -> None:
+    # No daily limit (owner, 2026-11-06): a fourth click of the day runs like the first.
     user_id, token = signed(factory, api)
     give_key(factory, user_id)
     save(factory, user_id, "skills", SKILLS)
-    for _ in range(3):
+    for _ in range(4):
         assert api.post(URL, token=token).status_code == 200
         end(factory, _last_run(factory, user_id))
-    response = api.post(URL, token=token)
-    assert response.status_code == 429
-    assert (
-        response.json()["detail"] == "You asked for more ideas 3 times today. Try again tomorrow."
-    )
 
 
 def _last_run(factory: sessionmaker[Session], user_id: uuid.UUID) -> uuid.UUID:
@@ -834,7 +828,7 @@ def test_a_queue_that_is_down_fails_the_run_and_gives_the_click_back(
     body = api.get(URL, token=token).json()
     assert body["status"] == "failed"
     assert body["error"] == titles.ERRORS["queue_down"]
-    assert body["asks_left"] == 3
+    assert "asks_left" not in body
     assert runs_of(factory, user_id)[0].status is RunStatus.failed
 
 
@@ -891,7 +885,7 @@ def test_a_message_starts_a_run_counts_as_one_ask_and_can_be_cleared(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] == "running"
-    assert body["asks_left"] == 2
+    assert "asks_left" not in body
     assert [one["text"] for one in body["messages"]] == ["Move into product"]
     assert len(recorded.jobs) == 1
     end(factory, _last_run(factory, user_id), "Product analyst")

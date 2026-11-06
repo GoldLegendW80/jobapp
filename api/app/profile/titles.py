@@ -34,8 +34,9 @@ cron) follow a save of a section the agent reads, an accepted Fill my profile it
 a base CV saved (`due`), at most one per person in AUTO_EVERY, never while an upload is still
 being read (READ_WAIT), and only when what the agent would read changed since the stored answer
 (`basis`); a trigger inside the day waits for the day to pass. "More ideas", and a message sent
-to the agent, ask again on a click, at most ASKS_PER_DAY times a UTC day together. One run at a
-time per person. A run's token budget is the ceiling of `estimate()` for its first message.
+to the agent, ask again on a click, with no daily limit (owner, 2026-11-06: "I don't want day
+limit for more ideas"); the router's guard per minute stops repeated clicks. One run at a time
+per person. A run's token budget is the ceiling of `estimate()` for its first message.
 
 **The store** (`profile_title_suggestions`, one row per person): the ideas kept, oldest first,
 at most LIST_MAX (a run's new ideas join after them, the oldest go past the cap), with their
@@ -51,7 +52,7 @@ import re
 import uuid
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import datetime, timedelta
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -86,9 +87,6 @@ TITLE_MAX = 80  # characters of a suggested title (a plain term of the list may 
 TITLE_WORDS_MAX = 6
 REASON_MAX = 120  # characters of its one line reason
 AUTO_EVERY = timedelta(days=1)
-# "More ideas" clicks and messages sent to the agent, together, that a person may make in one UTC
-# day: each is one run. The owner has not decided this number yet (2026-11-05).
-ASKS_PER_DAY = 3
 # A run asked longer ago than this and still not recorded reads as failed (the queue may have
 # lost it; the agents reaper fails it later).
 STALE_AFTER = timedelta(minutes=30)
@@ -488,14 +486,6 @@ def _in_flight(db: Session, row: TitleSuggestions, now: datetime) -> bool:
     return status in (RunStatus.queued, RunStatus.running)
 
 
-def _asks_today(row: TitleSuggestions, now: datetime) -> int:
-    return row.asks if row.asks_on == _day(now) else 0
-
-
-def _day(now: datetime) -> date:
-    return now.astimezone(UTC).date()
-
-
 class RefusedError(Exception):
     """A run that cannot start; `code` says why."""
 
@@ -510,10 +500,9 @@ def start(
     """Create the person's next run, queued, under the lock of their row; the caller commits,
     then queues `agents.JOB`. `message` (a click only, cleaned by `clean_message`) joins the
     person's kept messages when the run starts. Raises RefusedError: `running`,
-    `no_credential`, `nothing_to_read`, `search_invalid`, `asked_enough` (a click past
-    ASKS_PER_DAY), `not_due` (automatic: within AUTO_EVERY of the last one), `unchanged`
-    (automatic: the same input as the stored answer), `busy` (the person's active runs,
-    runs.ACTIVE_PER_USER)."""
+    `no_credential`, `nothing_to_read`, `search_invalid`, `not_due` (automatic: within
+    AUTO_EVERY of the last one), `unchanged` (automatic: the same input as the stored answer),
+    `busy` (the person's active runs, runs.ACTIVE_PER_USER)."""
     row = _row(db, user_id, lock=True)
     if _in_flight(db, row, now):
         raise RefusedError("running")
@@ -532,8 +521,6 @@ def start(
             raise RefusedError("not_due")
         if row.basis == basis(request):
             raise RefusedError("unchanged")
-    elif _asks_today(row, now) >= ASKS_PER_DAY:
-        raise RefusedError("asked_enough")
     budget = estimate(len(prompt_for(request))).ceiling
     data = {"request": uuid.uuid4().hex, "token_budget": budget}
     try:
@@ -544,16 +531,13 @@ def start(
     row.messages = messages
     if auto:
         row.auto_at = now
-    else:
-        row.asks = _asks_today(row, now) + 1
-        row.asks_on = _day(now)
     db.flush()
     return made.id
 
 
 def not_queued(db: Session, user_id: uuid.UUID, run_id: uuid.UUID, now: datetime) -> None:
-    """The queue refused the run's job: the run fails, the person reads why, and a click is
-    given back. The caller commits."""
+    """The queue refused the run's job: the run fails and the person reads why. The caller
+    commits."""
     runs.fail_queued(db, run_id, runs.QUEUE_DOWN, now)
     row = _row(db, user_id, lock=True)
     if row.run_id != run_id:
@@ -561,8 +545,6 @@ def not_queued(db: Session, user_id: uuid.UUID, run_id: uuid.UUID, now: datetime
     row.run_id, row.error = None, "queue_down"
     if row.auto_at == row.asked_at:
         row.auto_at = None
-    elif row.asks_on == _day(now) and row.asks > 0:
-        row.asks -= 1
 
 
 def run_request(db: Session, run_id: uuid.UUID) -> tuple[str, Request] | None:
@@ -681,8 +663,6 @@ def view(db: Session, user_id: uuid.UUID, now: datetime) -> dict[str, Any]:
         "note": note,
         "messages": _messages(row),
         "message_max": MESSAGE_MAX,
-        "asks_left": max(0, ASKS_PER_DAY - (_asks_today(row, now) if row else 0)),
-        "asks_per_day": ASKS_PER_DAY,
         "estimate": estimate_out(credential.kind, size) if credential is not None else None,
         "cost_note": (
             pricing.ESTIMATE_NOTE

@@ -393,3 +393,6 @@ The owner's answers during the product audit, in the session that built them.
   multi select to apply at all selected"): the Jobs list's and the map's selection get Apply. One
   confirmation names every posting it applies to and every one it leaves out with its reason;
   its click is the approval of exactly those listed, each started as one Apply click.
+- 2026-11-06, the job title ideas: "I don't want day limit for more ideas". "More ideas" and the
+  messages to the assistant have no daily limit; one run at a time and five clicks a minute stay
+  as guards against repeated clicks.

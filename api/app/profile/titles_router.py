@@ -5,15 +5,14 @@ titles.py).
 - GET answers what the pages show: the stored suggestions, checked again against the search as
   saved now, whether a run is on its way, why the last one gave nothing or that it added
   nothing (`note`), what is missing for a run (`needs`: a model key, or something to read: a
-  CV, a profile or a message), the person's kept messages, the clicks left today and the
+  CV, a profile or a message), the person's kept messages and the
   estimate for what a run reads now (tokens, and money on an API key only). It never calls a
   model.
 - POST asks for a new run on a click, `{message?}` with what the person tells the agent (at
   most titles.MESSAGE_MAX characters, kept with the last ones once the run starts; 422 past
   it): 409 while one is on its way, without a model key, with nothing to read, or when the
-  person's runs are busy; 429 past `titles.ASKS_PER_DAY` asks a day or past CLICKS_PER_MINUTE
-  (the HTTP guard, in this process); 503 when the queue cannot take it (the run fails at once
-  and the click is given back).
+  person's runs are busy; 429 past CLICKS_PER_MINUTE
+  (the HTTP guard, in this process); 503 when the queue cannot take it (the run fails at once).
 - POST /dismiss `{title}`: "Not for me", the idea leaves and never comes back; 422 for a title
   that is not plain words. DELETE /messages: the agent forgets what the person wrote. Both past
   EDITS_PER_MINUTE: 429. No model is called.
@@ -63,10 +62,6 @@ REFUSED = {
     "busy": (
         status.HTTP_409_CONFLICT,
         "Your assistant is busy with other tasks. Try again in a few minutes.",
-    ),
-    "asked_enough": (
-        status.HTTP_429_TOO_MANY_REQUESTS,
-        f"You asked for more ideas {titles.ASKS_PER_DAY} times today. Try again tomorrow.",
     ),
 }
 
@@ -121,8 +116,6 @@ class SuggestionsOut(BaseModel):
     note: str | None  # the last ask ended well and added nothing
     messages: list[MessageOut]  # oldest first
     message_max: int
-    asks_left: int
-    asks_per_day: int
     estimate: EstimateOut | None
     cost_note: str | None
 
