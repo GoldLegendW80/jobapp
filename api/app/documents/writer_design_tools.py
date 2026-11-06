@@ -8,8 +8,9 @@ id: each reads the run's binding (`writer_design.bind_generation`).
   allowed, and the counts of the base CV's sections. Never a text of the base CV.
 - `view_page(page)`: page 0 or 1 of the upload, one image block, its photos grey.
 - `view_render()`: page 1 of the base CV printed with the best template accepted so far at
-  step 0 (the captured density), a grey box in place of the person's photo; the overlay of its
-  ink on the upload's page 0; the measure in words (fidelity.py, design_capture.said).
+  step 0 (the captured density), a grey box in place of the person's photo, as one image: its
+  ink laid over the upload's page 0 (the render alone for a DOCX); the measure in words
+  (fidelity.py, design_capture.said).
 - `submit_template(cv_html, letter_html, css, labels?)`: `design_capture.labels_of` (the
   upload's own headings as the template's labels), `design_capture.validate`, then for an
   accepted one the fidelity measure (`candidate`: the base CV at step 0 through the renderer,
@@ -189,7 +190,7 @@ async def candidate(
     png = await asyncio.to_thread(render_client.page1_png, rendered.pdf, width)
     if not inputs.pages or not inputs.layout.get("read"):
         return Candidate(rendered.pdf, png, None)
-    lines = fidelity.original_lines(inputs.layout["read"][0])
+    lines = fidelity.original_lines(inputs.layout)
     found = await asyncio.to_thread(fidelity.measure, inputs.pages[0], lines, rendered.pdf, png)
     return Candidate(rendered.pdf, png, found)
 
@@ -213,10 +214,13 @@ async def view_render(scope: app_tools.Scope) -> list[dict[str, Any]] | tuple[st
     found = await candidate(scope, run.inputs, run.accepted, run.labels)
     if found is None:
         return GONE, True
-    blocks = [_block(await asyncio.to_thread(_jpeg, found.png))]
+    # One image a pass (the estimate counts one): the overlay holds both pages' ink, the render
+    # alone only when there is no page to lay it on (a DOCX).
     if run.inputs.pages:
         drawn = await asyncio.to_thread(fidelity.overlay, run.inputs.pages[0], found.png)
-        blocks.append(_block(drawn))
+    else:
+        drawn = await asyncio.to_thread(_jpeg, found.png)
+    blocks = [_block(drawn)]
     words = design_capture.said(found.measure) or "No measure: the upload has no page image."
     blocks.append({"type": "text", "text": words})
     return blocks
@@ -328,9 +332,9 @@ def _view_render(scope: app_tools.Scope) -> SdkMcpTool[Any]:
     @tool(
         "view_render",
         "Show page 1 of the base CV printed with the best template accepted so far at its "
-        "loosest step, the overlay on page 0 of the upload (the upload's ink red, the "
-        "render's blue, both black) and the measure: the score, the lines in place and the "
-        "largest offsets in points. Takes no id.",
+        "loosest step, laid over page 0 of the upload (the upload's ink red, the render's "
+        "blue, both black), and the measure: the score, the lines in place and the largest "
+        "offsets in points. Takes no id.",
         EMPTY,
     )
     async def handler(args: dict[str, Any]) -> dict[str, Any]:

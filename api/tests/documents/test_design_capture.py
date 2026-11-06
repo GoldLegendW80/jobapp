@@ -601,12 +601,15 @@ def test_the_estimate_counts_the_images() -> None:
 
     pdf = design_estimate.capture(10_000)
     docx = design_estimate.capture(10_000, pages=0)
-    # 5 turns of (7,000 + 3,334) fixed, 4 of (10,000 + 4 images of 1,600: two pages, the render
-    # and its overlay), 3 of 4,000 output.
-    assert pdf.low == 5 * 10_334 + 4 * (10_000 + 6_400) + 3 * 4_000 + 4_000 + 5 * 500
-    # each page twice and 5 renders with their overlays, against 5 renders: 9 images more, sent
-    # again at each of the 17 later turns
-    assert pdf.high - docx.high == 9 * 1_600 * 17
+    # 5 turns of (7,000 + 3,334) fixed, 4 of (5,000 + 3 images of 1,600: two pages and one
+    # view_render), 3 of 4,000 output.
+    assert pdf.low == 5 * 10_334 + 4 * (5_000 + 4_800) + 3 * 4_000 + 4_000 + 5 * 500
+    # each page twice, sent again at each of the 13 later turns: the renders are the same
+    assert pdf.high - docx.high == 4 * 1_600 * 13
+    # 14 turns, 5 submits sent again 10, 8, 6, 4 and 2 times, each with its view_render
+    resent = 30 * (13_334 + 1_600)
+    assert docx.high == 14 * 10_334 + 13 * 40_000 + resent + 5 * 13_334 + 14 * 500
+    assert design_estimate.capture(design_estimate.prompt_chars("design")).high <= 1_500_000
     assert pdf.ceiling == 2 * pdf.high
     assert asyncio.iscoroutinefunction(design_check.check_template)
 

@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     # Base CVs per person; a design capture: its fidelity passes after the first accepted
     # template (D28), and the turns and wall time of its writer.
     documents_base_cvs_max: int = Field(default=10, ge=1, le=50)
-    documents_design_max_turns: int = Field(default=18, ge=6, le=40)
+    documents_design_max_turns: int = Field(default=14, ge=6, le=40)
     documents_design_passes: int = Field(default=4, ge=1, le=6)
     documents_design_wall_s: int = Field(default=900, ge=120, le=1800)
     # The chat of a document: characters of one message, messages kept per document.

@@ -137,13 +137,14 @@ def lines_of(chars: Iterable[tuple[str, float, float, float, float]]) -> list[Li
     return out
 
 
-def original_lines(page: Mapping[str, Any]) -> list[Line]:
-    """The lines of a page of design_capture's layout (its runs, texts scrubbed)."""
+def original_lines(layout: Mapping[str, Any], page: int = 0) -> list[Line]:
+    """The lines of a page of design_capture's layout (its runs, texts scrubbed, as arrays of
+    `run_fields`)."""
+    fields = {name: at for at, name in enumerate(layout.get("run_fields", ()))}
     pieces = []
-    for run in page.get("runs", []):
-        box = run["box_pt"]
-        baseline = run.get("baseline_pt") or box[3]
-        pieces.append((run["text"], box[0], box[2], baseline, run["size_pt"]))
+    for run in layout["read"][page]["runs"] if layout.get("read") else ():
+        baseline = run[fields["baseline"]] or run[fields["y1"]]
+        pieces.append((run[0], run[fields["x0"]], run[fields["x1"]], baseline, run[fields["size"]]))
     return lines_of(pieces)
 
 

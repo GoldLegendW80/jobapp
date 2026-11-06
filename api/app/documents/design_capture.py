@@ -104,6 +104,11 @@ DESIGN_PAGES = 2
 REDACTED = "[redacted]"
 RUNS_PER_PAGE = 400  # text runs of one page the model reads, in reading order
 RUN_CHARS = 160
+# A run as read_design gives it (D28): one array in this order, the font an index of `fonts`, so
+# that the key names are not sent once per run. The extraction's own cap (DESIGN_TEXT, 40,000
+# characters for both pages) bounds the texts.
+RUN_FIELDS = ("text", "x0", "y0", "x1", "y1", "font", "size", "colour", "baseline", "spacing_em",
+              "caps")  # fmt: skip
 IMAGE_MAX_BYTES = 300_000  # one image block, as ingestion's view_image sends at most
 GREY = (160, 160, 160)
 SLUG_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -169,17 +174,16 @@ def _pdf_layout(
                 "size_pt": [_pt(page.width), _pt(page.height)],
                 "margins_pt": [_pt(m) for m in page.margins] if page.margins else None,
                 "runs": [
-                    {
-                        "text": text[:RUN_CHARS],
-                        "box_pt": [_pt(v) for v in run.box],
-                        "font": faces[run.font].css_name if run.font < len(faces) else None,
-                        "weight": faces[run.font].weight if run.font < len(faces) else None,
-                        "size_pt": _pt(run.size),
-                        "colour": run.colour,
-                        "baseline_pt": _pt(run.baseline),
-                        "letter_spacing_em": round(run.spacing / 1000, 3),
-                        "caps": run.caps,
-                    }
+                    [
+                        text[:RUN_CHARS],
+                        *(_pt(v) for v in run.box),
+                        run.font,
+                        _pt(run.size),
+                        run.colour,
+                        _pt(run.baseline),
+                        round(run.spacing / 1000, 3),
+                        run.caps,
+                    ]
                     for run, text in zip(runs, texts, strict=True)
                 ],
                 "shapes": [
@@ -192,6 +196,11 @@ def _pdf_layout(
     return {
         "pages": design.pages,
         "scanned": design.scanned,
+        "run_fields": list(RUN_FIELDS),
+        "fonts": [
+            {"family": face.css_name, "weight": face.weight, "italic": face.italic}
+            for face in faces
+        ],
         "read": pages,
         "measured": design_spec.measured(design, faces, every),
     }
@@ -287,7 +296,7 @@ async def read_inputs(raw: bytes, mime: str) -> Inputs:
 
 
 def _texts(page: Mapping[str, Any]) -> list[str]:
-    return [run["text"] for run in page["runs"]]
+    return [run[0] for run in page["runs"]]
 
 
 def _notes(codes: Any) -> tuple[str, ...]:
