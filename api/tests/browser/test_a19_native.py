@@ -331,3 +331,132 @@ def test_the_journey_s_recorded_stream_on_real_chromium(a19, agent):
     assert one["fields"]["email"] == "e2e-a19@example.org", one["fields"]
     assert one["fields"]["motivation"].startswith("I have built robot arms"), one["fields"]
     assert [f["sha256"] for f in one["files"]] == [hashlib.sha256(CV.encode()).hexdigest()]
+
+
+# --- A20: the resume widgets, and Review first's lease (purpose `apply_review`) ----------------
+
+WIDGETS = "http://careers.a19-robotics.test:8080/forms/a20/widgets.html"
+REVIEW = "http://careers.a19-robotics.test:8080/forms/a20/review.html"
+LETTER = pdf().replace("595 842", "612 792")  # another real PDF: its own bytes
+
+
+def test_the_cv_lands_in_every_resume_widget(a19, agent):
+    """A20 point 3: a file input hidden behind a styled button, a drop zone that opens the file
+    chooser, and a "Choose one" list of files with an option that reveals a new upload."""
+    assert agent.put("cv.pdf", CV)["status"] == 200
+    assert agent.put("letter.pdf", LETTER)["status"] == 200
+    opened = act(agent, "browser_navigate", url=WIDGETS)
+    assert opened["ok"], opened
+    page = opened["page"]
+    print("WIDGETS\n" + page)
+    typed = act(
+        agent, "browser_type", ref=ref(page, "textbox", "Email"), text="e2e-a20@example.org"
+    )
+    assert typed["ok"], typed
+    behind = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "Upload your CV"), paths=["cv.pdf"]
+    )
+    assert behind["ok"], behind
+    zone = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "drop a file here"),
+        paths=["letter.pdf"],
+    )  # fmt: skip
+    assert zone["ok"], zone
+    chosen = act(
+        agent, "browser_select_option", ref=ref(page, "combobox", "Resume"),
+        values=["Upload a new file"],
+    )  # fmt: skip
+    assert chosen["ok"], chosen
+    page = chosen["page"]
+    print("NEW UPLOAD\n" + page)
+    fresh = act(
+        agent, "browser_file_upload", ref=ref(page, "button", "New resume"), paths=["cv.pdf"]
+    )
+    assert fresh["ok"], fresh
+    send = ref(fresh["page"], "button", "Submit application")
+    assert agent.tool("browser_click", ref=send)["error"] == "submit_permit"
+    clicked = agent.tool("browser_click", agent.capability, ref=send)
+    assert clicked["ok"], clicked
+    assert agent.tool("browser_wait_for", text="Thank you for applying")["ok"]
+    [one] = sent(a19, "a20-widgets")
+    assert one["fields"]["existing_resume"] == "new", one["fields"]
+    files = {f["field"]: (f["filename"], f["sha256"]) for f in one["files"]}
+    cv, letter = (
+        hashlib.sha256(CV.encode()).hexdigest(),
+        hashlib.sha256(LETTER.encode()).hexdigest(),
+    )
+    assert files == {
+        "cv_button": ("cv.pdf", cv),
+        "letter_drop": ("letter.pdf", letter),
+        "resume_new": ("cv.pdf", cv),
+    }, files
+
+
+@pytest.fixture
+def review(a19):
+    fetched(a19, "http://atsforms:8080/_stub/reset", "POST")
+    lease = Lease(a19, "apply_review")
+    a19.redactions.append(lease.token)
+    assert lease.capability, "the review lease's capability, held by the api for the gate"
+    a19.redactions.append(lease.capability)
+    yield lease
+    lease.end()
+
+
+def test_on_the_review_lease_the_agent_never_sends_and_the_gate_s_click_sends_once(a19, review):
+    """A20 point 4: the agent fills both steps (the step's Next is a submit button and passes),
+    every act of its own on the final send is refused, a call with the capability is a click
+    only, and the gate's one click after the person's Confirm sends one application."""
+    assert review.put("cv.pdf", CV)["status"] == 200
+    opened = act(review, "browser_navigate", url=REVIEW)
+    assert opened["ok"], opened
+    page = opened["page"]
+    print("REVIEW STEP 1\n" + page)
+    for label, text in (("Full name", "Adaline Example"), ("Email", "e2e-a20@example.org")):
+        typed = act(review, "browser_type", ref=ref(page, "textbox", label), text=text)
+        assert typed["ok"], (label, typed)
+        page = typed["page"]
+    uploaded = act(
+        review, "browser_file_upload", ref=ref(page, "button", "Resume"), paths=["cv.pdf"]
+    )
+    assert uploaded["ok"], uploaded
+    moved = act(review, "browser_click", ref=ref(uploaded["page"], "button", "Next"))
+    assert moved["ok"], moved  # a submit button of the step, named Next: a wizard's step
+    page = moved["page"]
+    print("REVIEW STEP 2\n" + page)
+    notice = ref(page, "textbox", "notice period")
+    assert act(review, "browser_type", ref=notice, text="One month")["ok"]
+    page = review.snapshot()
+    send = ref(page, "button", "Submit application")
+    # The agent's own acts on the send: a click, Enter in a field, a script, all refused.
+    assert review.tool("browser_click", ref=send)["error"] == "submit_permit"
+    assert review.tool("browser_press_key", ref=notice, key="Enter")["error"] == "submit_permit"
+    script = review.tool(
+        "browser_evaluate", function="() => document.querySelector('form').requestSubmit()"
+    )
+    assert script["error"] == "submit_permit", script
+    # With the capability, only the gate's click passes on this lease (403 for any other act).
+    for name, args in (
+        ("browser_press_key", {"ref": notice, "key": "Enter"}),
+        ("browser_type", {"ref": notice, "text": " ", "submit": True}),
+        ("browser_evaluate", {"function": "() => 1"}),
+    ):
+        answer = review.raw(
+            "POST", f"/leases/{review.id}/tools/{name}", json.dumps(args),
+            **{"Content-Type": "application/json", "X-Gate-Capability": review.capability},
+        )  # fmt: skip
+        assert answer["status"] == 403, (name, answer)
+    assert sent(a19, "a20-review") == []
+    # The person's Confirm: the gate clicks the control the agent named, once.
+    clicked = review.tool(
+        "browser_click", review.capability, ref=send, element="Submit application"
+    )
+    assert clicked["ok"], clicked
+    assert review.tool("browser_wait_for", text="Thank you for applying")["ok"]
+    [one] = sent(a19, "a20-review")
+    assert one["fields"] == {
+        "full_name": "Adaline Example",
+        "email": "e2e-a20@example.org",
+        "notice": "One month",
+    }, one["fields"]
+    assert [f["filename"] for f in one["files"]] == ["cv.pdf"]

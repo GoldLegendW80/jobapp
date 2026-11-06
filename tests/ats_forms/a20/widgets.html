@@ -1,0 +1,46 @@
+<!doctype html><html lang="en"><meta charset="utf-8">
+<title>Apply: Field Robotics Technician, Example Robotics</title><meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="/forms/a1/forms.css"><body>
+<!-- A20: three resume widgets as job sites draw them. (1) a file input hidden behind a styled
+button, (2) a drop zone that opens the file chooser on a click, (3) a "Choose one" list of files
+already on the site, with an option that reveals a new upload. Submit sends everything to
+/_stub/submit/a20-widgets. -->
+<h1>Field Robotics Technician</h1>
+<form id="application" aria-label="Application">
+<label for="email">Email</label><input id="email" name="email" type="email" required>
+
+<input type="file" id="cv_hidden" name="cv_button" accept="application/pdf" style="display:none">
+<button type="button" class="styled" id="cv_pick" onclick="cv_hidden.click()">Upload your CV</button>
+<span id="cv_name"></span>
+
+<div id="drop" role="button" tabindex="0" aria-label="Cover letter: drop a file here or click to browse"
+  style="border:2px dashed #888;padding:2rem">Drop your cover letter here</div>
+<input type="file" id="letter_drop" name="letter_drop" accept="application/pdf" hidden>
+<span id="letter_name"></span>
+
+<label for="existing">Resume</label>
+<select id="existing" name="existing_resume" required>
+  <option value="">Choose one</option>
+  <option value="resume-2024.pdf">resume-2024.pdf</option>
+  <option value="new">Upload a new file</option>
+</select>
+<div id="newbox" hidden><label for="resume_new">New resume</label><input type="file" id="resume_new" name="resume_new" accept="application/pdf"></div>
+
+<button type="submit">Submit application</button>
+<p id="problem" role="alert"></p>
+</form>
+<script>
+const show = (input, out) => input.onchange = () => { out.textContent = input.files[0] ? input.files[0].name : ""; };
+show(cv_hidden, cv_name); show(letter_drop, letter_name);
+drop.onclick = () => letter_drop.click();
+drop.onkeydown = e => { if (e.key === "Enter") letter_drop.click(); };
+drop.ondragover = e => e.preventDefault();
+drop.ondrop = e => { e.preventDefault(); letter_drop.files = e.dataTransfer.files; letter_drop.onchange(); };
+existing.onchange = () => { newbox.hidden = existing.value !== "new"; };
+application.onsubmit = async event => {
+  event.preventDefault();
+  const response = await fetch("/_stub/submit/a20-widgets", {method: "POST", body: new FormData(event.currentTarget)});
+  if (response.ok) location.href = "confirmation.html";
+  else problem.textContent = "The application could not be sent.";
+};
+</script></body></html>
