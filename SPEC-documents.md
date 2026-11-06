@@ -269,8 +269,12 @@ version of a posting's CV or letter, and after the content conversion of an uplo
 runs as the job `documents_panel` on the agents queue (`api/app/documents/panel.py`):
 
 1. **The job brief** (`brief.py`): the posting's title, company, location, contract, pay, work
-   mode, language, source, address, its whole text, its requirement lines and the person's fit
-   (score, matched and missing terms). The app stores nothing else about a company and says so.
+   mode, language, source, address, its whole text, its requirement lines, the parts of the text
+   under their headings (`from_the_text`: about the company, the role, the profile asked for, the
+   benefits, the pay and the contract, as the posting writes them) and the person's fit (score,
+   matched and missing terms). The app has no fetch of a posting page outside the sweep and
+   stores nothing about a company beyond its name: what the brief knows of the company is what
+   the posting's own text says, and it says so.
    For an upload, the person's target roles (the search titles) and headline stand in for a
    posting. The writers read the same brief with `get_job_brief`.
 2. **Seven reviewers**, each its own agent under Documents in Admin (`documents_panel_screen`,

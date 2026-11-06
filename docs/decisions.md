@@ -219,7 +219,6 @@ choice made by the build that stands until the owner says otherwise.
   upload with the same method, is task D28. D28 built it: an upload is measured, its fonts chosen by
   name or by measurement, its template written from the numbers and rendered, compared and
   corrected over several passes, the best kept (SPEC-documents.md, "Design capture of an upload").
-  upload with the same method, is task D28.
 - 2026-11-06 (D29), the owner wrote: "I don't want to automaticaly generate the cv and cover letter anymore. I want to generate them manually from the job detail page or when i click on apply to the job. For the cv, analyze deeply this project : https://github.com/alexyc9381/hiring-panel-skill you must understand how it works perfectly and implement it during the cv and cover letter build to have perfect cv and cover letter", "use also this project skills when the user upload his cv", and "also when generating the cv and cover letter for the jobs, hiring-panel-skill must know everything about the jobs to be perfectly specialise on the job, the company, the offer ect.."
   Nothing writes a CV, a letter or a base CV without the person's click: the job page's Write, an
   Apply (one click, bulk, a Like, Full auto's apply after a Like) or an upload. This revises
