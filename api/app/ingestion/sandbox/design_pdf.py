@@ -13,11 +13,16 @@ tenths of a point from the top left corner of the page, every number an integer:
      "fonts": [{"name": as embedded, "weight": 0 or 100..900, "italic": bool, "serif": bool,
                 "monospace": bool, "symbolic": bool, "embedded": bool}],
      "read": [{"index": i, "width": W, "height": H, "margins": [top, right, bottom, left] | null,
+               "background": "#rrggbb" | null,
                "runs": [{"text": ..., "box": [x0, y0, x1, y1], "font": index of `fonts`,
-                         "size": tenths of a point, "colour": "#rrggbb"}],
+                         "size": tenths of a point, "colour": "#rrggbb", "baseline": y,
+                         "spacing": thousandths of an em, "caps": bool, "pitch": tenths}],
                "shapes": [{"type": "fill" | "rule" | "outline", "box": [...],
-                           "colour": "#rrggbb", "width": stroke width}],
-               "images": [{"box": [...]}]}]}
+                           "colour": "#rrggbb", "width": stroke width, "radius": tenths}],
+               "dots": [{"box": [...], "colour": "#rrggbb"}],
+               "images": [{"box": [...], "round": bool}]}],
+     "samples": [{"font": index, "page": index, "text": a word, "size": tenths,
+                  "width": tenths, "crop": base64 of a grey PNG}]}
 
 - A run is the characters PDFium's text page gives in a row with one font, size, colour and
   direction on one line; a jump back, a gap wider than GAP_EM times the size, or another line
@@ -40,6 +45,26 @@ tenths of a point from the top left corner of the page, every number an integer:
   determinant: exact for a uniform scale, the mean of the two for an uneven one), clamped to
   0..STROKE_MAX. Shading, clipping and the pixels of an image are never read; an image is its
   box only.
+- The measures (documents D28, the copy of a CV by measurement): a run's `baseline` is the median
+  of its characters' origins across the line (FPDFText_GetCharOrigin); its `spacing` the median,
+  over the run's pairs of letters in a word, of the gap between a character's advance end and
+  the next one's start (the loose boxes PDFium builds from the advance), in thousandths of the
+  run's size; `caps` that its letters, two at least, are all capitals; its `pitch` the distance
+  from its baseline to the nearest one below of a run of the same font and size whose start or
+  end it overlaps (the same column), within PITCH_LOW_EM..PITCH_HIGH_EM times the size, else 0.
+- A shape's `radius` is read from its path segments: a path of CURVES_MIN Bezier points or more
+  has the largest distance, along a side of its box, from a point on that side to the nearest
+  corner (the end of the rounded corner), at most half its shorter side; a plain rectangle 0. A
+  filled path DOT_LOW..DOT_HIGH points wide and as high (within ROUND), drawn with curves, is a
+  `dot` (a bullet: DOTS_MAX per page), even under SHAPE_MIN. A fill that covers BACKGROUND of the
+  page on both sides gives the page its `background` (the first one painted); it stays a shape.
+  An image is `round` when one path of its clip is drawn with curves and is as wide as high.
+- `samples`: for each font (the fonts with most characters first), up to SAMPLES_PER_FONT words
+  of SAMPLE_LETTERS letters or more, the longest of the upright runs, each with its size, its
+  width (the sum of its characters' advances: kerning and spacing left out) and a grey PNG crop
+  of its ink drawn at SAMPLE_SCALE times the page image's scale, SAMPLE_BYTES for all of them
+  together (`samples_limit` past it). Only the worker's font measure reads them
+  (documents/font_measure.py): they are never logged, stored or shown to a model.
 - `scanned` is true when no page read has a run and an image covers at least half of one of
   them: the design is then in the picture alone, and the extraction says so.
 
@@ -59,8 +84,11 @@ Only main.py may import this file in production. The tests import it too, to cal
 their own process on files they make.
 """
 
+import base64
 import ctypes
+import io
 import math
+import statistics
 import unicodedata
 
 import pdf_render  # sandbox/pdf_render.py, beside this file: the opening, the weighing, the guards
@@ -91,6 +119,23 @@ RIGHT, UP, LEFT, DOWN = range(4)  # the direction a line of text runs in on the 
 GUTTER = 12.0  # points: the narrowest gap between two columns
 ORDER_DEPTH_MAX = 8
 COLUMN_BANDS_MIN = 3  # bands a block must span to be read as columns
+# The measures of D28 (the design capture copies a CV by measurement).
+SPACING_LOW, SPACING_HIGH = -500, 1_000  # thousandths of an em: a run's letter spacing
+PITCH_LOW_EM, PITCH_HIGH_EM = 0.8, 3.0  # a line pitch outside these times the size is no pitch
+DOTS_MAX = 200
+DOT_LOW, DOT_HIGH = 0.8, 12.0  # points: the diameter of a bullet dot
+ROUND = 0.12  # a dot or a round clip: its width and height within this share of each other
+CURVES_MIN = 4  # Bezier points a rounded corner set or a circle has at least
+SEGMENTS_MAX = 64  # segments of one path or clip looked at for its corners
+EDGE_NEAR = 0.3  # points: a point this close to a side of the box lies on it
+BACKGROUND = 0.98  # of the page on both sides: a fill this large is the page's background
+SAMPLES_PER_FONT = 30
+SAMPLE_LETTERS = 3  # letters of a sampled word at least
+SAMPLE_SCALE = 4  # times the scale of the page image (pdf_render.LONG_SIDE)
+SAMPLE_BYTES = 400_000  # PNG bytes of every crop of an answer together
+SAMPLE_SIDE_MAX = 2_400  # pixels: a word crop larger than this on a side is not drawn
+SAMPLE_PAD = 1.0  # points around a word's box
+SAMPLE_TEXT_MAX = 40  # characters of a sampled word
 # PDF font descriptor flags (ISO 32000, 9.8.2).
 _FIXED, _SERIF, _SYMBOLIC, _ITALIC = 1, 2, 4, 64
 
@@ -262,6 +307,9 @@ class _Page:
         self.runs: list[dict] = []
         self.shapes: list[tuple[float, int, dict]] = []
         self.images: list[dict] = []
+        self.dots: list[dict] = []
+        self.background: str | None = None
+        self.words: list[tuple] = []  # (font, size, text, advance, box in PDF space)
         self.looked = 0
 
     def box(self, left: float, top: float, right: float, bottom: float) -> list[int] | None:
@@ -295,6 +343,7 @@ class _Page:
         run: dict | None = None
         rect = pdfium_c.FS_RECTF()
         matrix = pdfium_c.FS_MATRIX()
+        origin_x, origin_y = ctypes.c_double(), ctypes.c_double()
         red, green, blue, alpha = (ctypes.c_uint() for _ in range(4))
         paint = [ctypes.byref(part) for part in (red, green, blue, alpha)]
         for index in range(min(count, CHARS_MAX)):
@@ -307,6 +356,7 @@ class _Page:
                     run = self._close(run)
                 elif code == 32 and run is not None:
                     run["chars"].append(" ")
+                    self._word_end(run)
                 continue
             ch = _kept(code)
             found = pdfium_c.FPDFText_GetTextObject(text_page, index)
@@ -343,9 +393,18 @@ class _Page:
                 run = self._close(run)
             if run is None:
                 run = {"key": key, "chars": [], "box": list(box), "end": turned[0]}
-                run["across"] = (turned[1], turned[3])
+                run.update(across=(turned[1], turned[3]), baselines=[], gaps=[], last=None)
+                run.update(word=None, words=[])
             run["chars"].append(ch)
-            if not ch.isspace():
+            if ch.isspace():
+                self._word_end(run)
+            else:
+                exact = _along([rect.left, -rect.top, rect.right, -rect.bottom], way)
+                self._measure(run, ch, exact, rect, way)
+                if pdfium_c.FPDFText_GetCharOrigin(
+                    text_page, index, ctypes.byref(origin_x), ctypes.byref(origin_y)
+                ) and math.isfinite(origin_y.value):
+                    run["baselines"].append(self.top - origin_y.value)
                 run["box"] = [
                     min(run["box"][0], box[0]),
                     min(run["box"][1], box[1]),
@@ -372,9 +431,40 @@ class _Page:
         em = max(key[1], 10)
         return run["end"] - em / 2 <= turned[0] <= run["end"] + GAP_EM * em
 
+    @staticmethod
+    def _measure(run: dict, ch: str, exact: tuple, rect, way: int) -> None:
+        """The gap to the letter before (`exact` is the character's loose box along the run, in
+        points) and the word this letter belongs to."""
+        if run["last"] is not None and ch.isalpha():
+            run["gaps"].append(exact[0] - run["last"])
+        run["last"] = exact[2] if ch.isalpha() else None
+        if not ch.isalpha() or way != RIGHT:
+            _Page._word_end(run)
+            return
+        word = run["word"]
+        if word is None:
+            word = run["word"] = {
+                "chars": [],
+                "advance": 0.0,
+                "box": [rect.left, rect.bottom, rect.right, rect.top],
+            }
+        word["chars"].append(ch)
+        word["advance"] += max(exact[2] - exact[0], 0.0)
+        box = word["box"]
+        word["box"] = [min(box[0], rect.left), min(box[1], rect.bottom),
+                       max(box[2], rect.right), max(box[3], rect.top)]  # fmt: skip
+
+    @staticmethod
+    def _word_end(run: dict) -> None:
+        word, run["word"] = run.get("word"), None
+        run["last"] = None
+        if word is not None and SAMPLE_LETTERS <= len(word["chars"]) <= SAMPLE_TEXT_MAX:
+            run["words"].append(word)
+
     def _close(self, run: dict | None) -> None:
         if run is None:
             return None
+        self._word_end(run)
         # NFC writes some characters as two or three (U+0958, U+FB2C): cut again after it.
         text = unicodedata.normalize("NFC", "".join(run["chars"]).strip())[:RUN_TEXT_MAX]
         if not text:
@@ -385,9 +475,28 @@ class _Page:
             raise _Stop("text_limit")
         self.room[0] -= len(text)
         font, size, colour, _ = run["key"]
+        letters = [ch for ch in text if ch.isalpha()]
+        caps = len(letters) >= 2 and not any(ch.islower() for ch in letters)
+        caps = caps and any(ch.isupper() for ch in letters)
+        baseline = statistics.median(run["baselines"]) if run["baselines"] else 0.0
+        spacing = 0
+        if run["gaps"] and size:
+            spacing = round(statistics.median(run["gaps"]) * 10_000 / size)
+            spacing = min(max(spacing, SPACING_LOW), SPACING_HIGH)
         self.runs.append(
-            {"text": text, "box": run["box"], "font": font, "size": size, "colour": colour}
+            {
+                "text": text,
+                "box": run["box"],
+                "font": font,
+                "size": size,
+                "colour": colour,
+                "baseline": _bounded(baseline, _tenths(self.height)),
+                "spacing": spacing,
+                "caps": caps,
+            }
         )
+        for word in run["words"]:
+            self.words.append((font, size, "".join(word["chars"]), word["advance"], word["box"]))
         return None
 
     # --- shapes and images
@@ -440,12 +549,96 @@ class _Page:
                 if len(self.images) == IMAGES_MAX:
                     self.notes.add("images_limit")
                 else:
-                    self.images.append({"box": box})
+                    self.images.append({"box": box, "round": _round_clip(found)})
+                continue
+            points, curves = _outline(found, matrix)
+            dot = _dot(found, box, curves)
+            if dot is not None:
+                if len(self.dots) == DOTS_MAX:
+                    self.notes.add("dots_limit")
+                else:
+                    self.dots.append(dot)
                 continue
             shape = _shape(found, box, matrix)
             if shape is not None:
+                shape["radius"] = _radius(points, curves, left, bottom, right, top)
+                if shape["type"] == "fill" and self.background is None and self._covers(box):
+                    self.background = shape["colour"]
                 width, height = box[2] - box[0], box[3] - box[1]
                 self.shapes.append((width * height + max(width, height), len(self.shapes), shape))
+
+    def _covers(self, box: list[int]) -> bool:
+        return (box[2] - box[0]) >= BACKGROUND * _tenths(self.width) and (
+            box[3] - box[1]
+        ) >= BACKGROUND * _tenths(self.height)
+
+    def pitches(self, runs: list[dict]) -> None:
+        """Each run's `pitch`: to the nearest baseline below of a run of its font and size in
+        its column, within PITCH_LOW_EM..PITCH_HIGH_EM times its size."""
+        by_style: dict[tuple[int, int], list[dict]] = {}
+        for run in runs:
+            by_style.setdefault((run["font"], run["size"]), []).append(run)
+        for group in by_style.values():
+            group.sort(key=lambda r: r["baseline"])
+            for at, run in enumerate(group):
+                run["pitch"] = 0
+                low, high = PITCH_LOW_EM * run["size"], PITCH_HIGH_EM * run["size"]
+                for other in group[at + 1 :]:
+                    gap = other["baseline"] - run["baseline"]
+                    if gap > high:
+                        break
+                    same_column = (
+                        abs(other["box"][0] - run["box"][0]) <= run["size"]
+                        or abs(other["box"][2] - run["box"][2]) <= run["size"]
+                    )
+                    if gap >= low and same_column:
+                        run["pitch"] = min(gap, LENGTH_MAX)
+                        break
+
+    def sample(self, index: int, quota: dict[int, int], room: list[int], out: list[dict]) -> None:
+        """Crops of the longest words of each font still owed (`quota`), within `room` bytes."""
+        if pdfium_c.FPDFPage_GetRotation(self.page.raw) != 0:
+            return
+        scale = SAMPLE_SCALE * pdf_render.LONG_SIDE / max(self.width, self.height)
+        full = (max(1, round(self.width * scale)), max(1, round(self.height * scale)))
+        rank = {font: at for at, font in enumerate(quota)}
+        for font, size, text, advance, (x0, y0, x1, y1) in sorted(
+            self.words, key=lambda w: (rank.get(w[0], len(rank)), -len(w[2]), w[2])
+        ):
+            if quota.get(font, 0) <= 0 or not size or _bounded(advance, LENGTH_MAX) < 1:
+                continue
+            if self.budget.spent():
+                self.notes.add("samples_limit")
+                return
+            left = math.floor((x0 - self.left - SAMPLE_PAD) * scale)
+            right = math.ceil((x1 - self.left + SAMPLE_PAD) * scale)
+            top = math.floor((self.top - y1 - SAMPLE_PAD) * scale)
+            bottom = math.ceil((self.top - y0 + SAMPLE_PAD) * scale)
+            left, top = max(left, 0), max(top, 0)
+            right, bottom = min(right, full[0]), min(bottom, full[1])
+            if not (0 < right - left <= SAMPLE_SIDE_MAX and 0 < bottom - top <= SAMPLE_SIDE_MAX):
+                continue
+            drawn = pdf_render.draw_area(self.page, full, (left, top, right, bottom), self.budget)
+            if isinstance(drawn, str):
+                self.notes.add("samples_limit")
+                return
+            png = io.BytesIO()
+            drawn.convert("L").save(png, format="PNG")
+            if png.tell() > room[0]:
+                self.notes.add("samples_limit")
+                return
+            room[0] -= png.tell()
+            quota[font] -= 1
+            out.append(
+                {
+                    "font": font,
+                    "page": index,
+                    "text": text,
+                    "size": size,
+                    "width": _bounded(advance, LENGTH_MAX),
+                    "crop": base64.b64encode(png.getvalue()).decode("ascii"),
+                }
+            )
 
     def covered(self) -> bool:
         area = self.width * self.height * 100
@@ -458,6 +651,7 @@ class _Page:
     def answer(self, index: int) -> dict:
         order = reading_order([run["box"] for run in self.runs])
         runs = [self.runs[i] for i in order]
+        self.pitches(runs)
         margins = None
         if runs:
             width, height = _tenths(self.width), _tenths(self.height)
@@ -472,8 +666,10 @@ class _Page:
             "width": _tenths(self.width),
             "height": _tenths(self.height),
             "margins": margins,
+            "background": self.background,
             "runs": runs,
             "shapes": [shape for _, _, shape in self.shapes],
+            "dots": self.dots,
             "images": self.images,
         }
 
@@ -509,6 +705,93 @@ def _transform(matrix, left: float, bottom: float, right: float, top: float):
     return min(xs), min(ys), max(xs), max(ys)
 
 
+def _segments(count: int, get) -> tuple[list[tuple[float, float]], int]:
+    """The points of SEGMENTS_MAX segments at most, and how many are Bezier points."""
+    x, y = ctypes.c_float(), ctypes.c_float()
+    points, curves = [], 0
+    for at in range(min(count, SEGMENTS_MAX)):
+        segment = get(at)
+        if not segment or not pdfium_c.FPDFPathSegment_GetPoint(
+            segment, ctypes.byref(x), ctypes.byref(y)
+        ):
+            continue
+        if not (math.isfinite(x.value) and math.isfinite(y.value)):
+            continue
+        points.append((x.value, y.value))
+        curves += pdfium_c.FPDFPathSegment_GetType(segment) == pdfium_c.FPDF_SEGMENT_BEZIERTO
+    return points, curves
+
+
+def _outline(found, outer) -> tuple[list[tuple[float, float]], int]:
+    """The points of a path on the page (its own matrix, then the forms around it) and how many
+    of them are Bezier points; none past SEGMENTS_MAX segments."""
+    count = pdfium_c.FPDFPath_CountSegments(found)
+    if not 0 < count <= SEGMENTS_MAX:
+        return [], 0
+    points, curves = _segments(count, lambda at: pdfium_c.FPDFPath_GetPathSegment(found, at))
+    own = pdfium_c.FS_MATRIX()
+    if not pdfium_c.FPDFPageObj_GetMatrix(found, ctypes.byref(own)):
+        return [], 0
+    matrices = [(own.a, own.b, own.c, own.d, own.e, own.f)] + ([outer] if outer else [])
+    for a, b, c, d, e, f in matrices:
+        points = [(a * x + c * y + e, b * x + d * y + f) for x, y in points]
+    return points, curves
+
+
+def _square(width: float, height: float) -> bool:
+    return width > 0 and height > 0 and abs(width - height) <= ROUND * max(width, height)
+
+
+def _dot(found, box: list[int], curves: int) -> dict | None:
+    """A small filled circle drawn with curves: a bullet."""
+    width, height = (box[2] - box[0]) / 10, (box[3] - box[1]) / 10
+    if curves < CURVES_MIN or not (DOT_LOW <= width <= DOT_HIGH and _square(width, height)):
+        return None
+    mode, stroke = ctypes.c_int(), ctypes.c_int()
+    if not pdfium_c.FPDFPath_GetDrawMode(found, ctypes.byref(mode), ctypes.byref(stroke)):
+        return None
+    colour = _paint(found, pdfium_c.FPDFPageObj_GetFillColor) if mode.value else None
+    return None if colour is None else {"box": box, "colour": colour}
+
+
+def _radius(points, curves: int, left: float, bottom: float, right: float, top: float) -> int:
+    """The corner radius of a path with curves, in tenths of a point (see the docstring)."""
+    if curves < CURVES_MIN or not points:
+        return 0
+    found = 0.0
+    for x, y in points:
+        for edge, lo, hi, along in (
+            (abs(y - bottom), left, right, x),
+            (abs(y - top), left, right, x),
+            (abs(x - left), bottom, top, y),
+            (abs(x - right), bottom, top, y),
+        ):
+            if edge <= EDGE_NEAR and lo - EDGE_NEAR <= along <= hi + EDGE_NEAR:
+                found = max(found, min(along - lo, hi - along))
+    shorter = min(right - left, top - bottom)
+    return _bounded(min(found, shorter / 2), LENGTH_MAX)
+
+
+def _round_clip(found) -> bool:
+    """Whether one path of the image's clip is a circle (or an ellipse as wide as high)."""
+    clip = pdfium_c.FPDFPageObj_GetClipPath(found)
+    if not clip:
+        return False
+    for path in range(min(pdfium_c.FPDFClipPath_CountPaths(clip), 4)):
+        count = pdfium_c.FPDFClipPath_CountPathSegments(clip, path)
+        if not 0 < count <= SEGMENTS_MAX:
+            continue
+        points, curves = _segments(
+            count, lambda at, path=path: pdfium_c.FPDFClipPath_GetPathSegment(clip, path, at)
+        )
+        if curves < CURVES_MIN or not points:
+            continue
+        xs, ys = [x for x, _ in points], [y for _, y in points]
+        if _square(max(xs) - min(xs), max(ys) - min(ys)):
+            return True
+    return False
+
+
 def _paint(found, getter) -> str | None:
     red, green, blue, alpha = (ctypes.c_uint() for _ in range(4))
     if not getter(found, *(ctypes.byref(part) for part in (red, green, blue, alpha))):
@@ -532,7 +815,7 @@ def _shape(found, box: list[int], outer) -> dict | None:
     if mode.value:
         colour = _paint(found, pdfium_c.FPDFPageObj_GetFillColor)
         if colour is not None:
-            return {"type": "fill", "box": box, "colour": colour, "width": 0}
+            return {"type": "fill", "box": box, "colour": colour, "width": 0, "radius": 0}
     if stroke.value:
         colour = _paint(found, pdfium_c.FPDFPageObj_GetStrokeColor)
         thickness, own = ctypes.c_float(), pdfium_c.FS_MATRIX()
@@ -548,6 +831,7 @@ def _shape(found, box: list[int], outer) -> dict | None:
                 "box": box,
                 "colour": colour,
                 "width": _bounded(drawn, STROKE_MAX),
+                "radius": 0,
             }
     return None
 
@@ -618,6 +902,9 @@ def _describe(font) -> dict:
 def read(pdf, total: int, budget, contents=None) -> dict:
     fonts, room = _Fonts(), [TEXT_MAX]
     pages: list[dict] = []
+    samples: list[dict] = []
+    quota: dict[int, int] = {}
+    crop_room = [SAMPLE_BYTES]
     notes: set[str] = set()
     covered = False
     stopped = None
@@ -649,6 +936,18 @@ def read(pdf, total: int, budget, contents=None) -> dict:
                     if stop.code == "time_limit":
                         stopped = stop.code
                         break
+            if not stopped:
+                if not quota:  # the fonts with most characters are sampled first
+                    weight: dict[int, int] = {}
+                    for run in read_page.runs:
+                        weight[run["font"]] = weight.get(run["font"], 0) + len(run["text"])
+                    quota = dict.fromkeys(sorted(weight, key=lambda f: -weight[f]), 0)
+                for font in {word[0] for word in read_page.words}:
+                    quota.setdefault(font, 0)
+                for font in quota:
+                    taken = sum(1 for sample in samples if sample["font"] == font)
+                    quota[font] = SAMPLES_PER_FONT - taken
+                read_page.sample(index, quota, crop_room, samples)
             notes |= read_page.notes
             covered = covered or read_page.covered()
             pages.append(read_page.answer(index))
@@ -672,6 +971,7 @@ def read(pdf, total: int, budget, contents=None) -> dict:
         "notes": found,
         "fonts": fonts.found,
         "read": pages,
+        "samples": samples,
     }
 
 

@@ -2,12 +2,15 @@
 the test process on files made in code, every answer read back through the worker's own check
 (parser_client.check_design_pdf). The container tests run the same files in the real child."""
 
+import base64
+import io
 import json
 import unicodedata
 from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from app.ingestion import parser_client as pc
 from tests.ingestion import design_fixtures as fx
@@ -387,16 +390,30 @@ def test_the_largest_answer_the_caps_allow_fits_the_read_of_the_client() -> None
         "font": design_pdf.FONTS_MAX - 1,
         "size": 144_000,
         "colour": "#abcdef",
+        "baseline": 144_000,
+        "spacing": -500,
+        "caps": True,
+        "pitch": 144_000,
     }
     shape = {"type": "outline", "box": run["box"], "colour": "#abcdef", "width": 1000}
+    shape["radius"] = 0
     page = {
         "width": width,
         "height": height,
         "margins": [144_000] * 4,
+        "background": "#abcdef",
         "runs": [run] * design_pdf.RUNS_MAX,
         "shapes": [shape] * design_pdf.SHAPES_MAX,
-        "images": [{"box": run["box"]}] * design_pdf.IMAGES_MAX,
+        "dots": [{"box": run["box"], "colour": "#abcdef"}] * design_pdf.DOTS_MAX,
+        "images": [{"box": run["box"], "round": True}] * design_pdf.IMAGES_MAX,
     }
+    # The crops: SAMPLE_BYTES of PNG in all, as many samples as the fonts allow.
+    png = _png_of_bytes(design_pdf.SAMPLE_BYTES // (design_pdf.SAMPLES_PER_FONT * 4))
+    sample = {"page": 1, "text": '"' * design_pdf.SAMPLE_TEXT_MAX, "size": 144_000,
+              "width": 144_000, "crop": base64.b64encode(png).decode()}  # fmt: skip
+    samples = [
+        {"font": font, **sample} for font in range(4) for _ in range(design_pdf.SAMPLES_PER_FONT)
+    ]
     font = {"name": '"' * design_pdf.FONT_NAME_MAX, "weight": 900, **dict.fromkeys(
         ("italic", "serif", "monospace", "symbolic", "embedded"), True
     )}  # fmt: skip
@@ -409,11 +426,19 @@ def test_the_largest_answer_the_caps_allow_fits_the_read_of_the_client() -> None
         "notes": [{"code": code} for code in sorted(pc.DESIGN_NOTE_CODES)][: pc.MAX_NOTES],
         "fonts": [font] * design_pdf.FONTS_MAX,
         "read": [{"index": i, **page} for i in range(design_pdf.PAGES_READ)],
+        "samples": samples,
         "usage": {"cpu_ms": 10**10, "max_rss_kb": 10**10, "max_vm_kb": 10**10},
     }
     encoded = main.encode(answer)
+    assert sum(len(s["crop"]) for s in samples) * 3 // 4 <= design_pdf.SAMPLE_BYTES
     assert len(encoded) < pc.DESIGN_MAX_ANSWER < main.MAX_ANSWER
     assert len(pc.check_design_pdf(pc.loads(encoded)).read[1].runs) == design_pdf.RUNS_MAX
+
+
+def _png_of_bytes(size: int) -> bytes:
+    """A valid PNG header followed by filler up to `size` bytes: the client reads the header."""
+    head = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + (10).to_bytes(4, "big") * 2
+    return head + b"\x00" * (size - len(head))
 
 
 def test_the_caps_are_the_clients() -> None:
@@ -429,6 +454,12 @@ def test_the_caps_are_the_clients() -> None:
         (design_pdf.LENGTH_MAX, pc.DESIGN_LENGTH),
         (design_pdf.STROKE_MAX, pc.DESIGN_STROKE),
         (design_pdf.PAGES_MAX, pc.MAX_PAGES),
+        ((design_pdf.SPACING_LOW, design_pdf.SPACING_HIGH), pc.DESIGN_SPACING),
+        (design_pdf.DOTS_MAX, pc.DESIGN_DOTS),
+        (design_pdf.SAMPLES_PER_FONT, pc.DESIGN_SAMPLES_PER_FONT),
+        (design_pdf.SAMPLE_BYTES, pc.DESIGN_SAMPLE_BYTES),
+        (design_pdf.SAMPLE_SIDE_MAX, pc.DESIGN_SAMPLE_SIDE),
+        (design_pdf.SAMPLE_TEXT_MAX, pc.DESIGN_SAMPLE_TEXT),
     ]
     assert all(mine == theirs for mine, theirs in pairs), pairs
 
@@ -619,3 +650,64 @@ def test_reading_order_keeps_every_box_once_on_any_layout() -> None:
             x0, y0 = noise.uniform(0, 500), noise.uniform(0, 800)
             boxes.append(box(x0, y0, x0 + noise.uniform(0, 90), y0 + noise.uniform(0, 30)))
         assert sorted(design_pdf.reading_order(boxes)) == list(range(len(boxes)))
+
+
+# --- the measures of D28 --------------------------------------------------------------------------
+
+
+def test_a_run_gives_its_baseline_letter_spacing_capitals_and_line_pitch() -> None:
+    page = ask(fx.measured()).read[0]
+    name = next(run for run in page.runs if run.text == "ALEX EXAMPLE")
+    assert name.caps
+    assert name.baseline == 842 * 10 - 760 * 10
+    assert name.spacing == pytest.approx(2.2 * 1000 / 20, abs=6)  # 110 thousandths of an em
+    lines = [run for run in page.runs if run.size == 100]
+    assert [run.pitch for run in lines] == [140, 140, 0]
+    assert all(run.spacing == 0 for run in lines)
+    assert not any(run.caps for run in lines)
+    assert [run.baseline for run in lines] == [2420, 2560, 2700]
+
+
+def test_a_rounded_band_gives_its_radius_dots_are_bullets_and_a_full_fill_the_background() -> None:
+    page = ask(fx.measured()).read[0]
+    assert page.background == "#fdfbf7"
+    band = next(shape for shape in page.shapes if shape.colour == "#1f4f78")
+    assert band.type == "fill"
+    assert band.radius == pytest.approx(80, abs=2)
+    assert all(shape.radius == 0 for shape in page.shapes if shape is not band)
+    assert [dot.colour for dot in page.dots] == ["#1f4f78"] * 3
+    assert all(dot.box[2] - dot.box[0] == pytest.approx(30, abs=2) for dot in page.dots)
+    assert page.rounds == (True,)
+
+
+def test_a_square_photo_and_a_plain_band_are_not_round() -> None:
+    page = ask(fx.one_column()).read[0]
+    assert page.rounds == (False,)
+    assert page.background is None
+    assert page.dots == ()
+    assert all(shape.radius == 0 for shape in page.shapes)
+
+
+def test_word_samples_hold_the_longest_words_of_each_font_with_a_grey_crop() -> None:
+    design = ask(fx.measured())
+    assert design.samples
+    by_font: dict[int, list[pc.WordSample]] = {}
+    for sample in design.samples:
+        by_font.setdefault(sample.font, []).append(sample)
+        assert len(sample.text) >= 3
+        assert sample.text.isalpha()
+        image = Image.open(io.BytesIO(sample.crop))
+        assert image.mode == "L"
+        assert image.width > image.height > 0
+    body = by_font[next(run.font for run in design.read[0].runs if run.size == 100)]
+    assert body[0].text == "everything"  # the longest first
+    # Times Roman at 10pt: the advances of "everything" are 4277 thousandths of an em, 42.8pt
+    assert body[0].width == pytest.approx(428, abs=2)
+
+
+def test_the_samples_stop_at_their_byte_cap_with_a_note(monkeypatch: pytest.MonkeyPatch) -> None:
+    whole = sum(len(sample.crop) for sample in ask(fx.measured()).samples)
+    monkeypatch.setattr(design_pdf, "SAMPLE_BYTES", whole // 2)
+    design = ask(fx.measured())
+    assert 0 < sum(len(sample.crop) for sample in design.samples) <= whole // 2
+    assert "samples_limit" in {note.code for note in design.notes}

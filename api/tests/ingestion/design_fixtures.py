@@ -300,3 +300,71 @@ def styled_docx(*, style_part: str | None = None, theme: str | None = THEME) -> 
         SECTION,
         extra=extra,
     )
+
+
+# --- the measures of D28 (the copy of a CV by measurement) ---------------------------------------
+
+_K = 0.5523  # a quarter circle as one cubic Bezier
+
+
+def circle(cx: float, cy: float, r: float, colour: tuple, *, paint: bytes = b"f") -> bytes:
+    """A filled circle drawn as four Bezier curves (a bullet dot, or a clip with `paint` W n)."""
+    k = _K * r
+    path = (
+        b"%g %g m %g %g %g %g %g %g c %g %g %g %g %g %g c %g %g %g %g %g %g c "
+        b"%g %g %g %g %g %g c h "
+        % (cx + r, cy, cx + r, cy + k, cx + k, cy + r, cx, cy + r,
+           cx - k, cy + r, cx - r, cy + k, cx - r, cy,
+           cx - r, cy - k, cx - k, cy - r, cx, cy - r,
+           cx + k, cy - r, cx + r, cy - k, cx + r, cy)
+    )  # fmt: skip
+    if paint != b"f":
+        return path + paint + b"\n"
+    return b"q %g %g %g rg " % colour + path + b"f Q\n"
+
+
+def rounded(x: float, y: float, w: float, h: float, r: float, colour: tuple) -> bytes:
+    """A filled rectangle whose corners are rounded with the radius `r`."""
+    k = (1 - _K) * r
+    return b"q %g %g %g rg " % colour + (
+        b"%g %g m %g %g l %g %g %g %g %g %g c %g %g l %g %g %g %g %g %g c %g %g l "
+        b"%g %g %g %g %g %g c %g %g l %g %g %g %g %g %g c h f Q\n"
+        % (x + r, y, x + w - r, y, x + w - k, y, x + w, y + k, x + w, y + r,
+           x + w, y + h - r, x + w, y + h - k, x + w - k, y + h, x + w - r, y + h,
+           x + r, y + h, x + k, y + h, x, y + h - k, x, y + h - r,
+           x, y + r, x, y + k, x + k, y, x + r, y)
+    )  # fmt: skip
+
+
+def spaced(words: str, x: float, y: float, spacing: float, **style: object) -> bytes:
+    """One line set with the character spacing `spacing` (Tc, in points)."""
+    line = text(words, x, y, **style)  # type: ignore[arg-type]
+    return b"q " + line.replace(b"BT ", b"BT %g Tc " % spacing, 1) + b"Q\n"  # Tc outlives ET
+
+
+CREAM = (0.992, 0.984, 0.969)  # #fdfbf7
+
+
+def measured() -> bytes:
+    """A cream page with a rounded band, a name in tracked capitals, three lines of one style
+    14 points apart, three bullet dots and a photo clipped to a circle."""
+    body = b"".join(
+        text(line, 72, 600 - 14 * at, size=10)
+        for at, line in enumerate(("Planned the robots of Example", "Wrote their software",
+                                   "Measured everything twice"))
+    )  # fmt: skip
+    return build(
+        [
+            fill(0, 0, 595, 842, CREAM)
+            + rounded(40, 700, 515, 110, 8, NAVY)
+            + spaced("ALEX EXAMPLE", 60, 760, 2.2, font="F1", size=20, colour=(1, 1, 1))
+            + body
+            + circle(62, 603, 1.5, NAVY)
+            + circle(62, 589, 1.5, NAVY)
+            + circle(62, 575, 1.5, NAVY)
+            + b"q "
+            + circle(480, 760, 40, NAVY, paint=b"W n")
+            + picture(440, 720, 80, 80)
+            + b"Q\n"
+        ]
+    )
