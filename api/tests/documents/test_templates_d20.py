@@ -270,8 +270,8 @@ def baselines(pdf: bytes, needle: str) -> list[set[float]]:
         textpage = document[0].get_textpage()
         text = textpage.get_text_range().replace("\ufffe", "-")
         chars = [i for i, ch in enumerate(text) if not ch.isspace()]
-        compact = "".join(text[i] for i in chars)
-        target = "".join(needle.split())
+        compact = "".join(text[i] for i in chars).casefold()  # capitals set by CSS read alike
+        target = "".join(needle.split()).casefold()
         found, start = [], compact.find(target)
         while start >= 0:
             lines = set()
@@ -394,11 +394,23 @@ def test_an_ats_friendly_template_reads_in_the_order_of_the_page(
     keys = ["summary", "highlights", "competencies", "experience", "education", "skills"]
     keys = [k for k in keys if ">" + "".join(labels[k].split()).casefold() + "<" in page]
     keys.sort(key=lambda k: page.index(">" + "".join(labels[k].split()).casefold() + "<"))
+    # a label two keys share (band heads its competencies "Skills") is one heading
+    keys = [k for i, k in enumerate(keys) if labels[k] not in {labels[j] for j in keys[:i]}]
     assert len(keys) >= 4, keys
     folded = text.casefold()  # a heading in small caps may be extracted in capitals
-    places = [folded.index(labels[key].split()[0].casefold()) for key in keys]
-    assert places == sorted(places), dict(zip(keys, places, strict=True))
-    titles = [text.index(employer.title) for employer in d1_view().employers]
+    flat = "".join(folded.split())  # a heading or a title may wrap in its column
+
+    # Each heading after the one before it: whole, else its first word (a heading that wraps in
+    # its column is read line by line beside the body, band's label column).
+    at = 0
+    for key in keys:
+        label = labels[key]
+        place = flat.find("".join(label.split()).casefold(), at)
+        if place < 0:
+            place = flat.find(label.split()[0].casefold(), at)
+        assert place >= 0, (key, flat[at : at + 80])
+        at = place + 1
+    titles = [flat.index("".join(e.title.split()).casefold()) for e in d1_view().employers]
     assert titles == sorted(titles), titles
     # A long word wraps where the line ends: white space is not compared.
     squeezed = "".join(text.split())
