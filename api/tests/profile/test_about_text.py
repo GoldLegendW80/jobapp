@@ -332,11 +332,12 @@ def test_a_yes_or_no_the_text_does_not_state_clearly_is_left_as_it_was_and_said(
     assert answers["salary_stance"] == "range"
     assert answers["eeo_policy"] == "stored"
     # Each change to a switch is a line of its own, old value and new.
-    assert "Working on site: yes to no" in outcome.lines
-    assert "Sponsorship for France: no to yes" in outcome.lines
+    assert "Working on site: was yes, now no" in outcome.lines
+    assert "Sponsorship for France: was no, now yes" in outcome.lines
     assert f"{t.AUTHORIZATION} for Canada: removed" in outcome.lines
     assert any(
-        line.startswith("Salary range: EUR 50000 to 60000 a year to none") for line in outcome.lines
+        line.startswith("Salary range: was EUR 50000 to 60000 a year, now none")
+        for line in outcome.lines
     )
 
 
@@ -372,7 +373,7 @@ def test_a_salary_or_an_equal_opportunity_answer_not_written_is_not_taken() -> N
     assert outcome.changes["answers"]["eeo_policy"] == "stored"
     assert outcome.changes["answers"]["notice_period"] == "Three months."
     # The gender answer is no longer in the reading: its removal is its own line.
-    assert "Gender answer: Woman to none" in outcome.lines
+    assert "Gender answer: was Woman, now none" in outcome.lines
 
 
 def test_a_fact_part_is_its_block_read_by_code() -> None:

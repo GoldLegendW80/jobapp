@@ -371,7 +371,7 @@ def test_a_consent_in_the_answers_changes_only_on_apply_on_a_line_of_its_own(
         about._record(row, request, given, T0)
         db.commit()
     reading = api.get(URL, token=token).json()["reading"]
-    assert reading["lines"] == ["Background checks: no to yes"]
+    assert reading["lines"] == ["Background checks: was no, now yes"]
     assert sections(factory, user_id)["answers"]["background_check_consent"] is False
     assert api.post(f"{URL}/apply", token=token).status_code == 200
     assert sections(factory, user_id)["answers"]["background_check_consent"] is True

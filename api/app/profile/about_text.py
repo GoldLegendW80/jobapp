@@ -634,6 +634,12 @@ def _answers(
     return result
 
 
+def _change(title: str, old: str, new: str) -> str:
+    """One changed value, old and new, read without ambiguity even when a value holds "to"
+    ("Salary range: was EUR 50000 to 60000 a year, now none")."""
+    return f"{title}: was {old}, now {new}"
+
+
 def _answers_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[str]:
     """Prose in one line; every switch, sponsorship, salary and equal opportunity change on its
     own line, old value and new."""
@@ -645,7 +651,7 @@ def _answers_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[
         lines.append(f"{_many(len(prose), 'answer')} updated: {', '.join(prose)}")
     for name, (title, *_rest) in SWITCHES.items():
         if before.get(name) != after.get(name):
-            lines.append(f"{title}: {_yes_no(before.get(name))} to {_yes_no(after.get(name))}")
+            lines.append(_change(title, _yes_no(before.get(name)), _yes_no(after.get(name))))
     old = {fold(one["country"]): one for one in before.get("work_authorization") or []}
     new = {fold(one["country"]): one for one in after.get("work_authorization") or []}
     for key, one in new.items():
@@ -656,8 +662,11 @@ def _answers_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[
             lines.append(f"{AUTHORIZATION} for {one['country']}: answer updated")
         if was is not None and was.get("needs_sponsorship") != one.get("needs_sponsorship"):
             lines.append(
-                f"Sponsorship for {one['country']}: {_yes_no(was.get('needs_sponsorship'))} to "
-                f"{_yes_no(one.get('needs_sponsorship'))}"
+                _change(
+                    f"Sponsorship for {one['country']}",
+                    _yes_no(was.get("needs_sponsorship")),
+                    _yes_no(one.get("needs_sponsorship")),
+                )
             )
     for key, one in old.items():
         if key not in new:
@@ -665,7 +674,7 @@ def _answers_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[
     for name, title in (("salary_stance", SALARY), ("eeo_policy", EEO)):
         if before.get(name) != after.get(name):
             lines.append(
-                f"{title}: {before.get(name) or 'not set'} to {after.get(name) or 'not set'}"
+                _change(title, before.get(name) or "not set", after.get(name) or "not set")
             )
     old_ranges = {one["currency"]: one for one in before.get("salary_ranges") or []}
     new_ranges = {one["currency"]: one for one in after.get("salary_ranges") or []}
@@ -673,16 +682,22 @@ def _answers_lines(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[
         was, now = old_ranges.get(currency), new_ranges.get(currency)
         if was != now:
             lines.append(
-                f"Salary range: {_range_words(was) if was else 'none'} to "
-                f"{_range_words(now) if now else 'none'}"
+                _change(
+                    "Salary range",
+                    _range_words(was) if was else "none",
+                    _range_words(now) if now else "none",
+                )
             )
     old_eeo = {one["topic"]: one["answer"] for one in before.get("eeo_answers") or []}
     new_eeo = {one["topic"]: one["answer"] for one in after.get("eeo_answers") or []}
     for topic in TOPICS:
         if old_eeo.get(topic) != new_eeo.get(topic):
             lines.append(
-                f"{TOPICS[topic]} answer: {old_eeo.get(topic) or 'none'} to "
-                f"{new_eeo.get(topic) or 'none'}"
+                _change(
+                    f"{TOPICS[topic]} answer",
+                    old_eeo.get(topic) or "none",
+                    new_eeo.get(topic) or "none",
+                )
             )
     if (before.get("leave_blank") or []) != (after.get("leave_blank") or []):
         lines.append(f"{LEAVE_BLANK}: updated")

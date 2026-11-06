@@ -228,7 +228,7 @@ describe("About you", () => {
     await user.click(within(answers).getByRole("button", { name: "Done" }));
     expect(await within(answers).findByText("Reading this part")).toBeVisible();
     about.read(
-      ["Background checks: no to yes"],
+      ["Background checks: was no, now yes"],
       [
         "Not changed: the text does not say clearly whether you can work hybrid. Start the line with Yes or No.",
       ],
@@ -238,7 +238,7 @@ describe("About you", () => {
       name: "What the app understood",
     });
     expect(
-      within(understood).getByText("Background checks: no to yes"),
+      within(understood).getByText("Background checks: was no, now yes"),
     ).toBeVisible();
     expect(within(understood).getByText(/^Not changed: /)).toBeVisible();
     expect(about.steps).toEqual([]);
