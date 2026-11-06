@@ -89,16 +89,18 @@ PLACEHOLDER = "placeholder"
 # The family, in English and French: a square or curly bracket opened on a word that asks for a
 # fact ([ADD: ...], [À AJOUTER], [AJOUTER], [INSERT], [TBD], [TODO], [Your title], [Nom de
 # l'entreprise], [XX], ...), closed or not, case and accents as the writer typed them; and any
-# bracket of capitals alone ([COMPANY NAME], [NOMBRE D'ANNÉES]), which no CV line holds.
+# bracket of two or more words in capitals ([COMPANY NAME], [NOMBRE D'ANNÉES]), which no CV
+# line holds; a bracketed acronym alone ([AWS], [SQL], [UX/UI]) is a fact and stays.
 _ASKING = (
     r"ADD|ADDS|ADDED|INSERT|FILL(?:\s+IN)?|TBD|TBC|TBA|TODO|TO\s+DO|PLACEHOLDER|MISSING|"
     r"UNKNOWN|YOUR|X{2,}|(?:[AÀ]\s+)?AJOUTER|AJOUT|(?:[AÀ]\s+)?COMPL[EÉ]TER|INS[EÉ]RER|"
     r"[AÀ]\s+(?:D[EÉ]FINIR|PR[EÉ]CISER|CONFIRMER|RENSEIGNER)|PR[EÉ]CISER|MANQUANT|INCONNU|"
     r"VOTRE|NOM\s+DE|NOMBRE\s+DE"
 )
+_CAPS = r"[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9_/'\u2019.-]*"
 PLACEHOLDER_PATTERN = re.compile(
     r"\s*(?:[\[{]\s*(?:" + _ASKING + r")\b[^\]}]*[\]}]?"
-    r"|(?-i:\[\s*[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9 _/'\u2019.-]{2,}(?::[^\]]*)?\]))",
+    r"|(?-i:\[\s*" + _CAPS + r"(?:\s+" + _CAPS + r")+\s*(?::[^\]]*)?\]))",
     re.IGNORECASE,
 )
 # A claim ambiguous by construction (`rules.POLICY`) that no token cut could take: the sentence

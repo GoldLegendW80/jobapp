@@ -210,10 +210,17 @@ def test_a_letter_that_never_begins_after_its_cv_is_not_waited_for_good(
 
 
 def _cv_panel(
-    db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, *, started: bool
+    db: Session,
+    user_id: uuid.UUID,
+    posting_id: uuid.UUID,
+    *,
+    started: bool,
+    opened: datetime | None = None,
 ) -> uuid.UUID:
     """The hiring panel the CV's write opened (documents D29) at AT + 2 minutes: running, or
-    waiting its turn behind another panel of the person (`started_at` None). Commits."""
+    waiting its turn behind another panel of the person (`started_at` None); `opened` moves its
+    start. Commits."""
+    opened = opened or AT + timedelta(minutes=2)
     cv = next(d for d in store.posting_documents(db, user_id, posting_id) if d.kind == Kind.cv)
     made = DocumentPanel(
         id=uuid.uuid4(),
@@ -222,8 +229,8 @@ def _cv_panel(
         kind="cv",
         status=PanelStatus.running.value,
         reviewed_version=1,
-        created_at=AT + timedelta(minutes=2),
-        started_at=AT + timedelta(minutes=2) if started else None,
+        created_at=opened,
+        started_at=opened if started else None,
     )
     db.add(made)
     db.commit()
@@ -335,3 +342,26 @@ def test_review_first_goes_to_review_once_written_never_straight_to_submit(
     found = application(db, app_id)
     assert (found.state, found.mode) == (State.ready, Mode.review)
     assert authorisations(db, app_id) == []
+
+
+def test_a_panel_opened_before_the_apply_click_and_still_running_is_waited_for(
+    db: Session, person_a: Person, stub: str
+) -> None:
+    """A Write click on the CV opened its panel before the Apply click: the letter still follows
+    its end, so the wait holds past the CV's grace, then counts from the panel's end."""
+    job_id = posting(db, person_a.user_id, form(stub), kinds=())
+    app_id = apply_click(db, person_a, job_id).application.id
+    write(db, person_a.user_id, job_id, Kind.cv)
+    panel_id = _cv_panel(db, person_a.user_id, job_id, started=True, opened=AT - timedelta(hours=1))
+    late = AT + timedelta(minutes=2) + run.LETTER_START_GRACE + timedelta(hours=1)
+    assert run.prepare(db, app_id, late) == "waiting_documents"
+    db.commit()
+    ended = late + timedelta(minutes=5)
+    _end_panel(db, panel_id, ended)
+    assert run.prepare(db, app_id, ended + run.LETTER_START_GRACE - timedelta(seconds=1)) == (
+        "waiting_documents"
+    )
+    db.commit()
+    assert run.prepare(db, app_id, ended + run.LETTER_START_GRACE) == "blocked"
+    db.commit()
+    assert application(db, app_id).error_code == run.NOT_WRITTEN

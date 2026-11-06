@@ -46,6 +46,7 @@ from app.documents.models import (
     Kind,
     Origin,
 )
+from app.jobs.models import Job, JobStatus
 from tests.documents.canary import marker
 from tests.documents.render_support import CV
 from tests.documents.store_support import AT, USER_A, engine, factory, migrated_url, short_locks
@@ -431,6 +432,10 @@ def test_every_bracketed_placeholder_in_english_or_french_is_dropped(placeholder
         "Led the API guild [internal], then the platform team.",
         "Wrote the billing service in Go.",
         "Added tracing to every service.",  # "Added" outside a bracket is a fact
+        "Ran the data layer on [AWS] for payments.",
+        "Tuned every [SQL] query.",
+        "Shipped the [UX/UI] kit.",
+        "Moved the stack to [GCP].",
     ],
 )
 def test_a_line_without_a_placeholder_is_kept(kept: str) -> None:
@@ -696,3 +701,32 @@ def test_the_writers_brief_leaves_the_whole_text_to_get_job() -> None:
     assert planted not in str(shown)
     assert shown["text"] == writer_tools.BRIEF_TEXT_WHERE
     assert (shown["title"], shown["requirements"]) == ("Platform engineer", ["Go"])
+
+
+def test_a_letter_follows_a_running_panel_only_when_one_is_coming(world: World) -> None:
+    """The job page says the letter follows the CV's panel only for a letter that will be
+    written: asked by the click or the Apply, or not written yet on a posting that may have one."""
+    posting = world.posting(80)
+    document, made, run_id = written_cv(world, posting)
+
+    def coming() -> bool:
+        with world.factory() as db:
+            return panel.letter_coming(db, world.user, document)
+
+    assert coming()  # a click, and the posting's letter is not written
+    with world.factory() as db:
+        db.execute(sa.update(Job).where(Job.id == posting).values(status=JobStatus.applied))
+        db.commit()
+    assert not coming()  # the posting is past a letter, and the click asked for the CV only
+    with world.factory() as db:
+        db.execute(
+            sa.update(DocumentGeneration)
+            .where(DocumentGeneration.id == run_id)
+            .values(estimate={generate.LETTER_FOLLOWS: True})
+        )
+        db.commit()
+    assert coming()  # the click asked for both kinds
+    with world.factory() as db:
+        db.execute(sa.update(DocumentPanel).where(DocumentPanel.id == made).values(status="done"))
+        db.commit()
+    assert not coming()  # no panel runs
