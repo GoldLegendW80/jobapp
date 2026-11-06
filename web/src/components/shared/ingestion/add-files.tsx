@@ -16,10 +16,7 @@ import { cn } from "@/lib/utils";
 
 import { megabytes, type Limits } from "@/features/ingestion/api/documents-api";
 import { sizeLabel } from "@/features/ingestion/helpers/labels";
-import type {
-  UploadItem,
-  Uploads,
-} from "@/features/ingestion/hooks/use-uploads";
+import type { UploadItem, Uploads } from "@/features/ingestion/api/use-uploads";
 
 const FOLDER = "A folder cannot be added. Open it and add the files inside.";
 

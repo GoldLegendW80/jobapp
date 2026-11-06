@@ -24,7 +24,7 @@ import {
   type DocumentOut,
   type VersionSummary,
 } from "@/features/documents/api/documents-api";
-import { AUTOSAVE_MS } from "@/features/documents/helpers/edit-autosave";
+import { AUTOSAVE_MS } from "@/features/documents/api/use-edit-autosave";
 import {
   fieldKeys,
   withDefaults,

@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -13,21 +12,17 @@ import {
 import { isApiError } from "@/lib/api";
 
 import { ConsentDialog } from "@/components/shared/documents/consent-dialog";
+import { type Consent } from "@/features/documents/api/spend-api";
 import {
-  acceptConsent,
-  consentKey,
-  getConsent,
-  type Consent,
-} from "@/features/documents/api/spend-api";
-import { baseCvsKey } from "@/features/documents/api/base-cvs-api";
-import { documentKey } from "@/features/documents/api/documents-api";
+  useFetchConsent,
+  useResumeConsent,
+} from "@/features/documents/api/use-consent";
 
 const TITLE = "What is sent to resume your documents";
 const AGREE = "Agree and resume waiting documents";
 
 /** Consent resumes waiting generations on the server; this action creates no new run. */
 export function CaptureConsent({ documentId }: { documentId: string }) {
-  const client = useQueryClient();
   const trigger = useRef<HTMLButtonElement>(null);
   const read = useRef<AbortController>();
   // A ref also guards activations before React renders the pending state.
@@ -38,6 +33,13 @@ export function CaptureConsent({ documentId }: { documentId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   useEffect(() => () => read.current?.abort(), []);
+  const fetchConsent = useFetchConsent();
+  const resume = useResumeConsent(documentId, {
+    onSuccess: () => {
+      setOpen(false);
+      setCurrent(undefined);
+    },
+  });
 
   const load = async () => {
     read.current?.abort();
@@ -47,7 +49,7 @@ export function CaptureConsent({ documentId }: { documentId: string }) {
     setError(undefined);
     setLoading(true);
     try {
-      const consent = await getConsent(controller.signal);
+      const consent = await fetchConsent(controller.signal);
       if (!controller.signal.aborted) setCurrent(consent);
     } catch {
       if (!controller.signal.aborted)
@@ -73,15 +75,7 @@ export function CaptureConsent({ documentId }: { documentId: string }) {
     setBusy(true);
     setError(undefined);
     try {
-      const accepted = await acceptConsent(version);
-      await client.cancelQueries({ queryKey: consentKey });
-      client.setQueryData(consentKey, accepted);
-      setOpen(false);
-      setCurrent(undefined);
-      await Promise.all([
-        client.invalidateQueries({ queryKey: baseCvsKey }),
-        client.invalidateQueries({ queryKey: documentKey(documentId) }),
-      ]);
+      await resume.mutateAsync(version);
     } catch (failure) {
       if (isApiError(failure) && failure.status === 422) {
         posting.current = false;

@@ -9,7 +9,7 @@ import {
   saveDraft,
   staleDraft,
   type DocumentOut,
-} from "../api/documents-api";
+} from "./documents-api";
 import {
   fieldKey,
   localPath,
@@ -18,7 +18,7 @@ import {
   withDefaults,
   type Draft,
   type Path,
-} from "./edit-content";
+} from "../helpers/edit-content";
 
 /** A save starts this long after the last keystroke (SPEC-documents.md, "Pages", Edit). */
 export const AUTOSAVE_MS = 1000;

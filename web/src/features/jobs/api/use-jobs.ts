@@ -3,8 +3,15 @@ import {
   useInfiniteQuery,
   useQuery,
 } from "@tanstack/react-query";
+import { useCallback } from "react";
 
-import { countJobs, jobCountKey, jobListKey, listJobs } from "./jobs-api";
+import {
+  collectIds,
+  countJobs,
+  jobCountKey,
+  jobListKey,
+  listJobs,
+} from "./jobs-api";
 
 /** The postings of one list query (`listQuery(filters)`), page by page; the previous view stays
  * on screen while a new filter loads. */
@@ -25,4 +32,12 @@ export function useJobCount(options: { enabled?: boolean } = {}) {
     queryFn: ({ signal }) => countJobs(signal),
     ...options,
   });
+}
+
+/** The ids of a list query's postings, read page by page up to `cap`, outside the cache. */
+export function useCollectIds() {
+  return useCallback(
+    (apiQuery: string, cap: number) => collectIds(apiQuery, cap),
+    [],
+  );
 }

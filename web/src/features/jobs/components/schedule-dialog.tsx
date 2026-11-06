@@ -4,7 +4,6 @@
  * of the profile (PUT /api/profile/search with the base revision; a change made meanwhile is
  * merged once, see saveSchedule). Off by default: nothing runs until the user turns it on.
  */
-import { useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, CircleAlert, Plus, X } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { toast } from "sonner";
@@ -51,13 +50,13 @@ import {
   type SweepSchedule,
   type Weekday,
 } from "../helpers/schedule";
+import { type ScheduleState } from "../api/sweeps-api";
 import {
-  profileQueryKey,
-  saveSchedule,
-  sweepsKey,
-  type ScheduleState,
-} from "../api/sweeps-api";
-import { scheduleLine, scheduleOf, useSchedule } from "../api/use-schedule";
+  scheduleLine,
+  scheduleOf,
+  useSaveSchedule,
+  useSchedule,
+} from "../api/use-schedule";
 
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -116,13 +115,29 @@ export function ScheduleDialog({
   onClose: () => void;
 }) {
   const id = useId();
-  const client = useQueryClient();
   const [draft, setDraft] = useState<SweepSchedule>(() => initial(state));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [zones] = useState(() =>
     timeZonesOwnFirst(ownTimeZone(), draft.timezone),
   );
+  const save = useSaveSchedule({
+    onSuccess: (_saved, sent) => {
+      setSaving(false);
+      toast.success(`Automatic search: ${describeSchedule(sent)}.`);
+      onClose();
+    },
+    onError: (failure) => {
+      setSaving(false);
+      setError(
+        isApiError(failure) && failure.status === 409
+          ? "Your profile changed in another tab twice in a row. Close and try again."
+          : isApiError(failure) && failure.status === 422
+            ? `Not saved: ${errorDetail(failure) ?? "the schedule is not valid"}.`
+            : `Not saved. ${describeError(failure)}`,
+      );
+    },
+  });
 
   const badTimes = draft.times.some((t) => !CLOCK.test(t));
   const invalid = !draft.days.length || !draft.times.length || badTimes;
@@ -147,25 +162,7 @@ export function ScheduleDialog({
       invalid && !draft.enabled
         ? { ...DEFAULT_SCHEDULE, timezone: draft.timezone }
         : { ...draft, times: [...new Set(draft.times)].sort() };
-    saveSchedule(sent).then(
-      () => {
-        setSaving(false);
-        void client.invalidateQueries({ queryKey: sweepsKey });
-        void client.invalidateQueries({ queryKey: profileQueryKey });
-        toast.success(`Automatic search: ${describeSchedule(sent)}.`);
-        onClose();
-      },
-      (failure: unknown) => {
-        setSaving(false);
-        setError(
-          isApiError(failure) && failure.status === 409
-            ? "Your profile changed in another tab twice in a row. Close and try again."
-            : isApiError(failure) && failure.status === 422
-              ? `Not saved: ${errorDetail(failure) ?? "the schedule is not valid"}.`
-              : `Not saved. ${describeError(failure)}`,
-        );
-      },
-    );
+    save.mutate(sent);
   };
 
   return (

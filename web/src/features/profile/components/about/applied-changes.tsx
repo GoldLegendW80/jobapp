@@ -2,7 +2,7 @@ import { Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-import { actOnReading, type About } from "../../api/about-api";
+import type { AboutAction } from "@/features/profile/api/use-about-actions";
 import { ABOUT_WORDS as W } from "@/features/profile/helpers/about-words";
 
 /** What the last Apply changed in the profile, with Undo. */
@@ -13,7 +13,7 @@ export function AppliedChanges({
 }: {
   lines: readonly string[];
   busy: boolean;
-  onAct: (call: () => Promise<About>) => void;
+  onAct: (action: AboutAction) => void;
 }) {
   return (
     <div className="flex flex-col gap-2 rounded-lg bg-muted p-3">
@@ -29,7 +29,7 @@ export function AppliedChanges({
         className="w-fit"
         disabled={busy}
         onClick={() => {
-          onAct(() => actOnReading("undo"));
+          onAct({ name: "undo" });
         }}
       >
         <Undo2 aria-hidden="true" />

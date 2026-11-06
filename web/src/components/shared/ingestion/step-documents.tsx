@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { Lock, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -13,17 +12,18 @@ import { DocumentList } from "./document-list";
 import { DocumentPreview } from "./document-preview";
 import {
   DEFAULT_LIMITS,
-  documentsKey,
   loadFailureSentence,
   megabytes,
   type DocumentList as Documents,
   type IngestionDocument,
-  type StoredDocument,
 } from "@/features/ingestion/api/documents-api";
-import { useWatchedDocuments } from "@/features/ingestion/api/use-documents";
+import {
+  useDocumentsCache,
+  useWatchedDocuments,
+} from "@/features/ingestion/api/use-documents";
 import { sizeLabel } from "@/features/ingestion/helpers/labels";
 import { PasteBox } from "./paste-box";
-import { useUploads } from "@/features/ingestion/hooks/use-uploads";
+import { useUploads } from "@/features/ingestion/api/use-uploads";
 
 /**
  * After an upload is stopped the list is asked again at once, and once more after this long:
@@ -37,31 +37,19 @@ export const CANCEL_RECHECK_MS = 3000;
  * with its type, size and state, the preview of its text, and its deletion.
  */
 export function StepDocuments() {
-  const client = useQueryClient();
   const query = useWatchedDocuments();
+  const cache = useDocumentsCache();
   const [previewing, setPreviewing] = useState<IngestionDocument>();
   const [deleting, setDeleting] = useState<IngestionDocument>();
   const listHeading = useRef<HTMLHeadingElement>(null);
 
-  const onStored = useCallback(
-    (stored: StoredDocument) => {
-      // Shown at once, then the list is asked again for the order and what is used.
-      client.setQueryData<Documents>(documentsKey, (old) => {
-        if (!old || old.items.some((item) => item.id === stored.id)) return old;
-        return { ...old, items: [stored, ...old.items] };
-      });
-      void client.invalidateQueries({ queryKey: documentsKey });
-    },
-    [client],
-  );
+  const onStored = cache.stored;
   const recheck = useRef<number>();
   const onCancelled = useCallback(() => {
-    const look = () =>
-      void client.invalidateQueries({ queryKey: documentsKey });
-    look();
+    cache.refresh();
     window.clearTimeout(recheck.current);
-    recheck.current = window.setTimeout(look, CANCEL_RECHECK_MS);
-  }, [client]);
+    recheck.current = window.setTimeout(cache.refresh, CANCEL_RECHECK_MS);
+  }, [cache]);
   useEffect(
     () => () => {
       window.clearTimeout(recheck.current);
@@ -148,15 +136,7 @@ export function StepDocuments() {
         }}
         onDeleted={(gone) => {
           setDeleting(undefined);
-          client.setQueryData<Documents>(documentsKey, (old) =>
-            old
-              ? {
-                  ...old,
-                  items: old.items.filter((item) => item.id !== gone.id),
-                }
-              : old,
-          );
-          void client.invalidateQueries({ queryKey: documentsKey });
+          cache.deleted(gone);
           toast.success("Document deleted.");
         }}
         focusAfterDelete={listHeading}

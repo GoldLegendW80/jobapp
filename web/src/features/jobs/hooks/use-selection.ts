@@ -7,7 +7,8 @@ import { toast } from "sonner";
 
 import { describeError } from "@/lib/api";
 
-import { BULK_MAX, collectIds, type JobListItem } from "../api/jobs-api";
+import { BULK_MAX, type JobListItem } from "../api/jobs-api";
+import { useCollectIds } from "../api/use-jobs";
 import type { Selection } from "../helpers/selection";
 
 /**
@@ -24,6 +25,7 @@ export function useSelection(
   const [cappedFrom, setCappedFrom] = useState<number | null>(null);
   const [selectingAll, setSelectingAll] = useState(false);
   const [view, setView] = useState(apiQuery);
+  const collectIds = useCollectIds();
   if (view !== apiQuery) {
     setView(apiQuery);
     setSelected(new Set());
@@ -91,7 +93,7 @@ export function useSelection(
         );
       },
     );
-  }, [apiQuery, selected.size, clear]);
+  }, [apiQuery, selected.size, clear, collectIds]);
 
   const ids = useMemo(() => [...selected], [selected]);
   return {

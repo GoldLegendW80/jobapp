@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { RotateCw } from "lucide-react";
 import { useEffect, useRef, useState, type ComponentType } from "react";
 
@@ -10,12 +9,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { describeError } from "@/lib/api";
 
 import {
-  versionsKey,
   type DocumentOut,
   type Generation,
 } from "@/features/documents/api/documents-api";
-import { useLiveDocument } from "@/features/documents/api/use-document";
-import { templatesKey } from "@/features/documents/api/templates-api";
+import {
+  useLiveDocument,
+  useRefreshCaptured,
+} from "@/features/documents/api/use-document";
 import { type GenerationBrief } from "@/features/documents/api/posting-documents-api";
 import * as chat from "./chat-panel";
 import * as compare from "./compare-panel";
@@ -82,9 +82,9 @@ export function DocumentView({
   generation?: Generation | GenerationBrief | null;
   capture?: Generation | null;
 }) {
-  const client = useQueryClient();
   const [view, setView] = useState<View["id"]>("see");
   const query = useLiveDocument(documentId, generation);
+  const refreshCaptured = useRefreshCaptured(documentId);
 
   // The generation prop comes from another poll than the document's own: when it ends between two
   // reads of the document, the pending timer is dropped with the last read kept. Read once more.
@@ -102,13 +102,10 @@ export function DocumentView({
   useEffect(() => {
     if (captureWasOpen.current && !captureOpen) {
       void refetch();
-      if (capture?.status === "done") {
-        void client.invalidateQueries({ queryKey: versionsKey(documentId) });
-        void client.invalidateQueries({ queryKey: templatesKey });
-      }
+      if (capture?.status === "done") refreshCaptured();
     }
     captureWasOpen.current = captureOpen;
-  }, [captureOpen, capture?.status, client, documentId, refetch]);
+  }, [captureOpen, capture?.status, refreshCaptured, refetch]);
 
   if (query.isPending) {
     return (

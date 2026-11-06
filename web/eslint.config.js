@@ -54,17 +54,29 @@ const SHADCN_ONLY = [
  */
 const FEATURES = readdirSync(new URL("./src/features", import.meta.url));
 const NOT_APP = ["@/app/**", "@/design-system/**"];
-const banned = (patterns) => ({
-  files: patterns.files,
+// All fetching lives in a feature's api/ folder: no other folder fetches or touches the cache.
+const FETCHING = {
+  name: "@tanstack/react-query",
+  importNames: [
+    "useQuery",
+    "useQueries",
+    "useInfiniteQuery",
+    "useSuspenseQuery",
+    "useMutation",
+    "useQueryClient",
+  ],
+  message:
+    "Data is fetched in a feature's api/ folder: call a hook from there (web/ARCHITECTURE.md).",
+};
+const banned = ({ files, groups, fetching = true }) => ({
+  files,
   ignores: ["src/**/*.test.{ts,tsx}", "src/**/*.stories.tsx"],
   rules: {
     "no-restricted-imports": [
       "error",
       {
-        patterns: patterns.groups.map(([group, message]) => ({
-          group,
-          message,
-        })),
+        paths: fetching ? [FETCHING] : [],
+        patterns: groups.map(([group, message]) => ({ group, message })),
       },
     ],
   },
@@ -89,11 +101,22 @@ const LAYERS = [
     ],
   }),
   banned({
-    files: [
-      "src/features/*/api/**",
-      "src/features/*/helpers/**",
-      "src/features/*/hooks/**",
+    files: ["src/features/*/api/**"],
+    fetching: false,
+    groups: [
+      [
+        [
+          "@/components/**",
+          "@/features/*/components/**",
+          "@/features/*/pages/**",
+          ...NOT_APP,
+        ],
+        "api/ holds requests and the hooks that fetch: it renders nothing, so it imports no component or page.",
+      ],
     ],
+  }),
+  banned({
+    files: ["src/features/*/helpers/**", "src/features/*/hooks/**"],
     groups: [
       [
         [

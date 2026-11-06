@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { CompanyBoard } from "@/features/profile/api/profile-api";
 
 import {
+  detectBoard,
   getBoardSuggestions,
   getStarterBoards,
   savedBoard,
@@ -40,4 +41,9 @@ export function useBoardIdeas(boards: readonly CompanyBoard[] | null) {
       (starter.data?.boards ?? []).map(savedBoard),
     ),
   };
+}
+
+/** Asks the api which job board an address is, by its ATS and id; a 422 means none it reads. */
+export function useDetectBoard() {
+  return (url: string) => detectBoard(url);
 }

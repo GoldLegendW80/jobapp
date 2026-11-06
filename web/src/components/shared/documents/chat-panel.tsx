@@ -12,7 +12,6 @@
  * answer being written (`cancelGeneration`): the document stays as it was. A message with no
  * character drawn (only blanks or zero width characters) is not sent, as the api refuses it.
  */
-import { useQueryClient } from "@tanstack/react-query";
 import { SendHorizontal } from "lucide-react";
 import {
   useEffect,
@@ -37,14 +36,12 @@ import { cn } from "@/lib/utils";
 import { drawn } from "@/features/documents/helpers/chat-text";
 import { ConsentDialog } from "./consent-dialog";
 import type { PanelProps } from "./document-view";
-import {
-  documentKey,
-  failureSentence,
-} from "@/features/documents/api/documents-api";
+import { failureSentence } from "@/features/documents/api/documents-api";
 import { type Message } from "@/features/documents/api/chat-api";
 import {
   useGeneration,
   useMessages,
+  useRefreshWhenAnswered,
   useSendMessage,
   useStopGeneration,
 } from "@/features/documents/api/use-chat";
@@ -114,7 +111,6 @@ function MessageItem({ message }: { message: Message }) {
 }
 
 export function ChatPanel({ document, generation }: PanelProps) {
-  const client = useQueryClient();
   const ids = { composer: useId(), hint: useId() };
   const composer = useRef<HTMLTextAreaElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -135,10 +131,7 @@ export function ChatPanel({ document, generation }: PanelProps) {
     followed.data !== undefined &&
     followed.data.id === pending &&
     !isOpen(followed.data);
-  useEffect(() => {
-    if (ended)
-      void client.invalidateQueries({ queryKey: documentKey(document.id) });
-  }, [ended, client, document.id]);
+  useRefreshWhenAnswered(document.id, ended);
 
   // Each new answer is announced once, never the ones already there when the view opened.
   const answers = shown.filter((one) => one.role === "assistant");

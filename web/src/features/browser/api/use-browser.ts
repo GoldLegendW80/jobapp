@@ -5,12 +5,15 @@ import {
   type UseMutationOptions,
   type UseQueryOptions,
 } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import {
   browserQueryKey,
   forgetLogins,
   getBrowser,
+  giveBack,
+  liveTicket,
+  takeOver,
   type Browser,
 } from "./browser-api";
 
@@ -61,4 +64,19 @@ export function useForgetLogins(
       void client.invalidateQueries({ queryKey: browserQueryKey });
     },
   });
+}
+
+/**
+ * The calls of one live view, `viewer`: the one use ticket of its screen, and taking the keyboard
+ * and the mouse from the assistant or giving them back, each answered with who holds them now.
+ */
+export function useLiveView(viewer: string) {
+  return useMemo(
+    () => ({
+      ticket: () => liveTicket(viewer),
+      takeOver: () => takeOver(viewer),
+      giveBack: () => giveBack(viewer),
+    }),
+    [viewer],
+  );
 }

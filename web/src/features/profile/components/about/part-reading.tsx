@@ -4,7 +4,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 
-import { actOnReading, type About, type Reading } from "../../api/about-api";
+import { type Reading } from "../../api/about-api";
+import type { AboutAction } from "@/features/profile/api/use-about-actions";
 import { ABOUT_WORDS as W } from "@/features/profile/helpers/about-words";
 
 /** The model's reading of a part after Done: running, failed, or what it would change. */
@@ -17,7 +18,7 @@ export function PartReading({
   reading: Reading;
   busy: boolean;
   onDone: () => Promise<void>;
-  onAct: (call: () => Promise<About>) => void;
+  onAct: (action: AboutAction) => void;
 }) {
   if (reading.status === "running")
     return (
@@ -75,7 +76,7 @@ export function PartReading({
             size="sm"
             disabled={busy}
             onClick={() => {
-              onAct(() => actOnReading("apply"));
+              onAct({ name: "apply" });
             }}
           >
             Apply
@@ -91,7 +92,7 @@ export function PartReading({
           variant="outline"
           disabled={busy}
           onClick={() => {
-            onAct(() => actOnReading("discard"));
+            onAct({ name: "discard" });
           }}
         >
           {reading.can_apply ? W.notNow : W.close}

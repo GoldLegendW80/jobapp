@@ -9,8 +9,9 @@ React Router 7. This page is the map: where a file goes, what it may import, and
    lays out components; the data comes from hooks of a feature's `api/` folder.
 2. **A component used by two pages or more lives in `src/components/shared/`**, in the folder of
    the feature whose data it shows. A component used by one page lives in that page's feature.
-3. **All fetching lives in `api/`.** Requests, query keys, response schemas and every
-   `useQuery` or `useMutation` hook sit in a feature's `api/` folder, and nowhere else.
+3. **All fetching lives in `api/`.** Requests, query keys, response schemas, every `useQuery` or
+   `useMutation` hook and every read or write of the query cache sit in a feature's `api/` folder,
+   and nowhere else. A component calls a hook, never a request.
 
 ## The folders
 
@@ -63,6 +64,9 @@ through its `api/` and its shared components.
 | `features/<f>/pages/`                   | the above, and `<f>`'s own components                    | another feature's components, another page, app |
 | `app/`                                  | everything                                               |                                                 |
 
+Outside `api/`, importing `useQuery`, `useMutation`, `useQueryClient` and their siblings from
+TanStack Query is an error too: a component that needs data calls a hook of `api/`.
+
 There is no `index.ts` per feature on purpose: a barrel file makes every import load the whole
 module (Vercel's `bundle-barrel-imports`).
 
@@ -83,7 +87,9 @@ module (Vercel's `bundle-barrel-imports`).
 page or component → hook of `features/<f>/api/` (`useJobs(filters)`) → request function of the
 same folder → `lib/api.ts` (the HTTP client: credentials, errors as readable sentences) → the API.
 TanStack Query caches every answer by the keys each `api/` file exports; a mutation hook updates
-or invalidates the keys it changes. No global store: server state lives in the query cache, page
+or invalidates the keys it changes. A mutation hook takes the call site's own reactions (a toast,
+closing a dialog, a navigation) as `onSuccess`/`onError` and calls them after its cache work, so
+they still run when the component that started it has unmounted. No global store: server state lives in the query cache, page
 state in the address (filters, the selected posting) or in the component.
 
 ## Performance

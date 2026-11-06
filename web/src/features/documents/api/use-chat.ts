@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 
 import {
   listMessages,
@@ -8,6 +9,7 @@ import {
 } from "./chat-api";
 import {
   cancelGeneration,
+  documentKey,
   generationKey,
   getGeneration,
 } from "./documents-api";
@@ -33,6 +35,15 @@ export function useGeneration(generationId: string | null) {
         ? POLL_MS
         : false,
   });
+}
+
+/** Once the generation of a message has `ended`, the document is read again with its answer. */
+export function useRefreshWhenAnswered(documentId: string, ended: boolean) {
+  const client = useQueryClient();
+  useEffect(() => {
+    if (ended)
+      void client.invalidateQueries({ queryKey: documentKey(documentId) });
+  }, [ended, client, documentId]);
 }
 
 /**

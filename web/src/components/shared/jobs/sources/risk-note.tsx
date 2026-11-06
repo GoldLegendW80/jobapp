@@ -3,10 +3,8 @@ import { TriangleAlert } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-import type {
-  Permission,
-  Protected,
-} from "@/features/jobs/helpers/site-permissions";
+import type { Permission } from "@/features/jobs/api/permissions-api";
+import type { Protected } from "@/features/jobs/helpers/site-permissions";
 import { PLATFORM_NAMES } from "@/features/jobs/helpers/sources";
 import { Glyph, HANG } from "../setup-grid";
 

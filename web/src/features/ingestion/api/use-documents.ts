@@ -4,6 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useMemo } from "react";
 
 import {
   confirmDocument,
@@ -57,6 +58,42 @@ export function useQuoteText(documentId: string, from: number) {
     // Dropped as soon as the dialog closes: a document's text is not kept around.
     gcTime: 0,
   });
+}
+
+/**
+ * The cached list changed at once by what this page did: a document stored shows first, a
+ * document deleted goes. Each change, and `refresh`, then asks the list again for the order and
+ * what is used.
+ */
+export function useDocumentsCache() {
+  const client = useQueryClient();
+  return useMemo(() => {
+    const refresh = () => {
+      void client.invalidateQueries({ queryKey: documentsKey });
+    };
+    return {
+      refresh,
+      stored: (stored: StoredDocument) => {
+        client.setQueryData<DocumentList>(documentsKey, (old) => {
+          if (!old || old.items.some((item) => item.id === stored.id))
+            return old;
+          return { ...old, items: [stored, ...old.items] };
+        });
+        refresh();
+      },
+      deleted: (gone: { id: string }) => {
+        client.setQueryData<DocumentList>(documentsKey, (old) =>
+          old
+            ? {
+                ...old,
+                items: old.items.filter((item) => item.id !== gone.id),
+              }
+            : old,
+        );
+        refresh();
+      },
+    };
+  }, [client]);
 }
 
 /** Keeps a document flagged as holding a secret; the answer replaces it in the cached list. */

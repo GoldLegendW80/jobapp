@@ -6,7 +6,7 @@
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
-import { AUTOSAVE_MS } from "@/features/documents/helpers/edit-autosave";
+import { AUTOSAVE_MS } from "@/features/documents/api/use-edit-autosave";
 import { describeError } from "@/lib/api";
 
 import { aboutKey, saveAbout, staleAbout, type About } from "./about-api";

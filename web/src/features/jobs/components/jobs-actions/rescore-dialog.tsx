@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { useId, useState } from "react";
 import { Link } from "react-router";
@@ -20,7 +19,8 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
-import { jobsKey, rescoreAll, type RescoreResult } from "../../api/jobs-api";
+import { type RescoreResult } from "../../api/jobs-api";
+import { useRescore } from "../../api/use-jobs-actions";
 import { plural, rescoreSummary } from "@/features/jobs/helpers/selection";
 
 /** Rescore the postings `ids`, or all of them, with the progress as it goes; fits set by hand
@@ -33,7 +33,6 @@ export function RescoreDialog({
   onClose: () => void;
 }) {
   const id = useId();
-  const client = useQueryClient();
   const [overwrite, setOverwrite] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<RescoreResult | null>(null);
@@ -42,26 +41,27 @@ export function RescoreDialog({
     ? `the ${plural(ids.length, "selected posting")}`
     : "all postings";
 
+  const rescore = useRescore({
+    onProgress: setProgress,
+    onSuccess: (result) => {
+      setRunning(false);
+      toast.success(rescoreSummary(result));
+      onClose();
+    },
+    onError: (failure) => {
+      setRunning(false);
+      setError(
+        isApiError(failure) && failure.status === 409
+          ? (errorDetail(failure) ?? "Rescoring is not possible now.")
+          : `The rescore stopped. ${describeError(failure)}`,
+      );
+    },
+  });
+
   const run = () => {
     setRunning(true);
     setError("");
-    rescoreAll({ ids, overwriteManual: overwrite }, setProgress).then(
-      (result) => {
-        setRunning(false);
-        void client.invalidateQueries({ queryKey: jobsKey });
-        toast.success(rescoreSummary(result));
-        onClose();
-      },
-      (failure: unknown) => {
-        setRunning(false);
-        void client.invalidateQueries({ queryKey: jobsKey });
-        setError(
-          isApiError(failure) && failure.status === 409
-            ? (errorDetail(failure) ?? "Rescoring is not possible now.")
-            : `The rescore stopped. ${describeError(failure)}`,
-        );
-      },
-    );
+    rescore.mutate({ ids, overwriteManual: overwrite });
   };
 
   return (

@@ -6,19 +6,37 @@ import { toast } from "sonner";
 
 import { describeError } from "@/lib/api";
 
-import { aboutKey, doneAbout, staleAbout, type About } from "./about-api";
+import {
+  aboutKey,
+  actOnReading,
+  doneAbout,
+  rewriteAbout,
+  staleAbout,
+  type About,
+} from "./about-api";
 import { profileKey } from "./profile-api";
 import { shownPart } from "../helpers/about-parts";
+
+/** A button on the last reading (Apply, Undo, Not now) or on the parts (Rewrite, Add them). */
+export type AboutAction =
+  | { name: "apply" | "undo" | "discard" }
+  | { name: "rewrite"; heading: string | null; version: number };
+
+function send(action: AboutAction): Promise<About> {
+  return action.name === "rewrite"
+    ? rewriteAbout(action.heading, action.version)
+    : actOnReading(action.name);
+}
 
 export function useAboutActions(flush: () => Promise<About | undefined>) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
 
   /** One action on the document, then the profile it changed is loaded again. */
-  const runAction = async (call: () => Promise<About>) => {
+  const runAction = async (action: AboutAction) => {
     setBusy(true);
     try {
-      const answer = await call();
+      const answer = await send(action);
       queryClient.setQueryData(aboutKey, answer);
       await queryClient.invalidateQueries({ queryKey: profileKey });
     } catch (error) {

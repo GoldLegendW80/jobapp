@@ -9,7 +9,7 @@ import {
   storedSentence,
   UploadQueue,
   type UploadsState,
-} from "../hooks/use-uploads";
+} from "../api/use-uploads";
 
 vi.mock("../api/documents-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/documents-api")>()),

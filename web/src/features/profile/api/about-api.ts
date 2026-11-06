@@ -8,7 +8,7 @@
  * `splitParts` and `joinParts` are the twins of api/app/profile/about_text.py `split` and `join`:
  * a `## Heading` line outside a code fence starts a part.
  */
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { isApiError, request } from "@/lib/api";
@@ -131,6 +131,14 @@ export function useAbout() {
     refetchInterval: (query) =>
       query.state.data?.reading?.status === "running" ? READING_POLL_MS : false,
   });
+}
+
+/** Reads "About you" again, after a change made to the profile around it (an import, a restore). */
+export function useRefreshAbout() {
+  const client = useQueryClient();
+  return () => {
+    void client.invalidateQueries({ queryKey: aboutKey });
+  };
 }
 
 // --- the parts, as the api reads them -----------------------------------------------------------

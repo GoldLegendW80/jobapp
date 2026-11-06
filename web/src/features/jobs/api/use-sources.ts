@@ -39,14 +39,10 @@ import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { formatDateTime } from "../helpers/format";
 import {
   PROTECTED,
-  getPermission,
-  permissionKey,
   permissionPlan,
-  putPermission,
   readerWords,
   tickedOf,
   withdraws,
-  type Permission,
   type PermissionChange,
   type Protected,
 } from "../helpers/site-permissions";
@@ -55,6 +51,12 @@ import {
   draftOfSearch,
   type SourcesDraft,
 } from "../helpers/sources";
+import {
+  getPermission,
+  permissionKey,
+  putPermission,
+  type Permission,
+} from "./permissions-api";
 
 /** A save that stopped; `conflict` when current settings must be loaded first. */
 export class SourcesFailure extends Error {
@@ -148,6 +150,15 @@ export interface Sources {
   withdrawn: (reviewed: Search) => Protected[];
   save: (args: SaveArgs) => Promise<Profile | null>;
   saving: boolean;
+}
+
+/** Reads each known job website's permission again: "Load current settings" after a conflict. */
+export function useRefreshPermissions() {
+  const client = useQueryClient();
+  return () => {
+    for (const platform of PROTECTED)
+      void client.invalidateQueries({ queryKey: permissionKey(platform) });
+  };
 }
 
 export function useSources(search: Search): Sources {

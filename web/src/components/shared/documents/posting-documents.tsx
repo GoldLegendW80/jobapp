@@ -1,19 +1,18 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { RotateCw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { useProfile } from "@/features/profile/api/use-profile";
-import { jobKey, type JobDetail } from "@/features/jobs/api/jobs-api";
+import { type JobDetail } from "@/features/jobs/api/jobs-api";
 import { describeError } from "@/lib/api";
 
-import { spendKey } from "@/features/documents/api/spend-api";
 import { useBaseCvList } from "@/features/documents/api/use-base-cvs";
 import {
   usePostingDocuments,
+  useRefreshWhenWorkEnds,
   useWriteNow,
 } from "@/features/documents/api/use-posting-documents";
 import { useCurrentSpend } from "@/features/documents/api/use-spend";
@@ -44,7 +43,6 @@ export function PostingDocumentsSection({
   job: JobDetail;
   heading?: HeadingLevel;
 }) {
-  const queryClient = useQueryClient();
   const [choice, setChoice] = useState<string>();
   // CV generations seen closing; 0 when no letter is expected or its generation is read.
   const [letterWindow, setLetterWindow] = useState(0);
@@ -61,15 +59,10 @@ export function PostingDocumentsSection({
     profile.data !== undefined &&
     profile.data.sections.experience.employers.length === 0;
 
-  const open = (documents.data?.documents ?? []).some(isBusy);
-  const wasOpen = useRef(open);
-  useEffect(() => {
-    if (wasOpen.current && !open) {
-      void queryClient.invalidateQueries({ queryKey: jobKey(job.id) });
-      void queryClient.invalidateQueries({ queryKey: spendKey() });
-    }
-    wasOpen.current = open;
-  }, [open, queryClient, job.id]);
+  useRefreshWhenWorkEnds(
+    job.id,
+    (documents.data?.documents ?? []).some(isBusy),
+  );
 
   const cvGeneration = documentOf(documents.data, "cv")?.generation ?? null;
   const cvOpen = isOpen(cvGeneration);

@@ -47,11 +47,11 @@ import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel, sourceName } from "../helpers/labels";
 import { SweepSources } from "./sweep-sources";
 import { SearchSetup } from "./search-setup/search-setup";
-import { getSweep, type Sweep } from "../api/sweeps-api";
+import { type Sweep } from "../api/sweeps-api";
 import type { FindJobs } from "../hooks/use-find-jobs";
 import { scheduleLine } from "../api/use-schedule";
 import type { SweepRunner } from "../api/use-sweep-runner";
-import { useSweeps } from "../api/use-sweeps";
+import { useFetchSweep, useSweeps } from "../api/use-sweeps";
 
 /** A button that opens the page's Find jobs setup (use-find-jobs.ts); it says when a search
  * runs. */
@@ -357,11 +357,12 @@ export function PastSearchesButton({ runner }: { runner: SweepRunner }) {
   const [opening, setOpening] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const history = useSweeps({ enabled: open });
+  const fetchSweep = useFetchSweep();
   const schedule = history.data?.schedule;
 
   const show = (id: string) => {
     setOpening(id);
-    getSweep(id).then(
+    fetchSweep(id).then(
       (detail) => {
         setOpening(null);
         setOpen(false);

@@ -7,6 +7,7 @@ import {
 
 import { isApiError } from "@/lib/api";
 
+import { rememberAnswer } from "./apply-api";
 import {
   addBankAnswer,
   answerBankKey,
@@ -71,4 +72,10 @@ export function useSaveBankAnswer<Change extends BankChange>(
       return handlers.onError?.(...args);
     },
   });
+}
+
+/** "Remember this answer for next forms": the answer just saved on a form joins Saved answers. */
+export function useRememberAnswer() {
+  return (applicationId: string, fieldKey: string, value: string | boolean) =>
+    rememberAnswer(applicationId, fieldKey, value);
 }

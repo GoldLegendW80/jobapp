@@ -7,10 +7,10 @@ import {
   readerWords,
   tickedOf,
   withdraws,
-  type Permission,
   type PermissionInput,
   type Protected,
 } from "../helpers/site-permissions";
+import type { Permission } from "../api/permissions-api";
 
 const own = (url: string) => ({ platform: "custom" as const, url });
 

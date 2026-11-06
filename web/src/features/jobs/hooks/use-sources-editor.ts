@@ -7,7 +7,8 @@ import { useState } from "react";
 import type { CompanyBoard } from "@/features/profile/api/profile-api";
 import { describeError, isApiError } from "@/lib/api";
 
-import { detectBoard, savedBoard } from "../api/boards-api";
+import { savedBoard } from "../api/boards-api";
+import { useDetectBoard } from "../api/use-board-ideas";
 import { FEED_NAMES } from "../helpers/job-feeds";
 import { platformOf, type Protected } from "../helpers/site-permissions";
 import {
@@ -33,6 +34,7 @@ export function useSourcesEditor(sources: Sources) {
   const [adding, setAdding] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [said, setSaid] = useState("");
+  const detectBoard = useDetectBoard();
 
   const done = (sentence: string) => {
     setProblem(null);

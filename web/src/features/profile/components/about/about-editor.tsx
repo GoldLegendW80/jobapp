@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 
 import {
   joinParts,
-  rewriteAbout,
   splitParts,
   type About,
   type Part,
@@ -69,7 +68,7 @@ export function AboutEditor({ about }: { about: About }) {
               onDone={async (heading) => {
                 if (await actions.finishPart(heading)) setEditing(null);
               }}
-              onAct={(call) => void actions.runAction(call)}
+              onAct={(action) => void actions.runAction(action)}
             />
           ))}
           <div className="flex flex-wrap items-center gap-3">
@@ -89,9 +88,11 @@ export function AboutEditor({ about }: { about: About }) {
                   className="h-auto p-0"
                   disabled={actions.busy}
                   onClick={() => {
-                    void actions.runAction(() =>
-                      rewriteAbout(null, about.version),
-                    );
+                    void actions.runAction({
+                      name: "rewrite",
+                      heading: null,
+                      version: about.version,
+                    });
                   }}
                 >
                   {W.addThem}

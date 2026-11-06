@@ -12,12 +12,12 @@ import {
 
 import {
   keyOf,
-  rewriteAbout,
   type About,
   type AboutPart,
   type Part,
   type PartKind,
 } from "../../api/about-api";
+import type { AboutAction } from "@/features/profile/api/use-about-actions";
 import type { SaveState } from "@/features/profile/api/use-about-autosave";
 import { partAnchor } from "@/features/profile/helpers/about-parts";
 import { ABOUT_WORDS as W } from "@/features/profile/helpers/about-words";
@@ -54,7 +54,7 @@ export function AboutPartCard({
   onEdit: () => void;
   onChange: (part: Part) => void;
   onDone: (heading: string) => Promise<void>;
-  onAct: (call: () => Promise<About>) => void;
+  onAct: (action: AboutAction) => void;
 }) {
   const kind: PartKind = shown?.kind ?? "facts";
   const key = keyOf(part.heading);
@@ -96,7 +96,11 @@ export function AboutPartCard({
           <ProfileChangedAlert
             busy={busy}
             onRewrite={() => {
-              onAct(() => rewriteAbout(part.heading, about.version));
+              onAct({
+                name: "rewrite",
+                heading: part.heading,
+                version: about.version,
+              });
             }}
           />
         ) : null}

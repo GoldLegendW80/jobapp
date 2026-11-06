@@ -7,7 +7,6 @@
  * The search is in Settings, Search (owner, 2026-11-05). History, Export, Import and the classic
  * editor (the old tabs, kept for one release) are under More.
  */
-import { useQueryClient } from "@tanstack/react-query";
 import {
   CircleCheck,
   CircleDashed,
@@ -42,6 +41,7 @@ import { useTitle } from "@/hooks/use-title";
 
 import { AboutDocument } from "./about-document";
 import { ABOUT_WORDS } from "../helpers/about-words";
+import { useRefreshAbout } from "../api/about-api";
 import { SECTIONS, type Profile, type SectionName } from "../api/profile-api";
 import { photoUrl } from "../api/photo-api";
 import { useExportProfile } from "../api/use-profile-file";
@@ -292,12 +292,12 @@ function More({
   dirty: boolean;
   onChanged: () => void;
 }) {
-  const queryClient = useQueryClient();
   const [history, setHistory] = useState<SectionName>();
   const [importing, setImporting] = useState(false);
   const exporting = useExportProfile();
+  const refreshAbout = useRefreshAbout();
   const changed = () => {
-    void queryClient.invalidateQueries({ queryKey: ["profile-about"] });
+    refreshAbout();
     onChanged();
   };
   return (

@@ -17,7 +17,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { describeError } from "@/lib/api";
 
-import { bulkUpdate } from "@/features/jobs/api/jobs-api";
+import { useBulkNote } from "@/features/jobs/api/use-jobs-actions";
 import { plural } from "@/features/jobs/helpers/selection";
 
 /** "Add note" of the bulk bar: one note appended to each selected posting's notes. */
@@ -34,23 +34,24 @@ export function BulkNoteDialog({
   const [text, setText] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const note = useBulkNote({
+    onSuccess: (result) => {
+      setPending(false);
+      toast.success(`Note added to ${plural(result.changed, "posting")}.`);
+      onDone();
+    },
+    onError: (failure) => {
+      setPending(false);
+      setError(`Nothing was changed. ${describeError(failure)}`);
+    },
+  });
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!text.trim()) return;
     setPending(true);
     setError("");
-    bulkUpdate(ids, { notes_append: text.trim() }).then(
-      (result) => {
-        setPending(false);
-        toast.success(`Note added to ${plural(result.changed, "posting")}.`);
-        onDone();
-      },
-      (failure: unknown) => {
-        setPending(false);
-        setError(`Nothing was changed. ${describeError(failure)}`);
-      },
-    );
+    note.mutate({ ids, note: text.trim() });
   };
 
   return (

@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
@@ -22,7 +21,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { describeError } from "@/lib/api";
 import { contractWord } from "@/lib/wording";
 
-import { addJob, duplicateOf, jobsKey } from "../../api/jobs-api";
+import { duplicateOf } from "../../api/jobs-api";
+import { useAddPosting } from "../../api/use-jobs-actions";
 import { CONTRACT_TYPES } from "@/features/jobs/helpers/labels";
 import {
   EMPTY_POSTING,
@@ -45,7 +45,6 @@ export function AddPostingDialog({
   onAdded?: (job: { id: string }) => void;
 }) {
   const id = useId();
-  const client = useQueryClient();
   const navigate = useNavigate();
   const [draft, setDraft] = useState<PostingDraft>({
     ...EMPTY_POSTING,
@@ -57,6 +56,27 @@ export function AddPostingDialog({
     existing?: string;
   } | null>(null);
   const missing = !draft.company.trim() || !draft.title.trim();
+  const add = useAddPosting({
+    onSuccess: (job) => {
+      setPending(false);
+      toast.success(
+        job.fit === null ? "Posting added." : `Posting added, fit ${job.fit}.`,
+      );
+      onClose();
+      if (onAdded) onAdded(job);
+      else void navigate(`/jobs/${job.id}`);
+    },
+    onError: (failure) => {
+      setPending(false);
+      const duplicate = duplicateOf(failure);
+      if (duplicate)
+        setError({
+          text: "This posting is already in your list.",
+          existing: duplicate.id,
+        });
+      else setError({ text: `Not added. ${describeError(failure)}` });
+    },
+  });
 
   const field = (name: keyof PostingDraft) => ({
     id: `${id}-${name}`,
@@ -71,30 +91,7 @@ export function AddPostingDialog({
     if (missing) return;
     setPending(true);
     setError(null);
-    addJob(newPosting(draft)).then(
-      (job) => {
-        setPending(false);
-        void client.invalidateQueries({ queryKey: jobsKey });
-        toast.success(
-          job.fit === null
-            ? "Posting added."
-            : `Posting added, fit ${job.fit}.`,
-        );
-        onClose();
-        if (onAdded) onAdded(job);
-        else void navigate(`/jobs/${job.id}`);
-      },
-      (failure: unknown) => {
-        setPending(false);
-        const duplicate = duplicateOf(failure);
-        if (duplicate)
-          setError({
-            text: "This posting is already in your list.",
-            existing: duplicate.id,
-          });
-        else setError({ text: `Not added. ${describeError(failure)}` });
-      },
-    );
+    add.mutate(newPosting(draft));
   };
 
   return (

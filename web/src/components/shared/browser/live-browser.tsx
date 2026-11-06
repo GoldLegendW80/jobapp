@@ -14,12 +14,10 @@ import { describeError, errorDetail } from "@/lib/api";
 import { WORDING } from "@/lib/wording";
 
 import {
-  giveBack,
   liveSocketUrl,
-  liveTicket,
-  takeOver,
   type InputHolder,
 } from "@/features/browser/api/browser-api";
+import { useLiveView } from "@/features/browser/api/use-browser";
 import { screenFactory, type Screen } from "@/features/browser/helpers/screen";
 
 const SPECIAL_KEYS: Record<string, number> = {
@@ -67,6 +65,7 @@ export function LiveBrowser({
   watchOnly?: boolean;
 }) {
   const [viewer] = useState(() => crypto.randomUUID());
+  const live = useLiveView(viewer);
   const target = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLElement>(null);
   const keyboard = useRef<HTMLTextAreaElement>(null);
@@ -85,7 +84,7 @@ export function LiveBrowser({
     const gone = () => run.gone;
     const connect = async () => {
       try {
-        const ticket = await liveTicket(viewer);
+        const ticket = await live.ticket();
         if (gone() || !target.current) return;
         const opened = await screenFactory.open(
           target.current,
@@ -124,15 +123,15 @@ export function LiveBrowser({
       screen.current = null;
       if (!run.closed) run.opened?.disconnect();
     };
-  }, [viewer, attempt]);
+  }, [live, attempt]);
 
   // Leaving the page while holding the input gives it back, so the agent does not wait for it.
   useEffect(
     () => () => {
       if (inputRef.current === "you" && !person)
-        void giveBack(viewer).catch(() => undefined);
+        void live.giveBack().catch(() => undefined);
     },
-    [viewer, person],
+    [live, person],
   );
 
   const holder = (next: InputHolder) => {
@@ -148,7 +147,7 @@ export function LiveBrowser({
     setBusy(true);
     setProblem(undefined);
     try {
-      holder(await (to === "you" ? takeOver(viewer) : giveBack(viewer)));
+      holder(await (to === "you" ? live.takeOver() : live.giveBack()));
     } catch (error) {
       setProblem(sentence(error));
     } finally {

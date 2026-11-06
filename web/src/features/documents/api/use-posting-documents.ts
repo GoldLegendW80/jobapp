@@ -1,4 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+
+import { jobKey } from "@/features/jobs/api/jobs-api";
 
 import { fitDocument, type Kind } from "./documents-api";
 import {
@@ -6,6 +9,7 @@ import {
   postingDocumentsKey,
   writeNow,
 } from "./posting-documents-api";
+import { spendKey } from "./spend-api";
 import { postingPollInterval } from "../helpers/posting-documents-state";
 
 /**
@@ -19,6 +23,22 @@ export function usePostingDocuments(jobId: string, expectLetter?: boolean) {
     refetchInterval: (current) =>
       postingPollInterval(current.state.data, expectLetter),
   });
+}
+
+/**
+ * Once the work on a posting's documents ends (`busy` turns false), the posting and the spend are
+ * read again: the render that ends it may have moved the posting to `cv_ready`.
+ */
+export function useRefreshWhenWorkEnds(jobId: string, busy: boolean) {
+  const client = useQueryClient();
+  const wasBusy = useRef(busy);
+  useEffect(() => {
+    if (wasBusy.current && !busy) {
+      void client.invalidateQueries({ queryKey: jobKey(jobId) });
+      void client.invalidateQueries({ queryKey: spendKey() });
+    }
+    wasBusy.current = busy;
+  }, [busy, client, jobId]);
 }
 
 /** "Write now" on a posting; its documents are read again after either outcome. */

@@ -8,10 +8,9 @@
  * opportunities O7b). The profile save never carries it, and the search still checks the stored
  * consent, the 7 day pause and the daily caps before every page (app/browser/platform_policy.py).
  */
-import { z } from "zod";
-
 import type { InteractiveSite } from "@/features/profile/api/profile-api";
-import { request } from "@/lib/api";
+
+import type { Permission } from "../api/permissions-api";
 
 export const PROTECTED = [
   "linkedin",
@@ -71,46 +70,6 @@ export function tickedOf(sites: readonly InteractiveSite[]): Set<Protected> {
     if (platform) found.add(platform);
   }
   return found;
-}
-
-export const permissionSchema = z.object({
-  enabled: z.boolean(),
-  accepted: z.boolean(),
-  allowed: z.boolean(),
-  text: z.string().min(1).max(20000),
-  text_version: z.number().int().positive(),
-  query: z.string().nullable().optional(),
-  paused_until: z.string().nullable().optional(),
-});
-export type Permission = z.infer<typeof permissionSchema>;
-
-export const permissionKey = (platform: Protected) =>
-  ["search-permission", platform] as const;
-
-const pathOf = (platform: Protected) =>
-  platform === "linkedin"
-    ? "/browser/linkedin"
-    : `/opportunities/platforms/${platform}`;
-
-export function getPermission(
-  platform: Protected,
-  signal?: AbortSignal,
-): Promise<Permission> {
-  return request(pathOf(platform), {
-    signal,
-    validate: (value) => permissionSchema.parse(value),
-  });
-}
-
-export function putPermission(
-  platform: Protected,
-  body: Record<string, unknown>,
-): Promise<Permission> {
-  return request(pathOf(platform), {
-    method: "PUT",
-    body,
-    validate: (value) => permissionSchema.parse(value),
-  });
 }
 
 export interface PermissionInput {

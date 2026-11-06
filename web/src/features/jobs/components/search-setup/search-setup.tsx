@@ -1,4 +1,3 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -6,11 +5,8 @@ import { useProfile } from "@/features/profile/api/use-profile";
 import { describeError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+import { useRefreshPermissions } from "@/features/jobs/api/use-sources";
 import type { SweepRunner } from "@/features/jobs/api/use-sweep-runner";
-import {
-  PROTECTED,
-  permissionKey,
-} from "@/features/jobs/helpers/site-permissions";
 import { COLUMN } from "@/components/shared/jobs/setup-grid";
 import { SetupForm } from "./setup-form";
 import { BODY, SetupSurface } from "./setup-surface";
@@ -30,8 +26,8 @@ export function SearchSetup({
   onClose: () => void;
   onReturnFocus: () => void;
 }) {
-  const client = useQueryClient();
   const profile = useProfile({ retry: false });
+  const refreshPermissions = useRefreshPermissions();
   const [generation, setGeneration] = useState(0);
   const [busy, setBusy] = useState(false);
   return (
@@ -67,10 +63,7 @@ export function SearchSetup({
           onClose={onClose}
           onBusyChange={setBusy}
           onReload={async () => {
-            for (const platform of PROTECTED)
-              void client.invalidateQueries({
-                queryKey: permissionKey(platform),
-              });
+            refreshPermissions();
             const current = await profile.refetch();
             if (current.isSuccess) setGeneration((value) => value + 1);
           }}

@@ -8,7 +8,8 @@ import { errorDetail } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 import { AnswerEditor } from "./answer-editor";
-import { rememberAnswer, type Answer } from "@/features/apply/api/apply-api";
+import { type Answer } from "@/features/apply/api/apply-api";
+import { useRememberAnswer } from "@/features/apply/api/use-answer-bank";
 import {
   isEditable,
   isOpenField,
@@ -122,6 +123,7 @@ function FieldRow({
   applicationId?: string;
 }) {
   const [remembered, setRemembered] = useState<string | null>(null);
+  const rememberAnswer = useRememberAnswer();
   const key = answer.field_key;
   const onDirtyChange = useCallback(
     (isDirty: boolean) => {

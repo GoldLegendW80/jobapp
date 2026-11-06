@@ -34,7 +34,7 @@ import {
   useAutosave,
   type SaveStatus,
   type Saver,
-} from "@/features/documents/helpers/edit-autosave";
+} from "@/features/documents/api/use-edit-autosave";
 import {
   differences,
   fieldKeys,

@@ -1,4 +1,10 @@
 /** The automatic search schedule as GET /api/jobs/sweeps reports it, and its one line summary. */
+import {
+  useMutation,
+  useQueryClient,
+  type UseMutationOptions,
+} from "@tanstack/react-query";
+
 import { describeSchedule } from "@/features/profile/helpers/schedule";
 
 import {
@@ -6,7 +12,12 @@ import {
   weekdays,
   type SweepSchedule,
 } from "../helpers/schedule";
-import type { ScheduleState } from "./sweeps-api";
+import {
+  profileQueryKey,
+  saveSchedule,
+  sweepsKey,
+  type ScheduleState,
+} from "./sweeps-api";
 import { useSweeps } from "./use-sweeps";
 
 /** The schedule as the list of sweeps reports it, and the line that sums it up. */
@@ -36,4 +47,23 @@ export function scheduleLine(state: ScheduleState | undefined): string {
   return state.next_run
     ? `${line} Next: ${formatInZone(new Date(state.next_run), state.timezone)}.`
     : line;
+}
+
+/** Saves the schedule in the profile, then reads the sweeps and the profile again. */
+export function useSaveSchedule(
+  handlers: Pick<
+    UseMutationOptions<void, Error, SweepSchedule>,
+    "onSuccess" | "onError"
+  >,
+) {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (schedule: SweepSchedule) => saveSchedule(schedule),
+    ...handlers,
+    onSuccess: (...args) => {
+      void client.invalidateQueries({ queryKey: sweepsKey });
+      void client.invalidateQueries({ queryKey: profileQueryKey });
+      return handlers.onSuccess?.(...args);
+    },
+  });
 }

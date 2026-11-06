@@ -1,10 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback } from "react";
 
 import {
   documentKey,
   fitDocument,
   getDocument,
   patchDocument,
+  versionsKey,
   type DocumentOut,
   type Generation,
   type Language,
@@ -13,6 +15,7 @@ import {
   postingDocumentsKey,
   type GenerationBrief,
 } from "./posting-documents-api";
+import { templatesKey } from "./templates-api";
 import { pollInterval } from "../helpers/labels";
 
 /** One document as the api last answered it. */
@@ -38,6 +41,15 @@ export function useLiveDocument(
     refetchInterval: (current) =>
       pollInterval(current.state.data?.render.state ?? "idle", generation),
   });
+}
+
+/** Reads the document's versions and the templates again, once its design capture is done. */
+export function useRefreshCaptured(documentId: string) {
+  const client = useQueryClient();
+  return useCallback(() => {
+    void client.invalidateQueries({ queryKey: versionsKey(documentId) });
+    void client.invalidateQueries({ queryKey: templatesKey });
+  }, [client, documentId]);
 }
 
 /** Changes the language of a document's page; the answer goes to the cache. */

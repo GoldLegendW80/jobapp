@@ -7,7 +7,7 @@ import {
   megabytes,
   uploadDocument,
   type StoredDocument,
-} from "../api/documents-api";
+} from "./documents-api";
 
 export interface UploadItem {
   id: number;
