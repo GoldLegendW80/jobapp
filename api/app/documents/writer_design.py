@@ -120,9 +120,9 @@ def _definition() -> DesignWriter:
         input_model=DesignInput,
         model=MODEL,
         model_by_credential={CredentialKind.anthropic_api_key.value: MODEL_API_KEY},
-        max_turns=setting("documents_generation_max_turns"),
-        wall_time_s=float(setting("documents_generation_wall_s")),
-        effort="medium",
+        max_turns=setting("documents_design_max_turns"),
+        wall_time_s=float(setting("documents_design_wall_s")),
+        effort="high",  # D28: several passes of measure and correction
         internal=True,
         live_text=False,
         bind=bind_generation,

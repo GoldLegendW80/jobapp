@@ -73,10 +73,12 @@ from app.documents import content as c
 from app.documents import corrections
 from app.documents.profile_view import ProfileView
 from app.documents.rules import SoftLimits
-from app.documents.template_css import ENFORCED_CSS
+from app.documents.template_css import ENFORCED_CSS, page_background
 
 ROOT = Path(__file__).resolve().parent
 BASE = ROOT / "_base"
+ICONS = ROOT / "_icons"  # the contact line icons every template may read (D28)
+ICON_KINDS = ("email", "phone", "place", "link")  # template_css.CONTACT_KINDS
 FONTS = ROOT.parent / "fonts"
 DEFAULT = "band"
 KINDS = ("cv", "letter")
@@ -283,7 +285,16 @@ LABEL_KEYS = (
     "summary", "highlights", "competencies", "experience", "education", "skills", "languages",
     "contact", "subject",
 )  # fmt: skip
-_SEPARATOR = re.compile(r"[\u2013\u2014]| - ")
+# A dash used as a separator (hard rule 1): any dash but the hyphen (Unicode's dash punctuation,
+# the minus sign, the small and the two and three em dashes, the wave dashes), a spaced hyphen,
+# or a hyphen that opens or ends the label, in any of its forms (U+002D, U+2010, U+2011, the
+# small and the full width hyphen-minus); a hyphenated word ("Self-employed") stays.
+_HYPHENS = "\\-\u2010\u2011\ufe63\uff0d"
+_DASHES = "\u058a\u05be\u1400\u1806\u2012-\u2015\u2212\u2e17\u2e1a\u2e3a\u2e3b\u2e40\u2e5d"
+_DASHES += "\u301c\u3030\u30a0\ufe31\ufe32\ufe58"
+LABEL_SEPARATOR = re.compile(
+    f"[{_DASHES}]|\\s[{_HYPHENS}]|[{_HYPHENS}]\\s|^[{_HYPHENS}]|[{_HYPHENS}]$"
+)
 
 
 def _labels(slug: str, value: object) -> dict[str, dict[str, str]]:
@@ -299,7 +310,7 @@ def _labels(slug: str, value: object) -> dict[str, dict[str, str]]:
                 raise TemplateError(
                     slug, f"labels: {language}.{key} is a text of 1 to 40 characters"
                 )
-            if _SEPARATOR.search(text) or "<" in text:
+            if LABEL_SEPARATOR.search(text) or "<" in text:
                 raise TemplateError(slug, f"labels: {language}.{key} holds a dash or a <")
         out[language] = dict(items)
     return out
@@ -414,17 +425,21 @@ def registry() -> Mapping[str, Template]:
     return found
 
 
-def thumbnail_hash(folder: Path, base: Path = BASE, library: Path = FONTS) -> str:
+def thumbnail_hash(
+    folder: Path, base: Path = BASE, library: Path = FONTS, icons: Path = ICONS
+) -> str:
     """The hash of what a thumbnail is drawn from: the folder's files other than the
     thumbnails, the manifest without its `thumbnail_of`, the files of `_base/` (the macros, the
-    labels, the sample) and the fonts of its families (each `family.json` and face file). What
-    `thumbnail_of` must equal: a change to any of them makes the thumbnails stale."""
+    labels, the sample), the icons of `_icons/` and the fonts of its families (each
+    `family.json` and face file). What `thumbnail_of` must equal: a change to any of them makes
+    the thumbnails stale."""
     digest = hashlib.sha256()
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
     manifest.pop("thumbnail_of", None)
     parts = [("manifest.json", json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode())]
     parts += [(name, (folder / name).read_bytes()) for name in FILES]
     parts += [(f"_base/{p.name}", p.read_bytes()) for p in sorted(base.iterdir()) if p.is_file()]
+    parts += [(f"_icons/{p.name}", p.read_bytes()) for p in sorted(icons.iterdir()) if p.is_file()]
     for family in manifest.get("fonts", []):
         parts += [
             (f"fonts/{family}/{p.name}", p.read_bytes())
@@ -503,6 +518,23 @@ def _points(text: str) -> frozenset[int]:
         bounds = part.strip().upper().removeprefix("U+").split("-")
         out.update(range(int(bounds[0], 16), int(bounds[-1], 16) + 1))
     return frozenset(out)
+
+
+@cache
+def icon_css() -> str:
+    """The contact line icons as custom properties, `--icon-<kind>`, each one of the SVG files
+    of `_icons/` as a `data:` address: build_html sets them before every sheet, so a bundled
+    template and one written from an upload (template_css: only as the `background-image` of a
+    contact line's `::before`) read the same four drawings and embed nothing of their own."""
+    found = []
+    for kind in ICON_KINDS:
+        svg = (ICONS / f"{kind}.svg").read_bytes()
+        if not svg.startswith(b"<svg ") or b"<script" in svg or b"href" in svg:
+            raise TemplateError("icons", f"the icon {kind} is not a plain drawing")
+        found.append(
+            f"--icon-{kind}:url(data:image/svg+xml;base64,{base64.b64encode(svg).decode()})"
+        )
+    return ":root{" + ";".join(found) + "}"
 
 
 @cache
@@ -982,9 +1014,13 @@ def build_html(
     rendered_on: date,
     *,
     photo: str | None = None,
+    paint_page: bool = False,
 ) -> str:
     """The HTML of one document at one density step (see the module docstring). `photo` is a
-    `data:` address made by `photo.embed`, printed only when the template has a photo slot."""
+    `data:` address made by `photo.embed`, printed only when the template has a photo slot.
+    `paint_page`: the page of design_check's `/check` only, never a stored render: print paints
+    an `@page` background the check's screenshots do not, so it is set on `html` before the
+    sheet, where a sheet's own `html` or `body` background still wins as it does in print."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind}")
     if language not in LANGUAGES:
@@ -1041,7 +1077,11 @@ def build_html(
     page = environment(template).get_template(f"{kind}.html.j2").render(context)
     if page.count(token) != 1:
         raise TemplateError(template.slug, "the style is not printed exactly once")
-    css = step.css() + f":root{{--accent:{template.accent}}}" + template.files["style.css"]
+    css = step.css() + f":root{{--accent:{template.accent}}}" + icon_css()
+    sheet = template.files["style.css"]
+    if paint_page and (colour := page_background(sheet, template.accent)):
+        css += f"html{{background-color:{colour}}}"
+    css += sheet
     css += ENFORCED_CSS
     faces, names = font_css(template.fonts, html.unescape(page.replace(token, "")) + css)
     page = page.replace(token, faces + with_fallbacks(css, names), 1)

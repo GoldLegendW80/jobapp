@@ -55,6 +55,7 @@ from app.documents.models import (
     BaseSource,
     Document,
     DocumentGeneration,
+    DocumentUserTemplate,
     DocumentVersion,
     GenerationMode,
     GenerationStatus,
@@ -137,6 +138,34 @@ class BaseCvOut(BaseModel):
     render_state: RenderState
     generation: GenerationOut | None  # of the content (CONTENT_MODES): the open one, else the last
     design_generation: GenerationOut | None  # latest capture, separate from the content
+    # D28: how close the template copied from this CV lies on it, the numbers its capture kept
+    design_fidelity: FidelityOut | None = None
+
+
+class FidelityOut(BaseModel):
+    lines: int
+    in_place: int
+
+
+def _fidelity(db: Session, document: Document) -> FidelityOut | None:
+    """The fidelity of the person's own template this base CV prints with, when it was copied
+    from this CV (`manifest.capture.fidelity`); None for a bundled one or an older capture."""
+    if not document.template_slug.startswith("upload-"):
+        return None
+    manifest = db.scalar(
+        sa.select(DocumentUserTemplate.manifest).where(
+            DocumentUserTemplate.user_id == document.user_id,
+            DocumentUserTemplate.slug == document.template_slug,
+            DocumentUserTemplate.base_document_id == document.id,
+        )
+    )
+    found = ((manifest or {}).get("capture") or {}).get("fidelity")
+    if not isinstance(found, dict):
+        return None
+    lines, in_place = found.get("lines"), found.get("in_place")
+    if type(lines) is not int or type(in_place) is not int or not 0 <= in_place <= lines:
+        return None
+    return FidelityOut(lines=lines, in_place=in_place) if lines else None
 
 
 class BaseCvsOut(BaseModel):
@@ -262,6 +291,7 @@ def _out(db: Session, document: Document) -> BaseCvOut:
         render_state=document.render_state,
         generation=_generation(db, document),
         design_generation=_generation(db, document, (GenerationMode.template_capture,)),
+        design_fidelity=_fidelity(db, document),
     )
 
 

@@ -73,7 +73,7 @@ REPOSITORY = {
             "unprinted",
             "contact[].text is not printed, or only under another test",
         ),
-        ("style.css", "page", "@page: only size: A4 and margin: var(--margin)"),
+        # their @page background is allowed since D28
         (
             "style.css",
             "property",
@@ -111,7 +111,7 @@ REPOSITORY = {
             "unprinted",
             "contact[].text is not printed, or only under another test",
         ),
-        ("style.css", "page", "@page: only size: A4 and margin: var(--margin)"),
+        # their @page background is allowed since D28
         ("style.css", "property", "min-width: a value outside the allowed list"),
         ("style.css", "property", "white-space: a value outside the allowed list"),
         ("style.css", "selector", "a selector outside the allowed forms"),
@@ -142,7 +142,25 @@ REPOSITORY = {
             "unprinted",
             "contact[].text is not printed, or only under another test",
         ),
-        ("style.css", "property", "url(), a template from an upload embeds nothing"),
+        # its icons are the shared ones since D28 (var(--icon-...)): the sheet reads through
+        ("style.css", "property", "a property outside the allowed list"),
+        (
+            "style.css",
+            "property",
+            "background: a ::before or ::after holds punctuation only, no box",
+        ),
+        (
+            "style.css",
+            "property",
+            "border-radius: a ::before or ::after holds punctuation only, no box",
+        ),
+        ("style.css", "property", "height: a ::before or ::after holds punctuation only, no box"),
+        ("style.css", "property", "left: it can lay a box over another"),
+        ("style.css", "property", "min-width: a value outside the allowed list"),
+        ("style.css", "property", "position: a ::before or ::after holds punctuation only, no box"),
+        ("style.css", "property", "top: it can lay a box over another"),
+        ("style.css", "property", "white-space: a value outside the allowed list"),
+        ("style.css", "property", "width: a ::before or ::after holds punctuation only, no box"),
     },
 }
 
@@ -402,7 +420,9 @@ CSS_REFUSED = [
     (_css("@page { margin: 0; }"), "page"),
     (_css("@page { size: letter; }"), "page"),
     (_css("@page { size: A4; padding: 0; }"), "page"),
-    (_css(".name { font-size: 24pt; }"), "size"),
+    (_css(".name { font-size: 49pt; }"), "size"),
+    (_css(".name { font-size: 4.9pt; }"), "size"),
+    (_css(".name { font-size: 12px; }"), "size"),
     (_css(".name { font-size: 0em; }"), "size"),
     (_css(".name { font-size: 1.2rem; }"), "size"),
     (_css(".name { font-size: x-large; }"), "size"),
@@ -1324,3 +1344,74 @@ def test_the_apps_rules_come_last_in_every_built_page():
             template, "cv", sample.content, sample.view, "en", 0, sample.rendered_on
         )
         assert page.split("</style>", 1)[0].endswith(template_css.ENFORCED_CSS)
+
+
+# --- D28: what a copy of a CV needs, each allowance in its one form -----------------------------
+
+COPY_ACCEPTED = [
+    "@page { size: A4; background: #fdfbf7; }",
+    "@page { size: A4; margin: var(--margin); background-color: #f8f8f8; }",
+    ".name { font-size: 20pt; } .small { font-size: 5pt; } .big { font-size: 48pt; }",
+    ".contact .phone { order: 1; } .contact .email { order: 2; } li.place { order: 3; }",
+    '.contact .email::before { content: ""; display: inline-block; width: 13pt; height: 8pt;'
+    " background-image: var(--icon-email); background-size: contain;"
+    " background-repeat: no-repeat; background-position: center; margin-right: 4pt; }",
+    ".contact .phone::before, .contact .link::before { background-image: var(--icon-phone); }",
+]
+COPY_REFUSED = [
+    ("@page { background: #fdfbf7 !important; }", "page"),
+    ("@page { background: none; }", "page"),
+    ("@page { background: var(--rail); } :root { --rail: 4mm; }", "page"),
+    ("@page { background: #fdfbf7 #000000; }", "page"),
+    ("@page { background-image: var(--icon-email); }", "page"),
+    ("@page { background: linear-gradient(#ffffff, #000000); }", "page"),
+    (".name { font-size: 49pt; }", "size"),
+    (".name { font-size: 4.9pt; }", "size"),
+    (".name { font-size: 20px; }", "size"),
+    # an icon anywhere but the background image of a contact line's ::before
+    (".name { background-image: var(--icon-email); }", "property"),
+    (".name::before { background-image: var(--icon-email); }", "property"),
+    (".contact .email { background-image: var(--icon-email); }", "property"),
+    (".contact .email::after { background-image: var(--icon-email); }", "property"),
+    (".contact .email::before { background: var(--icon-email); }", "property"),
+    (".contact .email::before { color: var(--icon-email); }", "property"),
+    (".contact .email::before, .name::before { background-image: var(--icon-email); }", "property"),
+    (".contact .email::before { background-image: var(--icon-other); }", "property"),
+    (
+        ".contact .email::before { background-image: var(--icon-email) var(--icon-phone); }",
+        "property",
+    ),
+    (".contact .email::before { width: 25pt; }", "property"),
+    (".contact .email::before { height: 10mm; }", "property"),
+    (".contact .email::before { background-repeat: repeat; }", "property"),
+    (".contact .email::before { display: block; }", "property"),
+    (".contact .email::before { position: absolute; }", "property"),
+    (":root { --icon-email: #000000; }", "property"),
+    # the icons of D28 only go where the box of a contact line is; a class of another word is none
+    (".mail::before { background-image: var(--icon-email); }", "property"),
+]
+
+
+@pytest.mark.parametrize("addition", COPY_ACCEPTED)
+def test_what_a_copy_needs_passes_in_its_form(addition):
+    assert _check(_css(addition)) == []
+
+
+@pytest.mark.parametrize(("addition", "code"), COPY_REFUSED)
+def test_what_a_copy_needs_is_refused_outside_its_form(addition, code):
+    assert code in {p.code for p in _check(_css(addition))}
+
+
+def test_every_contact_line_carries_its_kind_as_a_class_through_the_macro():
+    html = template_rules.render_check("cv", FILES, "optional")
+    assert html == []  # the canaries print, and each line of the macro holds its kind
+    base = (templates.BASE / "macros.html.j2").read_text(encoding="utf-8")
+    assert '<li class="{{ line.kind }}">' in base
+    assert frozenset(templates.ICON_KINDS) == template_css.CONTACT_KINDS
+
+
+def test_the_icons_are_the_apps_four_drawings_set_before_every_sheet():
+    css = templates.icon_css()
+    assert css.startswith(":root{--icon-email:url(data:image/svg+xml;base64,")
+    assert [f"--icon-{kind}:" in css for kind in templates.ICON_KINDS] == [True] * 4
+    assert {f"--icon-{kind}" for kind in templates.ICON_KINDS} == template_css.ICONS

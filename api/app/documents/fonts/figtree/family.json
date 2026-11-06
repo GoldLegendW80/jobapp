@@ -1,0 +1,80 @@
+{
+ "family": "Figtree",
+ "licence": "OFL-1.1",
+ "source": "Fontsource @fontsource/figtree 5.3.0 (Google Fonts files, unmodified); unicode_range: the subset's range limited to the glyphs the file holds",
+ "fallback": false,
+ "faces": [
+  {
+   "file": "latin-ext-400-normal.woff2",
+   "weight": 400,
+   "style": "normal",
+   "unicode_range": "U+0100-0113,U+0116-0127,U+012A-012B,U+012E-0130,U+0132-0137,U+0139-013E,U+0141-0148,U+014A-014D,U+0150-0151,U+0154-0161,U+0164-0165,U+016A-017E,U+01CD-01CE,U+0218-021B,U+0237,U+02C7,U+02DD,U+0304,U+0308,U+1E80-1E85,U+1E9E,U+1EF2-1EF3,U+2020,U+20B9"
+  },
+  {
+   "file": "latin-400-normal.woff2",
+   "weight": 400,
+   "style": "normal",
+   "unicode_range": "U+000D,U+0020-007E,U+00A0-00AC,U+00AE-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2039-203A,U+2044,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215"
+  },
+  {
+   "file": "latin-ext-400-italic.woff2",
+   "weight": 400,
+   "style": "italic",
+   "unicode_range": "U+0100-0113,U+0116-0127,U+012A-012B,U+012E-0130,U+0132-0137,U+0139-013E,U+0141-0148,U+014A-014D,U+0150-0151,U+0154-0161,U+0164-0165,U+016A-017E,U+01CD-01CE,U+0218-021B,U+0237,U+02C7,U+02DD,U+0304,U+0308,U+1E80-1E85,U+1E9E,U+1EF2-1EF3,U+2020,U+20B9"
+  },
+  {
+   "file": "latin-400-italic.woff2",
+   "weight": 400,
+   "style": "italic",
+   "unicode_range": "U+000D,U+0020-007E,U+00A0-00AC,U+00AE-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2039-203A,U+2044,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215"
+  },
+  {
+   "file": "latin-ext-500-normal.woff2",
+   "weight": 500,
+   "style": "normal",
+   "unicode_range": "U+0100-0113,U+0116-0127,U+012A-012B,U+012E-0130,U+0132-0137,U+0139-013E,U+0141-0148,U+014A-014D,U+0150-0151,U+0154-0161,U+0164-0165,U+016A-017E,U+01CD-01CE,U+0218-021B,U+0237,U+02C7,U+02DD,U+0304,U+0308,U+1E80-1E85,U+1E9E,U+1EF2-1EF3,U+2020,U+20B9"
+  },
+  {
+   "file": "latin-500-normal.woff2",
+   "weight": 500,
+   "style": "normal",
+   "unicode_range": "U+000D,U+0020-007E,U+00A0-00AC,U+00AE-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2039-203A,U+2044,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215"
+  },
+  {
+   "file": "latin-ext-600-normal.woff2",
+   "weight": 600,
+   "style": "normal",
+   "unicode_range": "U+0100-0113,U+0116-0127,U+012A-012B,U+012E-0130,U+0132-0137,U+0139-013E,U+0141-0148,U+014A-014D,U+0150-0151,U+0154-0161,U+0164-0165,U+016A-017E,U+01CD-01CE,U+0218-021B,U+0237,U+02C7,U+02DD,U+0304,U+0308,U+1E80-1E85,U+1E9E,U+1EF2-1EF3,U+2020,U+20B9"
+  },
+  {
+   "file": "latin-600-normal.woff2",
+   "weight": 600,
+   "style": "normal",
+   "unicode_range": "U+000D,U+0020-007E,U+00A0-00AC,U+00AE-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2039-203A,U+2044,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215"
+  },
+  {
+   "file": "latin-ext-700-normal.woff2",
+   "weight": 700,
+   "style": "normal",
+   "unicode_range": "U+0100-0113,U+0116-0127,U+012A-012B,U+012E-0130,U+0132-0137,U+0139-013E,U+0141-0148,U+014A-014D,U+0150-0151,U+0154-0161,U+0164-0165,U+016A-017E,U+01CD-01CE,U+0218-021B,U+0237,U+02C7,U+02DD,U+0304,U+0308,U+1E80-1E85,U+1E9E,U+1EF2-1EF3,U+2020,U+20B9"
+  },
+  {
+   "file": "latin-700-normal.woff2",
+   "weight": 700,
+   "style": "normal",
+   "unicode_range": "U+000D,U+0020-007E,U+00A0-00AC,U+00AE-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2039-203A,U+2044,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215"
+  },
+  {
+   "file": "latin-ext-700-italic.woff2",
+   "weight": 700,
+   "style": "italic",
+   "unicode_range": "U+0100-0113,U+0116-0127,U+012A-012B,U+012E-0130,U+0132-0137,U+0139-013E,U+0141-0148,U+014A-014D,U+0150-0151,U+0154-0161,U+0164-0165,U+016A-017E,U+01CD-01CE,U+0218-021B,U+0237,U+02C7,U+02DD,U+0304,U+0308,U+1E80-1E85,U+1E9E,U+1EF2-1EF3,U+2020,U+20B9"
+  },
+  {
+   "file": "latin-700-italic.woff2",
+   "weight": 700,
+   "style": "italic",
+   "unicode_range": "U+000D,U+0020-007E,U+00A0-00AC,U+00AE-00FF,U+0131,U+0152-0153,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+2013-2014,U+2018-201A,U+201C-201E,U+2022,U+2026,U+2039-203A,U+2044,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215"
+  }
+ ]
+}

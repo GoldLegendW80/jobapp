@@ -280,6 +280,17 @@ def draw(page, width: float, height: float, budget) -> Image.Image | str:
     """The page as an RGB picture with its longest side at LONG_SIDE, or why there is none."""
     scale = LONG_SIDE / max(width, height)
     columns, rows = max(1, round(width * scale)), max(1, round(height * scale))
+    return draw_area(page, (columns, rows), (0, 0, columns, rows), budget)
+
+
+def draw_area(
+    page, full: tuple[int, int], area: tuple[int, int, int, int], budget
+) -> Image.Image | str:
+    """The part `area` (left, top, right, bottom, in pixels) of the page drawn `full` pixels
+    wide and high: PDFium draws into a bitmap of that part only, so a crop at a high scale
+    costs its own pixels, not the page's (documents D28: the word samples of design_pdf)."""
+    left, top, right, bottom = area
+    columns, rows = max(1, right - left), max(1, bottom - top)
     bitmap = pdfium_c.FPDFBitmap_CreateEx(columns, rows, pdfium_c.FPDFBitmap_BGRx, None, 0)
     if not bitmap:
         raise MemoryError
@@ -291,7 +302,7 @@ def draw(page, width: float, height: float, budget) -> Image.Image | str:
         ask = _PAUSE_TYPE(lambda _pause: 1 if budget.spent() else 0)
         pause.NeedToPauseNow = ask
         status = pdfium_c.FPDF_RenderPageBitmap_Start(
-            bitmap, page.raw, 0, 0, columns, rows, 0, _FLAGS, ctypes.byref(pause)
+            bitmap, page.raw, -left, -top, full[0], full[1], 0, _FLAGS, ctypes.byref(pause)
         )
         while status == pdfium_c.FPDF_RENDER_TOBECONTINUED and not budget.spent():
             status = pdfium_c.FPDF_RenderPage_Continue(page.raw, ctypes.byref(pause))

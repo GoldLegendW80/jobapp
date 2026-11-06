@@ -4,8 +4,9 @@ read are the bundled `_base` ones.
 
 **The checks.** `check(files, photo, fonts, accent) -> [Problem]` is what D25b runs on the
 files the design model wrote, before anything renders: [] accepts; else the problems go back to
-the model once, then `classic` is kept. A Problem names a file, a line and a code of CODES, never
-text of the template, so it can be logged. On top of the authoring rules every template follows
+the model once, then the default template (`band`) is kept. A Problem names a file, a line and
+a code of CODES, never text of the template, so it can be logged. On top of the authoring
+rules every template follows
 (`templates.problems`; the manifest is `templates.from_files`'s, which D25b calls to store it):
 - each `.j2` file is read as Jinja's own parser reads it (never rendered at this stage), and
   only an allow list passes. At the top level: `extends` of `_base/page.html.j2`, `import` of
@@ -577,6 +578,8 @@ def _context(kind: str, full: bool, photo: str) -> dict[str, Any]:
     context = {p: value(p) for p in top}
     if full:
         context["contact"][1]["href"] = None
+    for at, line in enumerate(context.get("contact") or []):
+        line["kind"] = ("email", "phone")[at % 2]  # the class the macro prints (D28)
     context |= {
         "lang": "en",
         "kind": kind,
@@ -953,8 +956,9 @@ def _layout(t: _Reading, page, text: str) -> _Layout:
     return _Layout(2, "right", round((page.width - right - end) / MM, 1))
 
 
-def from_pdf(design: DesignPdf) -> Tokens:
-    """The tokens of the first page of a PDF's layout (see the module docstring)."""
+def from_pdf(design: DesignPdf, mapped: list[font_map.Mapped] | None = None) -> Tokens:
+    """The tokens of the first page of a PDF's layout (see the module docstring). `mapped`:
+    the face of each font of the file (font_measure.faces), else font_map by name."""
     t = _Reading()
     page = design.read[0] if design.read else None
     runs = page.runs if page else ()
@@ -969,7 +973,8 @@ def from_pdf(design: DesignPdf) -> Tokens:
         if body and a.size == b.size == body and b.box[1] > a.box[1]
         if abs(b.box[0] - a.box[0]) <= 20
     ]
-    ratios = [r for r in ratios if 0.9 <= r <= 2.5]
+    pitches = [r.pitch / body for r in runs if body and r.size == body and r.pitch]
+    ratios = [r for r in (pitches or ratios) if 0.9 <= r <= 2.5]  # the measured pitch first
     largest = max((r.size for r in runs), default=0)
     headings, colours, accents = Counter(), Counter(), Counter()
     bold = {i for i, f in enumerate(design.fonts) if f.weight >= 600}
@@ -984,7 +989,9 @@ def from_pdf(design: DesignPdf) -> Tokens:
             accents[run.colour] += len(run.text)
     shapes = [s.colour for s in (page.shapes if page else ()) if s.colour != text]
     layout = _layout(t, page, text) if page else _Layout()
-    faces = [(font_map.face(**_face(design.fonts[r.font])), r) for r in runs]
+    if mapped is None or len(mapped) != len(design.fonts):
+        mapped = [font_map.face(**_face(font)) for font in design.fonts]
+    faces = [(mapped[r.font], r) for r in runs]
     body_font = _fonts((m, len(r.text)) for m, r in faces if r.size == body)
     heading_font = (
         _fonts((m, len(r.text)) for m, r in faces if r.size > body) if largest > body else ()

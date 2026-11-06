@@ -2,6 +2,7 @@
 check_design_docx, read_design): every byte of it is hostile, so each rule is broken here once
 and refused, and a good answer goes through a server that answers it over a connection."""
 
+import base64
 import copy
 import json
 import logging
@@ -39,6 +40,15 @@ def rule_of(check: Callable[[Any], Any], answer: Any) -> str:
     return caught.value.code
 
 
+def _crop(width: int, height: int, size: int = 0) -> str:
+    head = b"\x89PNG\r\n\x1a\n\x00\x00\x00\x0dIHDR" + width.to_bytes(4, "big")
+    head += height.to_bytes(4, "big")
+    return base64.b64encode(head + b"\x00" * max(size - len(head), 0)).decode()
+
+
+SAMPLE = {"font": 0, "page": 0, "text": "Example", "size": 110, "width": 391, "crop": _crop(9, 9)}
+
+
 def first_run(answer: dict) -> dict:
     return answer["read"][0]["runs"][0]
 
@@ -73,6 +83,63 @@ PDF_BREAKS = [
     ("a font weight of 50", lambda a: a["fonts"][0].update(weight=50), "font"),
     ("a font name with a tab", lambda a: a["fonts"][0].update(name="a\tb"), "font"),
     ("a scan with runs", lambda a: a.update(scanned=True), "scanned"),
+    ("a spacing past its bound", lambda a: first_run(a).update(spacing=1_001), "runs"),
+    ("a baseline below the page", lambda a: first_run(a).update(baseline=8_421), "runs"),
+    ("capitals as a number", lambda a: first_run(a).update(caps=1), "runs"),
+    (
+        "a radius wider than the shape",
+        lambda a: a["read"][0]["shapes"][0].update(radius=10**5),
+        "shapes",
+    ),
+    ("a background by name", lambda a: a["read"][0].update(background="cream"), "colour"),
+    (
+        "a dot with a width",
+        lambda a: a["read"][0].update(
+            dots=[{"box": [0, 0, 1, 1], "colour": "#000000", "width": 1}]
+        ),
+        "dots",
+    ),
+    (
+        "dots past the cap",
+        lambda a: a["read"][0].update(dots=[{"box": [0, 0, 1, 1], "colour": "#000000"}] * 201),
+        "dots",
+    ),
+    ("a round clip as text", lambda a: a["read"][0]["images"][0].update(round="yes"), "images"),
+    (
+        "a sample that is not a PNG",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": "QUFBQQ=="}]),
+        "samples",
+    ),
+    ("a sample of another font", lambda a: a.update(samples=[{**SAMPLE, "font": 99}]), "samples"),
+    ("a sample of a page not read", lambda a: a.update(samples=[{**SAMPLE, "page": 1}]), "samples"),
+    (
+        "a sample crop too wide",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_401, 10)}]),
+        "samples",
+    ),
+    ("a sample crop not base64", lambda a: a.update(samples=[{**SAMPLE, "crop": "*%"}]), "samples"),
+    # #757 round 1 (B5): sides within 2,400 px, the area past 400,000 pixels
+    (
+        "a sample crop too large in area",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_400, 167)}]),
+        "samples",
+    ),
+    (
+        "a sample crop of the largest square sides",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_400, 2_400)}]),
+        "samples",
+    ),
+    (
+        "a sample crop one pixel past the area",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(4_001, 100)}]),
+        "samples",
+    ),
+    (
+        "samples past the byte cap",
+        lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(10, 10, 200_001)}] * 2),
+        "samples",
+    ),
+    ("samples past the cap of a font", lambda a: a.update(samples=[SAMPLE] * 31), "samples"),
     ("a sentence as a note", lambda a: a.update(notes=[{"code": "the file is fine"}]), "note_code"),
     ("a note of another kind", lambda a: a.update(notes=[{"code": "scans_not_read"}]), "note_code"),
 ]
@@ -81,6 +148,13 @@ PDF_BREAKS = [
 @pytest.mark.parametrize(("name", "change", "rule"), PDF_BREAKS, ids=[r[0] for r in PDF_BREAKS])
 def test_a_pdf_answer_that_breaks_a_rule_is_refused(name: str, change: Any, rule: str) -> None:
     assert rule_of(pc.check_design_pdf, broken(PDF, change)) == rule, name
+
+
+def test_a_sample_crop_at_the_area_cap_is_accepted() -> None:
+    answer = broken(PDF, lambda a: a.update(samples=[{**SAMPLE, "crop": _crop(2_000, 200)}]))
+    (sample,) = pc.check_design_pdf(answer).samples
+    assert pc._png_side(sample.crop) == (2_000, 200)
+    assert pc.DESIGN_SAMPLE_AREA == 2_000 * 200
 
 
 def test_the_text_of_all_runs_together_is_capped() -> None:

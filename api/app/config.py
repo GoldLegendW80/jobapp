@@ -139,9 +139,12 @@ class Settings(BaseSettings):
     documents_auto_retry_after_s: int = Field(default=600, ge=60, le=86_400)
     documents_min_fit_default: int = Field(default=70, ge=0, le=100)
     documents_daily_ceiling_default: int = Field(default=100, ge=1, le=500)
-    # Base CVs per person, and the passes of a design capture (one repair, one fidelity).
+    # Base CVs per person; a design capture: its fidelity passes after the first accepted
+    # template (D28), and the turns and wall time of its writer.
     documents_base_cvs_max: int = Field(default=10, ge=1, le=50)
-    documents_design_passes: int = Field(default=2, ge=1, le=4)
+    documents_design_max_turns: int = Field(default=14, ge=6, le=40)
+    documents_design_passes: int = Field(default=4, ge=1, le=6)
+    documents_design_wall_s: int = Field(default=900, ge=120, le=1800)
     # The chat of a document: characters of one message, messages kept per document.
     documents_chat_max_chars: int = Field(default=2000, ge=200, le=10_000)
     documents_messages_kept: int = Field(default=200, ge=20, le=2000)

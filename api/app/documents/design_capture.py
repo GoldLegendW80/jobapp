@@ -33,7 +33,9 @@ model sees the base CV printed with it beside the original's page 1 and may subm
 correction that is refused leaves the accepted one in place. At most DOCUMENTS_DESIGN_PASSES
 passes after the first submit.
 
-**The result** (`settle`, from the run's final hook): the accepted files become the person's
+**The result** (`settle`, from the run's final hook, when the run ends or stops on its turn
+limit, wall time or token budget after an accepted submit: `stopped_on_a_limit`; never on a
+cancel or when the upload is gone): the best scoring accepted files become the person's
 user template (`document_user_templates`, `upload-` and 8 characters), or the next version of
 the one this base CV was captured to before (a capture run again replaces it, `previous` keeps
 the files before); the base CV takes it as a new version with origin `template`, and its render
@@ -56,6 +58,7 @@ import asyncio
 import io
 import json
 import logging
+import re
 import secrets
 import threading
 import uuid
@@ -71,7 +74,16 @@ from sqlalchemy.orm import Session, sessionmaker, undefer
 from app.agents import failures
 from app.agents.definitions import FinalRun
 from app.agents.models import AgentRun, RunStatus
-from app.documents import design_check, font_map, store, template_rules, templates
+from app.documents import (
+    design_check,
+    design_spec,
+    fidelity,
+    font_map,
+    font_measure,
+    store,
+    template_rules,
+    templates,
+)
 from app.documents.models import (
     BaseSource,
     Document,
@@ -93,8 +105,13 @@ logger = logging.getLogger("app.documents.design_capture")
 
 DESIGN_PAGES = 2
 REDACTED = "[redacted]"
-RUNS_PER_PAGE = 200  # text runs of one page the model reads, in reading order
-RUN_CHARS = 80
+RUNS_PER_PAGE = 400  # text runs of one page the model reads, in reading order
+RUN_CHARS = 160
+# A run as read_design gives it (D28): one array in this order, the font an index of `fonts`, so
+# that the key names are not sent once per run. The extraction's own cap (DESIGN_TEXT, 40,000
+# characters for both pages) bounds the texts.
+RUN_FIELDS = ("text", "x0", "y0", "x1", "y1", "font", "size", "colour", "baseline", "spacing_em",
+              "caps")  # fmt: skip
 IMAGE_MAX_BYTES = 300_000  # one image block, as ingestion's view_image sends at most
 GREY = (160, 160, 160)
 SLUG_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -121,6 +138,11 @@ class Inputs:
     layout: Mapping[str, Any]  # what read_design answers, texts scrubbed
     pages: tuple[bytes, ...]  # JPEG, image boxes grey; () for a DOCX
     notes: tuple[str, ...]  # codes of CAPTURE_NOTES
+    # D28, for a PDF: the extraction itself (the fidelity measure matches its lines; never
+    # stored, never logged) and the original's section headings as scrubbed, a replaced one
+    # left out (design_spec.measured): the only texts labels_of accepts
+    design: parser_client.DesignPdf | None = None
+    headings: tuple[str, ...] = ()
 
 
 def scrub(texts: list[str]) -> list[str]:
@@ -137,26 +159,34 @@ def _pt(value: int) -> float:
     return round(value / 10, 1)
 
 
-def _pdf_layout(design: parser_client.DesignPdf) -> dict[str, Any]:
-    faces = [font_map.face(f.name, f.weight, f.italic, f.serif, f.monospace) for f in design.fonts]
+def _pdf_layout(
+    design: parser_client.DesignPdf, faces: list[font_map.Mapped] | None = None
+) -> dict[str, Any]:
+    if faces is None:
+        faces = [
+            font_map.face(f.name, f.weight, f.italic, f.serif, f.monospace) for f in design.fonts
+        ]
+    every = [scrub([run.text for run in page.runs]) for page in design.read]
     pages = []
-    for page in design.read:
+    for page, scrubbed in zip(design.read, every, strict=True):
         runs = page.runs[:RUNS_PER_PAGE]
-        texts = scrub([run.text for run in runs])
+        texts = scrubbed[:RUNS_PER_PAGE]
         pages.append(
             {
                 "page": page.index,
                 "size_pt": [_pt(page.width), _pt(page.height)],
                 "margins_pt": [_pt(m) for m in page.margins] if page.margins else None,
                 "runs": [
-                    {
-                        "text": text[:RUN_CHARS],
-                        "box_pt": [_pt(v) for v in run.box],
-                        "font": faces[run.font].css_name if run.font < len(faces) else None,
-                        "weight": faces[run.font].weight if run.font < len(faces) else None,
-                        "size_pt": _pt(run.size),
-                        "colour": run.colour,
-                    }
+                    [
+                        text[:RUN_CHARS],
+                        *(_pt(v) for v in run.box),
+                        run.font,
+                        _pt(run.size),
+                        run.colour,
+                        _pt(run.baseline),
+                        round(run.spacing / 1000, 3),
+                        run.caps,
+                    ]
                     for run, text in zip(runs, texts, strict=True)
                 ],
                 "shapes": [
@@ -166,7 +196,17 @@ def _pdf_layout(design: parser_client.DesignPdf) -> dict[str, Any]:
                 "images_pt": [[_pt(v) for v in box] for box in page.images],
             }
         )
-    return {"pages": design.pages, "scanned": design.scanned, "read": pages}
+    return {
+        "pages": design.pages,
+        "scanned": design.scanned,
+        "run_fields": list(RUN_FIELDS),
+        "fonts": [
+            {"family": face.css_name, "weight": face.weight, "italic": face.italic}
+            for face in faces
+        ],
+        "read": pages,
+        "measured": design_spec.measured(design, faces, every),
+    }
 
 
 def _face(name: object) -> str | None:
@@ -238,7 +278,8 @@ async def read_inputs(raw: bytes, mime: str) -> Inputs:
         )
     except parser_client.ParserError as error:
         raise InputsGoneError(type(error).__name__) from None
-    tokens = template_rules.from_pdf(design)
+    faces = await asyncio.to_thread(font_measure.faces, design)
+    tokens = template_rules.from_pdf(design, faces)
     by_index = {page.index: page for page in design.read}
     pages = tuple(
         grey_boxes(image.jpeg, by_index[image.position])
@@ -247,11 +288,13 @@ async def read_inputs(raw: bytes, mime: str) -> Inputs:
     )
     photo = "optional" if design.read and design.read[0].images else "none"
     notes = [n.code for n in tokens.notes]
-    faces = [font_map.face(f.name, f.weight, f.italic, f.serif, f.monospace) for f in design.fonts]
-    notes += ["fonts_replaced"] if any(face.notes for face in faces) else []
+    replaced = any(face.notes and not face.notes[0].startswith("exact:") for face in faces)
+    notes += ["fonts_replaced"] if replaced else []
     notes += ["scanned"] if design.scanned else []
     notes += ["two_pages"] if design.pages > 1 else []
-    return Inputs("pdf", tokens, photo, _pdf_layout(design), pages, _notes(notes))
+    layout = _pdf_layout(design, faces)
+    headings = tuple(layout["measured"]["headings"])
+    return Inputs("pdf", tokens, photo, layout, pages, _notes(notes), design, headings)
 
 
 def _notes(codes: Any) -> tuple[str, ...]:
@@ -277,11 +320,19 @@ def fonts_of(tokens: template_rules.Tokens) -> tuple[str, ...]:
     return tokens.fonts or (font_map.GENRES[font_map.DEFAULT_GENRE],)
 
 
-def manifest_of(slug: str, version: int, inputs: Inputs) -> dict[str, Any]:
-    """The manifest of a user template, written by code from the captured tokens."""
+def manifest_of(
+    slug: str,
+    version: int,
+    inputs: Inputs,
+    labels: Mapping[str, Mapping[str, str]] | None = None,
+) -> dict[str, Any]:
+    """The manifest of a user template, written by code from the captured tokens; `labels`
+    as labels_of accepted them."""
     tokens = inputs.tokens
     default = templates.registry()[templates.DEFAULT]
+    own = {"labels": {lang: dict(items) for lang, items in labels.items()}} if labels else {}
     return {
+        **own,
         "slug": slug,
         "version": version,
         "name": dict(NAME),
@@ -311,7 +362,10 @@ class Validated:
 
 
 async def validate(
-    files: Mapping[str, str], inputs: Inputs, check: design_check.Check | None = None
+    files: Mapping[str, str],
+    inputs: Inputs,
+    check: design_check.Check | None = None,
+    labels: Mapping[str, Mapping[str, str]] | None = None,
 ) -> Validated:
     """The static rules, then the template system, then the render check. Raises
     design_check.CheckUnavailableError when the renderer cannot be reached."""
@@ -326,7 +380,7 @@ async def validate(
     if problems:
         return Validated(None, tuple(problems))
     try:
-        template = templates.from_files(manifest_of("upload-check00", 1, inputs), files)
+        template = templates.from_files(manifest_of("upload-check00", 1, inputs, labels), files)
     except templates.TemplateError:
         return Validated(None, (Problem("style.css", 0, "authoring", "the template system"),))
     found = await design_check.check_template(template, check)
@@ -340,10 +394,18 @@ async def validate(
 class RunState:
     inputs: Inputs | None = None
     submits: int = 0
-    accepted: dict[str, str] | None = None
+    accepted: dict[str, str] | None = None  # the best scoring accepted files (D28)
+    labels: dict[str, dict[str, str]] | None = None  # theirs
+    measure: fidelity.Measure | None = None  # theirs
+    best: float = 0.0
+    passes: int = 0  # fidelity passes done
     closed: bool = False  # no submit is taken any more
     refused: bool = False  # closed by a refusal, nothing accepted
     gone: bool = False  # the upload could not be read
+    # the last view_render's answer and the accepted files it printed: a second call while
+    # they are still the ones kept (the same pass) is answered from it, without a render
+    # (never stored, never logged)
+    viewed: tuple[dict[str, str], list[dict[str, Any]]] | None = None
     turn: asyncio.Lock = field(default_factory=asyncio.Lock)  # one submit at a time
     reading: asyncio.Lock = field(default_factory=asyncio.Lock)  # the inputs read once
 
@@ -370,43 +432,114 @@ def take(run_id: uuid.UUID) -> RunState:
 
 ACCEPTED = (
     "Accepted. The fidelity pass: call view_render to see the base CV printed with your "
-    "template, compare it with view_page 0, and submit once more only if something differs "
-    "that you can correct within the rules; otherwise stop and answer with one short line."
+    "template over the original, with the measure; correct what the numbers say within the "
+    "rules and submit again, or stop and answer with one short line when nothing is left to "
+    "correct."
 )
+BETTER = "Better: this version is now the one kept. Correct again from the numbers, or stop."
 STORED = "Stored. Your work is done: answer with one short line."
 KEPT = (
-    "This correction breaks the rules: the template accepted before is kept. Stop and answer "
-    "with one short line."
+    "This correction breaks the rules: the best template accepted before is kept. Stop and "
+    "answer with one short line."
+)
+NOT_BETTER = (
+    "This version does not lie closer to the original: the best one before is kept. Stop and "
+    "answer with one short line."
 )
 REFUSED = (
     "Refused again: the default design is kept for this CV. Stop and answer with one short line."
 )
 NO_MORE = "No submit is left in this run. Stop and answer with one short line."
+MARGIN = 0.005  # of the score: a pass that does not raise it by this much ends the passes
 
 
-def decide(run: RunState, files: dict[str, str], problems: tuple[Problem, ...], passes: int) -> str:
-    """What one submit does to the run's state, and the answer to the model."""
+def said(found: fidelity.Measure | None) -> str:
+    """The measure, in words for the writer: the score, the lines in place, the offsets."""
+    if found is None:
+        return ""
+    lines = [
+        f"Measure: score {found.score:.3f} (page ink {found.page:.3f}); {found.in_place} of "
+        f"{found.lines} lines in place within {fidelity.PLACE_PT:g}pt, {found.matched} matched; "
+        f"vertical offset mean {found.mean_dy:.1f}pt, max {found.max_dy:.1f}pt; horizontal "
+        f"mean {found.mean_dx:.1f}pt, max {found.max_dx:.1f}pt.",
+        *found.sentences(),
+    ]
+    return "\n".join(lines)
+
+
+def decide(
+    run: RunState,
+    files: dict[str, str],
+    problems: tuple[Problem, ...],
+    passes: int,
+    measure: fidelity.Measure | None = None,
+    labels: dict[str, dict[str, str]] | None = None,
+) -> str:
+    """What one submit does to the run's state, and the answer to the model. After the first
+    accepted template, up to `passes` fidelity passes; the best scoring accepted version is the
+    one kept, a pass that is refused or does not raise the score by MARGIN ends them."""
     if run.closed:
         return NO_MORE
     run.submits += 1
-    last = run.submits > passes
+    score = measure.score if measure is not None else 0.0
     if run.accepted is None:
         if not problems:
-            run.accepted = files
-            if last:
+            run.accepted, run.labels, run.measure, run.best = files, labels, measure, score
+            if passes <= 0:
                 run.closed = True
                 return STORED
-            return ACCEPTED
-        if last or run.submits > 1:
+            return f"{ACCEPTED}\n{said(measure)}".strip()
+        if run.submits > 1:
             run.closed = run.refused = True
             return REFUSED
         listed = "\n".join(f"- {p.file}: {p.code}: {p.detail}" for p in problems)
         return f"Refused. Correct every problem and submit once more, the only repair:\n{listed}"
-    run.closed = True
+    run.passes += 1
     if problems:
+        run.closed = True
         return KEPT
-    run.accepted = files
-    return STORED
+    if measure is not None and score < run.best + MARGIN:  # a DOCX has no measure
+        run.closed = True
+        return f"{NOT_BETTER}\n{said(measure)}".strip()
+    run.accepted, run.labels, run.measure, run.best = files, labels, measure, score
+    if run.passes >= passes:
+        run.closed = True
+        return STORED
+    return f"{BETTER}\n{said(measure)}".strip()
+
+
+LABEL_DASH = templates.LABEL_SEPARATOR  # one rule for bundled and user labels
+
+
+def labels_of(
+    proposed: object, inputs: Inputs, language: str
+) -> tuple[dict[str, dict[str, str]] | None, tuple[Problem, ...]]:
+    """The labels the writer proposes for the template (key: the original's heading), each
+    accepted only when its text is exactly, trimmed, one of the upload's own section headings
+    (`inputs.headings`: as the model read them, scrubbed, a replaced one left out), of 1 to
+    design_spec.LABEL_MAX characters, without a dash used as a separator or a `<`; given for
+    the base CV's `language` only. Any other text of the upload (the name, a headline, an
+    organisation) would print on every later document outside the fact check: refused."""
+    if proposed is None or proposed == {}:
+        return None, ()
+    if not isinstance(proposed, dict) or len(proposed) > len(template_rules.LABELS):
+        return None, (Problem("labels", 0, "labels", "labels: an object of label keys"),)
+    headings = frozenset(inputs.headings)
+    problems = []
+    for key, text in proposed.items():
+        if key not in template_rules.LABELS:
+            problems.append(Problem("labels", 0, "labels", f"labels: {key} is no label key"))
+        elif not isinstance(text, str) or not 1 <= len(text.strip()) <= design_spec.LABEL_MAX:
+            problems.append(Problem("labels", 0, "labels", f"labels: {key}: 1 to 40 characters"))
+        elif LABEL_DASH.search(text.strip()) or "<" in text:
+            problems.append(Problem("labels", 0, "labels", f"labels: {key} holds a dash or a <"))
+        elif text.strip() not in headings or text.strip() == REDACTED:
+            problems.append(
+                Problem("labels", 0, "labels", f"labels: {key} is not a heading of the upload")
+            )
+    if problems:
+        return None, tuple(problems)
+    return {language: {key: text.strip() for key, text in proposed.items()}}, ()
 
 
 # --- the loader -------------------------------------------------------------------------------
@@ -689,7 +822,13 @@ def _slug(db: Session, user_id: uuid.UUID) -> str:
 
 
 def store_template(
-    db: Session, document: Document, files: Mapping[str, str], inputs: Inputs, at: datetime
+    db: Session,
+    document: Document,
+    files: Mapping[str, str],
+    inputs: Inputs,
+    at: datetime,
+    labels: Mapping[str, Mapping[str, str]] | None = None,
+    measure: fidelity.Measure | None = None,
 ) -> DocumentUserTemplate:
     """The base CV's user template: a new row, or the next version of its own one."""
     row = db.execute(
@@ -729,8 +868,10 @@ def store_template(
             "manifest": row.manifest,
         }
     row.version += 1
-    manifest = manifest_of(row.slug, row.version, inputs)
+    manifest = manifest_of(row.slug, row.version, inputs, labels)
     manifest["capture"] = {"source": inputs.source, "notes": list(inputs.notes)}
+    if measure is not None:  # numbers only: no text of the CV is kept (fidelity.summary)
+        manifest["capture"]["fidelity"] = measure.summary()
     row.manifest = manifest
     row.cv_html, row.letter_html, row.css = (
         files["cv.html.j2"], files["letter.html.j2"], files["style.css"],
@@ -754,6 +895,28 @@ def _error(run: AgentRun | None, status: RunStatus, found: RunState) -> str:
     if error == failures.BINDING_GONE:
         return "binding_gone"
     return "run_failed"
+
+
+def _limit(pattern: str, name: str, value: str) -> re.Pattern[str]:
+    return re.compile(re.escape(pattern).replace(re.escape("{" + name + "}"), value))
+
+
+# The runner's stops on a limit (runner.py, `outcome_of`): its turns, its wall time (`_minutes`)
+# and, compared whole, its token budget.
+LIMITS = (
+    _limit(failures.TURN_LIMIT, "turns", r"\d+"),
+    _limit(failures.TIME_LIMIT, "minutes", r"\d+(?:\.\d+)? (?:seconds|minutes?)"),
+)
+
+
+def stopped_on_a_limit(status: RunStatus, run: AgentRun | None) -> bool:
+    """Whether a run failed only because it reached its turn limit, its wall time or its token
+    budget: what it accepted before still stands (B4 of #757). A cancel, a binding gone or any
+    other failure is not one."""
+    error = run.error if run is not None else None
+    if status is not RunStatus.failed or error is None:
+        return False
+    return error == failures.TOKEN_LIMIT or any(p.fullmatch(error) for p in LIMITS)
 
 
 def settle(
@@ -786,8 +949,15 @@ def settle(
         if generation.status is not GenerationStatus.running:
             return None
         render = None
-        if status is RunStatus.done and found.accepted is not None and found.inputs is not None:
-            row = store_template(db, document, found.accepted, found.inputs, at)
+        # The best accepted version is kept when the run ends, or when it stopped on a limit
+        # after accepting one; never on a cancel, nor when the upload or the document is gone.
+        ended = status is RunStatus.done or (
+            not found.gone and stopped_on_a_limit(status, db.get(AgentRun, run_id))
+        )
+        if ended and found.accepted is not None and found.inputs is not None:
+            row = store_template(
+                db, document, found.accepted, found.inputs, at, found.labels, found.measure
+            )
             document.template_slug = row.slug
             document.updated_at = at
             db.flush()
