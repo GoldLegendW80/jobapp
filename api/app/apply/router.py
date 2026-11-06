@@ -2,7 +2,8 @@
 
 - POST /api/postings/{posting_id}/applications `{mode: "manual" | "review" | "apply", dry_run}`
   starts one (`apply` is the Apply button: `direct` when the person's "Let me review each filled
-  form before it is sent" is unticked, the default, else `review`; issue #738):
+  form before it is sent" is unticked, the default, else `review`; issue #738; it asks the
+  documents the posting lacks first, as a Like does, `likes.on_apply`):
   201 with the application and its warnings (`{code, sentence}`: Apply myself on a role the
   person's rules exclude), 409 `{detail, code, application_id}` for a refusal before anything is
   spent (app/apply/guardrails.py lists the codes), 409 `busy` when a lock is held past its
@@ -29,9 +30,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app.apply import caps, full_auto, guardrails, service
+from app.apply import caps, full_auto, guardrails, likes, service
 from app.apply.models import Application, ApplicationAnswer, ApplicationEvent, Mode, State
 from app.db import get_session
+from app.documents import store
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
@@ -111,6 +113,8 @@ class QuestionOut(BaseModel):
 
 
 class QuestionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     answer: str = Field(default="", max_length=5000)
     remember: bool = False
 
@@ -206,8 +210,9 @@ def start_application(
     posting_id: str, body: StartIn, request: Request, user: CurrentUser, db: Db
 ) -> StartedOut | JSONResponse:
     """Start an application on one of the caller's postings, or say why not."""
+    start = likes.on_apply if body.mode == "apply" else service.start
     try:
-        started = service.start(
+        started = start(
             db,
             user.id,
             _uuid_or_404(posting_id, NOT_FOUND),
@@ -220,7 +225,7 @@ def start_application(
     except service.PostingNotFoundError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND) from None
-    except jobs_service.JobBusyError:
+    except (jobs_service.JobBusyError, store.DocumentBusyError):
         return _busy(db)
     except DBAPIError as exc:
         # A later statement that waited past the lock timeout (the insert behind another writer's).

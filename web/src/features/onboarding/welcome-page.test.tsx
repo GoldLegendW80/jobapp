@@ -793,15 +793,11 @@ describe("the wizard", () => {
     await user.click(
       await within(read).findByRole("checkbox", { name: /linkedin-export/ }),
     );
+    // The one start button carries the token range of the estimate.
     await user.click(
-      within(read).getByRole("button", { name: "See the estimate" }),
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: "Before the run starts",
-    });
-    await within(dialog).findByTestId("estimate");
-    await user.click(
-      within(dialog).getByRole("button", { name: "Start the run" }),
+      await within(read).findByRole("button", {
+        name: /^Complete my profile \(about [0-9,]+ to [0-9,]+ tokens\)$/,
+      }),
     );
     await waitFor(() => {
       expect(runs.sent("POST", "/api/ingestion/runs")).toHaveLength(1);

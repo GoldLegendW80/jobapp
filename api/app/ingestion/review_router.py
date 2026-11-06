@@ -17,8 +17,17 @@ the two bulk decisions.
   count per reason. 409 when one
   item stops the section: nothing is applied and `proposal_id` names it (`reason` is `invalid`
   or `profile_conflict`), or when the profile is held by another request (`busy`).
+- POST /api/ingestion/runs/{id}/accept-additions {proposal_ids[]}: "Accept all additions"
+  (`review.accept_additions`, owner 2026-11-05): the same rules as accept-section, every section
+  of the run at once, one revision per section. A section one item stops applies nothing and is
+  named in `stopped`; the others are kept. It answers what it accepted, what it left out with
+  the reason of each, and `pending`, how many of the run still need a decision.
 - POST /api/ingestion/runs/{id}/reject-section {section, proposal_ids[]}: "Reject the rest of
   this section", with no exclusion. The profile is not touched.
+
+A locked fact (contact, languages, jobs, schools) takes part in a bulk accept only where it fills
+an empty slot of the profile (`item_proposals.fills_empty`); one that would change what the
+profile holds stays `locked`, accepted on its own.
 
 Accept and reject of one item are the routes of `/api/proposals` (G5), unchanged. Every id of
 another user answers 404 with the sentence of an unknown one, and in a bulk call an id of
@@ -597,6 +606,93 @@ def accept_section(
         return _refused(SectionConflictOut(detail=BUSY, reason="busy"))
     revision = profile_service.get_profile(db, user.id, now).revision
     out = SectionDecidedOut.of(run, body.section, done, revision)
+    db.commit()
+    return out
+
+
+class AdditionsIn(BaseModel):
+    """The pending ids the page shows, every section together: nothing is decided that was not
+    on the screen."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    proposal_ids: Annotated[list[ProposalId], Field(max_length=review.IDS_MAX)]
+
+    @property
+    def ids(self) -> list[uuid.UUID]:
+        return [uuid.UUID(one) for one in dict.fromkeys(self.proposal_ids)]
+
+
+class StoppedOut(BaseModel):
+    """A section one item stopped: nothing of it was accepted."""
+
+    section: str
+    proposal_id: str
+    reason: Literal["invalid", "profile_conflict"]
+    detail: str
+
+
+class AdditionsOut(BaseModel):
+    """What "Accept all additions" did. `decided`: the ids accepted. `skipped` and `left_out`:
+    the ids left for the person, with the reason of each. `stopped`: the sections one item
+    stopped. `pending`: how many proposals of this run still need a decision, after it."""
+
+    run_id: str
+    decided: list[str]
+    skipped: list[SkippedOut]
+    left_out: dict[str, int]
+    stopped: list[StoppedOut]
+    revisions: dict[str, int]
+    profile_revision: int
+    pending: int
+
+
+@router.post(
+    "/runs/{run_id}/accept-additions",
+    response_model=AdditionsOut,
+    responses={**_401, **_404, **_409_BULK, **_422},
+)
+def accept_additions(
+    run_id: str, body: AdditionsIn, user: CurrentUser, request: Request, db: Db
+) -> Any:
+    """Accept all additions: every addition of the run shown on the page, locked facts that
+    fill an empty slot of the profile included (owner, 2026-11-05), one revision per section.
+    What replaces or changes a value the profile holds, and what is flagged, stays for the
+    person, each with its reason."""
+    run = _run(db, user, run_id)
+    now = deps.clock(request)
+    try:
+        done = review.accept_additions(db, user.id, run.id, body.ids, now)
+    except review.ReviewBusyError:
+        db.rollback()
+        return _refused(SectionConflictOut(detail=BUSY, reason="busy"))
+    pending = len(
+        item_proposals.list_items(
+            db,
+            user.id,
+            ingestion_run_id=run.id,
+            statuses=(ProposalStatus.pending,),
+            limit=ITEMS_MAX,
+        )
+    )
+    out = AdditionsOut(
+        run_id=str(run.id),
+        decided=[str(one) for one in done.decided],
+        skipped=[SkippedOut(id=str(one), reason=reason) for one, reason in done.skipped.items()],
+        left_out=done.left_out,
+        stopped=[
+            StoppedOut(
+                section=section,
+                proposal_id=str(failure.proposal_id),
+                reason=failure.reason,  # type: ignore[arg-type]
+                detail=SECTION_STOPPED[failure.reason].format(reason=failure.message.rstrip(".")),
+            )
+            for section, failure in sorted(done.failed.items())
+        ],
+        revisions=done.revisions,
+        profile_revision=profile_service.get_profile(db, user.id, now).revision,
+        pending=pending,
+    )
     db.commit()
     return out
 

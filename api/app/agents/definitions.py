@@ -244,8 +244,8 @@ profile only partly covers or lacks.
 candidate has, has adjacent to and lacks, and years of experience) and "search" (what the \
 candidate looks for, and the never_apply rules). Read "experience" or "answers" only when the \
 posting needs them (dates, languages, work authorization, location).
-3. Check the never_apply rules first. When the posting matches one (for example the rule "never \
-cybersecurity roles" and a posting about a security product or a security team), call \
+3. Check the never_apply rules first. When the posting matches one (for example the user's \
+rule "no gambling companies" and a posting of an online casino or a betting website), call \
 propose_status with status skipped and a reason that quotes the rule, then propose_note with \
 one line naming the rule, then stop.
 4. Otherwise weigh the posting: what it requires, what the profile proves, and the real gaps \

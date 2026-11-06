@@ -52,7 +52,7 @@ async function openRules(initial: Partial<DocumentSettings> = {}) {
   const profile = fakeProfile(haraldLike());
   const rules = fakeRules(initial);
   const user = userEvent.setup();
-  renderApp("/profile?tab=search");
+  renderApp("/settings/search");
   await screen.findByRole("form", { name: "Search" });
   await screen.findByRole("switch", { name: "No dashes as separators" });
   return { user, rules, profile };

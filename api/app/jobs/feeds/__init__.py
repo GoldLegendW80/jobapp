@@ -30,8 +30,8 @@ whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of t
   (`place_filter`), a place such as "everywhere", "worldwide" or "partout" meaning no place
   filter; a contract type outside the saved ones is left out (the feed's stated type, else the
   title's, as for the websites); a posting older than `search.days` is left out (an unknown date
-  is kept). Never apply rules, the app's own against cybersecurity included, mark a stored row
-  `skipped` with the rule as its note, as for every source (sweep.Commits).
+  is kept). The person's never apply rules mark a stored row `skipped` with the rule as its
+  note, as for every source (sweep.Commits).
 - Storing. Kept findings go through the run's commits (sweep.Commits) under the feed's source
   entry: deduplicated by address, then by employer, title and location, against the person's
   rows and this sweep's; scored; the external id kept in the sweep event's evidence.

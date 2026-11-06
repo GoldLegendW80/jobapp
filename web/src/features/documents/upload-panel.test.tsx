@@ -1,8 +1,15 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { MemoryRouter } from "react-router";
-import { describe, expect, it } from "vitest";
+import { MemoryRouter, useLocation } from "react-router";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { toast } from "sonner";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeSession, member } from "@/test/auth";
 import { fakeCv, fakeDocuments } from "@/test/documents";
@@ -18,7 +25,35 @@ import { server } from "@/test/server";
 
 import type { BaseCv } from "./documents-api";
 import type { DocumentStatus } from "@/features/ingestion/documents-api";
-import { FILL_REVIEW, NOT_A_CV, UploadPanel } from "./upload-panel";
+import { RUN_POLL_MS } from "@/features/ingestion/runs-api";
+
+import {
+  FILL_REVIEW,
+  NOT_A_CV,
+  READING_FOR_PROFILE,
+  REVIEW_OPENED,
+  UploadPanel,
+} from "./upload-panel";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
+/** The ingestion consent of a Fill my profile run, as the api answers it. */
+const RUN_CONSENT = {
+  version: 1,
+  text: "Your selected documents are sent to Anthropic to complete your profile (an invented test text).",
+  reminder: "Your documents are sent to Anthropic, as you agreed.",
+  accepted: false,
+  accepted_at: null,
+};
+
+/** Where the panel's router is now. */
+function Where() {
+  const where = useLocation();
+  return <p data-testid="where">{`${where.pathname}${where.search}`}</p>;
+}
 
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
 const SEPARATOR = /[–—]| - /;
@@ -72,10 +107,18 @@ function panel(options: Parameters<typeof userEvent.setup>[0] = {}) {
   const view = renderWithQuery(
     <MemoryRouter>
       <UploadPanel openHref={(id) => `/somewhere/${id}`} />
+      <Where />
     </MemoryRouter>,
   );
   return { user, ...view };
 }
+
+const consents = (api: ReturnType<typeof fakeDocuments>) =>
+  api.requests
+    .filter(
+      (one) => one.method === "POST" && one.path === "/api/documents/consent",
+    )
+    .map((one) => one.body);
 
 const conversions = (api: ReturnType<typeof fakeDocuments>) =>
   api.requests.filter(
@@ -251,13 +294,17 @@ describe("the upload panel", () => {
     ).toBeVisible();
   });
 
-  it("opens ingestion's run dialog on the file, and nothing runs until Start", async () => {
+  it("starts the run from one button with its token range, then opens the review by itself", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const info = vi.spyOn(toast, "info");
     const api = fakeDocuments({ consent: { accepted: true } });
     const files = fakeFiles();
     filesAre(files, "done");
     convertsInto(api, { is_default: true });
-    const runs = fakeRuns();
-    const { user } = panel();
+    const runs = fakeRuns({ consent: { ...RUN_CONSENT, accepted: true } });
+    const { user } = panel({
+      advanceTimers: (ms) => vi.advanceTimersByTimeAsync(ms),
+    });
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);
     const result = await screen.findByTestId("upload-result");
     expect(result).toHaveTextContent("It is your default CV.");
@@ -268,25 +315,109 @@ describe("the upload panel", () => {
       within(result).getByRole("link", { name: "Fill my profile page" }),
     ).toHaveAttribute("href", FILL_REVIEW);
 
-    await user.click(
-      within(result).getByRole("button", {
-        name: "Complete my profile from this CV",
-      }),
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: "Before the run starts",
-    });
-    await waitFor(() => {
-      expect(runs.sent("POST", "/api/ingestion/runs/estimate")).toHaveLength(1);
+    const start = await within(result).findByRole("button", {
+      name: "Complete my profile from this CV (about 61,234 to 176,220 tokens)",
     });
     expect(runs.sent("POST", "/api/ingestion/runs/estimate")[0]?.body).toEqual({
       document_ids: [files.items[0]?.id],
       reread_document_ids: [],
     });
+    // The figures are read, nothing runs before the click.
     expect(runs.sent("POST", "/api/ingestion/runs")).toEqual([]);
+    expect(screen.getByTestId("where")).toHaveTextContent("/");
+
+    await user.click(start);
+    await waitFor(() => {
+      expect(runs.sent("POST", "/api/ingestion/runs")).toHaveLength(1);
+    });
     expect(
-      within(dialog).getByRole("button", { name: /Start the run/ }),
-    ).toBeVisible();
+      await within(result).findByText(READING_FOR_PROFILE),
+    ).toBeInTheDocument();
+    // The run ends: the review opens by itself, and the person is told.
+    runs.runs = runs.runs.map((run) => ({ ...run, status: "done" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_POLL_MS);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("where")).toHaveTextContent(FILL_REVIEW);
+    });
+    expect(info).toHaveBeenCalledWith(REVIEW_OPENED);
+  });
+
+  it("asks both consents in one dialog, and records each with its own version", async () => {
+    const api = fakeDocuments({ consent: { version: 4 } });
+    const files = fakeFiles();
+    filesAre(files, "done");
+    convertsInto(api, {});
+    const runs = fakeRuns({ consent: { ...RUN_CONSENT, version: 2 } });
+    const { user } = panel();
+    await user.upload(screen.getByTestId("upload-cv-file"), PDF);
+    const dialog = await screen.findByRole("dialog");
+    expect(
+      await within(dialog).findByTestId("run-consent-text"),
+    ).toHaveTextContent(RUN_CONSENT.text);
+    const boxes = within(dialog).getAllByRole("checkbox");
+    expect(boxes).toHaveLength(2);
+    expect(
+      within(dialog).getAllByRole("button", { name: /^Agree/ }),
+    ).toHaveLength(1);
+    expect(dialog.textContent).not.toMatch(SEPARATOR);
+    for (const box of boxes) await user.click(box);
+    await user.click(within(dialog).getByRole("button", { name: /^Agree/ }));
+    await waitFor(() => {
+      expect(runs.sent("POST", "/api/ingestion/consent")).toEqual([
+        {
+          method: "POST",
+          path: "/api/ingestion/consent",
+          body: { version: 2 },
+        },
+      ]);
+    });
+    expect(consents(api)).toEqual([{ version: 4 }]);
+    await waitFor(() => {
+      expect(conversions(api)).toHaveLength(1);
+    });
+    // Both given: the start button needs no other box.
+    const result = await screen.findByTestId("upload-result");
+    expect(
+      await within(result).findByRole("button", {
+        name: /^Complete my profile from this CV \(about/,
+      }),
+    ).toBeEnabled();
+    expect(within(result).queryByRole("checkbox")).toBeNull();
+  });
+
+  it("records only the documents consent when the run's box stays empty, and asks it at the start", async () => {
+    const api = fakeDocuments();
+    const files = fakeFiles();
+    filesAre(files, "done");
+    convertsInto(api, {});
+    const runs = fakeRuns();
+    const { user } = panel();
+    await user.upload(screen.getByTestId("upload-cv-file"), PDF);
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByTestId("run-consent-text");
+    await user.click(
+      within(dialog).getByRole("checkbox", {
+        name: "I have read this and I agree to send it",
+      }),
+    );
+    await user.click(within(dialog).getByRole("button", { name: /^Agree/ }));
+    await waitFor(() => {
+      expect(conversions(api)).toHaveLength(1);
+    });
+    expect(consents(api)).toEqual([{ version: 1 }]);
+    expect(runs.sent("POST", "/api/ingestion/consent")).toEqual([]);
+    // Only the other one is asked now, beside the start button.
+    const result = await screen.findByTestId("upload-result");
+    const start = await within(result).findByRole("button", {
+      name: /^Complete my profile from this CV \(about/,
+    });
+    expect(start).toBeDisabled();
+    await user.click(
+      within(result).getByRole("checkbox", { name: /I have read this/ }),
+    );
+    expect(start).toBeEnabled();
   });
 });
 

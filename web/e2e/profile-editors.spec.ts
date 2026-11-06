@@ -161,6 +161,15 @@ const tab = (page: Page, name: string) =>
   page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
 
 async function openTab(page: Page, name: string) {
+  // The search is in Settings, Search (owner, 2026-11-05); the other sections in the classic
+  // editor's tabs.
+  if (name === "Search") {
+    await page.goto("/settings/search");
+    await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
+    return;
+  }
+  if ((await tab(page, name).count()) === 0)
+    await page.goto(`/profile?tab=${name.toLowerCase()}`);
   await tab(page, name).click();
   await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
 }
@@ -301,6 +310,14 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
   ).toContainText("researchmatches pytorch");
   await shots(page, "skills");
   await save(page, "Skills");
+  // Owner, 2026-11-05: the postings are rescored by themselves after a skills change; the
+  // worker's tick runs it within seconds and the line beside Save says what changed.
+  const rescored = page.getByTestId("rescore-line");
+  await expect(rescored).toContainText(
+    /more postings? now fits? you at \d+ or more|Rescored: no new posting reaches a fit of \d+/,
+    { timeout: 60_000 },
+  );
+  await expect(rescored).not.toContainText(/[–—]| - /);
   expect(errors).toEqual([]);
 });
 

@@ -370,7 +370,7 @@ def test_a_page_read_holds_no_link_or_button_text():
 
 
 # --- review of B21, round 1 -------------------------------------------------------------------
-# A shortened title never gets past the unwanted titles or the cybersecurity rule: the title
+# A shortened title never gets past the unwanted titles or a never apply rule: the title
 # stored is the page's own, never shorter than what the page says (`finder.title_on`).
 
 
@@ -473,17 +473,18 @@ def test_a_shortened_title_stores_what_the_page_shows(lines, title, stored):
     assert finder.title_on(read(*lines), title) == stored
 
 
-def test_a_shortened_title_reaches_the_cybersecurity_rule_with_the_page_s_heading():
-    from app.jobs.never_apply import CYBER_RULE, matching_rule
+def test_a_shortened_title_reaches_the_persons_never_apply_rule_with_the_page_s_heading():
+    from app.jobs.never_apply import NeverApplyRule, matching_rule
 
+    rule = NeverApplyRule.parse("No cybersecurity roles: cyber, security, pentest, threat")
     one, batches = opened(
         (JOB, page('- heading "Cybersecurity: AI Engineer" [level=1]', "- paragraph: x")),
     )
     assert reported(one, title="AI Engineer")["kept"] == 1
     [finding] = batches[0].findings
     assert finding.title == "Cybersecurity: AI Engineer"
-    # What the store applies to every verified posting (sweep.commit_verified).
-    assert matching_rule([CYBER_RULE], finding.company or "", finding.title) is CYBER_RULE
+    # What the store applies to every verified posting, with the person's rules (commit_verified).
+    assert matching_rule([rule], finding.company or "", finding.title) is rule
 
 
 @pytest.mark.parametrize(

@@ -23,6 +23,7 @@ import { failureSentence, getDocumentText } from "./documents-api";
 import { EditForm } from "./proposal-edit";
 import { editable, isRecord, refusedField, words } from "./proposal-value";
 import {
+  acceptAdditions,
   acceptProposal,
   type Citation,
   completenessKey,
@@ -36,6 +37,7 @@ import {
   proposalsKey,
   rejectProposal,
   type Review,
+  type Additions,
   type SectionDecided,
   undoProposal,
 } from "./proposals-api";
@@ -98,6 +100,8 @@ export const TYPED_NOTE =
   "Your profile already holds your own value here, typed by you or kept from an earlier decision. Accept all leaves it for you: accept this one on its own if the document is right.";
 export const REPLACE_NOTE =
   "This replaces the whole entry: what it leaves empty is cleared. Accept all leaves it for you to accept on its own.";
+export const ADDITIONS_NOTE =
+  "Adds what fills an empty place in your profile, contact details, languages, jobs and schools included. What would change a value you hold waits for your own click. Each one stays below with Edit, Reject and Take back.";
 export const TWO_ENTRIES_NOTE =
   " These may be two entries: two positions, or two degrees, that started the same year at one place show here together. Keep one here and add the other in your profile.";
 
@@ -264,6 +268,20 @@ function stoppedBy(error: unknown): string | undefined {
   return typeof id === "string" ? id : undefined;
 }
 
+/** "Accepted 12. 3 still need your decision.", and what stopped a section, in its words. */
+function additionsOutcome(done: Additions): string {
+  return [
+    `Accepted ${String(done.decided.length)}.`,
+    done.pending === 0
+      ? "Nothing else needs your decision."
+      : `${plural(done.pending, "proposal still needs", "proposals still need")} your decision.`,
+    ...done.stopped.map(
+      (one) =>
+        `${SECTION_NAMES[one.section] ?? words(one.section)}: ${one.detail}`,
+    ),
+  ].join(" ");
+}
+
 /** What a bulk decision did, from the server's answer: what it decided and what it left. */
 function outcomeOf(done: SectionDecided, what: "accept" | "reject"): string {
   const count = done.decided.length;
@@ -390,7 +408,7 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
         </h5>
         {decided ? <Badge variant="secondary">{decided}</Badge> : null}
         {item.stale ? <Badge variant="outline">Check again</Badge> : null}
-        {item.locked ? (
+        {item.locked && item.bulk === "locked" ? (
           <Badge variant="outline">Accepted one by one</Badge>
         ) : null}
         {pending && item.bulk === "typed_by_you" ? (
@@ -608,13 +626,17 @@ function Item({ item, context }: { item: ProposalItem; context: Context }) {
 function Section({
   section,
   context,
+  shown,
+  onShowMore,
 }: {
   section: ProposalSection;
   context: Context;
+  /** How many of its proposals the page shows: the bulk decisions take those only. */
+  shown: number;
+  onShowMore: () => void;
 }) {
   const name = SECTION_NAMES[section.section] ?? words(section.section);
   const id = `proposals-${section.section}`;
-  const [shown, setShown] = useState(PAGE);
   const [outcome, setOutcome] = useState<string>();
   const [problem, setProblem] = useState<string>();
   const [stopped, setStopped] = useState<{ id: string; message: string }>();
@@ -677,7 +699,11 @@ function Section({
       await refresh();
     },
   });
-  const inner: Context = { ...context, sectionBusy: decide.isPending, stopped };
+  const inner: Context = {
+    ...context,
+    sectionBusy: decide.isPending || context.sectionBusy,
+    stopped,
+  };
   return (
     <section aria-labelledby={id} className="flex flex-col gap-2">
       <div className="flex flex-wrap items-baseline gap-2">
@@ -702,7 +728,7 @@ function Section({
             <Button
               size="sm"
               aria-label={`${accepting}: ${name}`}
-              disabled={decide.isPending}
+              disabled={decide.isPending || context.sectionBusy}
               onClick={() => {
                 decide.mutate("accept");
               }}
@@ -715,7 +741,7 @@ function Section({
             variant="outline"
             size="sm"
             aria-label={`${rejecting}: ${name}`}
-            disabled={decide.isPending}
+            disabled={decide.isPending || context.sectionBusy}
             onClick={() => {
               decide.mutate("reject");
             }}
@@ -753,9 +779,7 @@ function Section({
             variant="outline"
             size="sm"
             aria-label={`Show ${String(Math.min(PAGE, section.items.length - shown))} more: ${name}`}
-            onClick={() => {
-              setShown(shown + PAGE);
-            }}
+            onClick={onShowMore}
           >
             Show {Math.min(PAGE, section.items.length - shown)} more
           </Button>
@@ -871,12 +895,39 @@ function Loaded({ review }: { review: Review }) {
   const [shown, setShown] = useState<Citation>();
   const [said, setSaid] = useState("");
   if (opened && opened !== shown) setShown(opened);
+  // How many proposals each section shows: the bulk decisions take only what is on the screen.
+  const [listed, setListed] = useState<Readonly<Record<string, number>>>({});
+  const additions = review.sections.flatMap((section) =>
+    section.items
+      .slice(0, listed[section.section] ?? PAGE)
+      .filter((item) => item.status === "pending" && item.bulk === null),
+  );
+  const refresh = useRefresh(review.run_id);
+  const [outcome, setOutcome] = useState<string>();
+  const all = useMutation({
+    mutationFn: () =>
+      acceptAdditions(
+        review.run_id,
+        additions.map((item) => item.id),
+      ),
+    onMutate: () => {
+      setOutcome(undefined);
+    },
+    onSuccess: async (done) => {
+      setOutcome(additionsOutcome(done));
+      await refresh();
+    },
+    onError: async (error) => {
+      setOutcome(refusal(error));
+      await refresh();
+    },
+  });
   const context: Context = {
     runId: review.run_id,
     revision: review.profile_revision,
     onOpen: setOpened,
     onSaid: setSaid,
-    sectionBusy: false,
+    sectionBusy: all.isPending,
   };
   return (
     <div className="flex flex-col gap-4">
@@ -928,11 +979,45 @@ function Loaded({ review }: { review: Review }) {
         ) : null}
       </div>
       <Completeness />
+      {additions.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <Button
+            className="w-full sm:w-fit"
+            disabled={all.isPending}
+            onClick={() => {
+              all.mutate();
+            }}
+          >
+            {all.isPending ? (
+              <Spinner aria-hidden="true" role={undefined} />
+            ) : (
+              <Check aria-hidden="true" />
+            )}
+            Accept all additions ({additions.length})
+          </Button>
+          <p className="text-sm text-muted-foreground">{ADDITIONS_NOTE}</p>
+        </div>
+      ) : null}
+      {/* Always in the page, so a screen reader hears the outcome when it arrives. */}
+      <p role="status" className="text-sm font-medium empty:hidden">
+        {outcome}
+      </p>
       <p role="status" className="sr-only">
         {said}
       </p>
       {review.sections.map((section) => (
-        <Section key={section.section} section={section} context={context} />
+        <Section
+          key={section.section}
+          section={section}
+          context={context}
+          shown={listed[section.section] ?? PAGE}
+          onShowMore={() => {
+            setListed((old) => ({
+              ...old,
+              [section.section]: (old[section.section] ?? PAGE) + PAGE,
+            }));
+          }}
+        />
       ))}
       <Dialog
         open={opened !== undefined}

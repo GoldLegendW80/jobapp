@@ -361,7 +361,7 @@ function DeckEmpty({
               <Link to="/profile?tab=skills">{WORDING.addSkills}</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link to="/profile?tab=search">{WORDING.searchOptions}</Link>
+              <Link to="/settings/search">{WORDING.searchOptions}</Link>
             </Button>
           </>,
         ]
@@ -373,7 +373,7 @@ function DeckEmpty({
               <Link to="/jobs?find=1">{WORDING.findNewPostings}</Link>
             </Button>
             <Button asChild size="sm" variant="outline">
-              <Link to="/profile?tab=search">{WORDING.searchOptions}</Link>
+              <Link to="/settings/search">{WORDING.searchOptions}</Link>
             </Button>
           </>,
         ];

@@ -138,7 +138,7 @@ test("an invented person has a base CV, and the tick writes the posting at fit 8
 });
 
 test("the card shows today's count, and what a threshold of 60 adds before it is saved", async () => {
-  await page.goto("/profile?tab=search");
+  await page.goto("/settings/search");
   await expect(
     card().getByRole("switch", { name: "Write documents automatically" }),
   ).toBeChecked();

@@ -2,6 +2,8 @@ import { ArrowLeft, MapPinOff } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Item,
   ItemContent,
@@ -13,27 +15,33 @@ import { cn } from "@/lib/utils";
 import { FitBadge, StatusBadge } from "../badges";
 import { dominantStatus } from "./geometry";
 import { describePlace, plural, STATUS_FILL } from "./format";
+import type { MapSelection } from "./map-selection";
 import type { PlacesMap } from "./places-api";
 
 /**
  * The side of the map. With no place selected: every place as a button with its count (the
  * list alternative to the pins), then the locations the gazetteer cannot place, with their
- * counts. With a place selected: its postings, each a link to the detail page.
+ * counts. With a place selected: its postings, each a link to the detail page, and with
+ * `selection` a checkbox each and one for the whole place, for the bulk bar (Apply, Like, status).
  */
 export function PlacesPanel({
   data,
   selected,
   onSelect,
   from,
+  selection,
 }: {
   data: PlacesMap;
   selected: string | null;
   onSelect: (name: string | null) => void;
   /** Passed to the detail page, so "Back to jobs" returns to this map view. */
   from: string;
+  selection?: MapSelection;
 }) {
   const place = data.places.find((p) => p.name === selected);
   if (place) {
+    const listed = place.job_ids.filter((id) => data.jobs[id]);
+    const ticked = listed.filter((id) => selection?.selected.has(id)).length;
     return (
       <aside
         aria-labelledby="place-title"
@@ -58,6 +66,26 @@ export function PlacesPanel({
           <p className="text-sm text-muted-foreground">
             {describePlace(place)}
           </p>
+          {selection && listed.length > 0 ? (
+            <Field orientation="horizontal" className="mt-2 items-center gap-2">
+              <Checkbox
+                id="place-select-all"
+                checked={
+                  ticked === 0
+                    ? false
+                    : ticked === listed.length
+                      ? true
+                      : "indeterminate"
+                }
+                onCheckedChange={() => {
+                  selection.setMany(listed, ticked < listed.length);
+                }}
+              />
+              <FieldLabel htmlFor="place-select-all" className="font-normal">
+                Select all of this place ({listed.length})
+              </FieldLabel>
+            </Field>
+          ) : null}
         </div>
         <ul
           aria-label={`Postings in ${place.name}`}
@@ -67,8 +95,19 @@ export function PlacesPanel({
             const job = data.jobs[id];
             if (!job) return null;
             return (
-              <li key={id}>
-                <Item asChild size="sm" className="px-2 py-2">
+              <li key={id} className="flex items-start gap-1">
+                {selection ? (
+                  <Checkbox
+                    checked={selection.selected.has(id)}
+                    aria-label={`Select ${job.title} at ${job.company}`}
+                    // Its line with the title, as the Jobs list's cards.
+                    className="mt-2.5 ml-2 shrink-0"
+                    onCheckedChange={() => {
+                      selection.toggle(id);
+                    }}
+                  />
+                ) : null}
+                <Item asChild size="sm" className="min-w-0 flex-1 px-2 py-2">
                   <Link to={`/jobs/${id}`} state={{ from }}>
                     <ItemContent className="min-w-0">
                       <ItemTitle className="w-auto break-words">

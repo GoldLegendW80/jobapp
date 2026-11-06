@@ -102,7 +102,7 @@ test("an invented CV dropped on the CV tab is read, then the consent is asked", 
   });
   expect(saved.status()).toBe(200);
 
-  await page.goto("/profile");
+  await page.goto("/profile?tab=identity");
   await page.getByRole("tab", { name: "CV" }).click();
   await expect(page).toHaveURL(/\/profile\/cv$/);
   const panel = page.getByTestId("upload-panel");
@@ -180,21 +180,21 @@ test("the converted CV is the default, with the invented employers in its fields
   keep(EVIDENCE, "converted.png", await page.screenshot({ fullPage: true }));
 });
 
-test("Complete my profile from this CV opens ingestion's run dialog, and no run starts", async () => {
-  await page
+test("Complete my profile from this CV shows its token range on the button, and no run starts", async () => {
+  const start = page
     .getByTestId("upload-result")
-    .getByRole("button", { name: "Complete my profile from this CV" })
-    .click();
-  const dialog = page.getByRole("dialog", { name: "Before the run starts" });
-  await expect(dialog).toBeVisible();
+    .getByRole("region", { name: "Before the run starts" });
   await expect(
-    dialog.getByRole("button", { name: /Start the run/ }),
+    start.getByRole("button", {
+      name: /^Complete my profile from this CV \(about [0-9,]+ to [0-9,]+ tokens\)$/,
+    }),
   ).toBeVisible();
+  await start
+    .getByRole("button", { name: "What is read, and the limits" })
+    .click();
+  await expect(start.getByTestId("estimate")).toBeVisible();
   keep(EVIDENCE, "complete-profile.png", await page.screenshot());
-  expect(await runs()).toEqual([]);
-
-  await dialog.getByRole("button", { name: "Not now" }).click();
-  await expect(dialog).toBeHidden();
+  // Reading the figures starts nothing: only the click on the button would.
   expect(await runs()).toEqual([]);
 });
 

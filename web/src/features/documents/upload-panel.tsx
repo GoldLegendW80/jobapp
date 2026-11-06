@@ -1,14 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileUp, UserRoundPen } from "lucide-react";
+import { FileUp } from "lucide-react";
 import {
   useEffect,
   useId,
   useRef,
   useState,
   type DragEvent,
-  type RefObject,
+  type ReactNode,
 } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
+import { toast } from "sonner";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -22,7 +23,17 @@ import {
   uploadDocument,
   type IngestionDocument,
 } from "@/features/ingestion/documents-api";
-import { StartDialog } from "@/features/ingestion/run-start";
+import { StartPanel } from "@/features/ingestion/run-start";
+import {
+  acceptConsent as acceptRunConsent,
+  consentKey as runConsentKey,
+  getConsent as getRunConsent,
+  getRun,
+  isActive,
+  refreshRuns,
+  runKey,
+  RUN_POLL_MS,
+} from "@/features/ingestion/runs-api";
 import { cn } from "@/lib/utils";
 import { WORDING } from "@/lib/wording";
 
@@ -46,6 +57,12 @@ export const READING_POLL_MS = 1500;
 export const FILL_REVIEW = "/profile/fill?step=review";
 const ACCEPTED = /\.(pdf|docx)$/i;
 export const NOT_A_CV = "Choose a PDF or a Word document (DOCX).";
+export const READING_FOR_PROFILE =
+  "Reading your CV for your profile. The review opens by itself when it ends.";
+export const REVIEW_OPENED =
+  "The reading of your CV ended. Here is what it proposes for your profile.";
+export const RUN_CONSENT_FAILED =
+  "Your consent to complete your profile could not be recorded. The app asks again when you start.";
 
 /**
  * Upload a CV and turn it into an editable base CV (task D24). Self contained: it reads and
@@ -55,10 +72,11 @@ export const NOT_A_CV = "Choose a PDF or a Word document (DOCX).";
  *
  * The file goes through ingestion's upload, which reads its text; the conversion starts once
  * the text is there, after the consent of what is sent (asked the first time; declined, a
- * button asks again). "Complete my
- * profile from this CV" opens ingestion's own run dialog on that file: it shows the estimate,
- * and nothing runs until the person clicks Start there; each proposed change is then reviewed on
- * the Fill my profile page.
+ * button asks again). The same dialog asks the consent of the Fill my profile run when it is
+ * missing (owner, 2026-11-05: one dialog, both texts, each recorded with its own version).
+ * "Complete my profile from this CV" is ingestion's start button on that file, with the token
+ * range of its estimate; nothing runs until the person clicks it. While the run reads, the
+ * panel says so, and when it ends the review opens by itself on the Fill my profile page.
  */
 export function UploadPanel({
   openHref,
@@ -72,13 +90,14 @@ export function UploadPanel({
   const titleId = useId();
   const hintId = useId();
   const input = useRef<HTMLInputElement>(null);
-  const completer = useRef<HTMLButtonElement>(null);
+  const navigate = useNavigate();
   const [over, setOver] = useState(false);
   const [problem, setProblem] = useState<string>();
   const [uploadId, setUploadId] = useState<string>();
   const [baseId, setBaseId] = useState<string>();
   const [declined, setDeclined] = useState(false);
-  const [completing, setCompleting] = useState(false);
+  /** The Fill my profile run started from this CV: its review opens when it ends. */
+  const [following, setFollowing] = useState<string>();
   /** The file whose conversion was asked for: once per upload. */
   const started = useRef<string>();
 
@@ -86,6 +105,34 @@ export function UploadPanel({
     queryKey: consentKey,
     queryFn: ({ signal }) => getConsent(signal),
   });
+  // Asked once a file is sent: the consent dialog may show it beside the documents consent.
+  const runConsent = useQuery({
+    queryKey: runConsentKey,
+    queryFn: ({ signal }) => getRunConsent(signal),
+    enabled: uploadId !== undefined,
+  });
+  const run = useQuery({
+    queryKey: runKey(following ?? "none"),
+    queryFn: ({ signal }) => getRun(following ?? "", signal),
+    enabled: following !== undefined,
+    refetchInterval: (current) =>
+      current.state.data && !isActive(current.state.data.status)
+        ? false
+        : RUN_POLL_MS,
+  });
+  const ended =
+    following !== undefined &&
+    run.data?.id === following &&
+    !isActive(run.data.status);
+  // The run ended: its review opens by itself, once, and the person is told.
+  const opened = useRef<string>();
+  useEffect(() => {
+    if (!ended || opened.current === following) return;
+    opened.current = following;
+    refreshRuns(client);
+    toast.info(REVIEW_OPENED);
+    void navigate(FILL_REVIEW);
+  }, [ended, following, client, navigate]);
   const files = useQuery({
     queryKey: documentsKey,
     queryFn: ({ signal }) => listDocuments(signal),
@@ -143,10 +190,24 @@ export function UploadPanel({
       setProblem(failureSentence(error));
     },
   });
+  // The documents consent first, then the run's when its box was ticked: each its own record.
   const agree = useMutation({
-    mutationFn: acceptConsent,
-    onSuccess: (accepted) => {
+    mutationFn: async ({
+      version,
+      runVersion,
+    }: {
+      version: number;
+      runVersion: number | null;
+    }) => {
+      const accepted = await acceptConsent(version);
       client.setQueryData(consentKey, accepted);
+      if (runVersion === null) return;
+      try {
+        client.setQueryData(runConsentKey, await acceptRunConsent(runVersion));
+      } catch {
+        void client.invalidateQueries({ queryKey: runConsentKey });
+        toast.error(RUN_CONSENT_FAILED);
+      }
     },
     onError: () => {
       void client.invalidateQueries({ queryKey: consentKey });
@@ -286,13 +347,22 @@ export function UploadPanel({
           cv={cv}
           openHref={openHref}
           defaulting={makeDefault.isPending}
-          completer={completer}
           onDefault={() => {
             makeDefault.mutate(cv.id);
           }}
-          onComplete={() => {
-            setCompleting(true);
-          }}
+          complete={
+            uploadId === undefined ? null : following !== undefined ? (
+              <Status>{READING_FOR_PROFILE}</Status>
+            ) : (
+              <StartPanel
+                documentIds={[uploadId]}
+                label="Complete my profile from this CV"
+                onStarted={(started) => {
+                  setFollowing(started.id);
+                }}
+              />
+            )
+          }
         />
       ) : null}
 
@@ -306,18 +376,12 @@ export function UploadPanel({
             agree.reset();
             setDeclined(true);
           }}
-          onAgree={(version) => {
-            agree.mutate(version);
+          onAgree={(version, runVersion) => {
+            agree.mutate({ version, runVersion });
           }}
-        />
-      ) : null}
-      {completing && uploadId !== undefined ? (
-        <StartDialog
-          documentIds={[uploadId]}
-          opener={completer}
-          onClose={() => {
-            setCompleting(false);
-          }}
+          {...(runConsent.data && !runConsent.data.accepted
+            ? { run: runConsent.data }
+            : {})}
         />
       ) : null}
     </section>
@@ -398,16 +462,15 @@ function Result({
   cv,
   openHref,
   defaulting,
-  completer,
   onDefault,
-  onComplete,
+  complete,
 }: {
   cv: BaseCv;
   openHref: (baseId: string) => string;
   defaulting: boolean;
-  completer: RefObject<HTMLButtonElement>;
   onDefault: () => void;
-  onComplete: () => void;
+  /** The start of the run that completes the profile from this CV, or its progress. */
+  complete: ReactNode;
 }) {
   const generation = cv.generation;
   if (isOpen(generation))
@@ -437,24 +500,24 @@ function Result({
           Open it
         </Link>
       </p>
-      <div className="flex flex-wrap gap-2">
-        {cv.is_default ? null : (
-          <Button variant="outline" disabled={defaulting} onClick={onDefault}>
-            Make this my default CV
-          </Button>
-        )}
-        <Button ref={completer} variant="outline" onClick={onComplete}>
-          <UserRoundPen aria-hidden="true" />
-          Complete my profile from this CV
+      {cv.is_default ? null : (
+        <Button
+          variant="outline"
+          className="w-fit"
+          disabled={defaulting}
+          onClick={onDefault}
+        >
+          Make this my default CV
         </Button>
-      </div>
+      )}
+      {complete}
       <p className="text-xs text-muted-foreground">
-        Nothing changes in your profile until you accept each proposed change on
+        Nothing changes in your profile until you accept the proposed changes on
         the{" "}
         <Link to={FILL_REVIEW} className="underline underline-offset-4">
           Fill my profile page
         </Link>
-        .
+        , which opens by itself when the reading ends.
       </p>
     </div>
   );

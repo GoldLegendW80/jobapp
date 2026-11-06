@@ -18,7 +18,7 @@ const DASHES = /[‒–—―]|\s-\s/;
 
 // Every agent id registered in api/app/agents today: definitions.py (echo, triage, job_chat) and
 // the `definitions.register` calls of browser/finder.py, apply/form_agent.py, apply/agents.py,
-// apply/model_check.py, ingestion/agents.py and the documents writers and chats. A new agent adds
+// apply/model_check.py, ingestion/agents.py, the documents writers and chats, and profile/agents.py. A new agent adds
 // its id here and its words to AGENT_WORDS.
 const REGISTERED = [
   "echo",
@@ -39,6 +39,7 @@ const REGISTERED = [
   "documents_chat_cv",
   "documents_chat_letter",
   "documents_chat_base",
+  "profile_titles",
 ];
 
 describe("agent words (Assistant activity)", () => {

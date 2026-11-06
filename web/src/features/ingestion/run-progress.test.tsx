@@ -597,13 +597,13 @@ describe("the run on the page", () => {
     });
 
     await user.click(await screen.findByRole("checkbox", { name: /dossier/ }));
-    await user.click(screen.getByRole("button", { name: "See the estimate" }));
-    const dialog = await screen.findByRole("dialog", {
+    const start = await screen.findByRole("region", {
       name: "Before the run starts",
     });
-    await within(dialog).findByTestId("estimate");
     await user.click(
-      within(dialog).getByRole("button", { name: "Start the run" }),
+      await within(start).findByRole("button", {
+        name: /^Complete my profile \(about/,
+      }),
     );
     await waitFor(() => {
       expect(screen.getByTestId("run-state")).toHaveTextContent(

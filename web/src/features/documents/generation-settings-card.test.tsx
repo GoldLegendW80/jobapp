@@ -84,7 +84,7 @@ async function openSearch(spend: Parameters<typeof fakeSpend>[1] = {}) {
   const state = fakeProfile(haraldLike());
   const asked = fakeSpend(state, spend);
   const user = userEvent.setup();
-  renderApp("/profile?tab=search");
+  renderApp("/settings/search");
   await screen.findByRole("form", { name: "Search" });
   return { user, state, asked };
 }

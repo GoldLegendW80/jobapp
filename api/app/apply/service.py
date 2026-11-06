@@ -12,6 +12,9 @@ order of the gate (SPEC-apply, "Guardrails"), so two starts at once make one row
    `same_address`, and a passed posting (`passed`), which Apply myself shows as warnings (the
    person decides; the app never clicks there).
 
+Steps 2 to 4 are `plan`, which writes nothing: the confirmation of Apply to the selected postings
+reads the same refusals before the click (apply/bulk_router.py).
+
 Then the `applications` row (`queued`, attempt 0) and its `created` event, which holds the mode,
 whether it is a rehearsal and the warning codes: ids and codes only. Full auto's own checks (the
 fit threshold, the supported ATS, the hold, the rehearsals, the caps) are the gate's (A6, A11, A13);
@@ -20,6 +23,7 @@ the lease of the fill is A5's.
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -31,6 +35,7 @@ from app.apply import guardrails
 from app.apply.models import Application, ApplicationEvent, Mode, State
 from app.jobs import service as jobs_service
 from app.jobs import sweep
+from app.jobs.models import Job
 
 logger = logging.getLogger(__name__)
 
@@ -102,25 +107,31 @@ def _refuse(
     raise RefusedError(guardrails.Refusal(code, application_id))
 
 
-def start(
+@dataclass(frozen=True)
+class Plan:
+    """What `start` creates once every refusal passed: the mode (an e-mail application of the
+    Apply button is Review first), the warnings of Apply myself, the form's key and address."""
+
+    mode: Mode
+    warnings: tuple[str, ...]
+    key: str
+    ats: str
+    form_url: str
+    sent_to_review: str | None
+
+
+def plan(
     db: Session,
     user_id: uuid.UUID,
-    posting_id: uuid.UUID,
+    posting: Job,
     mode: Mode,
-    dry_run: bool,
     *,
     now: datetime,
     stub_base: str | None = None,
-    agent_review: bool = False,
-) -> Started:
-    """Create the application, or raise RefusedError or PostingNotFoundError. Commits on success;
-    the caller rolls back on an error. Raises ValueError for a rehearsal in Apply myself."""
-    if dry_run and mode is Mode.manual:
-        raise ValueError("Apply myself is never a rehearsal")
-    posting = jobs_service.lock_job(db, user_id, posting_id)
-    if posting is None:
-        raise PostingNotFoundError(str(posting_id))
-    _lock_person(db, user_id)
+) -> Plan:
+    """Steps 2 to 4 of the module docstring on one of the person's postings: raises RefusedError,
+    else answers what `start` creates. Writes nothing, so the confirmation of Apply to the
+    selected postings reads the same refusals before the click (apply/bulk_router.py)."""
     warnings: list[str] = []
 
     code = guardrails.never_apply(
@@ -160,6 +171,40 @@ def start(
         _refuse(refusal.code, mode, warnings, refusal.application_id)
         for code in refusal.also:
             _refuse(code, mode, warnings)
+    return Plan(
+        mode=mode,
+        warnings=tuple(warnings),
+        key=key,
+        ats="email" if email_application else guardrails.ats_of(read_as),
+        form_url=form_url or f"mailto:{recipients[0]}",
+        sent_to_review=sent_to_review,
+    )
+
+
+def start(
+    db: Session,
+    user_id: uuid.UUID,
+    posting_id: uuid.UUID,
+    mode: Mode,
+    dry_run: bool,
+    *,
+    now: datetime,
+    stub_base: str | None = None,
+    documents: Sequence[str] = (),
+    agent_review: bool = False,
+) -> Started:
+    """Create the application, or raise RefusedError or PostingNotFoundError. Commits on success;
+    the caller rolls back on an error. Raises ValueError for a rehearsal in Apply myself.
+    `documents`: the kinds the Apply click asked the documents module for (likes.on_apply),
+    kept in a `documents_asked` event so the fill waits for each of them."""
+    if dry_run and mode is Mode.manual:
+        raise ValueError("Apply myself is never a rehearsal")
+    posting = jobs_service.lock_job(db, user_id, posting_id)
+    if posting is None:
+        raise PostingNotFoundError(str(posting_id))
+    _lock_person(db, user_id)
+    planned = plan(db, user_id, posting, mode, now=now, stub_base=stub_base)
+    mode, warnings = planned.mode, list(planned.warnings)
 
     application = Application(
         id=uuid.uuid4(),
@@ -168,12 +213,12 @@ def start(
         mode=mode,
         dry_run=dry_run,
         state=State.queued,
-        ats="email" if email_application else guardrails.ats_of(read_as),
-        form_url=form_url or f"mailto:{recipients[0]}",
-        canonical_key=key,
+        ats=planned.ats,
+        form_url=planned.form_url,
+        canonical_key=planned.key,
         created_at=now,
         updated_at=now,
-        error_code=sent_to_review,
+        error_code=planned.sent_to_review,
     )
     db.add(application)
     try:
@@ -191,13 +236,15 @@ def start(
         dry_run=dry_run,
         warnings=warnings,
     )
+    if documents:
+        _event(db, application, "documents_asked", now, kinds=[str(kind) for kind in documents])
     if mode is Mode.direct:
         # The person's click on Apply is the approval (owner, 2026-11-01): `created_at` is its
         # time; `direct.decide` writes its `apply_click` authorisation once the fill is done.
         _event(db, application, "apply_click", now)
-    elif sent_to_review:
-        _event(db, application, "sent_to_review", now, code=sent_to_review)
-    elif agent_review and mode is Mode.review and not dry_run and not email_application:
+    elif planned.sent_to_review:
+        _event(db, application, "sent_to_review", now, code=planned.sent_to_review)
+    elif agent_review and mode is Mode.review and not dry_run and planned.ats != "email":
         # A20: the Apply button with the review box ticked: the apply agent fills any site and
         # the person confirms the list of what it filled (apply/confirm.py).
         from app.apply import confirm

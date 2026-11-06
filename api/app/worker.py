@@ -20,6 +20,9 @@ Sweeps queue (app.queue.SWEEPS):
   sweep.STALE_AFTER (worker crash, lost queue message).
 - cron:browser_removals: every minute, the profile directories queued for removal are removed
   through browserd (browser B7, app/browser/removals.py). On this queue for its free slots.
+- rescore_tick: cron every 10 seconds (rescore.TICK_SECONDS): the rescore a change of the skills
+  section asked for, one person after the other, never two of one person at once
+  (app/jobs/rescore.py). No model call: the fit is code.
 
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
@@ -33,6 +36,12 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   `decision`), queued by the apply tick. Here, not on the apply queue, so a call of up to 120 s
   never holds the fills and submits, and it takes one of the MAX_AGENT_RUNS slots. Tried once:
   after a worker stop the next tick queues it again (it clears arq's failed result first).
+- profile_titles(run_id): one run of the job titles agent (profile, app/profile/agents.py), in
+  this process like apply_decide, so it takes one of the MAX_AGENT_RUNS slots. Tried once.
+- profile_interpret(run_id): one reading of a part of the About you document (profile,
+  app/profile/about_agent.py), in this process like profile_titles. Tried once.
+- profile_titles_tick: cron every minute: starts the automatic job title suggestions due after
+  a profile save, an accepted Fill my profile item, an upload or a base CV (titles.py `due`).
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
@@ -132,7 +141,7 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import service, sweep
+from app.jobs import rescore, service, sweep
 from app.logging_config import configure_logging
 
 logger = logging.getLogger("app.worker")
@@ -327,6 +336,10 @@ def _reap(sessions: sessionmaker[Session], now: datetime) -> int:
     return count
 
 
+async def rescore_tick(ctx: dict[str, Any]) -> int:
+    return await asyncio.to_thread(rescore.tick, sessions_of(ctx), clock_of(ctx))
+
+
 async def reap_sweeps(ctx: dict[str, Any]) -> int:
     count = await asyncio.to_thread(_reap, sessions_of(ctx), clock_of(ctx)())
     if count:
@@ -471,6 +484,30 @@ async def reap_agent_runs_at_start(ctx: dict[str, Any]) -> int:
     return await reap_agent_runs(ctx, at_start=True)
 
 
+async def profile_titles(ctx: dict[str, Any], run_id: str) -> None:
+    """One run of the job titles agent, in this process (app/profile/agents.py)."""
+    from app.profile import agents as profile_agents
+
+    await profile_agents.execute(agent_context(ctx), uuid.UUID(run_id))
+
+
+async def profile_interpret(ctx: dict[str, Any], run_id: str) -> None:
+    """One reading of a part of the About you document (app/profile/about_agent.py)."""
+    from app.profile import about_agent
+
+    await about_agent.execute(agent_context(ctx), uuid.UUID(run_id))
+
+
+async def profile_titles_tick(ctx: dict[str, Any]) -> int:
+    """Starts the automatic job title suggestions that are due (app/profile/titles.py `due`)."""
+    from app.profile import agents as profile_agents
+
+    redis = ctx.get("redis")
+    if redis is None:
+        return 0
+    return await profile_agents.tick(sessions_of(ctx), clock_of(ctx)(), redis)
+
+
 # --- queues -----------------------------------------------------------------------------------
 
 
@@ -498,6 +535,7 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
             func(run_sweep, name="run_sweep", timeout=SWEEP_JOB_TIMEOUT_S, max_tries=2),
             func(scheduled_sweeps, name="scheduled_sweeps", timeout=240, max_tries=1),
             func(reap_sweeps, name="reap_sweeps", timeout=60, max_tries=1),
+            func(rescore_tick, name="rescore_tick", timeout=rescore.TICK_TIMEOUT_S, max_tries=1),
         ],
         cron_jobs=[
             cron(
@@ -509,9 +547,15 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
             ),
             cron(reap_sweeps, name="cron:reap_sweeps", second=30, timeout=60),
             cron(browser_removals.drain, name="cron:browser_removals", second=20, timeout=60),
+            cron(
+                rescore_tick,
+                name="cron:rescore_tick",
+                second=set(range(0, 60, rescore.TICK_SECONDS)),
+                timeout=rescore.TICK_TIMEOUT_S,
+            ),
         ],
-        # Two users' sweeps at once, plus room for the cron jobs.
-        max_jobs=MAX_SWEEPS + 2,
+        # Two users' sweeps at once, plus room for the cron jobs (a long rescore among them).
+        max_jobs=MAX_SWEEPS + 3,
         job_timeout_s=SWEEP_JOB_TIMEOUT_S,
         on_start=reap_sweeps,
     )
@@ -540,8 +584,14 @@ def agents_queue() -> QueueSpec:
                 keep_result=0,
             ),
             func(reap_agent_runs, name="reap_agent_runs", timeout=60, max_tries=1),
+            func(profile_titles, name="profile_titles", timeout=job_timeout_s, max_tries=1),
+            func(profile_interpret, name="profile_interpret", timeout=job_timeout_s, max_tries=1),
+            func(profile_titles_tick, name="profile_titles_tick", timeout=60, max_tries=1),
         ],
-        cron_jobs=[cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60)],
+        cron_jobs=[
+            cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60),
+            cron(profile_titles_tick, name="cron:profile_titles", second=15, timeout=60),
+        ],
         # Two jobs at once: a third run waits in the queue (the reaper cron, a few milliseconds,
         # waits for a free slot too).
         max_jobs=MAX_AGENT_RUNS,

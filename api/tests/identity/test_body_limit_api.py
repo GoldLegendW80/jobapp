@@ -239,6 +239,10 @@ UNBOUNDED_SCHEMAS = {
     ),
     ("POST", "/api/agents/runs"): "input is free JSON, at most 16 KiB (runs_router)",
     ("POST", "/api/proposals/{proposal_id}/accept"): "the edited fields are free JSON",
+    ("POST", "/api/documents/spend/skills"): (
+        "skills is free JSON validated as the profile's skills section, as the Save of "
+        "PUT /api/profile/{section}; the 1 MiB default class bounds it"
+    ),
     ("PUT", "/api/documents/settings"): (
         "free JSON validated as DocumentSettings (at most 50 phrases of 100 characters) for its "
         "own 422 message; the 1 MiB default class bounds it"

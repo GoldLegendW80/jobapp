@@ -20,8 +20,8 @@ Sections and what they replace in the engine:
 - skills: the scoring model (`profile/skills.json`): years_experience 0 to 60, categories
   have, adjacent, none (names unique across the three), gates with a penalty 0 to 100.
 - search: title include, title exclude, location and unwanted location terms, contract
-  types, remote stance, min_fit, posting age window, never-apply rules (`engine/boards.json`,
-  hard rule 11), the job websites searched, the company job boards read through their ATS's
+  types, remote stance, min_fit, posting age window, the person's own never-apply rules
+  (`engine/boards.json`), the job websites searched, the company job boards read through their ATS's
   public API (owner, 2026-10-30), and what the person aims for (opportunities O4):
   seniority levels, industries, company types (a small bonus to the fit, never a filter) and
   the pay sought (changes no score).

@@ -134,6 +134,58 @@ export function feedOf(url: string): JobFeed | null {
   return null;
 }
 
+/**
+ * The recommended places, added together by one button (click analysis A1): the known job
+ * websites and the two job feeds of EXAMPLES, never a company board example. Each known job
+ * website keeps its risk sentence in its line, and its permission is still given at Save (J17).
+ */
+export const RECOMMENDED: readonly Example[] = EXAMPLES.filter(
+  (example) => example.platform !== undefined || feedOf(example.url) !== null,
+);
+
+/** The recommended places the draft does not list yet (a known website under any address). */
+export function missingRecommended(draft: SourcesDraft): Example[] {
+  return RECOMMENDED.filter((example) =>
+    example.platform
+      ? !draft.sites.some((site) => platformOf(site) === example.platform)
+      : !listed(draft, example.url),
+  );
+}
+
+/** The draft with every recommended place it lacks, the websites within SITES_MAX: the names
+ * added, and those left out for want of room. */
+export function withRecommended(draft: SourcesDraft): {
+  draft: SourcesDraft;
+  added: string[];
+  left: string[];
+} {
+  let { sites, feeds } = draft;
+  const added: string[] = [];
+  const left: string[] = [];
+  for (const example of missingRecommended(draft)) {
+    const feed = feedOf(example.url);
+    if (feed) {
+      feeds = withFeed(feeds, feed);
+      added.push(example.label);
+      continue;
+    }
+    const checked = checkSite(sites, siteOf(example.url, example.platform));
+    if ("error" in checked) {
+      left.push(example.label);
+      continue;
+    }
+    sites = checked.sites;
+    added.push(example.label);
+  }
+  return { draft: { ...draft, sites, feeds }, added, left };
+}
+
+/** "LinkedIn, Indeed and Himalayas". */
+export function namesSentence(names: readonly string[]): string {
+  if (names.length <= 1) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names.at(-1) ?? ""}`;
+}
+
 /** A website of the list, checked as the api checks it; the message to show when it is not. */
 export function checkSite(
   sites: readonly InteractiveSite[],

@@ -12,9 +12,10 @@
 #    lock hook (issue #27), the owner is an admin account with a credential of the subscription
 #    kind (role, kind and verified flag only, never the secret) and no run queued or running; the
 #    job is the owner's, has a posting text, and neither its title, its company nor its posting
-#    mentions security (hard rule: never a cybersecurity role). Snapshot of the owner's data: jobs
-#    (count, per status, md5 over every column of every row), profile (revision and md5), job
-#    events (count and highest id), files and sweeps (count only), and the agent tables.
+#    mentions security (the owner's own never apply rule, "No cybersecurity roles: cyber,
+#    security, pentest, threat", in his profile: not a rule of the app). Snapshot of the owner's
+#    data: jobs (count, per status, md5 over every column of every row), profile (revision and
+#    md5), job events (count and highest id), files and sweeps (count only), and the agent tables.
 # 2. For each run: a sampler on the Jetson writes, every second, the worker's and the api's
 #    cgroup memory, the host's available memory and the Claude Code processes (count, RSS).
 #    The run is started with no web session by python -m app.agents.cli start in the api
@@ -70,7 +71,9 @@ EVIDENCE="${EVIDENCE:-$ROOT/tasks/evidence/agents-a5}"
 # CredentialKind, the owner's personal option by A1) gets a run.
 OWNER_ROLE="admin"
 OWNER_CREDENTIAL="claude_subscription"
-# Never a cybersecurity role: the job is refused when its title, company or posting matches.
+# The owner's own never apply rule against cybersecurity roles (his profile; the app has no rule
+# of its own about a kind of role, owner 2026-11-05): the job is refused when its title, company
+# or posting matches. These runs are only ever on the owner's account.
 FORBIDDEN='(cyber|security|sécurité|securite|pentest|threat)'
 # The wall time of every agent (definitions.DEFAULT_WALL_TIME_S) plus a minute.
 WAIT_S="${WAIT_S:-660}"
@@ -461,7 +464,7 @@ SQL
 IFS='|' read -r jstatus fit posting forbidden jruns jproposals jthreads <<<"$job"
 info "job $JOB (status $jstatus, fit $fit, posting $posting characters)"
 info "on this job before: runs=$jruns proposals=$jproposals threads=$jthreads"
-[[ "$forbidden" == f ]] || die "this job mentions security: never a cybersecurity role"
+[[ "$forbidden" == f ]] || die "this job mentions security: the owner's own rule excludes cybersecurity roles"
 [[ "$posting" -ge 500 ]] || die "this job has no posting text stored"
 
 DONE=0

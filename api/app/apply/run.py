@@ -11,7 +11,10 @@ before any decision. One job at a time (the queue's concurrency is 1, the browse
    off, the sentence not accepted or a checkpoint's pause ends it `blocked` with `linkedin_off`
    or `linkedin_paused`, before the lease too.
 2. The documents through `documents.current` (D14): no CV and none coming is `blocked` with
-   `no_documents`; a CV or a letter still being written keeps the application `queued` with
+   `no_documents` (`documents_not_written` when the Apply click asked for it, likes.on_apply);
+   a letter the click asked for that ends without a version is `documents_not_written` too, so
+   nothing is sent without it (owner, 2026-11-05: Apply writes them and then sends);
+   a CV or a letter still being written keeps the application `queued` with
    `needs` = `documents:<reason>`, and the tick asks again. An approved version whose render is
    queued or running is waited for the same way (`documents:rendering`), and the older rendered
    one is not filled in its place (test_which_version_the_run_takes). A wait on a render ends
@@ -103,7 +106,14 @@ from app.apply.models import (
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.documents import freeze as documents
-from app.documents.models import DocumentVersion
+from app.documents.models import (
+    Document,
+    DocumentGeneration,
+    DocumentVersion,
+    GenerationMode,
+    Kind,
+    Scope,
+)
 from app.jobs import service as jobs_service
 from app.jobs import sweep
 from app.jobs.models import Job, JobStatus
@@ -387,6 +397,48 @@ def _wait(db: Session, application: Application, needs: str, now: datetime, **da
     application.updated_at = now
 
 
+# What the Apply click asked for and could not get (likes.on_apply): its writer failed, or the
+# person stopped it. A letter that follows its CV is created right after the CV's run ends
+# (documents.generate.start_letter): one with no writing since the click is waited for this long.
+NOT_WRITTEN = "documents_not_written"
+LETTER_START_GRACE = timedelta(minutes=10)
+
+
+def _asked(db: Session, application: Application) -> frozenset[str]:
+    """The kinds of document the Apply click asked for (its `documents_asked` event)."""
+    rows = db.scalars(
+        sa.select(ApplicationEvent.data).where(
+            ApplicationEvent.application_id == application.id,
+            ApplicationEvent.user_id == application.user_id,
+            ApplicationEvent.kind == "documents_asked",
+        )
+    )
+    return frozenset(
+        kind for data in rows for kind in (data or {}).get("kinds") or [] if isinstance(kind, str)
+    )
+
+
+def _letter_gone(db: Session, application: Application, now: datetime) -> bool:
+    """An asked letter with no version and nothing coming: True once a writing of it begun
+    since the click ended without one, or once none began LETTER_START_GRACE after the CV's."""
+    rows = db.execute(
+        sa.select(Document.kind, DocumentGeneration.finished_at)
+        .join(Document, Document.id == DocumentGeneration.document_id)
+        .where(
+            DocumentGeneration.user_id == application.user_id,
+            Document.user_id == application.user_id,
+            Document.posting_id == application.posting_id,
+            Document.scope == Scope.posting,
+            DocumentGeneration.mode == GenerationMode.posting,
+            DocumentGeneration.created_at >= application.created_at,
+        )
+    ).all()
+    if any(row.kind is Kind.letter for row in rows):
+        return True
+    ended = [row.finished_at for row in rows if row.kind is Kind.cv and row.finished_at]
+    return not ended or now - max(ended) >= LETTER_START_GRACE
+
+
 def _end(db: Session, application: Application, to: State, code: str, now: datetime) -> None:
     states.move(application, to, now)
     application.error_code = code
@@ -402,8 +454,9 @@ def documents_of(
     Shared with One click Apply's agent (A19, applier.py)."""
     user_id = application.user_id
     current = documents.current(db, user_id, application.posting_id)
+    asked = frozenset() if manual else _asked(db, application)
     if current.cv.version is None and current.cv.coming is None and not manual:
-        _end(db, application, State.blocked, "no_documents", now)
+        _end(db, application, State.blocked, NOT_WRITTEN if "cv" in asked else "no_documents", now)
         return "blocked"
     for kind, slot in (("cv", current.cv), ("letter", current.letter)):
         if slot.version is None and slot.coming is not None:
@@ -423,6 +476,12 @@ def documents_of(
             application.updated_at = now
         else:
             _wait(db, application, needs, now, document=kind)
+        return "waiting_documents"
+    if "letter" in asked and current.letter.version is None and current.letter.coming is None:
+        if _letter_gone(db, application, now):
+            _end(db, application, State.blocked, NOT_WRITTEN, now)
+            return "blocked"
+        _wait(db, application, f"documents:{documents.WRITING}", now, document="letter")
         return "waiting_documents"
     versions: dict[str, Any] = {}
     pdfs: dict[str, bytes] = {}

@@ -105,6 +105,9 @@ const answerSchema = z.object({
   left_reason: z.string().nullable().optional(),
   // The choices of a select field, when the api lists them.
   options: z.array(z.string()).nullable().optional(),
+  // A field left for the person: "Remember this answer for next forms" offered ticked ("on"),
+  // offered unticked because the question names the company ("off"), or not offered.
+  remember: z.enum(["on", "off"]).nullable().optional(),
 });
 export type Answer = z.infer<typeof answerSchema>;
 
@@ -160,6 +163,21 @@ export const applicationKey = (id: string) => ["apply", "detail", id] as const;
 export const approvalKey = (id: string) => ["apply", "approval", id] as const;
 
 const id = encodeURIComponent;
+
+/** The person's newest applications, for the Jobs list's rows (at most the api's 200). */
+export const RECENT_LIMIT = 200;
+export const recentApplicationsKey = ["apply", "recent"] as const;
+
+export const recentApplications = async (
+  signal?: AbortSignal,
+): Promise<Application[]> => {
+  const list = await request(`/applications?limit=${String(RECENT_LIMIT)}`, {
+    signal,
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => applicationListSchema.parse(body),
+  });
+  return list.items;
+};
 
 /** The newest application of a posting, or none. */
 export const latestApplication = async (
@@ -268,6 +286,29 @@ export const saveAnswer = (
     body: { value },
     timeoutMs: TIMEOUT_MS,
     validate: (body) => approvalSchema.parse(body),
+  });
+
+const rememberedSchema = z.object({
+  outcome: z.enum(["saved", "kept"]),
+  question: z.string(),
+});
+export type Remembered = z.infer<typeof rememberedSchema>;
+
+/**
+ * Remember this answer for next forms (owner, 2026-11-05): the answer just saved on this form
+ * goes to Saved answers, so the next form with the same question is filled with it. A separate
+ * call: saving an answer on a form never saves it anywhere else by itself.
+ */
+export const rememberAnswer = (
+  applicationId: string,
+  fieldKey: string,
+  value: string | boolean,
+): Promise<Remembered> =>
+  request(`/applications/${id(applicationId)}/remember`, {
+    method: "POST",
+    body: { field_key: fieldKey, value },
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => rememberedSchema.parse(body),
   });
 
 /** One click Apply (A19): the person's answer to the assistant's question; it goes on then. */

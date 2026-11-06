@@ -88,10 +88,13 @@ export function QueueCard({
   item,
   onLeave,
   offset = 0,
+  onUnsavedChange,
 }: {
   item: QueueItem;
   onLeave: () => void;
   offset?: number;
+  /** How many answers of this card are typed and not saved: Approve all ready leaves it out. */
+  onUnsavedChange?: (id: string, count: number) => void;
 }) {
   const queryClient = useQueryClient();
   const titleId = useId();
@@ -105,6 +108,15 @@ export function QueueCard({
   if (item.required_left > 0 && !requiredSeen) setRequiredSeen(true);
   const open = toggled ?? requiredSeen;
   const [unsaved, setUnsaved] = useState(0);
+  useEffect(() => {
+    onUnsavedChange?.(item.id, unsaved);
+  }, [onUnsavedChange, item.id, unsaved]);
+  useEffect(
+    () => () => {
+      onUnsavedChange?.(item.id, 0);
+    },
+    [onUnsavedChange, item.id],
+  );
   const [confirming, setConfirming] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -453,6 +465,7 @@ export function QueueCard({
                   }
                 }}
                 onDirtyChange={setUnsaved}
+                applicationId={item.id}
               />
             ) : approvalQuery.isError ? (
               <Alert variant="destructive">

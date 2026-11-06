@@ -140,6 +140,12 @@ SENTENCES = {
         "Remove tabs, carriage returns and other control characters before saving the letter."
     ),
     "not_an_option": "This form does not offer that choice.",
+    # Remember this answer for next forms (remember.py).
+    "not_answered": "Save your answer to this question first, then the app can remember it.",
+    "not_rememberable": (
+        "This answer stays on this form only: the app never fills this question from your "
+        "saved answers."
+    ),
     # Not a refusal: the error code of a `submitted` application whose posting kept its status.
     "status_not_set": (
         "This application was sent, but the posting could not be marked as applied. Mark it "

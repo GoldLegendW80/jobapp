@@ -244,13 +244,21 @@ export function SaveBar({
   label,
   saving,
   dirty,
+  note,
 }: {
   label: string;
   saving: boolean;
   dirty: boolean;
+  /** A line beside the button: what the save will start, or what the last one did. */
+  note?: ReactNode;
 }) {
   return (
-    <div className="sticky bottom-(--bottom-bar,0px) z-10 -mx-4 flex items-center justify-end gap-3 border-t bg-background/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-b-lg">
+    <div className="sticky bottom-(--bottom-bar,0px) z-10 -mx-4 flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t bg-background/95 px-4 py-3 backdrop-blur sm:mx-0 sm:rounded-b-lg">
+      {note ? (
+        <div className="min-w-0 basis-full text-sm empty:hidden sm:flex-1 sm:basis-auto">
+          {note}
+        </div>
+      ) : null}
       <span
         className={cn("text-sm text-muted-foreground", !dirty && "sr-only")}
         aria-live="polite"

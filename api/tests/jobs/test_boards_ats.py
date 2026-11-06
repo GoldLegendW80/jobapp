@@ -224,8 +224,6 @@ def test_the_starter_list() -> None:
         "ashby", "greenhouse", "lever", "smartrecruiters", "workable",
     }  # fmt: skip
     assert all(ats.valid_board(board.ats, board.board) for board in seed)
-    # No security company (CLAUDE.md rule 2).
-    assert "lakera.ai" not in {board.board for board in seed}
 
 
 def test_enabled_boards_read_only_a_saved_list() -> None:

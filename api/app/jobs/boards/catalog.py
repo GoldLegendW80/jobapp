@@ -8,9 +8,10 @@ list: None reads no board, so no account starts calling the ATSs before its pers
 
 The starter list (seed.json): the 20 boards that answered on 2026-10-30 in the research of
 alternatives to the deleted engine, and the 13 boards of the engine's own list that also
-answered that day, one request each (Lakera left out: a security company, CLAUDE.md rule 2;
-Pigment left out: not on Recruitee). This module imports nothing of the sweep, so app/jobs/sweep.py
-can import it.
+answered that day, one request each (Lakera left out: a security company, under the rule
+against cybersecurity roles the app had that day, now the owner's own never apply rule alone;
+Pigment left out: not on Recruitee). This module imports nothing of the sweep, so
+app/jobs/sweep.py can import it.
 """
 
 import json

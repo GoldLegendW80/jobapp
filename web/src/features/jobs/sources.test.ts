@@ -7,6 +7,9 @@ import {
   draftOfSearch,
   feedOf,
   listed,
+  missingRecommended,
+  namesSentence,
+  RECOMMENDED,
   resumed,
   rowsOf,
   siteOf,
@@ -15,6 +18,7 @@ import {
   withFeed,
   withScheme,
   withoutRow,
+  withRecommended,
   type SourcesDraft,
 } from "./sources";
 import { EMPTY } from "@/features/profile/api";
@@ -158,5 +162,60 @@ describe("the list", () => {
     ]);
     for (const example of EXAMPLES)
       expect(example.label).not.toMatch(/[–—]| - /);
+  });
+});
+
+describe("the recommended places", () => {
+  it("are the four job websites and the two feeds, never a company board", () => {
+    expect(RECOMMENDED.map((example) => example.label)).toEqual([
+      "LinkedIn",
+      "Welcome to the Jungle",
+      "Indeed",
+      "Free-Work",
+      "Arbeitnow",
+      "Himalayas",
+    ]);
+  });
+
+  it("adds what the draft lacks once, a known website under any address counting as listed", () => {
+    const draft: SourcesDraft = {
+      sites: [siteOf("https://fr.linkedin.com/jobs/")],
+      boards: null,
+      feeds: ["arbeitnow"],
+    };
+    expect(missingRecommended(draft).map((example) => example.label)).toEqual([
+      "Welcome to the Jungle",
+      "Indeed",
+      "Free-Work",
+      "Himalayas",
+    ]);
+    const result = withRecommended(draft);
+    expect(result.left).toEqual([]);
+    expect(result.draft.sites.map((site) => site.platform)).toEqual([
+      "custom",
+      "welcome_to_the_jungle",
+      "indeed",
+      "freework",
+    ]);
+    expect(result.draft.feeds).toEqual(["arbeitnow", "himalayas"]);
+    expect(missingRecommended(result.draft)).toEqual([]);
+    expect(withRecommended(result.draft).added).toEqual([]);
+  });
+
+  it("stops the websites at ten and says which were left", () => {
+    const sites = Array.from({ length: 9 }, (_, index) =>
+      siteOf(`https://careers${String(index)}.example.org/`),
+    );
+    const result = withRecommended({ sites, boards: null, feeds: [] });
+    expect(result.draft.sites).toHaveLength(10);
+    expect(result.added).toEqual(["LinkedIn", "Arbeitnow", "Himalayas"]);
+    expect(result.left).toEqual([
+      "Welcome to the Jungle",
+      "Indeed",
+      "Free-Work",
+    ]);
+    expect(namesSentence(result.left)).toBe(
+      "Welcome to the Jungle, Indeed and Free-Work",
+    );
   });
 });
