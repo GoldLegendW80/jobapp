@@ -198,6 +198,8 @@ class PostingDocumentOut(DocumentOut):
     # The hiring panel is reviewing (or rebuilding) this document (D29): the job page keeps
     # reading, and a CV's letter follows the panel's end.
     panel_running: bool = False
+    # A CV's panel runs and a letter follows it (asked by the click or the Apply, or not written).
+    letter_coming: bool = False
 
 
 class PostingDocumentsOut(BaseModel):
@@ -513,6 +515,7 @@ def posting_documents(job_id: uuid.UUID, user: CurrentUser, db: Db) -> PostingDo
                 approved=max(approved) if approved else None,
                 sent=sorted(v.number for v in found if v.frozen_at is not None),
                 panel_running=panel.is_running(db, user.id, document.id),
+                letter_coming=panel.letter_coming(db, user.id, document.id),
                 generation=(
                     GenerationOut(
                         status=generation.status,

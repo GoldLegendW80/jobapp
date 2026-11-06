@@ -473,6 +473,7 @@ describe("the Documents section of a posting", () => {
       postingDocument("cv", {
         latest: fakeVersion({ number: 1 }),
         panel_running: true,
+        letter_coming: true,
       }),
     ]);
     const { section } = await openSection();
@@ -508,6 +509,23 @@ describe("the Documents section of a posting", () => {
     expect(within(section).getByTestId("posting-letter")).toHaveTextContent(
       "Writing the letter",
     );
+  });
+
+  it("keeps the letter's empty state with Write while the CV's panel runs and no letter is coming", async () => {
+    fakePosting([
+      postingDocument("cv", {
+        latest: fakeVersion({ number: 1 }),
+        panel_running: true,
+        letter_coming: false,
+      }),
+    ]);
+    const { section } = await openSection();
+    const letter = within(section).getByTestId("posting-letter");
+    expect(letter).not.toHaveTextContent("hiring panel is reviewing");
+    expect(letter).toHaveTextContent("Not written yet");
+    expect(
+      within(letter).getByRole("button", { name: /Write/ }),
+    ).toBeInTheDocument();
   });
 
   describe("on the test's own clock", () => {

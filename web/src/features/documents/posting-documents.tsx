@@ -76,6 +76,9 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const cvGeneration = documentOf(documents.data, "cv")?.generation ?? null;
   // The CV's hiring panel runs: the letter follows its end, not the CV generation's (D29).
   const cvPanel = documentOf(documents.data, "cv")?.panel_running === true;
+  // Only when a letter is coming does the letter card say it follows the panel.
+  const letterFollows =
+    cvPanel && documentOf(documents.data, "cv")?.letter_coming === true;
   const cvOpen = isOpen(cvGeneration) || cvPanel;
   const letterOpen = isOpen(documentOf(documents.data, "letter")?.generation);
   const [cvWasOpen, setCvWasOpen] = useState(cvOpen);
@@ -112,8 +115,10 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     (documentOf(documents.data, "letter")?.latest ?? null) !== null;
   const untouched = (["cv", "letter"] as const).every(
     (kind) =>
-      cardState(documentOf(documents.data, kind), kind === "letter" && cvPanel)
-        .tag === "empty",
+      cardState(
+        documentOf(documents.data, kind),
+        kind === "letter" && letterFollows,
+      ).tag === "empty",
   );
 
   return (
@@ -171,7 +176,7 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                 onChoose={setChoice}
                 cvReady={cvReady}
                 letterWritten={letterWritten}
-                afterPanel={kind === "letter" && cvPanel}
+                afterPanel={kind === "letter" && letterFollows}
               />
             ))}
           </div>

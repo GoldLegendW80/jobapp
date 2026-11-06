@@ -148,6 +148,8 @@ export const postingDocumentSchema = documentSchema.extend({
   generation: generationBriefSchema.nullable(),
   /** The hiring panel is reviewing or rebuilding it (D29): a CV's letter follows its end. */
   panel_running: z.boolean().default(false),
+  /** A letter follows the CV's running panel (asked by the click or the Apply, or not written yet). */
+  letter_coming: z.boolean().default(false),
 });
 export type PostingDocument = z.input<typeof postingDocumentSchema>;
 

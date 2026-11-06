@@ -95,7 +95,7 @@ from app.documents.models import (
     PanelStatus,
     Scope,
 )
-from app.jobs.models import JobStatus
+from app.jobs.models import Job, JobStatus
 from app.profile.models import Profile
 
 logger = logging.getLogger("app.documents.panel")
@@ -1425,6 +1425,47 @@ def is_running(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
         )
         or 0
     ) > 0
+
+
+def letter_coming(db: Session, user_id: uuid.UUID, document_id: uuid.UUID) -> bool:
+    """A CV's running panel is followed by a letter (`generate.start_letter`): the CV's write
+    was a click that asked for both kinds, or the posting's letter has no version and the posting
+    may still have one. False for a panel of an automatic write, and when no panel runs."""
+    from app.documents import generate
+
+    row = db.execute(
+        sa.select(DocumentGeneration.estimate, DocumentGeneration.trigger, Document.posting_id)
+        .select_from(DocumentPanel)
+        .join(Document, Document.id == DocumentPanel.document_id)
+        .join(DocumentGeneration, DocumentGeneration.run_id == DocumentPanel.source_run_id)
+        .where(
+            DocumentPanel.user_id == user_id,
+            DocumentPanel.document_id == document_id,
+            DocumentPanel.status == PanelStatus.running.value,
+            Document.kind == Kind.cv,
+        )
+        .order_by(DocumentPanel.created_at.desc())
+        .limit(1)
+    ).one_or_none()
+    if row is None or row.posting_id is None or row.trigger is not GenerationTrigger.click:
+        return False
+    if row.estimate.get(generate.LETTER_FOLLOWS):
+        return True
+    status = db.scalar(
+        sa.select(Job.status).where(Job.user_id == user_id, Job.id == row.posting_id)
+    )
+    letter = db.scalar(
+        sa.select(DocumentVersion.id)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(
+            Document.user_id == user_id,
+            Document.posting_id == row.posting_id,
+            Document.kind == Kind.letter,
+            Document.scope == Scope.posting,
+        )
+        .limit(1)
+    )
+    return status in generate.LETTER_STATUSES and letter is None
 
 
 def tokens(db: Session, panel: DocumentPanel) -> tuple[int, int]:
