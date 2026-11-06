@@ -14,7 +14,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function openPage(path = "/profile") {
+async function openPage(path = "/profile?tab=identity") {
   const user = userEvent.setup();
   renderApp(path);
   await screen.findByRole("heading", { level: 1, name: "Profile" });
@@ -145,7 +145,7 @@ const exportFile = (
     { type: "application/json" },
   );
 
-async function openImport(path = "/profile") {
+async function openImport(path = "/profile?tab=identity") {
   const user = await openPage(path);
   await user.click(
     within(await openMenu(user)).getByRole("menuitem", {

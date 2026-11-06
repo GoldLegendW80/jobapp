@@ -149,7 +149,10 @@ async function signUp(
   ).toBeVisible();
 }
 
-/** Ticks exactly `wanted` and opens the dialog; answers the estimate the page was given. */
+/**
+ * Ticks exactly `wanted`: the start panel asks the estimate for its button. Opens the folded
+ * details; answers the estimate of the whole selection the page was given.
+ */
 async function openDialog(
   on: Page,
   all: string[],
@@ -158,23 +161,32 @@ async function openDialog(
   // The run reads the documents in the order they were ticked.
   for (const name of all)
     await on.getByRole("checkbox", { name: named(name) }).uncheck();
-  for (const name of wanted)
-    await on.getByRole("checkbox", { name: named(name) }).check();
   const [answer] = await Promise.all([
     on.waitForResponse(
       (response) =>
         new URL(response.url()).pathname === ESTIMATE &&
-        response.request().method() === "POST",
+        response.request().method() === "POST" &&
+        (response.request().postDataJSON() as { document_ids: string[] })
+          .document_ids.length === wanted.length,
     ),
-    on.getByRole("button", { name: "See the estimate" }).click(),
+    (async () => {
+      for (const name of wanted)
+        await on.getByRole("checkbox", { name: named(name) }).check();
+    })(),
   ]);
   expect(answer.status()).toBe(200);
+  await dialogOf(on)
+    .getByRole("button", { name: "What is read, and the limits" })
+    .click();
   await expect(dialogOf(on).getByTestId("estimate")).toBeVisible();
   return (await answer.json()) as Estimate;
 }
 
+/** The start of a run: one button with the token range, in place of the start dialog. */
 const dialogOf = (on: Page) =>
-  on.getByRole("dialog", { name: "Before the run starts" });
+  on.getByRole("region", { name: "Before the run starts" });
+const startOf = (on: Page) =>
+  dialogOf(on).getByRole("button", { name: /^Complete my profile/ });
 const state = () => page.getByTestId("run-state");
 
 /** Clicks Start and answers the body the page sent to the start route. */
@@ -183,7 +195,7 @@ async function clickStart(): Promise<Record<string, unknown>> {
     page.waitForRequest(
       (one) => new URL(one.url()).pathname === RUNS && one.method() === "POST",
     ),
-    dialogOf(page).getByRole("button", { name: "Start the run" }).click(),
+    startOf(page).click(),
   ]);
   return request.postDataJSON() as Record<string, unknown>;
 }
@@ -207,14 +219,13 @@ test("a new user with a subscription adds documents and opens the review step", 
   await expect(
     page.getByRole("heading", { name: "Start reading" }),
   ).toBeVisible();
-  // Nothing is chosen for the user, and nothing can be asked for without a choice.
-  await expect(
-    page.getByRole("button", { name: "See the estimate" }),
-  ).toBeDisabled();
+  // Nothing is chosen for the user, and nothing is asked for without a choice.
+  await expect(dialogOf(page)).toHaveCount(0);
+  await expect(page.getByText(/Choose at least one document/)).toBeVisible();
   await expect(page.locator("main")).not.toContainText(DASH);
 });
 
-test("the start dialog shows the estimate and the consent, and starts only on a tick and a click", async () => {
+test("the start button shows the estimate and the consent, and starts only on a tick and a click", async () => {
   const estimate = await openDialog(page, ALL, [FIRST, SECOND]);
   subscriptionModel = estimate.model;
   const dialog = dialogOf(page);
@@ -243,7 +254,10 @@ test("the start dialog shows the estimate and the consent, and starts only on a 
   await expect(dialog.getByTestId("consent-text")).toHaveText(consent.text);
   const box = dialog.getByRole("checkbox", { name: /I have read this/ });
   await expect(box).not.toBeChecked();
-  const start = dialog.getByRole("button", { name: "Start the run" });
+  const start = startOf(page);
+  await expect(start).toHaveText(
+    `Complete my profile (about ${figure(estimate.tokens.low)} to ${figure(estimate.tokens.high)} tokens)`,
+  );
   await expect(start).toBeDisabled();
   await shots(page, "start-dialog-consent");
 
@@ -263,9 +277,7 @@ test("the start dialog shows the estimate and the consent, and starts only on a 
   await expect(
     page.getByRole("heading", { name: "The run in progress" }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "See the estimate" }),
-  ).toHaveCount(0);
+  await expect(startOf(page)).toHaveCount(0);
 });
 
 test("the run survives a reload, moves through both documents and ends on its summary", async () => {
@@ -382,7 +394,7 @@ test("a run that reaches its ceiling shows what was spent, and goes on after a C
   );
 });
 
-test("the dialog opened again shows the reminder and the documents as reused, and starts nothing", async () => {
+test("the start shown again has the reminder and the documents as reused, and starts nothing", async () => {
   const estimate = await openDialog(page, ALL, [FIRST, SECOND]);
   const dialog = dialogOf(page);
   expect(estimate.documents.map((one) => one.reused_steps)).toEqual([1, 1]);
@@ -402,11 +414,9 @@ test("the dialog opened again shows the reminder and the documents as reused, an
   await shots(page, "start-dialog-reused");
 
   const before = (await activeRun()).id;
-  await dialog.getByRole("button", { name: "Not now" }).click();
+  // Reading the figures starts nothing: only the click on the button does.
+  await page.getByRole("button", { name: "Clear the selection" }).click();
   await expect(dialog).toBeHidden();
-  await expect(
-    page.getByRole("button", { name: "See the estimate" }),
-  ).toBeFocused();
   expect((await activeRun()).id).toBe(before);
   expect(errors).toEqual([]);
 });
@@ -444,7 +454,7 @@ test("a second user with an API key sees the amounts as estimates and the other 
     await expect(dialog).not.toContainText(/at most|maximum/i);
     await expect(dialog).not.toContainText(DASH);
     await shots(mine, "start-dialog-api-key");
-    await dialog.getByRole("button", { name: "Not now" }).click();
+    await mine.getByRole("checkbox", { name: named(FIRST) }).uncheck();
     expect(
       ((await (await other.request.get(RUNS)).json()) as { runs: unknown[] })
         .runs,

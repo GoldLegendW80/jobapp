@@ -16,6 +16,8 @@ import { defineConfig, devices } from "@playwright/test";
  *   profile-history  empty to 100% in the browser, History diff and restore, export, import
  *   profile-dates  a year alone as a date: typed, saved, reloaded, made a month, exported, imported
  *   admin-agents  Admin, Agents: the website search agent, its prompt edited, saved, reverted
+ *   profile-titles  the place of the profile and the job title ideas, one click each (fake stream)
+ *   profile-about  the one page profile, About you edited in place, Done, Apply, Undo (fake stream)
  *   throttle  five wrong passwords, then 429 with a countdown (last: it locks its admin)
  *
  * Each spec deletes its own failed sign in attempts in its afterAll (stack.ts clearAttempts, which
@@ -37,6 +39,8 @@ const SPECS = [
   "profile-history",
   "profile-dates",
   "admin-agents",
+  "profile-titles",
+  "profile-about",
   "throttle",
 ] as const;
 

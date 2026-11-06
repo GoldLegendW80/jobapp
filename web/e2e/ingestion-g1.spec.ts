@@ -385,9 +385,7 @@ test("a new user follows Fill my profile with an agent from the profile", async 
     .getByRole("navigation", { name: "Main" })
     .getByRole("link", { name: "Profile" })
     .click();
-  await page
-    .getByRole("link", { name: "Fill my profile with an agent" })
-    .click();
+  await page.getByRole("link", { name: "Add other documents" }).click();
   await expect(page).toHaveURL(/\/profile\/fill$/);
   await expect(
     page.getByRole("heading", {

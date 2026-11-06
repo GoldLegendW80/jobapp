@@ -198,9 +198,8 @@ describe("/profile/fill", () => {
     fakePrompt();
     const app = renderApp("/profile");
     await user.click(
-      await screen.findByRole("link", {
-        name: "Fill my profile with an agent",
-      }),
+      // Under Your CV on the one page profile.
+      await screen.findByRole("link", { name: "Add other documents" }),
     );
     await screen.findByRole("heading", {
       level: 1,

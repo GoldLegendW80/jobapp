@@ -483,13 +483,13 @@ describe("skills tab", () => {
   it("asks before leaving with an unsaved chip", async () => {
     const { user } = await openSkills();
     await user.type(screen.getByLabelText("New term for rust"), "cargo{enter}");
-    await user.click(screen.getByRole("tab", { name: /^Search/ }));
+    await user.click(screen.getByRole("tab", { name: /^Answers/ }));
     const guard = await screen.findByRole("alertdialog", {
       name: "Discard unsaved changes?",
     });
     await user.click(
       within(guard).getByRole("button", { name: "Discard changes" }),
     );
-    expect(await screen.findByRole("form", { name: "Search" })).toBeVisible();
+    expect(await screen.findByRole("form", { name: "Answers" })).toBeVisible();
   });
 });

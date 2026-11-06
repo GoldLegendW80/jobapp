@@ -29,7 +29,7 @@ describe("document letter edits", () => {
       if (length === 998) {
         expect(save).toBeEnabled();
         fireEvent.click(save);
-        expect(onSave).toHaveBeenCalledWith("x".repeat(998));
+        expect(onSave).toHaveBeenCalledWith("x".repeat(998), false);
       } else {
         expect(save).toBeDisabled();
         expect(onSave).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe("document letter edits", () => {
       if (length <= 10000) {
         expect(save).toBeEnabled();
         fireEvent.click(save);
-        expect(onSave).toHaveBeenCalledWith(letter);
+        expect(onSave).toHaveBeenCalledWith(letter, false);
       } else {
         expect(save).toBeDisabled();
         expect(screen.getByRole("alert")).toHaveTextContent("10000 characters");
@@ -157,7 +157,7 @@ describe("document letter edits", () => {
     const letter = " x" + "a".repeat(9996) + "x ";
     fireEvent.change(box, { target: { value: letter } });
     fireEvent.click(screen.getByRole("button", { name: "Save answer" }));
-    expect(onSave).toHaveBeenCalledWith(letter);
+    expect(onSave).toHaveBeenCalledWith(letter, false);
     expect(screen.getByText(/^10000 \/ 10000 characters/)).toBeInTheDocument();
   });
 

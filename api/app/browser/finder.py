@@ -280,7 +280,8 @@ a translation or a synonym the website understands, as the person would. Read ev
 load more, open the next pages, scroll. Open every posting that could fit the person's profile,
 and report each one that fits. When in doubt, report it: the app scores every posting against
 the profile afterwards and the person sees the score. Do not report a posting whose title or
-place the person does not want, nor a cybersecurity role: the app drops them.
+place the person does not want: the app drops them, and skips the ones the person's own never
+apply rules exclude.
 
 You have the browser commands of a person: browser_navigate (any public address), back and
 forward, browser_snapshot (the page's elements, with refs), browser_take_screenshot (an image
@@ -796,7 +797,7 @@ def _on_page(text: str, page: PageRead) -> bool:
 def title_on(page: PageRead, title: str) -> tuple[str, str] | None:
     """The title a reported posting is stored with, and the rule that accepted it (B21), always
     as the page shows it and never shorter than what the page says, so the unwanted titles and
-    the cybersecurity rule read the page's own words. The reported words are compared case,
+    the person's never apply rules read the page's own words. The reported words are compared case,
     accents, spacing and punctuation aside, with a gender marker at the end set aside too
     (`_bare`), as a sequence of whole words:
     - the page's one clear primary heading when it holds them; else a heading that equals them;

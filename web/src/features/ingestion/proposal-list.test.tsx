@@ -154,9 +154,11 @@ describe("ProposalList", () => {
     const calls = fakeApi(
       review({
         identity: [
+          // A locked fact on a value the profile holds: accept all leaves it out.
           item("full_name", "Alice Martin", {
             before: "A. Martin",
             locked: true,
+            bulk: "locked",
             citations: [cite(CV, "Alice Martin"), cite(LETTER, "Alice Martin")],
           }),
           item("headline", "Engineer", { free_text: true }),
@@ -438,5 +440,90 @@ describe("ProposalList", () => {
     const { container } = show("run-1");
     await screen.findByTestId("proposal");
     expect(container.textContent).not.toMatch(/[—–]| - /);
+  });
+
+  it("accepts every addition in one click, locked facts on an empty slot included, and says what is left", async () => {
+    const before = review({
+      identity: [
+        // A locked fact on an empty slot: it joins, and keeps its own buttons.
+        item("phone", "+33 6 00 00 00 00", { locked: true }),
+        // A locked fact on a value the profile holds: left for the person.
+        item("full_name", "Alice Martin", {
+          before: "A. Martin",
+          locked: true,
+          bulk: "locked",
+        }),
+        item("headline", "Engineer"),
+      ],
+      experience: [
+        item(
+          "employers:acme-group-2021",
+          { organisation: "Acme Group" },
+          {
+            section: "experience",
+            locked: true,
+          },
+        ),
+        item(
+          "employers:globex-2019",
+          { organisation: "Globex" },
+          {
+            section: "experience",
+            action: "replace",
+            locked: true,
+            bulk: "replace",
+          },
+        ),
+      ],
+    });
+    const calls = fakeApi(before);
+    const sent: unknown[] = [];
+    server.use(
+      http.post(
+        "*/api/ingestion/runs/:id/accept-additions",
+        async ({ request }) => {
+          sent.push(await request.json());
+          return HttpResponse.json({
+            run_id: "run-1",
+            decided: ["p-phone", "p-headline", "p-employers:acme-group-2021"],
+            skipped: [],
+            left_out: {},
+            stopped: [],
+            revisions: { identity: 4, experience: 5 },
+            profile_revision: 5,
+            pending: 2,
+          });
+        },
+      ),
+    );
+    const user = userEvent.setup();
+    show("run-1");
+    const all = await screen.findByRole("button", {
+      name: "Accept all additions (3)",
+    });
+    expect(
+      screen.getByText(/What would change a value you hold waits/),
+    ).toBeInTheDocument();
+    // The locked fact that joins shows no "one by one" badge; the one left out does.
+    expect(
+      within(proposal("phone")).queryByText("Accepted one by one"),
+    ).toBeNull();
+    within(proposal("full_name")).getByText("Accepted one by one");
+    // Each value keeps its Edit and Reject beside its excerpt.
+    within(proposal("phone")).getByRole("button", { name: /Edit/ });
+    within(proposal("phone")).getByRole("button", { name: /Reject/ });
+    await user.click(all);
+    expect(
+      await screen.findByText(
+        "Accepted 3. 2 proposals still need your decision.",
+      ),
+    ).toBeInTheDocument();
+    expect(sent).toEqual([
+      {
+        proposal_ids: ["p-phone", "p-headline", "p-employers:acme-group-2021"],
+      },
+    ]);
+    // No other decision was sent: one click, one call.
+    expect(calls.paths.filter((one) => one.startsWith("POST"))).toEqual([]);
   });
 });

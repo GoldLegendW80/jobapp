@@ -297,13 +297,21 @@ test("a new member lands on the wizard and imports an invented CV in step 1", as
     name: "Read them into your profile",
   });
   await press(read.getByRole("button", { name: "Select all" }), "Enter");
-  await press(read.getByRole("button", { name: "See the estimate" }), "Enter");
-  const estimate = pageN.getByRole("dialog", { name: "Before the run starts" });
-  await expect(estimate.getByTestId("estimate")).toBeVisible({
-    timeout: 60_000,
-  });
+  const estimate = read.getByRole("region", { name: "Before the run starts" });
+  await expect(
+    estimate.getByRole("button", { name: /^Complete my profile \(about/ }),
+  ).toBeVisible({ timeout: 60_000 });
+  await press(
+    estimate.getByRole("button", { name: "What is read, and the limits" }),
+    "Enter",
+  );
+  await expect(estimate.getByTestId("estimate")).toBeVisible();
   await noDash(pageN);
-  await pageN.keyboard.press("Escape");
+  // Leaving the selection starts nothing.
+  await press(
+    read.getByRole("button", { name: "Clear the selection" }),
+    "Enter",
+  );
   await expect(estimate).toBeHidden();
   await next(pageN);
 });
@@ -346,6 +354,10 @@ test("steps 2 to 5 by keyboard, and Back keeps every value", async () => {
   await step(pageN, 4);
   await expect(
     pageN.getByRole("button", { name: "Add LinkedIn", exact: true }),
+  ).toBeVisible();
+  // One click for the known job websites and the two feeds (audit chapter 2, A1).
+  await expect(
+    pageN.getByRole("button", { name: "Add the recommended websites" }),
   ).toBeVisible();
   await expect(pageN.getByText(/A company job board, like/)).toBeVisible();
   await noDash(pageN);

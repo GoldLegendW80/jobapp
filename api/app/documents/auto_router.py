@@ -27,6 +27,14 @@ SPEC-documents.md, "API", "Automatic generation", "Templates", "The spend"). Inc
   lowering it to the one asked would add, shown before the person saves it) with their estimate,
   and the tokens and cost of the module's runs today and over the last 30 days, from
   `agent_runs` joined through `document_generations.run_id`.
+- `POST /api/documents/spend/skills {skills}`: what saving this draft of the skills section would
+  start (audit chapter 2, owner answer 4: the cost said before saving, since the postings are
+  rescored by themselves after the save). The draft scores the person's open postings of the
+  window (`jobs.service.draft_fits`, storing nothing); the postings it brings to the threshold
+  that are not eligible now and have no CV yet are counted as the spend route counts `newly`,
+  with the same estimate. `writes` says whether automatic writing would start by itself
+  (automatic generation on, a consent and a credential). 422 for a draft the profile's Save
+  would refuse.
 Every route is the signed in person's. Every answer is `Cache-Control: private, no-store`.
 Logs carry ids and codes, never a text.
 """
@@ -42,7 +50,8 @@ from typing import Annotated, Any, Literal
 import anyio.from_thread
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field
+from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session
 
 from app import queue as queues
@@ -64,7 +73,9 @@ from app.documents.models import (
 from app.identity import deps
 from app.identity.models import User
 from app.ingestion import pricing
+from app.jobs import service as jobs_service
 from app.jobs import sweep
+from app.profile.schemas import SkillsSection
 
 logger = logging.getLogger("app.documents")
 
@@ -433,4 +444,80 @@ def spend(
         last_30_days=_spent(
             db, user.id, (zone_start - timedelta(days=lookback - 1)).astimezone(UTC)
         ),
+    )
+
+
+class SkillsDraftIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Free JSON validated as the profile's Save validates the section (`_draft_skills`), as
+    # PUT /api/profile/{section} takes it: its real bound is the 1 MiB default class
+    # (tests/identity/test_body_limit_api.py, UNBOUNDED_SCHEMAS).
+    skills: dict[str, Any]
+
+
+def _draft_skills(raw: dict[str, Any]) -> SkillsSection:
+    """The draft as a skills section, or the app's 422 for what Save would refuse."""
+    try:
+        return SkillsSection.model_validate(raw)
+    except ValidationError as invalid:
+        raise RequestValidationError(
+            [
+                {**error, "loc": ("body", "skills", *error["loc"])}
+                for error in invalid.errors(
+                    include_input=False, include_url=False, include_context=False
+                )
+            ]
+        ) from None
+
+
+class SkillsSpendOut(BaseModel):
+    auto: bool
+    min_fit: int
+    writes: bool  # automatic writing starts by itself: on, with a consent and a credential
+    newly: int  # postings the draft brings to the threshold, eligible then, with no CV yet
+    newly_estimate: EstimateOut
+    priced: bool
+    cost_note: str
+
+
+@router.post("/api/documents/spend/skills", response_model=SkillsSpendOut)
+def skills_spend(
+    body: SkillsDraftIn, user: CurrentUser, request: Request, db: Db
+) -> SkillsSpendOut:
+    skills = _draft_skills(body.skills)
+    at = deps.clock(request)
+    try:
+        search = sweep.load_search(db, user.id)
+    except sweep.InvalidSearchError:
+        search = None
+    setting = tick.setting_of(search)
+    lookback = request.app.state.settings.documents_auto_lookback_days
+    found_day = eligibility.found_day(at)
+    drafted = jobs_service.draft_fits(
+        db,
+        user.id,
+        skills,
+        search,
+        eligibility.OPEN_STATUSES,
+        eligibility.since(found_day, lookback),
+    )
+    today = {found.id for found in tick.eligible(db, user.id, setting, search, found_day, lookback)}
+    docs = tick.posting_docs(db, user.id)
+    newly = sum(
+        1
+        for found in tick.eligible(db, user.id, setting, search, found_day, lookback, fits=drafted)
+        if found.id not in today and docs.ids.get((found.id, Kind.cv)) not in docs.written
+    )
+    figures = consent.figures(db, user.id, found_day)
+    return SkillsSpendOut(
+        auto=setting.auto,
+        min_fit=setting.min_fit,
+        writes=setting.auto and writer_base.wait_reason(db, user.id) is None,
+        newly=newly,
+        newly_estimate=_estimate_out(
+            estimate.times(figures.posting, newly), figures.model, figures.priced
+        ),
+        priced=figures.priced,
+        cost_note=pricing.ESTIMATE_NOTE if figures.priced else pricing.QUOTA_NOTE,
     )

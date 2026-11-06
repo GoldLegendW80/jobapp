@@ -1,14 +1,15 @@
-"""The sweep and apply must read the person's exclusion rules alike (#580), and the app's own
-rule against cybersecurity (never_apply.CYBER_RULE) holds without any rule of the person's."""
+"""The sweep and apply must read the person's exclusion rules alike (#580), and those rules are
+the only ones: the app adds none of its own about a kind of role (owner, 2026-11-05)."""
 
 import uuid
+from typing import Any
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 
 from app.apply import guardrails
-from app.jobs import never_apply, sweep
+from app.jobs import sweep
 from app.jobs.models import JobEvent, JobStatus
 from tests.apply.test_a2_guardrails import (
     HIDDEN_FROM_THE_RULE,
@@ -90,24 +91,52 @@ def test_hidden_exclusions_are_stored_skipped_with_the_rule_and_its_events(
             assert guardrails.swept_never_apply(db, alice, posting.id)
 
 
-def test_the_apps_cyber_rule_skips_without_a_rule_of_the_persons(
-    factory: sessionmaker, alice: uuid.UUID
+# The app has no rule of its own about a kind of role (owner, 2026-11-05): a security role is a
+# posting like any other for a person whose rules do not exclude it, and the same postings are
+# skipped, with the person's own rule as their note, for a person whose rules do.
+SECURITY_ROLES = [
+    ("Example Robotics", "Security Engineer"),
+    ("Example Robotics", "Pentest Engineer"),
+    ("Northwind Cyber Labs", "AI Engineer"),
+]
+OWNERS_RULE = "No cybersecurity roles: cyber, security, pentest, threat"
+
+
+def sweep_security_roles(factory: sessionmaker, user: uuid.UUID, rules: list[str]) -> Any:
+    set_profile(factory, user, search(never_apply=rules))
+    found = [
+        finding(title, company=company, url=f"https://jobs.example-robotics.test/jobs/{i}")
+        for i, (company, title) in enumerate(SECURITY_ROLES)
+    ]
+    return run(factory, new_sweep(factory, user), *found)
+
+
+@pytest.mark.parametrize("rules", [[], ["No sales roles: sales (test rule)"]])
+def test_a_sweep_keeps_security_roles_for_a_person_whose_rules_do_not_exclude_them(
+    factory: sessionmaker, alice: uuid.UUID, rules: list[str]
 ) -> None:
-    set_profile(factory, alice, search(never_apply=[]))
-    row = run(
-        factory,
-        new_sweep(factory, alice),
-        finding("Pentest Engineer", company="Example Robotics"),
-        finding(
-            "AI Engineer",
-            company="Northwind Cyber Labs",
-            url="https://jobs.example-robotics.test/northwind/ai-engineer",
-        ),
-        finding("AI Engineer", company="Example Robotics"),
-    )
-    assert (row.stats["new"], row.stats["skipped_by_rule"]) == (3, 2)
-    by_key = {(job.company, job.title): job for job in jobs_of(factory, alice)}
-    for key in (("Example Robotics", "Pentest Engineer"), ("Northwind Cyber Labs", "AI Engineer")):
-        assert by_key[key].status is JobStatus.skipped
-        assert by_key[key].notes == never_apply.CYBER_RULE.text
-    assert by_key[("Example Robotics", "AI Engineer")].status is JobStatus.found
+    row = sweep_security_roles(factory, alice, rules)
+    assert (row.stats["new"], row.stats["skipped_by_rule"]) == (3, 0)
+    jobs = jobs_of(factory, alice)
+    assert {(job.company, job.title): (job.status, job.notes) for job in jobs} == {
+        key: (JobStatus.found, "") for key in SECURITY_ROLES
+    }
+    with factory() as db:
+        assert not any(guardrails.swept_never_apply(db, alice, job.id) for job in jobs)
+
+
+def test_a_sweep_skips_the_same_roles_under_the_persons_own_rule(
+    factory: sessionmaker, alice: uuid.UUID, bob: uuid.UUID
+) -> None:
+    row = sweep_security_roles(factory, alice, [OWNERS_RULE])
+    assert (row.stats["new"], row.stats["skipped_by_rule"]) == (3, 3)
+    jobs = jobs_of(factory, alice)
+    assert {(job.company, job.title): (job.status, job.notes) for job in jobs} == {
+        key: (JobStatus.skipped, OWNERS_RULE) for key in SECURITY_ROLES
+    }
+    with factory() as db:
+        assert all(guardrails.swept_never_apply(db, alice, job.id) for job in jobs)
+    # Another person's sweep reads that person's rules only: Alice's rule is not Bob's.
+    row = sweep_security_roles(factory, bob, [])
+    assert (row.stats["new"], row.stats["skipped_by_rule"]) == (3, 0)
+    assert {job.status for job in jobs_of(factory, bob)} == {JobStatus.found}

@@ -730,7 +730,7 @@ def test_unwanted_titles_places_never_apply_and_known_postings_are_never_fetched
             card("4100000011", "GenAI Engineer"),
             card("4100000012", "GenAI Engineer Sales"),  # an unwanted title
             card("4100000013", "GenAI Engineer", place="Berlin, Germany"),  # an unwanted place
-            card("4100000014", "GenAI Security Engineer"),  # the app's rule against cybersecurity
+            card("4100000014", "GenAI Engineer, Security"),  # the person's own rule (cyber)
             card("4100000015", "GenAI Engineer", company="Example Casino"),  # a never apply rule
             card("4100000016", "GenAI Engineer, Agents"),  # the person has it already
             card("4100000017", "Data Engineer"),  # no saved title
@@ -739,7 +739,7 @@ def test_unwanted_titles_places_never_apply_and_known_postings_are_never_fetched
     search = section(
         title_exclude={"terms": ["sales"]},
         location_exclude={"terms": ["Germany"]},
-        never_apply=["No gambling: casino (test rule)"],
+        never_apply=["No gambling: casino (test rule)", OWNERS_RULE],
     )
     known = Known({"https://fr.linkedin.com/jobs/view/genai-engineer-agents-at-example-4100000016"})
     entries, fake, _, _ = execute(
@@ -753,6 +753,34 @@ def test_unwanted_titles_places_never_apply_and_known_postings_are_never_fetched
     assert entry["unwanted"] == 5
     assert entry["found"] == 2  # the new one and the duplicate
     assert entry["duplicates"] == 1
+
+
+OWNERS_RULE = "No cybersecurity roles: cyber, security, pentest, threat"
+
+
+@pytest.mark.parametrize("given", [True, False])  # the plan's rules, or read from the search
+@pytest.mark.parametrize(
+    ("rules", "fetched"),
+    [
+        # No rule of the person's against it: fetched, the app has none of its own (2026-11-05).
+        ([], True),
+        (["No gambling: casino (test rule)"], True),
+        ([OWNERS_RULE], False),
+    ],
+)
+def test_a_security_role_is_left_out_only_by_the_persons_own_rule(
+    rules: list[str], fetched: bool, given: bool
+) -> None:
+    search = section(title_include={"terms": ["Security Engineer"]}, never_apply=rules)
+    page = card("4100000031", "Security Engineer")
+    entries, fake, _, _ = execute(
+        search,
+        lambda now: LinkedInFake(now, pages={0: page}),
+        rules=sweep.never_apply_rules(search) if given else None,
+    )
+    [entry] = entries
+    assert fake.paths() == ["search?start=0", *(["4100000031"] if fetched else [])]
+    assert (entry.get("found", 0), entry.get("unwanted", 0)) == ((1, 0) if fetched else (0, 1))
 
 
 def test_a_posting_of_another_contract_is_dropped_only_when_linkedin_could_not_filter() -> None:

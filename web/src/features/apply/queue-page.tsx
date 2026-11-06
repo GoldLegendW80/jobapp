@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -9,6 +9,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { describeError } from "@/lib/api";
 import { useTitle } from "@/lib/use-title";
 
+import { ApproveAll } from "./approve-all";
 import { serverOffset } from "./full-auto-state";
 import { FullAutoSummary } from "./full-auto-summary";
 import {
@@ -74,6 +75,13 @@ export function QueuePage() {
   const leave = useCallback(() => {
     heading.current?.focus();
   }, []);
+  // The answers typed in each card and not saved yet: such a form waits for its own Approve.
+  const [unsaved, setUnsaved] = useState<Readonly<Record<string, number>>>({});
+  const onUnsaved = useCallback((id: string, count: number) => {
+    setUnsaved((old) =>
+      (old[id] ?? 0) === count ? old : { ...old, [id]: count },
+    );
+  }, []);
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-8">
@@ -130,6 +138,7 @@ export function QueuePage() {
             </p>
           ) : (
             <>
+              <ApproveAll items={waiting} unsaved={unsaved} />
               <QueueSection
                 id="queue-waiting"
                 heading={`Waiting for you (${waiting.length})`}
@@ -137,6 +146,7 @@ export function QueuePage() {
                 items={waiting}
                 onLeave={leave}
                 offset={offset}
+                onUnsaved={onUnsaved}
               />
               <QueueSection
                 id="queue-under-way"
@@ -167,6 +177,7 @@ function QueueSection({
   items,
   onLeave,
   offset,
+  onUnsaved,
 }: {
   id: string;
   heading: string;
@@ -174,6 +185,7 @@ function QueueSection({
   items: QueueItem[];
   onLeave: () => void;
   offset: number;
+  onUnsaved?: (id: string, count: number) => void;
 }) {
   return (
     <section aria-labelledby={id} className="flex flex-col gap-3">
@@ -184,7 +196,12 @@ function QueueSection({
         <ul className="flex flex-col gap-4">
           {items.map((item) => (
             <li key={item.id}>
-              <QueueCard item={item} onLeave={onLeave} offset={offset} />
+              <QueueCard
+                item={item}
+                onLeave={onLeave}
+                offset={offset}
+                onUnsavedChange={onUnsaved}
+              />
             </li>
           ))}
         </ul>

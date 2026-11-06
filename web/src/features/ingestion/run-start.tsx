@@ -1,13 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { ChevronRight, Play } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -15,13 +8,10 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Field,
   FieldLabel,
@@ -88,8 +78,6 @@ export function RunStart() {
   });
   /** The documents ticked, in the order they were ticked: the run reads them in that order. */
   const [chosen, setChosen] = useState<readonly string[]>([]);
-  const [open, setOpen] = useState(false);
-  const opener = useRef<HTMLButtonElement>(null);
   const boxes = useId();
 
   if (runs.isPending || documents.isPending)
@@ -136,8 +124,8 @@ export function RunStart() {
       </h3>
       <p className="text-sm text-muted-foreground">
         Choose the documents the agent reads, in the order you want them read.
-        Before anything is sent, you see what it would cost in tokens and you
-        decide.
+        The button says what it would use in tokens: nothing is sent before you
+        click it.
       </p>
       {runs.isError || documents.isError ? (
         <p role="status" className="text-sm text-muted-foreground">
@@ -189,16 +177,6 @@ export function RunStart() {
             </ul>
           </FieldSet>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              ref={opener}
-              disabled={selected.length === 0}
-              onClick={() => {
-                setOpen(true);
-              }}
-            >
-              <Play aria-hidden="true" />
-              See the estimate
-            </Button>
             {selectable.length > 1 ? (
               <Button
                 variant="outline"
@@ -224,14 +202,21 @@ export function RunStart() {
           </div>
         </>
       )}
-      {open ? (
-        <StartDialog
+      {selected.length > 0 ? (
+        <StartPanel
           documentIds={selected}
-          opener={opener}
-          onClose={() => {
-            setOpen(false);
+          onStarted={() => {
+            // The run on the page takes the focus: this part steps aside while it runs.
+            window.requestAnimationFrame(() =>
+              document.getElementById(RUN_HEADING_ID)?.focus(),
+            );
           }}
         />
+      ) : items.length > 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Choose at least one document: the button shows what reading it would
+          use.
+        </p>
       ) : null}
     </section>
   );
@@ -256,20 +241,23 @@ function canBeChosen(document: IngestionDocument): boolean {
 }
 
 /**
- * The start dialog: the estimate exactly as the server gave it, the consent text the first
- * time, and one button that starts the run with the `quote_id` of the estimate on screen. A
- * start the server refuses because the figures changed replaces what is shown and waits for
- * another click.
+ * The start of a run, in place of the start dialog (owner, 2026-11-05): one button that carries
+ * the token range of the estimate exactly as the server gave it, and starts the run with the
+ * `quote_id` of that estimate. Under it, the pause and the cost range of an API key; the consent
+ * box the first time; and, folded, what is read, the "Read again" choices and the limits. A
+ * blocker of the estimate disables the button and says why. A start the server refuses because
+ * the figures changed replaces what is shown and waits for another click.
  */
-export function StartDialog({
+export function StartPanel({
   documentIds,
-  opener,
-  onClose,
+  label = WORDING.completeProfile,
+  onStarted,
 }: {
   documentIds: string[];
-  /** The button that opened the dialog: it takes the focus back when nothing was started. */
-  opener: RefObject<HTMLButtonElement>;
-  onClose: () => void;
+  /** The words of the button, before the token range. */
+  label?: string;
+  /** The run was created: the caller follows it. */
+  onStarted?: (run: Run) => void;
 }) {
   const client = useQueryClient();
   const boxId = useId();
@@ -286,13 +274,10 @@ export function StartDialog({
   /** The version of the consent text the box was ticked for, never a bare yes. */
   const [tickedVersion, setTickedVersion] = useState<number | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
-  const started = useRef(false);
 
   const consent = useQuery({
     queryKey: consentKey,
     queryFn: ({ signal }) => getConsent(signal),
-    staleTime: 0,
-    gcTime: 0,
   });
 
   const ask = useMutation({
@@ -315,15 +300,16 @@ export function StartDialog({
   const askEstimate = ask.mutate;
   const key = documentIds.join(",");
   useEffect(() => {
+    if (key === "") return;
     askEstimate({
-      document_ids: key === "" ? [] : key.split(","),
+      document_ids: key.split(","),
       reread_document_ids: [...reread],
     });
   }, [askEstimate, key, reread]);
 
   const say = useCallback((sentence: string) => {
     setNotice(sentence);
-    // The notice takes the focus so a screen reader hears it and the next Tab is in the dialog.
+    // The notice takes the focus so a screen reader hears it and the next Tab is next to it.
     window.requestAnimationFrame(() => noticeRef.current?.focus());
   }, []);
 
@@ -341,7 +327,6 @@ export function StartDialog({
       return startRun(current.selection, current.estimate.quote_id);
     },
     onSuccess: (run) => {
-      started.current = true;
       client.setQueryData(runKey(run.id), run);
       client.setQueryData<RunList>(runsKey, (old) => ({
         runs: [
@@ -357,7 +342,7 @@ export function StartDialog({
         active_run_id: isActive(run.status) ? run.id : null,
       }));
       refreshRuns(client);
-      onClose();
+      onStarted?.(run);
     },
     onError: (error, current) => {
       const refusal = startRefusal(error);
@@ -371,7 +356,7 @@ export function StartDialog({
             selection: current.selection,
           });
           say(
-            "The estimate has changed since you opened it. Nothing was started. Read the new figures, then start again.",
+            "The estimate has changed since you read it. Nothing was started. Read the new figures, then start again.",
           );
           void consent.refetch();
           break;
@@ -383,7 +368,6 @@ export function StartDialog({
         case "active_run":
           toast.info("A run is already in progress. This page shows it.");
           void client.invalidateQueries({ queryKey: runsKey });
-          onClose();
           break;
         case "unreadable_documents":
           setRefused(
@@ -417,153 +401,180 @@ export function StartDialog({
     text !== undefined &&
     estimate.can_start &&
     !ask.isPending;
+  const range =
+    estimate === undefined
+      ? null
+      : `about ${tokens(estimate.tokens.low)} to ${tokens(estimate.tokens.high)} tokens`;
 
   return (
-    <Dialog
-      open
-      onOpenChange={(next) => {
-        if (!next && !start.isPending) onClose();
-      }}
+    <section
+      aria-label="Before the run starts"
+      className="flex flex-col gap-3"
+      data-testid="start-panel"
     >
-      <DialogContent
-        className="max-h-[90dvh] overflow-y-auto sm:max-w-xl"
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          if (!started.current) {
-            opener.current?.focus();
-            return;
-          }
-          // The button that opened the dialog is gone: the run on the page takes the focus.
-          window.requestAnimationFrame(() =>
-            document.getElementById(RUN_HEADING_ID)?.focus(),
-          );
-        }}
-      >
-        <DialogHeader>
-          <DialogTitle>Before the run starts</DialogTitle>
-          <DialogDescription>
-            This is what the agent would read and what it is expected to use.
-            Nothing is sent until you start the run.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div
-          ref={noticeRef}
-          tabIndex={-1}
-          className="outline-none empty:hidden"
-        >
-          {notice ? (
-            <Alert>
-              <AlertTitle>Read this first</AlertTitle>
-              <AlertDescription>{notice}</AlertDescription>
-            </Alert>
-          ) : null}
-        </div>
-        {failure ? (
-          <Alert variant="destructive">
-            <AlertDescription>{failure}</AlertDescription>
+      <div ref={noticeRef} tabIndex={-1} className="outline-none empty:hidden">
+        {notice ? (
+          <Alert>
+            <AlertTitle>Read this first</AlertTitle>
+            <AlertDescription>{notice}</AlertDescription>
           </Alert>
         ) : null}
+      </div>
+      {failure ? (
+        <Alert variant="destructive">
+          <AlertDescription>{failure}</AlertDescription>
+        </Alert>
+      ) : null}
+      {estimate !== undefined && estimate.blockers.length > 0 ? (
+        <Blockers estimate={estimate} />
+      ) : null}
 
+      {text === undefined ? (
+        consent.isError ? (
+          <Alert variant="destructive">
+            <AlertDescription>
+              {loadFailureSentence(consent.error)}
+            </AlertDescription>
+          </Alert>
+        ) : null
+      ) : text.accepted ? null : (
+        <section
+          aria-labelledby={`${boxId}-heading`}
+          className="flex flex-col gap-2 rounded-lg border p-3"
+        >
+          <h4 id={`${boxId}-heading`} className="text-sm font-semibold">
+            What is sent, and to whom
+          </h4>
+          <p className="text-sm" data-testid="consent-text">
+            {text.text}
+          </p>
+          {changed ? (
+            <p className="text-sm font-medium" data-testid="consent-changed">
+              The text changed after you ticked the box. Read it again and tick
+              the box if you agree.
+            </p>
+          ) : null}
+          <Field orientation="horizontal" className="items-start">
+            <Checkbox
+              id={boxId}
+              className="mt-0.5"
+              checked={ticked}
+              disabled={start.isPending}
+              onCheckedChange={(state) => {
+                setTickedVersion(state === true ? text.version : null);
+              }}
+            />
+            <FieldLabel htmlFor={boxId}>
+              I have read this and I agree to send the selected documents
+            </FieldLabel>
+          </Field>
+        </section>
+      )}
+
+      <div className="flex flex-col gap-1">
+        <Button
+          className="w-full whitespace-normal sm:w-fit"
+          disabled={!ready || !agreed || start.isPending}
+          onClick={() => {
+            if (!ready) return;
+            start.mutate({
+              estimate,
+              selection: shown.selection,
+              consent: text,
+            });
+          }}
+        >
+          {start.isPending || (ask.isPending && estimate === undefined) ? (
+            <Spinner aria-hidden="true" role={undefined} />
+          ) : (
+            <Play aria-hidden="true" />
+          )}
+          {range ? `${label} (${range})` : label}
+        </Button>
         {estimate === undefined ? (
           failure ? null : (
-            <p
-              role="status"
-              className="flex items-center gap-2 text-sm text-muted-foreground"
-            >
-              <Spinner aria-hidden="true" role={undefined} />
+            <p role="status" className="text-sm text-muted-foreground">
               Computing the estimate
             </p>
           )
         ) : (
-          <EstimateView
-            estimate={estimate}
-            reread={reread}
-            refused={refused}
-            busy={ask.isPending || start.isPending}
-            onReread={(id, on) => {
-              setReread((old) =>
-                on ? [...old, id].sort() : old.filter((one) => one !== id),
-              );
-            }}
-          />
+          <EstimateLine estimate={estimate} />
         )}
-
-        {text === undefined ? (
-          consent.isError ? (
-            <Alert variant="destructive">
-              <AlertDescription>
-                {loadFailureSentence(consent.error)}
-              </AlertDescription>
-            </Alert>
-          ) : null
-        ) : text.accepted ? (
+        {text?.accepted ? (
           <p className="text-sm text-muted-foreground" data-testid="reminder">
             {text.reminder}
           </p>
-        ) : (
-          <section
-            aria-labelledby={`${boxId}-heading`}
-            className="flex flex-col gap-2 rounded-lg border p-3"
-          >
-            <h4 id={`${boxId}-heading`} className="text-sm font-semibold">
-              What is sent, and to whom
-            </h4>
-            <p className="text-sm" data-testid="consent-text">
-              {text.text}
-            </p>
-            {changed ? (
-              <p className="text-sm font-medium" data-testid="consent-changed">
-                The text changed after you ticked the box. Read it again and
-                tick the box if you agree.
-              </p>
-            ) : null}
-            <Field orientation="horizontal" className="items-start">
-              <Checkbox
-                id={boxId}
-                className="mt-0.5"
-                checked={ticked}
-                disabled={start.isPending}
-                onCheckedChange={(state) => {
-                  setTickedVersion(state === true ? text.version : null);
-                }}
-              />
-              <FieldLabel htmlFor={boxId}>
-                I have read this and I agree to send the selected documents
-              </FieldLabel>
-            </Field>
-          </section>
-        )}
+        ) : null}
+      </div>
 
-        <DialogFooter>
-          <Button
-            variant="outline"
-            disabled={start.isPending}
-            onClick={onClose}
-          >
-            Not now
-          </Button>
-          <Button
-            disabled={!ready || !agreed || start.isPending}
-            onClick={() => {
-              if (!ready) return;
-              start.mutate({
-                estimate,
-                selection: shown.selection,
-                consent: text,
-              });
-            }}
-          >
-            {start.isPending ? (
-              <Spinner aria-hidden="true" role={undefined} />
-            ) : (
-              <Play aria-hidden="true" />
-            )}
-            Start the run
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      {estimate !== undefined ? (
+        <Collapsible className="flex flex-col gap-2">
+          <CollapsibleTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-fit px-1 text-muted-foreground"
+            >
+              <ChevronRight
+                aria-hidden="true"
+                className="transition-transform motion-reduce:transition-none [[data-state=open]_&]:rotate-90"
+              />
+              What is read, and the limits
+            </Button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <EstimateView
+              estimate={estimate}
+              reread={reread}
+              refused={refused}
+              busy={ask.isPending || start.isPending}
+              onReread={(id, on) => {
+                setReread((old) =>
+                  on ? [...old, id].sort() : old.filter((one) => one !== id),
+                );
+              }}
+            />
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
+    </section>
+  );
+}
+
+/** Why the run cannot start yet, as the estimate says: the button stays disabled. */
+function Blockers({ estimate }: { estimate: Estimate }) {
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>The run cannot start yet</AlertTitle>
+      <AlertDescription>
+        <ul className="flex flex-col gap-1">
+          {estimate.blockers.map((one) => (
+            <li key={one.code}>
+              {one.reason}{" "}
+              {one.code === "no_credential" ? (
+                <Link to="/account" className="font-medium underline">
+                  Open your account page
+                </Link>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/** Under the button: where the run pauses, and what an API key may pay, as estimates. */
+function EstimateLine({ estimate }: { estimate: Estimate }) {
+  const { cost } = estimate;
+  return (
+    <p className="text-sm text-muted-foreground" data-testid="estimate-line">
+      The run pauses at {tokens(estimate.tokens.ceiling)} tokens and asks you
+      before going on.
+      {cost
+        ? ` On your API key, about ${cost.low} to ${cost.high} ${cost.currency}, as an estimate.`
+        : null}
+    </p>
   );
 }
 
@@ -588,26 +599,6 @@ function EstimateView({
   const boxes = useId();
   return (
     <div className="flex flex-col gap-4 text-sm" data-testid="estimate">
-      {estimate.blockers.length > 0 ? (
-        <Alert variant="destructive">
-          <AlertTitle>The run cannot start yet</AlertTitle>
-          <AlertDescription>
-            <ul className="flex flex-col gap-1">
-              {estimate.blockers.map((one) => (
-                <li key={one.code}>
-                  {one.reason}{" "}
-                  {one.code === "no_credential" ? (
-                    <Link to="/account" className="font-medium underline">
-                      Open your account page
-                    </Link>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
       <section aria-label="What is read" className="flex flex-col gap-2">
         <h4 className="font-semibold">What is read</h4>
         <ul className="flex flex-col divide-y rounded-lg border">

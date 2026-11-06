@@ -20,8 +20,8 @@ Everything else stays the code's: the input model, the flags (internal, private_
 needs_job, bind_job, test_only, live_text), the tools' code and schemas, and what the runner
 sets for every agent (sdk_options.py: the denied built-ins, the permission mode, no settings
 sources). So do the guards enforced in code whatever a prompt says: browserd's policy, the apply
-gate and its approval, no mail sent by itself, the cybersecurity rule. A saved prompt is checked
-for its size only, never for what it says.
+gate and its approval, no mail sent by itself, the person's own never apply rules. A saved prompt
+is checked for its size only, never for what it says.
 
 The default message is editable only for an agent whose first message can be it
 (`AgentDefinition.uses_default_message`); the others refuse it, so nothing is saved that no run

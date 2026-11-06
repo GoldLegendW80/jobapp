@@ -26,6 +26,8 @@ import {
 import { cn } from "@/lib/utils";
 import { WORDING, contractWord } from "@/lib/wording";
 
+import { ApplyRow } from "@/features/apply/apply-row";
+
 import type { JobListItem } from "./api";
 import { FitBadge, PayText, StatusBadge } from "./badges";
 import { formatDate } from "./format";
@@ -62,7 +64,7 @@ function useIsMobile(): boolean {
 }
 
 const COLUMNS =
-  "lg:grid lg:grid-cols-[1.25rem_minmax(0,1fr)_minmax(0,1.8fr)_minmax(0,1fr)_minmax(0,1.3fr)_5.5rem_6.5rem_6.5rem_5.5rem] lg:items-center lg:gap-3";
+  "lg:grid lg:grid-cols-[1.25rem_minmax(0,1fr)_minmax(0,1.8fr)_minmax(0,1fr)_minmax(0,1.3fr)_5.5rem_6.5rem_6.5rem_5.5rem_6rem] lg:items-center lg:gap-3";
 
 /** A header or a cell of the grid above: none of the table's own padding, and a checkbox on
  * the row's centre line. The table's elements are laid out as blocks and grids (a virtualised
@@ -285,6 +287,7 @@ export function JobsList({
               "Fit",
               "Status",
               "Found",
+              "Apply",
             ].map((name) => (
               <TableHead
                 key={name}
@@ -420,6 +423,16 @@ export function JobsList({
                   <time dateTime={job.found_on}>
                     {formatDate(job.found_on)}
                   </time>
+                </TableCell>
+                <TableCell
+                  role="cell"
+                  className={cn(CELL, "flex items-center lg:justify-end")}
+                >
+                  <ApplyRow
+                    job={job}
+                    from={from}
+                    focusable={virtual.index === current}
+                  />
                 </TableCell>
               </TableRow>
             );

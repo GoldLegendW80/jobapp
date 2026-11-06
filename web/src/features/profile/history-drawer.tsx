@@ -98,27 +98,36 @@ export function HistoryDrawer({
   profile,
   dirty,
   onRestored,
+  open: given,
+  onOpenChange,
 }: {
   section: SectionName;
   profile: Profile;
   dirty: boolean;
   onRestored: () => void;
+  /** Opened from elsewhere (the one page profile's More menu): no button of its own. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [own, setOwn] = useState(false);
+  const open = given ?? own;
+  const setOpen = onOpenChange ?? setOwn;
   const label = SECTION_LABELS[section];
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <SheetTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-label={`History of ${label.toLowerCase()}`}
-        >
-          <History aria-hidden="true" />
-          History
-        </Button>
-      </SheetTrigger>
+      {given === undefined ? (
+        <SheetTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            aria-label={`History of ${label.toLowerCase()}`}
+          >
+            <History aria-hidden="true" />
+            History
+          </Button>
+        </SheetTrigger>
+      ) : null}
       <SheetContent side="right" className="w-full gap-0 p-0 sm:max-w-3xl">
         <SheetHeader className="border-b">
           <SheetTitle>{label} history</SheetTitle>

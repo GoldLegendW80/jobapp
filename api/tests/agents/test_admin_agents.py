@@ -129,6 +129,10 @@ def test_the_list_and_the_page_render_for_every_registered_agent(api: Api, admin
         assert body["first_message"]
         assert body["starter"]
         assert body["guards"]
+        # The person's own never apply rules, and no rule of the app's own about a kind of role
+        # (owner, 2026-11-05).
+        assert "the person's own never apply rules" in body["guards"]
+        assert "cyber" not in body["guards"].lower()
         assert {field["name"] for field in body["input_fields"]} == set(
             agent.input_model.model_fields
         )
@@ -705,8 +709,12 @@ def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
     assert inside["profile_extract"] <= agents["apply_decide"] - margin  # its own job's bound
     # Every agent not inside another job is one the app starts as its own run.
     own = sorted(name for name in ceilings if name not in inside)
+    # profile_titles and profile_interpret are each their own job on the agents queue, with the
+    # queue's timeout.
     assert all(
-        name in ("echo", "job_chat", "triage") or name.startswith("documents_") for name in own
+        name in ("echo", "job_chat", "profile_interpret", "profile_titles", "triage")
+        or name.startswith("documents_")
+        for name in own
     )
     for name, (_, where) in found["ceilings"].items():
         assert where.startswith("It runs "), name
