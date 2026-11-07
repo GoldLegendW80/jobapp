@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "browser"))
@@ -28,6 +29,7 @@ from browserd.config import Config  # noqa: E402
 from browserd.leases import LeaseError, Manager, Request  # noqa: E402
 
 from app.browser import live_router  # noqa: E402
+from app.browser.leases import Lease, View  # noqa: E402
 
 SECRET = b"e2e-live-" + secrets.token_hex(8).encode()
 WALL = 1_800_000_000.0
@@ -208,6 +210,38 @@ def test_no_secret_admits_nobody() -> None:
     assert (
         live.read_grant(b"", live.sign_grant(b"", LEASE, VIEWER, int(WALL), "0" * 32), WALL) is None
     )
+
+
+# --- the api's lease of a slot --------------------------------------------------------------------
+
+
+class OneView:
+    """The lease store as the live api reads it: one person's leases, in the store's order."""
+
+    def __init__(self, *leases: Lease) -> None:
+        self.view = View(leases[0] if leases else None, False, (), leases)
+
+    async def current(self, user_id: str) -> View:
+        return self.view
+
+
+def slot_lease(state: str, slot: int) -> Lease:
+    return Lease(str(uuid.uuid4()), "a", "apply_fill", True, "p", 900, 300, WALL, state, slot=slot)
+
+
+def held(store: OneView, slot: int) -> Lease:
+    return asyncio.run(live_router._held(store, "a", slot))  # type: ignore[arg-type]
+
+
+def test_a_starting_lease_never_hides_the_started_lease_of_slot_0() -> None:
+    """After a take back, a lease still starting (no slot granted yet, so 0) can come before slot
+    0's lease: the ticket, Take over and Give back of slot 0 still find slot 0's lease."""
+    starting, started = slot_lease("starting", 0), slot_lease("active", 0)
+    assert held(OneView(starting, started), 0) is started
+    for store, slot in ((OneView(starting, started), 1), (OneView(starting), 0)):
+        with pytest.raises(HTTPException) as refused:
+            held(store, slot)
+        assert refused.value.status_code == 403
 
 
 # --- a browserd with a lease ---------------------------------------------------------------------

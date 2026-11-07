@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeAnswer, leftAnswer } from "@/test/apply";
 import { fakeQueue, queueItem } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
-import { connected, fakeScreens } from "@/test/browser";
+import { connected, fakeScreens, fakeWindows, windowIn } from "@/test/browser";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -600,6 +600,8 @@ const FILL_SIGNIN = {
   started_at: "2026-10-20T10:00:00Z",
   active_s: 40,
   max_s: 900,
+  application_id: queueItem(1, "filling").id,
+  slot: 0,
 };
 const FILL_ACTIVE = {
   ...FILL_SIGNIN,
@@ -616,6 +618,18 @@ const browserOf = (lease: object, holder: "you" | "other" = "you") => ({
   lease,
   holder,
   queue: [],
+});
+/** Application 2's fill beside application 1's, in the second window of the person's browser. */
+const SECOND_FILL = {
+  ...FILL_ACTIVE,
+  id: "1c7a8d2f-5b54-4a1f-8b62-2a3b4c5d6e7f",
+  purpose: "apply_agent",
+  application_id: queueItem(2, "filling").id,
+  slot: 1,
+};
+const twoFills = (first: object) => ({
+  ...browserOf(first),
+  slots: [first, SECOND_FILL],
 });
 
 describe("a sign in wall in the queue", () => {
@@ -706,6 +720,59 @@ describe("a sign in wall in the queue", () => {
     expect(
       within(card).queryByRole("region", { name: /Sign in to/ }),
     ).toBeNull();
+  });
+});
+
+describe("two fills of the person at once", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("shows the sign in hand off only on the card whose fill waits for it", async () => {
+    server.use(
+      http.get("*/api/browser", () => HttpResponse.json(twoFills(FILL_SIGNIN))),
+    );
+    fakeQueue([queueItem(1, "filling"), queueItem(2, "filling")]);
+    renderApp(PATH);
+    const first = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    await within(first).findByRole("region", {
+      name: "Sign in to jobs.example.org",
+    });
+    expect(
+      within(card("Robotics Engineer 2")).queryByRole("region", {
+        name: /Sign in to/,
+      }),
+    ).toBeNull();
+  });
+
+  it("shows both fills behind Watch the browser, each in its own window under its own name", async () => {
+    const { opened } = fakeWindows();
+    server.use(
+      http.get("*/api/browser", () => HttpResponse.json(twoFills(FILL_ACTIVE))),
+    );
+    fakeQueue([queueItem(1, "filling"), queueItem(2, "filling")]);
+    renderApp(PATH);
+    const under = await screen.findByRole("region", { name: /^Under way/ });
+    await userEvent
+      .setup()
+      .click(within(under).getByRole("button", { name: "Watch the browser" }));
+    const views = await within(under).findByRole("list", {
+      name: "Applications in your browser",
+    });
+    await waitFor(() => {
+      expect(opened).toHaveLength(2);
+    });
+    for (const [n, slot] of [
+      [1, 0],
+      [2, 1],
+    ]) {
+      const view = within(views).getByRole("region", {
+        name: `Live view of your browser: Robotics Engineer ${String(n)}`,
+      });
+      expect(windowIn(opened, view)).toBe(slot);
+    }
   });
 });
 

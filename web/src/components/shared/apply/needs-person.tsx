@@ -60,7 +60,7 @@ export function NeedsPerson({
         />
       ) : null}
       {ON_PAGE.has(application.needs ?? "") ? (
-        <OnPageSlot events={events} />
+        <OnPageSlot application={application} events={events} />
       ) : null}
       {application.needs === "agent_question" && question ? (
         <AgentQuestion application={application} question={question} />
@@ -73,7 +73,13 @@ const WAITS =
   "The assistant waits for you. Complete this step in the live view.";
 
 /** The live view while the run waits for the person on the page, and words once it stopped. */
-function OnPageSlot({ events }: { events?: readonly ApplicationEvent[] }) {
+function OnPageSlot({
+  application,
+  events,
+}: {
+  application: Application;
+  events?: readonly ApplicationEvent[];
+}) {
   if (events === undefined) {
     return <LiveViewSlot idle={WAITS} leaseOf="none" />;
   }
@@ -90,7 +96,7 @@ function OnPageSlot({ events }: { events?: readonly ApplicationEvent[] }) {
   return (
     <LiveViewSlot
       idle={WAITS}
-      leaseOf={{ startedBy: wait.since }}
+      leaseOf={{ application: application.id }}
       status={WAITS}
     />
   );

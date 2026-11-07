@@ -39,14 +39,12 @@ function submitStatus(item: QueueItem): string {
 /**
  * On the Applications page, behind Watch the browser, the live view of each application the
  * assistant works on in the person's browser (LiveViewSlot, as on its job page), named by its
- * posting: its fill, watched with Use the browser myself, and its submit, watched only. The
- * person's fill lease names no application and one fill runs at a time, so it is the one filling
- * application's.
+ * posting: its fill, watched with Use the browser myself, and its submit, watched only. Each lease
+ * names the application it fills or sends, so two fills side by side each show their own window.
  */
 export function ApplicationBrowsers({ items }: { items: QueueItem[] }) {
   const [open, setOpen] = useState(false);
   const working = items.filter(inTheBrowser);
-  const filling = working.filter((item) => item.state === "filling");
   return (
     <LiveViews
       label="Applications in your browser"
@@ -60,7 +58,7 @@ export function ApplicationBrowsers({ items }: { items: QueueItem[] }) {
             label={item.title}
             detail={item.company}
             idle={FILL_STARTS}
-            leaseOf={filling.length === 1 ? "any" : "none"}
+            leaseOf={{ application: item.id }}
           />
         ) : (
           <LiveViewSlot

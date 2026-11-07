@@ -126,8 +126,10 @@ async def _held(store: Leases, user_id: str, slot: int = 0) -> Lease:
         view = await store.current(user_id)
     except StoreUnavailableError:
         raise _unavailable() from None
-    lease = next((held for held in view.leases if held.slot == slot), None)
-    if lease is None or lease.state == "starting":
+    # A starting lease has no slot yet (0 by default): it would hide slot 0's own lease.
+    started = (held for held in view.leases if held.state != "starting")
+    lease = next((held for held in started if held.slot == slot), None)
+    if lease is None:
         raise _forbidden()
     return lease
 

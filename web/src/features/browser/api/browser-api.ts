@@ -24,7 +24,7 @@ const leaseSchema = z.object({
   started_at: z.string(),
   active_s: z.number(),
   max_s: z.number(),
-  // The id of the application a submit lease sends (apply), else null.
+  // The id of the application an apply lease fills or sends, else null.
   application_id: z.string().nullable().optional(),
   // The window of the person's browser this lease uses, and the sweep's website it searches.
   slot: z.number().int().nonnegative().optional(),

@@ -5,8 +5,8 @@ import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getJob, jobKey } from "@/features/jobs/api/jobs-api";
-import { fakeApplication } from "@/test/apply";
-import { FREE, fakeScreens } from "@/test/browser";
+import { APP_ID, fakeApplication } from "@/test/apply";
+import { FREE, fakeScreens, fakeWindows, windowIn } from "@/test/browser";
 import { makeDetail } from "@/test/jobs";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
@@ -43,16 +43,19 @@ afterEach(() => {
 });
 
 const LEASE_START = "2026-10-19T10:00:00Z";
+const OF_APP = { application: APP_ID };
+/** Another application of the person, filled in their browser beside this one. */
+const OTHER_APP = "00000000-0000-4000-9000-0000000000a2";
 const WAITING: ApplicationEvent = {
   at: "2026-10-19T10:01:00Z",
   kind: "waiting_person",
   data: { needs: "captcha" },
 };
 
-/** The person's browser held by an automation lease of `purpose`, started at `startedAt`. */
+/** The person's browser held by an automation lease of `purpose`, for `application`. */
 function leaseOf(
   purpose: string,
-  startedAt = LEASE_START,
+  application: string | null = APP_ID,
   signingIn: boolean | string = false,
 ) {
   server.use(
@@ -74,9 +77,10 @@ function leaseOf(
           wait_host: signingIn ? "jobs.example.org" : null,
           wait_minutes_left: signingIn ? 30 : null,
           wait_deadline: null,
-          started_at: startedAt,
+          started_at: LEASE_START,
           active_s: 30,
           max_s: 900,
+          application_id: application,
         },
       }),
     ),
@@ -161,8 +165,8 @@ describe("what the application needs", () => {
 describe("the job page", () => {
   it("has one person-controlled live view during a sign in handoff", async () => {
     const opened = fakeScreens();
-    leaseOf("apply_fill", LEASE_START, true);
-    renderWithQuery(<LiveViewSlot idle="Filling" leaseOf="any" />);
+    leaseOf("apply_fill", APP_ID, true);
+    renderWithQuery(<LiveViewSlot idle="Filling" leaseOf={OF_APP} />);
     await screen.findByRole("region", { name: "Sign in to jobs.example.org" });
     await waitFor(() => {
       expect(opened).toHaveLength(1);
@@ -196,8 +200,8 @@ describe("the job page", () => {
     "gives the person live input directly during the %s wait on the page",
     async (reason) => {
       const opened = fakeScreens();
-      leaseOf("apply_fill", LEASE_START, reason);
-      renderWithQuery(<LiveViewSlot idle="Waiting" leaseOf="any" />);
+      leaseOf("apply_fill", APP_ID, reason);
+      renderWithQuery(<LiveViewSlot idle="Waiting" leaseOf={OF_APP} />);
       await waitFor(() => {
         expect(opened).toHaveLength(1);
       });
@@ -221,8 +225,8 @@ describe("the job page", () => {
     "keeps the %s wait view only, with Take over",
     async (reason) => {
       const opened = fakeScreens();
-      leaseOf("apply_fill", LEASE_START, reason);
-      renderWithQuery(<LiveViewSlot idle="Waiting" leaseOf="any" />);
+      leaseOf("apply_fill", APP_ID, reason);
+      renderWithQuery(<LiveViewSlot idle="Waiting" leaseOf={OF_APP} />);
       await waitFor(() => {
         expect(opened).toHaveLength(1);
       });
@@ -238,13 +242,13 @@ describe("the job page", () => {
     const opened = fakeScreens();
     leaseOf("apply_fill");
     const { client } = renderWithQuery(
-      <LiveViewSlot idle="Waiting" leaseOf="any" />,
+      <LiveViewSlot idle="Waiting" leaseOf={OF_APP} />,
     );
     await waitFor(() => {
       expect(opened).toHaveLength(1);
     });
     expect(opened[0]?.screen.viewOnly).toBe(true);
-    leaseOf("apply_fill", LEASE_START, "captcha");
+    leaseOf("apply_fill", APP_ID, "captcha");
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["browser"] });
     });
@@ -279,11 +283,11 @@ describe("the job page", () => {
   });
 
   it.each([
-    ["a sweep", "sweep", LEASE_START],
-    ["the fill of another posting", "apply_fill", "2026-10-19T10:05:00Z"],
-  ])("opens no live view of %s", async (_, purpose, startedAt) => {
+    ["a sweep", "sweep", null],
+    ["the fill of another posting", "apply_fill", OTHER_APP],
+  ])("opens no live view of %s", async (_, purpose, application) => {
     let asked = 0;
-    leaseOf(purpose, startedAt);
+    leaseOf(purpose, application);
     server.use(
       http.get("*/api/browser", () => {
         asked += 1;
@@ -300,6 +304,49 @@ describe("the job page", () => {
     expect(
       screen.queryByRole("button", { name: "Use the browser myself" }),
     ).toBeNull();
+  });
+
+  it("opens this application's window when two fills run, and gives the person its input", async () => {
+    const { opened } = fakeWindows();
+    const fill = (id: string, application: string, slot: number) => ({
+      id,
+      purpose: "apply_fill",
+      automation: true,
+      state: "active",
+      wait_reason: null,
+      wait_host: null,
+      wait_deadline: null,
+      started_at: LEASE_START,
+      active_s: 30,
+      max_s: 900,
+      application_id: application,
+      slot,
+    });
+    const other = fill("1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d", OTHER_APP, 0);
+    const mine = {
+      ...fill("2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e", APP_ID, 1),
+      state: "waiting_person",
+      wait_reason: "captcha",
+    };
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json({
+          ...FREE,
+          holder: "you",
+          lease: other,
+          slots: [other, mine],
+        }),
+      ),
+    );
+    captchaPage([WAITING]);
+    await waitFor(() => {
+      expect(opened).toHaveLength(1);
+    });
+    expect(windowIn(opened, screen.getByTestId("live-view-slot"))).toBe(1);
+    expect(opened[0]?.screen.viewOnly).toBe(false);
+    expect(
+      screen.getByRole("button", { name: "Keyboard" }),
+    ).toBeInTheDocument();
   });
 
   it("says the assistant stopped waiting once the wait ended", () => {

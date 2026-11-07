@@ -114,11 +114,15 @@ export const WatchApplicationsInTheBrowser: Story = {
   beforeEach: () => {
     fakeSession(member);
     liveRoutes();
-    browserHolds(lease({ purpose: "apply_agent", max_s: 3600 }));
-    fakeQueue([
-      application(3, "filling", 2, { mode: "direct" }),
-      application(4, "approved", 3),
-    ]);
+    const filling = application(3, "filling", 2, { mode: "direct" });
+    browserHolds(
+      lease({
+        purpose: "apply_agent",
+        application_id: filling.id,
+        max_s: 3600,
+      }),
+    );
+    fakeQueue([filling, application(4, "approved", 3)]);
     return fakeLiveScreens({ pages: ["form"] });
   },
   play: async ({ canvasElement }) => {

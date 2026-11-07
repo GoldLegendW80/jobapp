@@ -116,7 +116,7 @@ export function QueueCard({
         <CardContent className="@container flex flex-col gap-4">
           <p className="text-sm">{statusLine(item, agentList)}</p>
           {item.state === "filling" && item.mode !== "manual" ? (
-            <FillHandoff />
+            <FillHandoff applicationId={item.id} />
           ) : null}
           {item.mode === "manual" ? (
             <p className="text-sm">

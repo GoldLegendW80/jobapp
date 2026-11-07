@@ -28,12 +28,10 @@ const FILL_PURPOSES = new Set([
 const SUBMIT_PURPOSES = new Set(["apply_submit"]);
 
 /**
- * Which of the person's leases is this application's: `any` fill lease (the application fills,
- * and a person has one fill at a time), one that started by `startedBy` (a later one is the fill
- * of another posting), the one the api names for `application` (the submit lease), or `none`.
+ * Which of the person's leases is this application's: the one the api names for `application`
+ * (its fill, or its submit lease; two fills of the person can run side by side), or `none`.
  */
-export type LeaseOf =
-  "any" | "none" | { startedBy: string } | { application: string };
+export type LeaseOf = "none" | { application: string };
 
 /**
  * The lease of this application among the person's (one per window of their browser), the one
@@ -51,14 +49,11 @@ function applicationLease(
       lease.state !== "starting" &&
       purposes.has(lease.purpose),
   );
-  if (of === "any") return leases[0] ?? null;
-  if ("application" in of)
-    return (
-      leases.find((lease) => lease.application_id === of.application) ?? null
-    );
-  // browserd's started_at against the api's waiting_person time: right only while both share the host clock.
-  const by = Date.parse(of.startedBy);
-  return leases.find((lease) => Date.parse(lease.started_at) <= by) ?? null;
+  const own = leases.find((lease) => lease.application_id === of.application);
+  if (own || purposes === SUBMIT_PURPOSES) return own ?? null;
+  // A fill lease taken back after Redis lost it names no application: it is this one's only if it is the person's one fill.
+  const [only, ...others] = leases;
+  return only && others.length === 0 && !only.application_id ? only : null;
 }
 
 const signingIn = (lease: ReturnType<typeof applicationLease>) =>
@@ -183,10 +178,10 @@ export function LiveViewSlot({
 
 /**
  * The sign in hand off of the application that fills, on its queue card (browser B12b's banner,
- * the live view closed until the person opens it): only while the person's own fill lease waits
- * for them to sign in. Nothing otherwise.
+ * the live view closed until the person opens it): only while this application's fill lease waits
+ * for the person to sign in. Nothing otherwise.
  */
-export function FillHandoff() {
-  const lease = useApplicationLease("any");
+export function FillHandoff({ applicationId }: { applicationId: string }) {
+  const lease = useApplicationLease({ application: applicationId });
   return signingIn(lease) ? <HandoffBanner /> : null;
 }

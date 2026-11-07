@@ -67,7 +67,10 @@ export function ApplicationLiveViews({
   return (
     <>
       {phase === "filling" ? (
-        <LiveViewSlot idle={fillingSentence(direct, agentFill)} leaseOf="any" />
+        <LiveViewSlot
+          idle={fillingSentence(direct, agentFill)}
+          leaseOf={application ? { application: application.id } : "none"}
+        />
       ) : null}
       {phase === "waiting" ? (
         <LiveViewSlot

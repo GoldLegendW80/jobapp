@@ -14,7 +14,13 @@ import {
   fakeApply,
   leftAnswer,
 } from "@/test/apply";
-import { FREE, connected, fakeScreens } from "@/test/browser";
+import {
+  FREE,
+  connected,
+  fakeScreens,
+  fakeWindows,
+  windowIn,
+} from "@/test/browser";
 import { fakeJobDetail, makeDetail } from "@/test/jobs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
@@ -1607,5 +1613,60 @@ describe("Review first filled by the apply agent (A20)", () => {
       "Nothing is sent until you click Confirm and send.",
     );
     expect(section).not.toHaveTextContent("until you approve");
+  });
+});
+
+describe("two fills of the person at once on the job page", () => {
+  it("shows this application's window and takes over that window, never the other fill's", async () => {
+    const { opened, takeovers } = fakeWindows();
+    const fill = (id: string, application: string, slot: number) => ({
+      id,
+      purpose: "apply_fill",
+      automation: true,
+      state: "active",
+      wait_reason: null,
+      wait_host: null,
+      wait_deadline: null,
+      started_at: "2026-10-15T08:30:00Z",
+      active_s: 12,
+      max_s: 900,
+      application_id: application,
+      slot,
+    });
+    const other = fill(
+      "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
+      "00000000-0000-4000-9000-0000000000a2",
+      0,
+    );
+    const mine = fill("2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e", APP_ID, 1);
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json({
+          ...FREE,
+          holder: "you",
+          lease: other,
+          slots: [other, mine],
+        }),
+      ),
+    );
+    fakeApply({ application: fakeApplication("filling") });
+    const { user, section } = await openSection();
+    await waitFor(() => {
+      expect(opened).toHaveLength(1);
+    });
+    expect(
+      windowIn(opened, within(section).getByTestId("live-view-slot")),
+    ).toBe(1);
+    act(() => {
+      opened[0]?.events.connect();
+    });
+    await user.click(
+      await within(section).findByRole("button", {
+        name: "Use the browser myself",
+      }),
+    );
+    await waitFor(() => {
+      expect(takeovers).toEqual([1]);
+    });
   });
 });

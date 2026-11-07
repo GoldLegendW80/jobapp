@@ -26,11 +26,17 @@ const meta = {
   },
   args: {
     idle: "The assistant is filling the form. You can watch it live here, then it sends it.",
-    leaseOf: "any",
+    leaseOf: { application: APPLICATION },
   },
   beforeEach: () => {
     liveRoutes();
-    browserHolds(lease({ purpose: "apply_agent", max_s: 3600 }));
+    browserHolds(
+      lease({
+        purpose: "apply_agent",
+        application_id: APPLICATION,
+        max_s: 3600,
+      }),
+    );
     return fakeLiveScreens({ pages: ["form"] });
   },
 } satisfies Meta<typeof LiveViewSlot>;
@@ -79,6 +85,7 @@ export const ACaptchaWaitsForYou: Story = {
     browserHolds(
       lease({
         purpose: "apply_fill",
+        application_id: APPLICATION,
         state: "waiting_person",
         wait_reason: "captcha",
         wait_host: "jobs.example.org",
@@ -95,6 +102,7 @@ export const SignInWall: Story = {
     browserHolds(
       lease({
         purpose: "apply_fill",
+        application_id: APPLICATION,
         state: "waiting_person",
         wait_reason: "signin",
         wait_host: "jobs.example.org",

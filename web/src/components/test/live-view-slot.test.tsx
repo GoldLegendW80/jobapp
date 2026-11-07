@@ -1,4 +1,5 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { QueryClient } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +8,13 @@ import {
   browserQueryKey,
   type Lease,
 } from "@/features/browser/api/browser-api";
-import { FREE, connected, fakeScreens } from "@/test/browser";
+import {
+  FREE,
+  connected,
+  fakeScreens,
+  fakeWindows,
+  windowIn,
+} from "@/test/browser";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -137,9 +144,9 @@ describe("the submit lease", () => {
 
   it.each([
     ["does not read", "none", "idle"],
-    ["reads", "any", "fetching"],
+    ["reads", OF_MINE, "fetching"],
   ] as const)(
-    "%s the browser while leaseOf is %s",
+    "%s the browser while leaseOf is %o",
     (_, leaseOf, fetchStatus) => {
       browser(lease());
       const { client } = slot(leaseOf);
@@ -154,7 +161,7 @@ describe("the fill slot", () => {
   it("does not show the submit lease", async () => {
     const opened = fakeScreens();
     browser(lease());
-    const { client } = slot("any", false);
+    const { client } = slot(OF_MINE, false);
     await read(client);
     expect(screen.queryByTestId("live-screen")).toBeNull();
     expect(opened).toHaveLength(0);
@@ -163,7 +170,7 @@ describe("the fill slot", () => {
   it("still offers Take over on its own fill lease", async () => {
     const opened = fakeScreens();
     browser(lease({ purpose: "apply_fill" }));
-    slot("any", false);
+    slot(OF_MINE, false);
     await connected(opened);
     expect(
       await screen.findByRole("button", { name: "Use the browser myself" }),
@@ -178,8 +185,8 @@ describe("the fill of the apply agent", () => {
     ["Review first's", "apply_review"],
   ])("shows %s fill lease, with Take over", async (_, purpose) => {
     const opened = fakeScreens();
-    browser(lease({ purpose, application_id: null }));
-    slot("any", false);
+    browser(lease({ purpose }));
+    slot(OF_MINE, false);
     await connected(opened);
     expect(
       await screen.findByRole("button", { name: "Use the browser myself" }),
@@ -191,13 +198,12 @@ describe("the fill of the apply agent", () => {
     browser(
       lease({
         purpose: "apply_agent",
-        application_id: null,
         state: "waiting_person",
         wait_reason: "ask_person",
         wait_host: "jobs.example.org",
       }),
     );
-    slot("any", false);
+    slot(OF_MINE, false);
     await connected(opened);
     expect(await screen.findByRole("status")).toHaveTextContent(
       "The assistant needs your help on jobs.example.org.",
@@ -222,7 +228,7 @@ describe("a slot in a grid of views", () => {
   it("names its application and says it is live", async () => {
     const opened = fakeScreens();
     browser(lease({ purpose: "apply_fill" }));
-    labelled("any");
+    labelled(OF_MINE);
     await connected(opened);
     const view = screen.getByRole("region", { name: VIEW });
     expect(view).toHaveTextContent("Example Robotics");
@@ -250,7 +256,7 @@ describe("a slot in a grid of views", () => {
         wait_host: "jobs.example.org",
       }),
     );
-    labelled("any");
+    labelled(OF_MINE);
     await waitFor(() => {
       expect(screen.getByRole("region", { name: VIEW })).toHaveTextContent(
         "The assistant waits for you to sign in to jobs.example.org. Sign in from this application's card.",
@@ -303,4 +309,99 @@ describe("two browsers at once", () => {
     expect(asked).toHaveLength(1);
     expect(asked[0]).toMatchObject({ slot: 1 });
   });
+});
+
+describe("two fills of the person at once", () => {
+  /** The fill of the other application in window 0, and of `mine` in window 1. */
+  function twoFills(mine: Partial<Lease> = {}) {
+    const other = lease({
+      purpose: "apply_fill",
+      application_id: OTHER,
+      slot: 0,
+    });
+    const own = lease({
+      id: "4d6e8f0a-2b3c-4d5e-9f6a-7b8c9d0e1f2a",
+      purpose: "apply_agent",
+      slot: 1,
+      ...mine,
+    });
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json({
+          ...FREE,
+          holder: "you",
+          lease: other,
+          slots: [other, own],
+        }),
+      ),
+    );
+  }
+
+  it("shows this application's window, and takes over that window", async () => {
+    const { opened, takeovers } = fakeWindows();
+    twoFills();
+    const user = userEvent.setup();
+    slot(OF_MINE, false);
+    await waitFor(() => {
+      expect(opened).toHaveLength(1);
+    });
+    expect(windowIn(opened, screen.getByTestId("live-view-slot"))).toBe(1);
+    act(() => {
+      opened[0]?.events.connect();
+    });
+    await user.click(
+      await screen.findByRole("button", { name: "Use the browser myself" }),
+    );
+    await waitFor(() => {
+      expect(takeovers).toEqual([1]);
+    });
+  });
+
+  it("never shows the other application's fill, even when it started first", async () => {
+    const opened = fakeScreens();
+    twoFills({ application_id: OTHER });
+    const { client } = slot(OF_MINE, false);
+    await read(client);
+    expect(screen.getByTestId("live-view-slot")).toHaveTextContent(
+      "Waiting for the browser.",
+    );
+    expect(opened).toHaveLength(0);
+  });
+
+  it.each([
+    ["is the person's one fill", [null], true],
+    ["is beside another fill", [null, OTHER], false],
+    ["is one of two", [null, null], false],
+  ])(
+    "shows a fill lease that names no application only if it %s",
+    async (_, named, shown) => {
+      const opened = fakeScreens();
+      const leases = named.map((application_id, at) =>
+        lease({
+          id: `4d6e8f0a-2b3c-4d5e-9f6a-7b8c9d0e1f2${String(at)}`,
+          purpose: "apply_fill",
+          application_id,
+          slot: at,
+        }),
+      );
+      server.use(
+        http.get("*/api/browser", () =>
+          HttpResponse.json({
+            ...FREE,
+            holder: "you",
+            lease: leases[0],
+            slots: leases,
+          }),
+        ),
+      );
+      const { client } = slot(OF_MINE, false);
+      await read(client);
+      await waitFor(() => {
+        expect(opened).toHaveLength(shown ? 1 : 0);
+      });
+      expect(screen.queryByText("Waiting for the browser.") === null).toBe(
+        shown,
+      );
+    },
+  );
 });

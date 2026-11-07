@@ -253,8 +253,8 @@ def lease_max_table(raw: str) -> dict[str, int]:
 class Lease:
     """The holder's turn. `lease_id` is browserd's lease id once it started (`starting:<uuid>`
     before). Times are seconds of the store's clock. `application_id`: the application the call
-    that started the lease named (apply's submit lease); None otherwise, and on a lease taken back
-    from browserd after Redis lost it."""
+    that started the lease named (apply's fill and submit leases); None otherwise, and on a lease
+    taken back from browserd after Redis lost it."""
 
     lease_id: str
     user_id: str

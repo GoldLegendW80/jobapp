@@ -89,3 +89,48 @@ export async function connected(opened: Opened[]): Promise<Opened> {
   });
   return view;
 }
+
+export interface OpenedWindow extends Opened {
+  slot: number;
+  target: HTMLElement;
+}
+
+/**
+ * Like fakeScreens, with two browsers at once: each live view with the window (slot) its ticket
+ * was asked for and the element it is drawn in, and every Take over with its slot.
+ */
+export function fakeWindows(): {
+  opened: OpenedWindow[];
+  takeovers: number[];
+} {
+  const opened: OpenedWindow[] = [];
+  const takeovers: number[] = [];
+  vi.spyOn(screenFactory, "open").mockImplementation((target, url, events) => {
+    const screen = new FakeScreen();
+    const ticket = new URL(url).searchParams.get("ticket") ?? "";
+    opened.push({ screen, events, target, slot: Number(ticket.slice(-1)) });
+    return Promise.resolve(screen);
+  });
+  server.use(
+    http.post("*/api/browser/live/ticket", async ({ request }) => {
+      const { slot } = (await request.json()) as { slot: number };
+      const ticket = `${"t".repeat(42)}${String(slot)}`;
+      return HttpResponse.json(
+        { ticket, url: `/vnc/websockify?ticket=${ticket}`, expires_in_s: 30 },
+        { status: 201 },
+      );
+    }),
+    http.post("*/api/browser/takeover", async ({ request }) => {
+      takeovers.push(((await request.json()) as { slot: number }).slot);
+      return HttpResponse.json({ input: "you" });
+    }),
+  );
+  return { opened, takeovers };
+}
+
+/** The window (slot) of the one live view drawn inside `region`. */
+export function windowIn(opened: OpenedWindow[], region: HTMLElement): number {
+  const found = opened.filter((view) => region.contains(view.target));
+  expect(found).toHaveLength(1);
+  return found[0]?.slot ?? -1;
+}
