@@ -361,7 +361,9 @@ services:
   #   firewall drops the same from the `egress` bridge (ops/browser-egress.sh, B6). Not on
   #   `default`: db, redis and the api's name do not resolve there. No published port;
   # - 2048m of memory by default (BROWSER_MEM_LIMIT, B20) and as much with swap (memswap_limit
-  #   equal: no swap, a fast OOM kill),
+  #   equal: no swap, a fast OOM kill), for one Chromium of BROWSER_SLOTS windows (two by
+  #   default since 2026-11-06, SPEC-browser "Two browsers at once": the second heavy tab
+  #   estimated at 300 to 600 MiB, the 90 % guard closing the newest tab past about 1840 MiB),
   #   128m of /dev/shm (B1: Chromium used none of it), 1024 processes and threads.
   # SIGTERM releases the lease and closes Chromium cleanly (the profile is flushed) within 15 s.
   # Never give it an env_file, a published port, `default`, a capability or `unconfined`.
@@ -395,6 +397,8 @@ services:
       BROWSER_IDLE_S: ${BROWSER_IDLE_S:-300}
       BROWSER_SESSION_MAX_S: ${BROWSER_SESSION_MAX_S:-1800}
       BROWSER_MEM_GUARD_PCT: ${BROWSER_MEM_GUARD_PCT:-90}
+      # Two browsers at once (owner, 2026-11-06): one person's agents in two windows, 1 or 2.
+      BROWSER_SLOTS: ${BROWSER_SLOTS:-2}
     networks:
       - browsing
       - egress

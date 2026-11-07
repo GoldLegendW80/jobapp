@@ -24,6 +24,10 @@ the keyboard and the mouse.
 
 Nobody but the holder of the lease gets a ticket, a grant or the input: there is no lease id in
 any path or body, the user comes from the session. No ticket, grant or query string is logged.
+
+Two browsers at once (owner, 2026-11-06): the ticket, Take over and Give back name the slot whose
+window they are for (`slot`, 0 when left out), and are refused 403 unless the person's own lease
+serves that slot; the ticket, and the grant it leads to, are bound to that slot's lease.
 """
 
 import hashlib
@@ -35,10 +39,10 @@ from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.browser.client import BrowserError
-from app.browser.leases import PREFIX, Lease, Leases, StoreUnavailableError
+from app.browser.leases import PREFIX, SLOTS_MAX, Lease, Leases, StoreUnavailableError
 from app.browser.router import UNAVAILABLE, Store, no_store
 from app.identity import deps, service
 from app.identity.models import User
@@ -65,6 +69,7 @@ class TicketIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     viewer: UUID
+    slot: int = Field(default=0, ge=0, lt=SLOTS_MAX)
 
 
 class TicketOut(BaseModel):
@@ -77,6 +82,7 @@ class InputIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     viewer: UUID
+    slot: int = Field(default=0, ge=0, lt=SLOTS_MAX)
 
 
 class InputOut(BaseModel):
@@ -114,13 +120,13 @@ def _secret(request: Request) -> bytes:
     return value.encode()
 
 
-async def _held(store: Leases, user_id: str) -> Lease:
-    """The person's own lease once browserd started it, else 403."""
+async def _held(store: Leases, user_id: str, slot: int = 0) -> Lease:
+    """The person's own lease of that slot once browserd started it, else 403."""
     try:
         view = await store.current(user_id)
     except StoreUnavailableError:
         raise _unavailable() from None
-    lease = view.lease
+    lease = next((held for held in view.leases if held.slot == slot), None)
     if lease is None or lease.state == "starting":
         raise _forbidden()
     return lease
@@ -162,12 +168,13 @@ async def live_ticket(
 ) -> TicketOut:
     _secret(request)
     user_id = str(active.user.id)
-    lease = await _held(store, user_id)
+    lease = await _held(store, user_id, body.slot)
     ticket = secrets.token_urlsafe(32)
     record = {
         "user": user_id,
         "session": str(active.row.id),
         "lease": lease.lease_id,
+        "slot": body.slot,
         "viewer": str(body.viewer),
         "exp": store.clock() + TICKET_TTL_S,
     }
@@ -203,7 +210,8 @@ async def live_auth(request: Request, active: CurrentSession, store: Store) -> R
         or not store.clock() < float(record.get("exp", 0))
     ):
         raise _forbidden()
-    lease = await _held(store, user_id)
+    slot = record.get("slot", 0)
+    lease = await _held(store, user_id, slot if isinstance(slot, int) else -1)
     if lease.lease_id != record.get("lease"):
         raise _forbidden()
     grant = sign_grant(
@@ -216,9 +224,9 @@ async def live_auth(request: Request, active: CurrentSession, store: Store) -> R
 
 
 async def _set_input(
-    store: Leases, user_id: str, viewer: str | None, giver: str | None = None
+    store: Leases, user_id: str, viewer: str | None, giver: str | None = None, slot: int = 0
 ) -> InputOut:
-    lease = await _held(store, user_id)
+    lease = await _held(store, user_id, slot)
     if not lease.automation:  # B7: the person's own session, their input from start to end
         raise HTTPException(status.HTTP_409_CONFLICT, OWN_SESSION)
     try:
@@ -238,9 +246,9 @@ _409 = {409: {"model": ErrorOut, "description": OWN_SESSION}}
 
 @router.post("/takeover", response_model=InputOut, responses={**_403, **_409, **_503})
 async def take_over(body: InputIn, user: CurrentUser, store: Store) -> InputOut:
-    return await _set_input(store, str(user.id), str(body.viewer))
+    return await _set_input(store, str(user.id), str(body.viewer), slot=body.slot)
 
 
 @router.post("/giveback", response_model=InputOut, responses={**_403, **_409, **_503})
 async def give_back(body: InputIn, user: CurrentUser, store: Store) -> InputOut:
-    return await _set_input(store, str(user.id), None, str(body.viewer))
+    return await _set_input(store, str(user.id), None, str(body.viewer), slot=body.slot)

@@ -27,9 +27,10 @@ Sweeps queue (app.queue.SWEEPS):
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
   the queue. The apply fill's answer agent (`apply_answer`) is not counted: it runs inside the
-  fill, in this process, one fill at a time, so the worker holds at most three Claude Code
-  processes next to the sweeps (about 145 MiB plus 3 x 240 MiB measured in A2 and A5, within
-  the 1536m limit). Tried once: a run whose worker died is never started again behind the
+  fill, in this process, one fill per slot of the one person's browser, a website's finder
+  likewise, so the worker holds at most four Claude Code processes (about 145 MiB plus 4 x 240
+  MiB measured in A2 and A5, within the 1536m limit; two browsers at once, 2026-11-06, not
+  measured on the Jetson yet). Tried once: a run whose worker died is never started again behind the
   user's back.
 - apply_decide(application_id): the decision of one `ready` Full auto item, its check by model
   (`apply_check`, one agent run in this process) first (apply A13c, app/apply/submit.py
@@ -67,16 +68,17 @@ Documents queue (app.queue.DOCUMENTS, documents D6, app/documents/render_job.py)
   app/documents/tick.py exists.
 
 Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
-- apply_fill(application_id): the fill of one application form on a browser lease, one at a time
-  (max_jobs 1: the browser is one); tried once by arq, its result not kept, so the tick can queue
+- apply_fill(application_id): the fill of one application form on a browser lease, as many at
+  once as a person's browser has slots (max_jobs BROWSER_SLOTS, two browsers at once, owner
+  2026-11-06); tried once by arq, its result not kept, so the tick can queue
   it again under the same id once it ended. Its answer agent (`apply_answer`, app/apply/agents.py)
   is one agent run executed inside the fill, in this process, never on the agents queue.
 - apply_submit(application_id): the submit lease of one `approved` application (apply A6,
   app/apply/submit.py): refill, read back, the one click through the gate.
 - apply_tick: cron every 30 seconds: asks a fill for the next `queued` application of every
-  person whose fill is not running (a new one, one waiting for its documents or behind another
-  person's lease, whose ticket lives 60 s), one per person so people take turns; and the submit
-  job of every `approved` application (A6) and every `held` one whose hold ended, and the
+  person whose fills do not take every slot (a new one, one waiting for its documents or behind
+  another person's lease, whose ticket lives 60 s), one per free slot so people take turns; and
+  the submit job of every `approved` application (A6) and every `held` one whose hold ended, and the
   decision of every `ready` Full auto one on the agents queue (A13a and A13c, `submit.due`).
   The fill's timeout is the `apply_fill` lease's ceiling (BROWSER_LEASE_MAX_S) plus the wait of a
   sign in hand off (BROWSER_SESSION_MAX_S, browser B12a) plus a margin, the submit's the
@@ -930,7 +932,7 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     if ended and (ctx.get("apply_services") is not None or ctx.get("redis") is not None):
         await apply_manual.recover_ended(apply_services(ctx), ended)
     with sessions_of(ctx)() as db:
-        due = apply_run.due(db)
+        due = apply_run.due(db, slots=getattr(ctx.get("settings"), "browser_slots", 1))
         approved = apply_submit_run.due(db)
         deciding = apply_submit_run.undecided_of(db, approved)
     redis: ArqRedis | None = ctx.get("redis")
@@ -1045,6 +1047,11 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
     )
     submit_timeout_s = table["apply_submit"] + TAKEOVER_WAIT_S + APPLY_JOB_MARGIN_S
     manual_timeout_s = table["apply_manual"] + APPLY_JOB_MARGIN_S
+    slots = (
+        settings.browser_slots
+        if settings is not None
+        else Settings.model_fields["browser_slots"].default
+    )
     return QueueSpec(
         name=queue.APPLY,
         functions=[
@@ -1093,8 +1100,8 @@ def apply_queue(settings: Settings | None = None) -> QueueSpec:
                 keep_result=0,
             ),
         ],
-        # One fill at a time: there is one browser. The tick waits its turn behind a fill.
-        max_jobs=1,
+        # One fill per slot of the person's browser (BROWSER_SLOTS): the tick waits its turn.
+        max_jobs=slots,
         job_timeout_s=max(fill_timeout_s, submit_timeout_s, manual_timeout_s),
         on_start=reset_fills_at_start,
     )

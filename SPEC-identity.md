@@ -27,7 +27,8 @@ Builds on platform. Additions:
 
 ```
 users(id uuid pk, email citext unique, name text, password_hash text, role enum(admin, member),
-      is_active bool default true, created_at, updated_at, last_login_at)
+      is_active bool default true, created_at, updated_at, last_login_at,
+      browsers_at_once smallint null: 1 up to BROWSER_SLOTS, null the server's BROWSER_SLOTS)
 sessions(id uuid pk, user_id fk users on delete cascade, token_hash bytea unique,
          created_at, last_seen_at, expires_at, user_agent text, ip inet)
 invites(id uuid pk, email citext, kind enum(invite, reset), token_hash bytea unique,
@@ -47,8 +48,8 @@ All under `/api/auth` and `/api/admin`; JSON; errors are `{"detail": "..."}` wit
 | POST /api/auth/password | signed in | current and new password; ends the user's other sessions |
 | GET /api/auth/invites/{token} | anyone | checks a link: returns email and kind, or 404 if invalid, used, revoked or expired |
 | POST /api/auth/invites/{token}/accept | anyone | name (invite only) and password → creates or updates the user, signs in |
-| GET/POST /api/admin/users | admin | list users; (no POST: users come from invites) |
-| PATCH /api/admin/users/{id} | admin | `is_active`, `role`; disabling ends their sessions; the last active admin cannot be disabled or demoted |
+| GET/POST /api/admin/users | admin | list users, each with its `browsers` (browsers at once), and `browsers_max` (the server's BROWSER_SLOTS); (no POST: users come from invites) |
+| PATCH /api/admin/users/{id} | admin | `is_active`, `role`, `browsers` (1 up to BROWSER_SLOTS, else 422; owner, 2026-11-07); disabling ends their sessions; the last active admin cannot be disabled or demoted |
 | GET/POST /api/admin/invites | admin | list; create `{email, kind}` → returns the link once |
 | DELETE /api/admin/invites/{id} | admin | revoke an unused invite |
 
@@ -63,7 +64,7 @@ Rules:
 
 ## Frontend
 
-Routes: `/login`, `/invite/:token`, `/reset/:token`, `/` (protected shell with a header: app name, user menu with Account and Sign out, Admin entry for admins), `/account` (change password), `/admin/users` (users table, invites table, "Invite someone" dialog that shows and copies the link). Unauthenticated access to a protected route redirects to `/login?next=<path>`, and back after sign in. A 401 from any API call sends the user to `/login`. Mobile friendly at 375px.
+Routes: `/login`, `/invite/:token`, `/reset/:token`, `/` (protected shell with a header: app name, user menu with Account and Sign out, Admin entry for admins), `/account` (change password), `/admin/users` (users table with a "Browsers at once" column, a toggle 1 or 2 per account, the admin's own row too, saved at once with a toast; invites table, "Invite someone" dialog that shows and copies the link). Unauthenticated access to a protected route redirects to `/login?next=<path>`, and back after sign in. A 401 from any API call sends the user to `/login`. Mobile friendly at 375px.
 
 ## Commands
 

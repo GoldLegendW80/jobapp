@@ -42,12 +42,14 @@ def _unavailable() -> HTTPException:
 
 
 async def _agents_lease(store: Leases, user_id: str) -> Lease:
-    """The person's own lease when an agent drives it (a hand off can only be on one)."""
+    """The person's own lease when an agent drives it (a hand off can only be on one: browserd
+    hands none off while two slots run), the one waiting for a sign in first."""
     try:
         view = await store.current(user_id)
     except StoreUnavailableError:
         raise _unavailable() from None
-    lease = view.lease
+    waits = (held for held in view.leases if held.wait_reason == "signin")
+    lease = next(waits, view.lease)
     if lease is None or not lease.automation or lease.state == "starting":
         raise _no_handoff()
     return lease

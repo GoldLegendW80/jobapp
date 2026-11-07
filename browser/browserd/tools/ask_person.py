@@ -34,8 +34,8 @@ async def run(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
     if set(args) - ARGS or not reason:
         return handoff.failure("bad_args", "reason is one sentence for the person.")
     svc = handoff.service_of(tab.request)
-    lease = svc.manager.current() if svc is not None else None
-    if lease is None or lease.request is not tab.request:
+    lease = svc.manager.lease_of(tab.request) if svc is not None else None
+    if lease is None:
         return handoff.failure("lease_ended", "The lease ended.")
     if not watched(svc, lease):
         return handoff.failure("nobody_watching", NOBODY)

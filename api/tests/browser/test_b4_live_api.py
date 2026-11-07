@@ -12,6 +12,7 @@ import logging
 import sys
 import uuid
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -308,3 +309,65 @@ def test_no_ticket_or_grant_in_the_logs(
     assert lease_id in grant  # an id, not a secret: httpx logs it in browserd's address
     for secret in (value, grant, grant.rsplit(".", 1)[1], grant.split(".")[4]):
         assert secret not in text
+
+
+def test_the_ticket_and_the_input_name_a_slot_of_the_person_s_own(
+    app: FastAPI, api: Api, user_a: tuple[uuid.UUID, str]
+) -> None:
+    """Two browsers at once (2026-11-06): the slot named must be one the person's lease uses."""
+    a_id, a = user_a
+    store: Leases = app.state.browser_leases
+
+    async def take() -> str:
+        got = await store.acquire(str(a_id), "sweep", True, source_id="5f1e0c2b9a7d3e4f6a8b0c1d")
+        assert got.lease is not None
+        return got.lease.lease_id
+
+    lease_id = str(api.client.portal.call(take))  # type: ignore[union-attr]
+    shown = api.get("/api/browser", token=a).json()
+    assert shown["lease"]["slot"] == 0
+    assert shown["lease"]["source_id"] == "5f1e0c2b9a7d3e4f6a8b0c1d"
+    assert shown["slots"] == [shown["lease"]]
+    other = {"viewer": VIEWER, "slot": 1}
+    assert api.post("/api/browser/live/ticket", token=a, json=other).status_code == 403
+    assert api.post("/api/browser/takeover", token=a, json=other).status_code == 403
+    assert api.post("/api/browser/giveback", token=a, json=other).status_code == 403
+    for bad in (-1, 2, "1x"):
+        sent = {"viewer": VIEWER, "slot": bad}
+        assert api.post("/api/browser/live/ticket", token=a, json=sent).status_code == 422
+    mine = api.post("/api/browser/live/ticket", token=a, json={"viewer": VIEWER, "slot": 0})
+    assert mine.status_code == 201, mine.text
+    taken = api.post("/api/browser/takeover", token=a, json={"viewer": VIEWER, "slot": 0})
+    assert (taken.status_code, taken.json()) == (200, {"input": "you"})
+    assert lease_id
+
+
+def test_the_second_window_has_its_own_ticket_grant_and_input(
+    app: FastAPI, api: Api, browserd: FakeBrowserd, user_a: tuple[uuid.UUID, str]
+) -> None:
+    """With two slots, the person's second lease is listed with its window, and its ticket and
+    grant are bound to that lease (the view shows that window only)."""
+    a_id, a = user_a
+    store: Leases = app.state.browser_leases
+    browserd.manager.config = replace(browserd.manager.config, slots=2)
+
+    async def take() -> tuple[str, str]:
+        sweep = await store.acquire(str(a_id), "sweep", True, source_id="5f1e0c2b9a7d3e4f6a8b0c1d")
+        fill = await store.acquire(
+            str(a_id), "apply_fill", True, application_id="00000000-0000-4000-9000-0000000000f1"
+        )
+        assert sweep.lease is not None
+        assert fill.lease is not None
+        return sweep.lease.lease_id, fill.lease.lease_id
+
+    first, second = api.client.portal.call(take)  # type: ignore[union-attr]
+    shown = api.get("/api/browser", token=a).json()
+    assert [(s["id"], s["slot"]) for s in shown["slots"]] == [(first, 0), (second, 1)]
+    assert shown["slots"][1]["application_id"] == "00000000-0000-4000-9000-0000000000f1"
+    assert shown["lease"] == shown["slots"][0]
+    sent = {"viewer": VIEWER, "slot": 1}
+    answer = api.post("/api/browser/live/ticket", token=a, json=sent)
+    assert answer.status_code == 201, answer.text
+    admitted(browserd, auth(api, a, answer.json()["ticket"]), second)
+    taken = api.post("/api/browser/takeover", token=a, json=sent)
+    assert (taken.status_code, taken.json()) == (200, {"input": "you"})

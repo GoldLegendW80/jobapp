@@ -84,11 +84,16 @@ def state_of(lease: Lease) -> actions.State:
     return state
 
 
-def _lock(lease: Lease) -> asyncio.Lock:
-    # One lock per lease, and only the current lease's is kept.
-    for old in [key for key in LOCKS if key != lease.lease_id]:
+def _lock(lease: Lease, held: Any = None) -> asyncio.Lock:
+    # One lock per lease, and only those of the leases held (`held`: their ids) are kept.
+    kept = {lease.lease_id, *(held or ())}
+    for old in [key for key in LOCKS if key not in kept]:
         del LOCKS[old]
     return LOCKS.setdefault(lease.lease_id, asyncio.Lock())
+
+
+def _held_ids(svc: Any) -> set[str]:
+    return {lease.lease_id for lease in svc.manager.held()}
 
 
 async def _run(
@@ -111,6 +116,7 @@ def _tab(svc: Any, lease: Lease, *, gate: bool = False) -> actions.Tab:
 
     live = live_of(svc)
     epoch = lease.scratch.get("input_epoch", 0)
+    slot_of = getattr(svc.manager.browser, "slot_of", None)
     return actions.Tab(
         request=lease.request,
         state=state_of(lease),
@@ -119,13 +125,17 @@ def _tab(svc: Any, lease: Lease, *, gate: bool = False) -> actions.Tab:
         gate=gate,
         lease_tag=lease.lease_id[:8],
         input_allowed=lambda: (
-            svc.manager.current() is lease
+            svc.manager.get(lease.lease_id) is lease
             and not lease.person_input
             and live.holder(lease.lease_id) is None
+            and not live.input_held()
             and lease.scratch.get("input_epoch", 0) == epoch
             and (lease.request.purpose != MANUAL_PURPOSE or lease.app_turn)
         ),
-        person_holds=lambda: svc.manager.current() is lease and live.person_holds(lease.lease_id),
+        person_holds=lambda: (
+            svc.manager.get(lease.lease_id) is lease and live.person_holds(lease.lease_id)
+        ),
+        slot=slot_of(lease) if callable(slot_of) else None,
     )
 
 
@@ -167,7 +177,7 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     tab = _tab(svc, lease, gate=capability is not None)
 
     async def work() -> dict[str, Any]:
-        async with _lock(lease):
+        async with _lock(lease, _held_ids(svc)):
             if taken := await _turn(svc, lease, tab):
                 return taken
             if manual and not lease.app_turn and name not in PERSON_TIME:
@@ -228,8 +238,8 @@ async def apply_wait(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any
         not isinstance(body["reason"], str) or body["reason"] not in APPLY_WAITS
     ):
         raise LeaseError(400, "bad_args")
-    async with _lock(lease):
-        if svc.manager.current() is not lease:
+    async with _lock(lease, _held_ids(svc)):
+        if svc.manager.get(lease.lease_id) is not lease:
             raise LeaseError(410, "lease_ended")
         now = svc.manager.clock()
         if reason := lease.expired(now):
@@ -268,7 +278,7 @@ async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
         raise LeaseError(413 if code == "file_too_large" else 400, code)
 
     async def work() -> dict[str, Any]:
-        async with _lock(lease):
+        async with _lock(lease, _held_ids(svc)):
             # Again under the lease's lock: two PUTs of new names at FILES_MAX - 1 both passed
             # the check above, and only one may be held.
             again = policy.file_verdict(name, req.body, state.files)
@@ -293,7 +303,7 @@ async def linkedin_open(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, 
     tab = _tab(svc, lease)
 
     async def work() -> dict[str, Any]:
-        async with _lock(lease):
+        async with _lock(lease, _held_ids(svc)):
             if taken := await _turn(svc, lease, tab):
                 return taken
             try:

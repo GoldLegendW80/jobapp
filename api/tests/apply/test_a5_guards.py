@@ -719,7 +719,9 @@ def test_the_fill_timeout_is_the_leases_ceiling_and_the_queue_resets_at_start() 
     # Browser B12a: plus the wait of a sign in hand off, which stops the lease's clock.
     default = worker.apply_queue()
     longer = worker.apply_queue(
-        SimpleNamespace(browser_lease_max_s="apply_fill=1200", browser_session_max_s=2400)  # type: ignore[arg-type]
+        SimpleNamespace(  # type: ignore[arg-type]
+            browser_lease_max_s="apply_fill=1200", browser_session_max_s=2400, browser_slots=2
+        )
     )
     for spec, lease_s, wait_s in ((default, 900, 1800), (longer, 1200, 2400)):
         (filling,) = [f for f in spec.functions if f.name == "apply_fill"]
@@ -793,6 +795,39 @@ def test_one_persons_backlog_never_keeps_another_out_and_people_alternate(
     _set(factory, b_ids[1], mode=Mode.manual)
     with factory() as other:
         assert run.due(other) == [a_ids[1]]
+
+
+def test_with_two_browser_slots_a_person_has_two_fills_and_another_still_has_theirs(
+    db: Session, factory: sessionmaker[Session], person_a: Person, person_b: Person
+) -> None:
+    a_ids = backlog(db, person_a, 3, timedelta(seconds=-1000))
+    b_ids = backlog(db, person_b, 1, timedelta(seconds=10))
+    with factory() as other:
+        assert run.due(other, slots=2) == [a_ids[0], a_ids[1], b_ids[0]]
+    _set(factory, a_ids[0], state=State.filling)  # one of A's fills runs: one more of A's
+    with factory() as other:
+        assert run.due(other, slots=2) == [a_ids[1], b_ids[0]]
+    _set(factory, a_ids[1], state=State.filling)  # both of A's slots fill
+    with factory() as other:
+        assert run.due(other, slots=2) == [b_ids[0]]
+        assert run.due(other) == [b_ids[0]]
+
+
+def test_a_person_an_admin_set_to_one_browser_has_one_fill_at_a_time(
+    db: Session, factory: sessionmaker[Session], person_a: Person, person_b: Person
+) -> None:
+    """Browsers at once per person (owner, 2026-11-07): BROWSER_SLOTS stays the ceiling."""
+    from app.identity.models import User
+
+    a_ids = backlog(db, person_a, 2, timedelta(seconds=-1000))
+    b_ids = backlog(db, person_b, 2, timedelta(seconds=10))
+    with factory() as other:
+        other.execute(sa.update(User).where(User.id == person_a.user_id).values(browsers_at_once=1))
+        other.execute(sa.update(User).where(User.id == person_b.user_id).values(browsers_at_once=2))
+        other.commit()
+    with factory() as other:
+        assert run.due(other, slots=2) == [a_ids[0], b_ids[0], b_ids[1]]
+        assert run.due(other, slots=1) == [a_ids[0], b_ids[0]]  # the ceiling holds
 
 
 def test_a_persons_application_waiting_for_documents_lets_their_next_one_go(

@@ -129,26 +129,32 @@ async def waiting(leases: Any, user: str, lease_id: str) -> bool:
     except (BrowserError, StoreUnavailableError):
         # A control-plane outage cannot be proof that the person's handoff ended.
         return True
-    lease = view.lease
+    lease = view.find(lease_id)
     return (
         lease is not None
-        and lease.lease_id == lease_id
         and lease.state == "waiting_person"
         and getattr(lease, "wait_reason", "signin") == "signin"
     )
 
 
 def address(db: Session, user_id: uuid.UUID, ref: uuid.UUID) -> str | None:
+    """Where the person's own session opens for the step their application waits on them for:
+    a sign in wall (A10), or an action the apply agent asked for (A19: a password, a code, a
+    check, any step on the site; SPEC-apply, "the site's own session for an action"), also after
+    a control that may have sent the form. None for a fact, anything else, another's."""
+    from app.apply import applier
+
     application = db.execute(
         sa.select(Application).where(Application.id == ref, Application.user_id == user_id)
     ).scalar_one_or_none()
-    if (
-        application is None
-        or application.state is not State.needs_person
-        or application.needs != "signin"
-    ):
+    if application is None:
         return None
-    return application.form_url
+    if application.state is State.needs_person and application.needs == "signin":
+        return application.form_url
+    question = applier.open_question(db, application)
+    if question is not None and question.kind == "question:action":
+        return application.form_url
+    return None
 
 
 def signed_in(db: Session, user_id: uuid.UUID, ref: uuid.UUID, now: datetime) -> bool:

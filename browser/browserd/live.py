@@ -41,6 +41,14 @@ every viewer forwards the keyboard and the mouse, except during the app's turn. 
 the turn with `{viewer: null}` and no `from` (a "Fill my details"), and ends it with a viewer;
 a page's own give back (with `from`) never takes the input from the person there.
 
+Two browsers at once (owner, 2026-11-06): each slot is a lease of its own, and its views show its
+region of the wide display only (x11vnc `-clip`, config.clip), so a view of one slot never shows
+the other's window. The display has one keyboard focus, so one viewer holds the input at a time
+across the slots: a Take over of one slot gives back the other first, brings the slot's tab to
+the front, and every agent's call waits while the person holds the input of any slot (only the
+slot taken over is told PERSON_USED); otherwise an agent's next tab change could move the focus,
+and the person's keys, to its window.
+
 Logs: never a grant, a ticket, a query string, nor a byte of the stream.
 """
 
@@ -303,12 +311,13 @@ Vnc = tuple[asyncio.StreamReader, asyncio.StreamWriter, Callable[[], Awaitable[N
 HOME = "/tmp"  # noqa: S108 - the display user's scratch home
 
 
-async def spawn_x11vnc() -> Vnc:
-    """One x11vnc for one viewer, as the display's user, speaking RFB over a socket pair."""
+async def spawn_x11vnc(clip: str | None = None) -> Vnc:
+    """One x11vnc for one viewer, as the display's user, speaking RFB over a socket pair; with
+    `clip`, the slot's region of the display only (its pointer stays inside it too)."""
     ours, theirs = socket.socketpair()
     try:
         proc = await asyncio.create_subprocess_exec(
-            *X11VNC,
+            *X11VNC, *(("-clip", clip) if clip else ()),
             stdin=theirs.fileno(), stdout=theirs.fileno(), stderr=asyncio.subprocess.DEVNULL,
             user=c.DISPLAY_UID, group=c.DISPLAY_UID, extra_groups=[], start_new_session=True,
             env={"PATH": "/usr/bin:/bin", "DISPLAY": c.DISPLAY, "HOME": HOME}, cwd="/",
@@ -384,15 +393,18 @@ class Live:
 
     # The input ------------------------------------------------------------------------------------
 
-    def _lease_id(self) -> str | None:
-        lease = self.manager.current()
-        return lease.lease_id if lease else None
+    def _held(self, lease_id: str | None) -> bool:
+        return self.manager.get(lease_id) is not None
 
     def holder(self, lease_id: str) -> str | None:
         """The viewer that holds the input of that lease, or None (the agent has it)."""
-        if self.input_lease == lease_id and lease_id == self._lease_id():
+        if self.input_lease == lease_id and self._held(lease_id):
             return self.input_viewer
         return None
+
+    def input_held(self) -> bool:
+        """The person holds the input of a slot of the browser: every agent waits (one focus)."""
+        return self.input_lease is not None and self._held(self.input_lease)
 
     def person_holds(self, lease_id: str) -> bool:
         """B20: the person holds the input of that lease at this moment: it is the current lease,
@@ -414,21 +426,21 @@ class Live:
         """That lease is the current one and a person's own session: the person holds the
         input from its start to its end (B7); or an agent's lease during the sign in hand off,
         while its Chromium has no debugging port (B12, browserd/handoff.py)."""
-        lease = self.manager.current()
-        if lease is None or lease.lease_id != lease_id:
+        lease = self.manager.get(lease_id)
+        if lease is None:
             return False
         if lease.request.purpose == MANUAL_PURPOSE:
             return not lease.app_turn
         return not lease.request.automation or lease.person_input
 
     def take(self, lease_id: str, viewer: str) -> None:
-        if lease_id != self._lease_id():
+        lease = self.manager.get(lease_id)
+        if lease is None:
             raise LeaseError(404, "no_such_lease")
         if self.person(lease_id):
             raise LeaseError(409, "person_session")
-        lease = self.manager.current()
-        if lease is None:
-            raise LeaseError(404, "no_such_lease")
+        if self.input_lease not in (None, lease_id):
+            self.give_back()  # another slot's: the display's one keyboard goes to this slot
         now = self.manager.clock()
         deadline = now + TAKEOVER_S
         if lease.state == "waiting_person" and lease.wait_reason == "takeover":
@@ -445,6 +457,15 @@ class Live:
         self.absent_since = None
         self.used.add(lease_id)
         self.given_back.clear()
+        if len(self.manager.held()) > 1:
+            self._focus(lease)
+
+    def _focus(self, lease: Any) -> None:
+        """The keyboard focus on the slot taken over: its tab to the front (best effort)."""
+        page = getattr(lease.scratch.get("tools"), "page", None)
+        with contextlib.suppress(Exception):
+            if page is not None and not page.is_closed():
+                asyncio.ensure_future(page.bring_to_front())  # noqa: RUF006 - the page owns it
 
     def give_back(self, lease_id: str | None = None, viewer: str | None = None) -> None:
         """The agent has the input again. With `viewer`, only when that viewer holds it: a tab
@@ -453,12 +474,8 @@ class Live:
             return
         if viewer is not None and viewer != self.input_viewer:
             return
-        lease = self.manager.current()
-        if (
-            lease is not None
-            and lease.lease_id == self.input_lease
-            and lease.wait_reason in ("takeover", "ask_person")
-        ):
+        lease = self.manager.get(self.input_lease)
+        if lease is not None and lease.wait_reason in ("takeover", "ask_person"):
             lease.resume(self.manager.clock())
         self.input_lease = self.input_viewer = None
         self.absent_since = None
@@ -467,8 +484,9 @@ class Live:
     async def agent_turn(self, lease_id: str) -> str | None:
         """For B5's tool calls, before they act: waits while the person holds the input of that
         lease (Give back, TAKEOVER_S, or the lease's end), then answers PERSON_USED when the
-        person took over since the agent's last call, else None."""
-        while self.holder(lease_id) is not None:
+        person took over since the agent's last call, else None. With slots, it also waits while
+        the person holds another slot's input (one keyboard focus on the display)."""
+        while self.holder(lease_id) is not None or (self.input_held() and self._held(lease_id)):
             await self.given_back.wait()
         if lease_id in self.used:
             self.used.discard(lease_id)
@@ -479,10 +497,10 @@ class Live:
         """Every half second: the viewers of an ended lease are closed, and a take over past
         TAKEOVER_S, of a lease that ended, or whose holder has had no open view for
         HOLDER_GRACE_S (a closed tab), gives the input back."""
-        current = self._lease_id()
+        held = {lease.lease_id for lease in self.manager.held()}
         now = self.manager.clock()
         for viewer in list(self.viewers):
-            if viewer.lease_id != current:
+            if viewer.lease_id not in held:
                 viewer.close()
                 self.viewers.discard(viewer)
         if self.input_lease is not None:
@@ -491,22 +509,21 @@ class Live:
             elif self.absent_since is None:
                 self.absent_since = now
             if (
-                self.input_lease != current
+                self.input_lease not in held
                 or now >= self.input_until
                 or (self.absent_since is not None and now - self.absent_since >= HOLDER_GRACE_S)
             ):
                 self.give_back()
-        lease = self.manager.current()
-        if (  # B20: an ask nobody took over ends at its deadline, and the agent goes on
-            lease is not None
-            and lease.state == "waiting_person"
-            and lease.wait_reason == "ask_person"
-            and self.input_lease != lease.lease_id
-            and lease.wait_deadline is not None
-            and now >= lease.wait_deadline
-        ):
-            lease.resume(now)
-        self.used &= {current} if current else set()
+        for lease in self.manager.held():
+            if (  # B20: an ask nobody took over ends at its deadline, and the agent goes on
+                lease.state == "waiting_person"
+                and lease.wait_reason == "ask_person"
+                and self.input_lease != lease.lease_id
+                and lease.wait_deadline is not None
+                and now >= lease.wait_deadline
+            ):
+                lease.resume(now)
+        self.used &= held
         wall = self.wall()
         self.nonces = {n: exp for n, exp in self.nonces.items() if exp >= wall}
 
@@ -522,8 +539,7 @@ class Live:
         grant = read_grant(self.secret, headers.get(GRANT_HEADER, ""), self.wall())
         if grant is None or grant.nonce in self.nonces:
             return None
-        lease = self.manager.current()
-        if lease is None or lease.lease_id != grant.lease_id:
+        if not self._held(grant.lease_id):
             return None
         self.nonces[grant.nonce] = grant.exp
         return grant
@@ -597,8 +613,14 @@ class Live:
             await self.refuse_view(key, headers, reader, writer)
             return
         self.starting[grant.lease_id] = self.starting.get(grant.lease_id, 0) + 1
+        lease = self.manager.get(grant.lease_id)
+        clip = (
+            c.clip(lease.request.slot)
+            if lease is not None and self.manager.config.slots > 1
+            else None
+        )
         try:
-            vnc_reader, vnc_writer, stop = await self.spawn()
+            vnc_reader, vnc_writer, stop = await (self.spawn(clip) if clip else self.spawn())
         except OSError as exc:  # x11vnc missing, or the uid change refused
             log.warning("x11vnc did not start: %s", type(exc).__name__)
             writer.write(answer(503))
@@ -627,12 +649,12 @@ class Live:
                     continue
                 if opcode not in (0x0, 0x2):
                     raise Closed("text frame")
-                if self._lease_id() != viewer.lease_id:
+                if not self._held(viewer.lease_id):
                     return  # the lease ended: nothing more reaches the next person's screen
                 data, inputs = rfb.feed(payload, allow)
                 if inputs:
-                    lease = self.manager.current()
-                    if lease is not None and lease.lease_id == viewer.lease_id:
+                    lease = self.manager.get(viewer.lease_id)
+                    if lease is not None:
                         lease.touch(self.manager.clock())
                 if data:
                     vnc_writer.write(data)
@@ -645,7 +667,7 @@ class Live:
                     return
                 # Checked for every chunk, not only by tick(): a byte read after the lease ended
                 # may come from the next person's screen on the same display.
-                if self._lease_id() != viewer.lease_id:
+                if not self._held(viewer.lease_id):
                     return
                 writer.write(frame(0x2, data))
                 await writer.drain()
@@ -724,14 +746,14 @@ async def set_input(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     for value in (viewer, giver):
         if value is not None and (not isinstance(value, str) or not re.fullmatch(UUID, value)):
             raise LeaseError(400, "bad_viewer")
-    lease = live.manager.current()
+    lease = live.manager.get(match["lease_id"])
     manual = lease is not None and lease.request.purpose == MANUAL_PURPOSE
-    if lease is not None and manual and lease.lease_id == match["lease_id"]:
+    if lease is not None and manual:
         if viewer is not None or giver is None:
             lease.app_turn = viewer is None
         return 200, {"input": "agent" if lease.app_turn else "person"}
     if viewer is None:
-        if match["lease_id"] != live._lease_id():
+        if lease is None:
             raise LeaseError(404, "no_such_lease")
         if live.person(match["lease_id"]):
             raise LeaseError(409, "person_session")

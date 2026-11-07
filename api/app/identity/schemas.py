@@ -9,7 +9,7 @@ user-facing.
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from app.identity.models import InviteKind, Role
 from app.identity.service import InviteStatus
@@ -133,6 +133,9 @@ class AdminUserOut(BaseModel):
     created_at: datetime
     last_login_at: datetime | None
     sessions: int
+    # Browsers at once (owner, 2026-11-07): the slots of the browser this person's work may use
+    # at once, 1 up to the page's `browsers_max`.
+    browsers: int
 
 
 class AdminUserPage(BaseModel):
@@ -144,18 +147,21 @@ class AdminUserPage(BaseModel):
     limit: int
     offset: int
     active_admins: int
+    browsers_max: int  # the server's BROWSER_SLOTS: the most browsers at once anyone may have
 
 
 class AdminUserPatch(_Strict):
-    """What an admin may change on an account: at least one of the two, never null."""
+    """What an admin may change on an account: at least one, never null. `browsers` is 1 up to
+    the server's BROWSER_SLOTS (the router checks the ceiling: 422 above it)."""
 
     is_active: StrictBool | None = None
     role: Role | None = None
+    browsers: StrictInt | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def _something_to_change(self) -> "AdminUserPatch":
         if not self.model_fields_set:
-            raise ValueError("Send is_active, role or both.")
+            raise ValueError("Send is_active, role or browsers.")
         for field in self.model_fields_set:
             if getattr(self, field) is None:
                 raise ValueError(f"{field} cannot be null.")

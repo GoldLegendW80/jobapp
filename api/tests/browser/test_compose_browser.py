@@ -32,6 +32,7 @@ ENV = {
     "BROWSER_IDLE_S",
     "BROWSER_SESSION_MAX_S",
     "BROWSER_MEM_GUARD_PCT",
+    "BROWSER_SLOTS",
 }
 
 

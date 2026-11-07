@@ -113,6 +113,9 @@ class Settings(BaseSettings):
     browser_session_max_s: int = Field(default=1800, ge=60, le=7200)
     # Past this share of the browser container's memory limit, browserd closes the newest tab.
     browser_mem_guard_pct: int = Field(default=90, ge=50, le=99)
+    # Two browsers at once (owner, 2026-11-06): BROWSER_SLOTS as browserd reads it, the fills
+    # that may run at once (one per slot of a person's browser); 1 keeps one at a time.
+    browser_slots: int = Field(default=2, ge=1, le=2)
     # Tests only: the job websites of the sweep (app/browser/sources) and their platform pages
     # are read from the fixture pages under this address instead of the real hosts. Refused in
     # production.

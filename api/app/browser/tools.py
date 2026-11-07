@@ -77,8 +77,8 @@ class LeaseTools:
 
     async def _owned_apply(self) -> None:
         # current() restores a lost Redis mirror from browserd before checking ownership.
-        lease = (await self.leases.current(self.user_id)).lease
-        if lease is None or lease.lease_id != self.lease_id:
+        lease = (await self.leases.current(self.user_id)).find(self.lease_id)
+        if lease is None:
             raise BrowserError("ended")
         if lease.purpose != "apply_fill":
             raise BrowserError("refused")

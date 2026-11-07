@@ -10,7 +10,9 @@ counted, as `finding_persistence_pending`.
 
 One agent per website (owner, 2026-10-27, jobs J18): "An LLM agent for each website that will
 search intelligently, just like a human, using all the parameters provided to it." A website is
-one lease and one finder run a sweep. Its scope (`searches_for`) holds every saved title and
+one lease and one finder run a sweep; the websites run side by side, as many as the person's
+browser has free slots (two browsers at once, owner 2026-11-06, `_Slots`), and start in run
+order. Its scope (`searches_for`) holds every saved title and
 place, or the first ones that fit when the person saved more than it carries (100 of each,
 32 KiB: `_carried`), the rest counted in the summary as left out, and every other criterion:
 all of it is the agent's context. Since B20 (owner, 2026-11-04: the search works as Claude Code
@@ -65,7 +67,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit
 
 from app.browser import finder
-from app.browser.client import BrowserError
+from app.browser.client import BrowserError, held_in
 from app.browser.leases import StoreUnavailableError
 from app.browser.sources import (
     ERRORS,
@@ -437,6 +439,52 @@ def run_order[T](sites: list[T]) -> list[T]:
     )
 
 
+class _Slots:
+    """The sweep's websites in the person's browser at once, one lease (one slot) each (two
+    browsers at once, owner 2026-11-06): the next website starts once the one before it holds
+    its lease or ended, so they start in run order and as many run as browserd has free slots.
+    A website the lease store makes wait while another website of the sweep holds a lease asks
+    again once one of them ends; with none holding one it is `browser_busy`, as before. A stop
+    (STOPS_SWEEP) lets the websites that run end, and those still waiting for a slot do not
+    start (`not_started`)."""
+
+    def __init__(self, stop: str | None = None) -> None:
+        self.holding = 0
+        self.ended = 0  # the sweep's websites that held a lease and ended, commits settled
+        self.stop = stop
+        self.changed = asyncio.Condition()
+        self._took: set[asyncio.Event] = set()
+
+    def took(self, ready: asyncio.Event) -> None:
+        self.holding += 1
+        self._took.add(ready)
+        ready.set()
+
+    async def gave_back(self, ready: asyncio.Event) -> None:
+        """The website of `ready` ended, its lease released and its commits settled."""
+        if ready not in self._took:
+            return
+        async with self.changed:
+            self._took.discard(ready)
+            self.holding -= 1
+            self.ended += 1
+            self.changed.notify_all()
+
+    async def halt(self, code: str) -> None:
+        async with self.changed:
+            self.stop = self.stop or code
+            self.changed.notify_all()
+
+    async def wait_end(self, seen: int) -> bool:
+        """After a wait answered while `seen` leases had ended: True once another ended (ask
+        again), False at once when no website of the sweep holds a lease."""
+        async with self.changed:
+            if self.ended == seen and self.holding == 0:
+                return False
+            await self.changed.wait_for(lambda: self.ended != seen or self.stop is not None)
+            return True
+
+
 async def run_selected(
     runner: Runner,
     plan: Any,
@@ -449,47 +497,73 @@ async def run_selected(
     if search is None:
         return  # Pre-v1 legacy callers have no selected interactive sources.
     sites = run_order([source for source in search.interactive_sites if source.enabled])
-    for source in sites:
-        entry = sweep.bind_source(
-            stats,
-            "llm_browser",
-            (source.url,),
-            {
-                "source_id": sweep._source_id("llm_browser", source.url),
-                "mode": "llm_browser",
-                "kind": source.effective_platform,
-                "host": urlsplit(source.url).hostname,
-                "result_pages": 0,
-                "found": 0,
-                "postings": 0,
-                "error": None,
-            },
-        )
-        if stop:
-            entry["error"] = "not_started"
-        else:
+    slots = _Slots(stop)
+
+    async def run_one(source: InteractiveSite, entry: dict[str, Any], ready: asyncio.Event) -> None:
+        try:
             # Safe stable identity only. Instructions and search text do not become labels.
             stats.current_board = entry.get("source_id")
             await progress()
             commits = getattr(plan, "commits", None)
             if commits is not None:
                 commits.admit(entry["source_id"])
-            # No time cap (B20, owner 2026-11-04: "as long as it takes"): a website runs until its
-            # agent ends or the run is cancelled; the sweep's own deadline bounds its API sources.
+            # No time cap (B20, owner 2026-11-04: "as long as it takes"): a website runs until
+            # its agent ends or the run is cancelled; the sweep's own deadline bounds its API
+            # sources.
             try:
-                entry["error"] = await _one(runner, plan, source, search, entry, math.inf)
+                entry["error"] = await _one(
+                    runner, plan, source, search, entry, math.inf, (slots, ready)
+                )
             except (BrowserError, StoreUnavailableError):
                 entry["error"] = "browser_unavailable"
             except Exception:
                 entry["error"] = "agent_failed"
             if entry["error"] in STOPS_SWEEP:
-                stop = entry["error"]
+                await slots.halt(entry["error"])
             if commits is not None and not await commits.settle(entry["source_id"]):
                 # A commit outlived the wait: no later source runs, the row is left as it is.
                 entry["error"] = entry["error"] or "store_failed"
-                stop = stop or "store_failed"
-        sweep.finish_source(entry)
-        await progress()
+                await slots.halt("store_failed")
+            sweep.finish_source(entry)
+            sweep.release_board(stats, entry.get("source_id"))
+            await progress()
+        finally:
+            # After its commits settled: a website that waits for this slot starts after them.
+            await slots.gave_back(ready)
+            ready.set()
+
+    running: list[asyncio.Task[None]] = []
+    try:
+        for source in sites:
+            entry = sweep.bind_source(
+                stats,
+                "llm_browser",
+                (source.url,),
+                {
+                    "source_id": sweep._source_id("llm_browser", source.url),
+                    "mode": "llm_browser",
+                    "kind": source.effective_platform,
+                    "host": urlsplit(source.url).hostname,
+                    "result_pages": 0,
+                    "found": 0,
+                    "postings": 0,
+                    "error": None,
+                },
+            )
+            if slots.stop:
+                entry["error"] = "not_started"
+                sweep.finish_source(entry)
+                await progress()
+                continue
+            ready = asyncio.Event()
+            running.append(asyncio.ensure_future(run_one(source, entry, ready)))
+            await ready.wait()
+        for task in running:
+            await task
+    finally:
+        for task in running:
+            task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
 
 
 async def _one(
@@ -499,6 +573,7 @@ async def _one(
     search: SearchSection,
     entry: dict[str, Any],
     deadline: float,
+    turn: tuple[_Slots, asyncio.Event] | None = None,
 ) -> str | None:
     from app.browser import platform_policy
 
@@ -535,7 +610,7 @@ async def _one(
         host=entry.get("host") or "",
     )
     try:
-        code = await _website(runner, plan, context, planned.scope, site, deadline)
+        code = await _website(runner, plan, context, planned.scope, site, deadline, turn)
     finally:
         site.write(entry)
     return code or ("finding_persistence_pending" if site.found else None)
@@ -548,9 +623,11 @@ async def _website(
     scope: finder.InteractiveScope,
     site: _Site,
     deadline: float,
+    turn: tuple[_Slots, asyncio.Event] | None = None,
 ) -> str | None:
     """The website's one agent run on one lease, until the agent ends or the run is cancelled
-    (B20: no time cap)."""
+    (B20: no time cap). `turn`: the sweep's websites at once, and the event this website sets
+    once it holds its lease (`_Slots`)."""
     from app.browser import platform_policy
 
     asked = runner.monotonic()
@@ -564,10 +641,21 @@ async def _website(
         logins = None
     # The website's hosts: its platform's family (B19, finder.lease_hosts), else its own host.
     hosts = finder.lease_hosts(scope.start)
-    got = await runner.leases.acquire(str(plan.user_id), "sweep", automation=True, hosts=hosts)
-    if got.lease is None or got.token is None:
-        await runner._give_back(str(plan.user_id), None if got.lease is None else "")
-        return "browser_busy"
+    slots, ready = turn if turn is not None else (_Slots(), asyncio.Event())
+    while True:
+        seen = slots.ended
+        got = await runner.leases.acquire(
+            str(plan.user_id), "sweep", automation=True, hosts=hosts, source_id=context.source_id
+        )
+        if got.lease is not None and got.token is not None:
+            break
+        held = None if got.lease is None else ""
+        await runner._give_back(str(plan.user_id), held, context.source_id)
+        if held is not None or not await slots.wait_end(seen):
+            return "browser_busy"
+        if slots.stop:
+            return "not_started"
+    slots.took(ready)
     lease_id = got.lease.lease_id
     paced = platform_policy.platform_for(context)
     try:
@@ -752,9 +840,8 @@ async def await_person(
             found = await tools.client.current()
         except BrowserError:
             found = None
-        lease = found.get("lease") if isinstance(found, dict) else None
-        mine = isinstance(lease, dict) and lease.get("lease_id") == tools.lease_id
-        if found is not None and not mine:
+        lease = held_in(found, tools.lease_id)
+        if found is not None and lease is None:
             return "ended"
         if isinstance(lease, dict):
             try:

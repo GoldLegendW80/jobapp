@@ -5,9 +5,11 @@ keeps the turns in Redis and browserd (app/browser/client.py) mirrors the holder
 second one. The keys, all under `jobapp:browser:`:
 
     holder          the current lease as JSON, written and ended by compare and set only
-    queue:<tier>    one sorted set per priority tier, members `<user id>|<purpose>`, in order of
-                    arrival; tier 0 first: a person's own session (`takeover`, `signin`, and
-                    Apply myself's `apply_manual`, apply A9), then
+    holder:<n>      the lease of another slot of the person's browser (below), as `holder`
+    queue:<tier>    one sorted set per priority tier, members `<user id>|<purpose>`, or
+                    `<user id>|<purpose>|<key>` for a lease that names what it serves (`key`),
+                    in order of arrival; tier 0 first: a person's own session (`takeover`,
+                    `signin`, and Apply myself's `apply_manual`, apply A9), then
                     the apply purposes a person waits on, then `full_auto`, then `sweep`
     ticket:<member> present while that waiter still waits: it lives TICKET_TTL_S and is renewed
                     each time the waiter asks again; a member whose ticket is gone leaves the queue
@@ -18,14 +20,26 @@ second one. The keys, all under `jobapp:browser:`:
     ending          the leases ended here whose end browserd has not confirmed yet
     forgets:<user id>:<day>  how many "Forget all logins" the person spent that UTC day (B7)
 
-`acquire(user_id, purpose, automation)` is idempotent per person and purpose, also for two calls
-at once (two tabs): the one that loses the turn to the other answers that same lease, and leaves no
+`acquire(user_id, purpose, automation)` is idempotent per person, purpose and key (the
+application or the sweep's website the lease serves, `Lease.key`), also for two calls at once
+(two tabs): the one that loses the turn to the other answers that same lease, and leaves no
 place in the queue behind it. The first call queues, each call renews the ticket and takes the
 turn when the browser is free and this member is the head of the first non empty tier (one Lua
 script, so two callers never both win), then starts the lease in browserd on the person's one
-profile (app/browser/profiles.py). There is no preemption but one: a `sweep` lease ends at
+profile (app/browser/profiles.py).
+
+Two browsers at once (owner, 2026-11-06, SPEC-browser): browserd serves one person's agent
+leases in up to BROWSER_SLOTS slots of one Chromium, and says how many (`slots` of its
+`GET /leases/current`). The holder has one place per slot (`holder`, `holder:1`): the same
+claim gives a free place to the head of the queue when every place held is that person's agent
+lease (SLOT_PURPOSES, active or watched by the person) and the claimant's purpose is one too;
+anyone else waits until every place is free, as with one browser. browserd grants the slot
+(`Lease.slot`), so a place and a slot need not be the same number. Each place is settled,
+ended and updated on its own, against browserd's list of every slot (`leases`).
+
+There is no preemption but one: every `sweep` lease ends at
 once when a person asks for their own browser (`takeover`, `signin`; B8): the person is queued
-first, then the sweep ends, then the person claims, so no other waiter takes the turn in between.
+first, then the sweeps end, then the person claims, so no other waiter takes the turn in between.
 Any other lease ends first. A waiter
 keeps its place by asking again within TICKET_TTL_S; the caller that took the turn gets browserd's
 lease token once, in memory: it is never written to Redis nor logged.
@@ -52,8 +66,8 @@ Every call first settles the holder: one that browserd no longer holds (its own 
 crash) is dropped, and an expired one is ended. An end browserd could not be told is kept in
 `ending` and told on every later call until browserd confirms it, and a lease of that list is
 never taken back from browserd, so the api and browserd agree again as soon as it answers. When
-Redis has lost its keys (a restart), the first call reads browserd's `GET /leases/current` and
-takes its lease back as the holder.
+Redis has lost its keys (a restart), or browserd refused a start as busy, the next call reads
+browserd's `GET /leases/current` and takes back each lease it holds, one place each.
 
 At every end browserd measures the profile once Chromium closed (B7); the size it answers (to
 the end this store asked for, or in `last_end` for an end browserd decided) is written to that
@@ -84,7 +98,7 @@ from redis.exceptions import RedisError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser import profiles
-from app.browser.client import BrowserdClient, BrowserError, ended_of
+from app.browser.client import BrowserdClient, BrowserError, ended_of, held_in
 from app.browser.profiles import ProfileRef
 
 logger = logging.getLogger("app.browser.leases")
@@ -127,6 +141,14 @@ TIERS = {
 }
 PREEMPTS_SWEEP = ("takeover", "signin")  # a person's own browser ends a sweep lease (B8)
 QUEUES = tuple(f"{PREFIX}queue:{tier}" for tier in range(4))
+SLOTS_MAX = 2  # browserd's config.SLOTS_MAX
+HOLDERS = (HOLDER, *(f"{HOLDER}:{n}" for n in range(1, SLOTS_MAX)))
+# The purposes whose leases share the browser in slots (browserd's SLOT_PURPOSES): an agent's.
+SLOT_PURPOSES = tuple(p for p in PURPOSES if p not in (*PREEMPTS_SWEEP, "apply_manual"))
+SHARED = "," + ",".join(SLOT_PURPOSES) + ","
+# The waits of a lease another may still join (browserd refuses one during B12's hand off and
+# Apply's own waits, `person_input`).
+SHARED_WAITS = ("takeover", "ask_person")
 TICKET_TTL_S = 60  # a waiter that has not asked again for this long leaves the queue
 START_GRACE_S = 60  # a turn still starting after this is dropped (the caller died mid start)
 MAX_GRACE_S = 60  # past the maximum or the wait deadline, the api ends a lease browserd still holds
@@ -140,24 +162,49 @@ APPLY_WAITS = frozenset({"captcha", "email_code", "forbidden"})
 APPLY_WAIT_S = 1800
 HOST_MAX = 253  # a DNS name's longest form: the host a sign in waits on, as browserd noted it
 
-# Drops the members whose ticket is gone, then, when ARGV[1] names a member, gives it the turn
-# if nobody holds one and it is the head of the first non empty tier.
-# KEYS: the holder, then the queues by tier. ARGV: member ('' prunes only), holder JSON, prefix.
+# Drops the members whose ticket is gone, then, when ARGV[1] names the head of the first non
+# empty tier, gives it a place of the holder: the first of the usable ones (ARGV[5]) that is free,
+# while nobody holds the browser, or while every place held is an agent lease of the claimant's
+# person (ARGV[6]) that may be joined and the claimant's purpose shares the browser (ARGV[7]).
+# KEYS: the places (ARGV[4] of them), then the queues by tier. ARGV: member ('' prunes only),
+# holder JSON, ticket prefix, places, usable places, user id, '1' or '0', SHARED, SHARED_WAITS
+# as ',a,b,'. Answers the place taken, from 1, else 0.
 CLAIM = """
-for i = 2, #KEYS do
+local places = tonumber(ARGV[4])
+for i = places + 1, #KEYS do
   for _, m in ipairs(redis.call('ZRANGE', KEYS[i], 0, -1)) do
     if redis.call('EXISTS', ARGV[3] .. m) == 0 then redis.call('ZREM', KEYS[i], m) end
   end
 end
-if ARGV[1] == '' or redis.call('EXISTS', KEYS[1]) == 1 then return 0 end
-for i = 2, #KEYS do
+if ARGV[1] == '' then return 0 end
+local function listed(list, word)
+  return type(word) == 'string' and string.find(list, ',' .. word .. ',', 1, true) ~= nil
+end
+local free = 0
+for i = 1, places do
+  local raw = redis.call('GET', KEYS[i])
+  if raw then
+    if ARGV[7] ~= '1' then return 0 end
+    local ok, held = pcall(cjson.decode, raw)
+    if not ok or type(held) ~= 'table' or held.user_id ~= ARGV[6] or held.automation ~= true
+      or not listed(ARGV[8], held.purpose)
+      or not (held.state == 'active'
+        or (held.state == 'waiting_person' and listed(ARGV[9], held.wait_reason))) then
+      return 0
+    end
+  elseif free == 0 and i <= tonumber(ARGV[5]) then
+    free = i
+  end
+end
+if free == 0 then return 0 end
+for i = places + 1, #KEYS do
   local head = redis.call('ZRANGE', KEYS[i], 0, 0)[1]
   if head then
     if head ~= ARGV[1] then return 0 end
     redis.call('ZREM', KEYS[i], head)
     redis.call('DEL', ARGV[3] .. head)
-    redis.call('SET', KEYS[1], ARGV[2])
-    return 1
+    redis.call('SET', KEYS[free], ARGV[2])
+    return free
   end
 end
 return 0
@@ -225,11 +272,22 @@ class Lease:
     active_since: float = 0.0
     last_input: float = 0.0
     application_id: str | None = None
+    # The sweep's website (its stats entry's `source_id`) a sweep lease searches, as its call
+    # named it (2026-11-06: the run page matches a website's live view by it); None otherwise.
+    source_id: str | None = None
     # A person's live takeovers of this lease, all of them together, pause its clock for
     # TAKEOVER_WAIT_S at most: the takeover seconds banked by the earlier ones, and the start of
     # the current one, so the apply job's timeout (one TAKEOVER_WAIT_S) outlives every pause.
     takeover_s: float = 0.0
     takeover_since: float | None = None
+    # The browser's slot browserd granted (2026-11-06, BROWSER_SLOTS): its window and its view.
+    slot: int = 0
+
+    @property
+    def key(self) -> str | None:
+        """What tells this lease from another of the same person and purpose (two browsers at
+        once): the application or the sweep's website it serves, as its call named it."""
+        return self.application_id or self.source_id
 
     def active_s(self, now: float) -> float:
         running = now - self.active_since if self.state == "active" else 0.0
@@ -318,9 +376,30 @@ class Acquired:
 
 @dataclass(frozen=True)
 class View:
-    lease: Lease | None  # the person's own, never another's
+    lease: Lease | None  # the person's own, never another's: the lowest slot's
     held_by_other: bool
     waiting: tuple[Waiting, ...]
+    leases: tuple[Lease, ...] = ()  # every lease of the person's, one per slot, by slot
+
+    def find(self, lease_id: str | None) -> Lease | None:
+        """The person's lease of that id, whatever its slot."""
+        held = self.leases or ((self.lease,) if self.lease is not None else ())
+        return next((lease for lease in held if lease.lease_id == lease_id), None)
+
+
+@dataclass(frozen=True)
+class _Spot:
+    """A place of the holder and the lease it holds, as last read or written."""
+
+    key: str
+    raw: str
+    lease: Lease
+
+
+@dataclass(frozen=True)
+class _Settled:
+    spots: tuple[_Spot, ...]
+    slots: int = 1  # browserd's BROWSER_SLOTS when it was asked, else 1: nobody joins
 
 
 class Profiles(Protocol):
@@ -340,6 +419,9 @@ class DbProfiles:
     async def ensure(self, user_id: str) -> ProfileRef:
         return await asyncio.to_thread(profiles.ensure, self.sessions, uuid.UUID(user_id))
 
+    async def browsers(self, user_id: str) -> int | None:
+        return await asyncio.to_thread(profiles.browsers, self.sessions, uuid.UUID(user_id))
+
     async def mark_used(
         self, user_id: str, at: float, size_bytes: int | None = None, profile_id: str | None = None
     ) -> None:
@@ -349,8 +431,14 @@ class DbProfiles:
         )
 
 
-def _member(user_id: str, purpose: str) -> str:
-    return f"{user_id}|{purpose}"
+def _member(user_id: str, purpose: str, key: str | None = None) -> str:
+    return f"{user_id}|{purpose}|{key}" if key else f"{user_id}|{purpose}"
+
+
+def _person_of(member: str) -> tuple[str, str]:
+    """The user id and the purpose of a queue member, its key left out."""
+    user_id, _, rest = member.partition("|")
+    return user_id, rest.partition("|")[0]
 
 
 def _text(raw: Any) -> str | None:
@@ -388,33 +476,42 @@ class Leases:
         submit_selectors: Sequence[str] = (),
         address: str | None = None,
         application_id: str | None = None,
+        source_id: str | None = None,
     ) -> Acquired:
         """The caller's lease, started now or already held, or its place in the queue. Raises
         BrowserError when browserd cannot start it, StoreUnavailableError without Redis.
         `hosts` and `submit_selectors` (B5) are given to browserd by the call that starts the
         lease: the hosts its tools may open, the adapter's own submit elements; `address` (B7)
-        is where a person's own session opens. `application_id` is written on the lease this
-        call starts, never on one it finds held."""
+        is where a person's own session opens. `application_id` and `source_id` are written on
+        the lease this call starts, and with the purpose they name the lease a call finds held
+        (`Lease.key`): a call for another application or website takes a slot of its own."""
         if purpose not in TIERS:
             raise ValueError(purpose)
+        key = application_id or source_id
         try:
             r = await self._pool()
             now = self.clock()
-            held = await self._settle(r, now)
-            if held is not None and held.user_id == user_id and held.purpose == purpose:
-                return Acquired(lease=held)
-            member = _member(user_id, purpose)
-            if held is not None and held.purpose == "sweep" and purpose in PREEMPTS_SWEEP:
-                # B8: the one preemption. A sweep ends at once when a person asks for their own
-                # browser, and resumes at the next sweep (app/browser/sources). The person's
-                # place is queued (tier 0) before the sweep ends: while browserd closes the
-                # sweep's Chromium, any other waiter's claim finds this member at the head and
+            settled = await self._settle(r, now)
+            for spot in settled.spots:
+                held = spot.lease
+                if (held.user_id, held.purpose, held.key) == (user_id, purpose, key):
+                    return Acquired(lease=held)
+            member = _member(user_id, purpose, key)
+            sweeps = [spot for spot in settled.spots if spot.lease.purpose == "sweep"]
+            if sweeps and purpose in PREEMPTS_SWEEP:
+                # B8: the one preemption. Every sweep lease ends at once when a person asks for
+                # their own browser, and resumes at the next sweep (app/browser/sources). The
+                # person's place is queued (tier 0) before the sweeps end: while browserd closes
+                # their Chromium, any other waiter's claim finds this member at the head and
                 # never takes the turn in between.
                 await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
                 await r.zadd(QUEUES[TIERS[purpose]], {member: await r.incr(SEQ)}, nx=True)
-                raw_held = _text(await r.get(HOLDER))
-                if raw_held is not None and Lease.loads(raw_held).lease_id == held.lease_id:
-                    await self._end(r, raw_held, held, "preempted", now)
+                for spot in sweeps:
+                    raw_held = _text(await r.get(spot.key))
+                    if raw_held is not None and Lease.loads(raw_held).lease_id == (
+                        spot.lease.lease_id
+                    ):
+                        await self._end(r, spot.key, raw_held, spot.lease, "preempted", now)
             turn = Lease(
                 lease_id=f"starting:{uuid.uuid4()}",
                 user_id=user_id,
@@ -427,23 +524,30 @@ class Leases:
                 active_since=now,
                 last_input=now,
                 application_id=application_id,
+                source_id=source_id,
             )
             raw = turn.dumps()
+            shares = automation and purpose in SLOT_PURPOSES
+            browsers = await self._browsers(user_id)
             for _ in range(2):
                 # The ticket first: a member without one is pruned by the next claim.
                 await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
                 await r.zadd(QUEUES[TIERS[purpose]], {member: await r.incr(SEQ)}, nx=True)
-                if await r.eval(CLAIM, 1 + len(QUEUES), HOLDER, *QUEUES, member, raw, TICKET):
-                    return await self._start(r, turn, raw, hosts, submit_selectors, address)
-                mine = await self._own(r, user_id, purpose)
+                usable = min(settled.slots, browsers)
+                place = await self._claim(r, member, raw, user_id, shares, usable)
+                if place:
+                    return await self._start(
+                        r, HOLDERS[place - 1], turn, raw, hosts, submit_selectors, address, browsers
+                    )
+                mine = await self._own(r, user_id, purpose, key)
                 if mine is not None:
                     return Acquired(lease=mine)
-                place = await self._place(r, user_id, purpose, now)
-                if place is not None:
-                    return Acquired(waiting=place)
+                waiting = await self._place(r, member, now)
+                if waiting is not None:
+                    return Acquired(waiting=waiting)
                 # The other call of this member claimed and then lost its turn before this one
                 # read the holder: ask once more, as that call's caller will.
-            return Acquired(waiting=await self._place(r, user_id, purpose, now))
+            return Acquired(waiting=await self._place(r, member, now))
         except (RedisError, OSError, TimeoutError) as exc:
             # The kind of failure only: a Redis error's text may hold its address.
             logger.warning("browser lease store unavailable: %s", type(exc).__name__)
@@ -456,19 +560,22 @@ class Leases:
         reason: str = "released",
         purposes: Collection[str] | None = None,
     ) -> bool:
-        """Ends the person's lease (that one only, when `lease_id` is given; of those purposes
-        only, when `purposes` is). False when the person holds no such lease."""
+        """Ends the person's leases, one per slot (that one only, when `lease_id` is given; of
+        those purposes only, when `purposes` is). False when the person holds no such lease."""
         try:
             r = await self._pool()
-            raw = _text(await r.get(HOLDER))
-            if raw is None:
-                return False
-            lease = Lease.loads(raw)
-            if lease.user_id != user_id or (lease_id is not None and lease.lease_id != lease_id):
-                return False
-            if purposes is not None and lease.purpose not in purposes:
-                return False
-            return await self._end(r, raw, lease, reason, self.clock())
+            ended = False
+            for key in HOLDERS:
+                raw = _text(await r.get(key))
+                if raw is None:
+                    continue
+                lease = Lease.loads(raw)
+                if lease.user_id != user_id or lease_id not in (None, lease.lease_id):
+                    continue
+                if purposes is not None and lease.purpose not in purposes:
+                    continue
+                ended = await self._end(r, key, raw, lease, reason, self.clock()) or ended
+            return ended
         except (RedisError, OSError, TimeoutError):
             raise StoreUnavailableError from None
 
@@ -495,15 +602,24 @@ class Leases:
             r = await self._pool()
             await r.decr(key)
 
-    async def cancel(self, user_id: str, purposes: Collection[str] | None = None) -> int:
-        """Takes the person out of the queue (for those purposes); how many places were left."""
+    async def cancel(
+        self, user_id: str, purposes: Collection[str] | None = None, key: str | None = None
+    ) -> int:
+        """Takes the person out of the queue (for those purposes; for that key only, when `key`
+        is given); how many places were left."""
         left = 0
         try:
             r = await self._pool()
             for purpose in purposes or PURPOSES:
-                member = _member(user_id, purpose)
-                left += int(await r.zrem(QUEUES[TIERS[purpose]], member))
-                await r.delete(TICKET + member)
+                queue = QUEUES[TIERS[purpose]]
+                members = (
+                    [_member(user_id, purpose, key)]
+                    if key
+                    else await self._members(r, user_id, purpose)
+                )
+                for member in members:
+                    left += int(await r.zrem(queue, member))
+                    await r.delete(TICKET + member)
         except (RedisError, OSError, TimeoutError):
             raise StoreUnavailableError from None
         return left
@@ -512,20 +628,23 @@ class Leases:
         try:
             r = await self._pool()
             now = self.clock()
-            held = await self._settle(r, now)
-            await r.eval(CLAIM, 1 + len(QUEUES), HOLDER, *QUEUES, "", "", TICKET)
+            settled = await self._settle(r, now)
+            await self._claim(r, "", "", "", False, 1)
             places = []
             for purpose in PURPOSES:
-                place = await self._place(r, user_id, purpose, now)
-                if place is not None:
-                    places.append(place)
+                for member in await self._members(r, user_id, purpose):
+                    place = await self._place(r, member, now)
+                    if place is not None:
+                        places.append(place)
         except (RedisError, OSError, TimeoutError):
             raise StoreUnavailableError from None
-        mine = held if held is not None and held.user_id == user_id else None
+        held = [spot.lease for spot in settled.spots]
+        mine = sorted((lease for lease in held if lease.user_id == user_id), key=_by_slot)
         return View(
-            lease=mine,
-            held_by_other=held is not None and mine is None,
+            lease=mine[0] if mine else None,
+            held_by_other=bool(held) and not mine,
             waiting=tuple(places),
+            leases=tuple(mine),
         )
 
     async def waiters(self) -> list[tuple[str, str]]:
@@ -538,7 +657,7 @@ class Leases:
             for queue in QUEUES[: TIERS["sweep"]]:
                 for raw in await r.zrange(queue, 0, -1):
                     member = _text(raw) or ""
-                    user_id, _, purpose = member.partition("|")
+                    user_id, purpose = _person_of(member)
                     if purpose in TIERS and await r.exists(TICKET + member):
                         found.append((user_id, purpose))
         except (RedisError, OSError, TimeoutError):
@@ -550,13 +669,14 @@ class Leases:
         call to browserd (B5's tools ask it before each call; browserd then checks the token)."""
         try:
             r = await self._pool()
-            raw = _text(await r.get(HOLDER))
+            raws = [_text(await r.get(key)) for key in HOLDERS]
         except (RedisError, OSError, TimeoutError):
             raise StoreUnavailableError from None
-        if raw is None:
-            return False
-        lease = Lease.loads(raw)
-        return lease.user_id == user_id and lease.lease_id == lease_id and lease.state != "starting"
+        for raw in raws:
+            lease = Lease.loads(raw) if raw is not None else None
+            if lease is not None and (lease.user_id, lease.lease_id) == (user_id, lease_id):
+                return lease.state != "starting"
+        return False
 
     async def touch(self, user_id: str, lease_id: str) -> Lease | None:
         """A tool call or an input on the lease: the idle timer starts again."""
@@ -608,14 +728,51 @@ class Leases:
 
     # --- inside ----------------------------------------------------------------------------------
 
+    async def _browsers(self, user_id: str) -> int:
+        """The person's own browsers at once (the admin's setting, 2026-11-07): SLOTS_MAX when
+        unset or with a profile store that does not say; 1 when it cannot be read (fail closed:
+        no lease of theirs joins another)."""
+        read = getattr(self.profiles, "browsers", None)
+        if read is None:
+            return SLOTS_MAX
+        try:
+            found = await read(user_id)
+        except Exception as exc:
+            logger.warning("browsers at once not read: %s", type(exc).__name__)
+            return 1
+        return SLOTS_MAX if found is None else max(1, min(int(found), SLOTS_MAX))
+
+    async def _claim(
+        self, r: Any, member: str, raw: str, user_id: str, shares: bool, slots: int
+    ) -> int:
+        """CLAIM: the place `member` took (from 1), else 0; '' only drops the stale members."""
+        place = await r.eval(
+            CLAIM,
+            len(HOLDERS) + len(QUEUES),
+            *HOLDERS,
+            *QUEUES,
+            member,
+            raw,
+            TICKET,
+            len(HOLDERS),
+            max(1, min(slots, len(HOLDERS))),
+            user_id,
+            "1" if shares else "0",
+            SHARED,
+            "," + ",".join(SHARED_WAITS) + ",",
+        )
+        return int(place or 0)
+
     async def _start(
         self,
         r: Any,
+        key: str,
         turn: Lease,
         raw: str,
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
         address: str | None = None,
+        browsers: int = SLOTS_MAX,
     ) -> Acquired:
         try:
             profile = await self.profiles.ensure(turn.user_id)
@@ -628,151 +785,185 @@ class Leases:
                 hosts=hosts,
                 submit_selectors=submit_selectors,
                 address=address,
+                browsers=browsers,
             )
         except BrowserError as exc:
-            await r.eval(CAS, 1, HOLDER, raw, "")
+            await r.eval(CAS, 1, key, raw, "")
             if exc.code != "busy":
                 raise
-            # browserd holds a lease this Redis does not know: read it back on the next call,
-            # and keep this waiter at the head of its tier.
+            # browserd holds a lease this Redis does not know, or refused the slot: read it back
+            # on the next call, and keep this waiter at the head of its tier.
             await r.delete(SYNCED)
-            member = _member(turn.user_id, turn.purpose)
+            member = _member(turn.user_id, turn.purpose, turn.key)
             await r.set(TICKET + member, "1", ex=TICKET_TTL_S)
             await r.zadd(QUEUES[TIERS[turn.purpose]], {member: 0}, nx=True)
-            return Acquired(waiting=await self._place(r, turn.user_id, turn.purpose, self.clock()))
+            return Acquired(waiting=await self._place(r, member, self.clock()))
         except BaseException:
-            await r.eval(CAS, 1, HOLDER, raw, "")
+            await r.eval(CAS, 1, key, raw, "")
             raise
         now = self.clock()
+        slot = started.lease.get("slot")
         lease = replace(
             turn,
             lease_id=started.lease_id,
             profile_id=profile.profile_id,
+            slot=slot if type(slot) is int and 0 <= slot < SLOTS_MAX else 0,
             state="active",
             started_at=now,
             active_since=now,
             last_input=now,
         )
-        if not await r.eval(CAS, 1, HOLDER, raw, lease.dumps()):
+        if not await r.eval(CAS, 1, key, raw, lease.dumps()):
             # The turn was dropped while Chromium started (START_GRACE_S): nobody wants it now.
             await self._tell_end(r, started.lease_id)
             raise BrowserError("unavailable")
         await self.profiles.mark_used(turn.user_id, now)
-        logger.info("browser lease started: purpose=%s", turn.purpose)
+        logger.info("browser lease started: purpose=%s slot=%d", turn.purpose, lease.slot)
         return Acquired(lease=lease, token=started.token, capability=started.capability)
 
-    async def _settle(self, r: Any, now: float) -> Lease | None:
-        """The holder after ending an expired one or one browserd no longer holds."""
+    async def _settle(self, r: Any, now: float) -> _Settled:
+        """Every place's lease after ending the expired ones and those browserd no longer holds,
+        with browserd's slot count (1 when it was not asked or did not answer: nobody joins)."""
         await self._tell_ending(r)
-        raw = _text(await r.get(HOLDER))
-        if raw is None:
-            if await r.exists(SYNCED):
-                return None
-            raw = await self._sync(r, now)
-            if raw is None:
-                return None
-        lease = Lease.loads(raw)
-        size: int | None = None
-        if lease.state == "starting":
-            reason = lease.expired(now)
-        else:
-            # Read browserd before the local ceiling: a verified live takeover banks active
-            # time in both stores. An ordinary active browser still obeys the hard ceiling.
-            reason, size = await self._gone_in_browserd(lease)
-            if reason is None or reason == _CANNOT_ASK:
-                reason = lease.overdue(now) or reason
-            if reason is None or reason == _CANNOT_ASK:
-                answer = "held" if reason is None else "unanswered"
-                seen = await r.eval(SIGHT, 1, SEEN + lease.lease_id, answer, now, SEEN_TTL_S)
-                if reason == _CANNOT_ASK:
-                    alive_at = max((float(_text(x) or 0.0) for x in seen), default=0.0)
-                    reason = lease.expired(now, alive_at)
-        if reason is None:
-            if lease.dumps() != raw:
-                await r.eval(CAS, 1, HOLDER, raw, lease.dumps())
-            return lease
-        await self._end(r, raw, lease, reason, now, size)
-        return None
+        if not await r.exists(SYNCED):
+            await self._sync(r, now)
+        held = []
+        for key in HOLDERS:
+            raw = _text(await r.get(key))
+            if raw is not None:
+                held.append((key, raw, Lease.loads(raw)))
+        found: dict[str, Any] | None = None
+        if any(lease.state != "starting" for _, _, lease in held):
+            # One answer of browserd for every slot.
+            with contextlib.suppress(BrowserError):
+                found = await self.client.current()
+        spots = []
+        for key, raw, lease in held:
+            size: int | None = None
+            if lease.state == "starting":
+                reason = lease.expired(now)
+            else:
+                # Read browserd before the local ceiling: a verified live takeover banks active
+                # time in both stores. An ordinary active browser still obeys the hard ceiling.
+                reason, size = self._gone(lease, found)
+                if reason is None or reason == _CANNOT_ASK:
+                    reason = lease.overdue(now) or reason
+                if reason is None or reason == _CANNOT_ASK:
+                    answer = "held" if reason is None else "unanswered"
+                    seen = await r.eval(SIGHT, 1, SEEN + lease.lease_id, answer, now, SEEN_TTL_S)
+                    if reason == _CANNOT_ASK:
+                        alive_at = max((float(_text(x) or 0.0) for x in seen), default=0.0)
+                        reason = lease.expired(now, alive_at)
+            if reason is None:
+                fresh = lease.dumps()
+                if fresh != raw and await r.eval(CAS, 1, key, raw, fresh):
+                    raw = fresh
+                spots.append(_Spot(key, raw, lease))
+                continue
+            await self._end(r, key, raw, lease, reason, now, size)
+        slots = found.get("slots") if found is not None else 1
+        return _Settled(tuple(spots), slots if type(slots) is int and slots >= 1 else 1)
 
-    async def _sync(self, r: Any, now: float) -> str | None:
-        """After Redis lost its keys: browserd's current lease becomes the holder again."""
-        try:
-            found = (await self.client.current())["lease"]
-        except BrowserError:
-            return None  # asked again on the next call
-        if found is not None:
-            try:
-                active_s = float(found.get("active_s") or 0.0)
-                lease = Lease(
-                    lease_id=str(found["lease_id"]),
-                    user_id=str(found["user_id"]),
-                    purpose=str(found["purpose"]),
-                    automation=bool(found.get("automation", True)),
-                    profile_id=str(found.get("profile_id") or ""),
-                    max_s=int(found.get("max_s") or self.max_table[str(found["purpose"])]),
-                    idle_s=int(found.get("idle_s") or self.idle_s),
-                    started_at=now - active_s,
-                    state="active",
-                    active_before=active_s,
-                    active_since=now,
-                    last_input=now,
-                )
-            except (KeyError, TypeError, ValueError):
-                lease = None
-            if lease is not None and await r.sismember(ENDING, lease.lease_id):
-                # The api ended it while browserd could not be told: end it, never take it back.
-                await self._tell_end(r, lease.lease_id)
-                lease = None
-            if lease is not None and lease.purpose in TIERS:
-                if found.get("state") == "waiting_person":
-                    # browserd's deadline, not a fresh one (#291): what it has left, else none.
-                    left = found.get("wait_left_s")
-                    left = left if isinstance(left, int) and not isinstance(left, bool) else 0
-                    host = found.get("wait_host")
-                    lease.wait_person(
-                        now,
-                        str(found.get("wait_reason") or "signin"),
-                        host[:HOST_MAX] if isinstance(host, str) else "",
-                        max(
-                            0,
-                            min(
-                                left,
-                                APPLY_WAIT_S
-                                if lease.purpose == "apply_fill"
-                                and found.get("wait_reason") in APPLY_WAITS
-                                else self.session_max_s,
-                            ),
-                        ),
-                    )
-                if await r.set(HOLDER, lease.dumps(), nx=True):
-                    logger.info("browser lease taken back from browserd: purpose=%s", lease.purpose)
-        await r.set(SYNCED, "1")
-        return _text(await r.get(HOLDER))
-
-    async def _own(self, r: Any, user_id: str, purpose: str) -> Lease | None:
-        """The person's lease of this purpose when another call of theirs (a second tab) took the
-        turn while this one queued; the place this call may have put back after that call's claim
-        is taken out, so the person never waits behind their own lease."""
-        raw = _text(await r.get(HOLDER))
-        if raw is None:
-            return None
-        lease = Lease.loads(raw)
-        if lease.user_id != user_id or lease.purpose != purpose:
-            return None
-        member = _member(user_id, purpose)
-        await r.zrem(QUEUES[TIERS[purpose]], member)
-        await r.delete(TICKET + member)
-        return lease
-
-    async def _gone_in_browserd(self, lease: Lease) -> tuple[str | None, int | None]:
-        """Why browserd no longer holds this lease (None when it does, _CANNOT_ASK when browserd
-        does not answer), and the profile's size it measured at that end, when it says."""
+    async def _sync(self, r: Any, now: float) -> None:
+        """After Redis lost its keys, or a start browserd refused as busy: each lease browserd
+        holds that no place holds becomes the holder of a free place again."""
         try:
             found = await self.client.current()
         except BrowserError:
+            return  # asked again on the next call
+        known: dict[str, Lease] = {}
+        for key in HOLDERS:
+            raw = _text(await r.get(key))
+            if raw is not None:
+                lease = Lease.loads(raw)
+                known[lease.lease_id] = lease
+        if any(lease.state == "starting" for lease in known.values()):
+            return  # browserd may hold that start already: read again once it is written
+        listed = found.get("leases")
+        for item in listed if isinstance(listed, list) else [found.get("lease")]:
+            lease = self._taken_back(item, now) if isinstance(item, dict) else None
+            if lease is None or lease.lease_id in known:
+                continue
+            if await r.sismember(ENDING, lease.lease_id):
+                # The api ended it while browserd could not be told: end it, never take it back.
+                await self._tell_end(r, lease.lease_id)
+                continue
+            for key in HOLDERS:
+                if await r.set(key, lease.dumps(), nx=True):
+                    known[lease.lease_id] = lease
+                    logger.info("browser lease taken back from browserd: purpose=%s", lease.purpose)
+                    break
+        await r.set(SYNCED, "1")
+
+    def _taken_back(self, found: dict[str, Any], now: float) -> Lease | None:
+        """browserd's public lease as this store's, or None when it is not well formed."""
+        try:
+            active_s = float(found.get("active_s") or 0.0)
+            slot = found.get("slot")
+            lease = Lease(
+                lease_id=str(found["lease_id"]),
+                user_id=str(found["user_id"]),
+                purpose=str(found["purpose"]),
+                automation=bool(found.get("automation", True)),
+                profile_id=str(found.get("profile_id") or ""),
+                max_s=int(found.get("max_s") or self.max_table[str(found["purpose"])]),
+                idle_s=int(found.get("idle_s") or self.idle_s),
+                started_at=now - active_s,
+                state="active",
+                active_before=active_s,
+                active_since=now,
+                last_input=now,
+                slot=slot if type(slot) is int and 0 <= slot < SLOTS_MAX else 0,
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+        if lease.purpose not in TIERS:
+            return None
+        if found.get("state") == "waiting_person":
+            # browserd's deadline, not a fresh one (#291): what it has left, else none.
+            left = found.get("wait_left_s")
+            left = left if isinstance(left, int) and not isinstance(left, bool) else 0
+            host = found.get("wait_host")
+            lease.wait_person(
+                now,
+                str(found.get("wait_reason") or "signin"),
+                host[:HOST_MAX] if isinstance(host, str) else "",
+                max(
+                    0,
+                    min(
+                        left,
+                        APPLY_WAIT_S
+                        if lease.purpose == "apply_fill" and found.get("wait_reason") in APPLY_WAITS
+                        else self.session_max_s,
+                    ),
+                ),
+            )
+        return lease
+
+    async def _own(self, r: Any, user_id: str, purpose: str, key: str | None) -> Lease | None:
+        """The person's lease of this purpose and key when another call of theirs (a second tab)
+        took the turn while this one queued; the place this call may have put back after that
+        call's claim is taken out, so the person never waits behind their own lease."""
+        for place in HOLDERS:
+            raw = _text(await r.get(place))
+            if raw is None:
+                continue
+            lease = Lease.loads(raw)
+            if (lease.user_id, lease.purpose, lease.key) != (user_id, purpose, key):
+                continue
+            member = _member(user_id, purpose, key)
+            await r.zrem(QUEUES[TIERS[purpose]], member)
+            await r.delete(TICKET + member)
+            return lease
+        return None
+
+    def _gone(self, lease: Lease, found: dict[str, Any] | None) -> tuple[str | None, int | None]:
+        """Why browserd no longer holds this lease (None when it does, _CANNOT_ASK when browserd
+        did not answer), and the profile's size it measured at that end, when it says."""
+        if found is None:
             return _CANNOT_ASK, None
-        current = found["lease"]
-        if current is not None and current.get("lease_id") == lease.lease_id:
+        current = held_in(found, lease.lease_id)
+        if current is not None:
             now = self.clock()
             if current.get("wait_reason") == "takeover":
                 from app.browser.client import TAKEOVER_WAIT_S
@@ -800,9 +991,16 @@ class Leases:
         return "ended", None
 
     async def _end(
-        self, r: Any, raw: str, lease: Lease, reason: str, now: float, size: int | None = None
+        self,
+        r: Any,
+        key: str,
+        raw: str,
+        lease: Lease,
+        reason: str,
+        now: float,
+        size: int | None = None,
     ) -> bool:
-        if not await r.eval(CAS, 1, HOLDER, raw, ""):
+        if not await r.eval(CAS, 1, key, raw, ""):
             return False
         if lease.state != "starting":
             await r.lpush(DURATIONS, max(0, int(now - lease.started_at)))
@@ -847,9 +1045,20 @@ class Leases:
             await r.srem(ENDING, lease_id)
             logger.info("browserd confirmed the end of a lease it held while it did not answer")
 
-    async def _place(self, r: Any, user_id: str, purpose: str, now: float) -> Waiting | None:
+    async def _members(self, r: Any, user_id: str, purpose: str) -> list[str]:
+        """The person's members of that purpose in its queue, with a key or without."""
+        bare = _member(user_id, purpose)
+        found = []
+        for raw in await r.zrange(QUEUES[TIERS[purpose]], 0, -1):
+            member = _text(raw) or ""
+            if member == bare or member.startswith(bare + "|"):
+                found.append(member)
+        return found
+
+    async def _place(self, r: Any, member: str, now: float) -> Waiting | None:
+        purpose = _person_of(member)[1]
         tier = TIERS[purpose]
-        rank = await r.zrank(QUEUES[tier], _member(user_id, purpose))
+        rank = await r.zrank(QUEUES[tier], member)
         if rank is None:
             return None
         ahead = 0
@@ -858,10 +1067,11 @@ class Leases:
         position = ahead + int(rank) + 1
         recent = [int(x) for x in await r.lrange(DURATIONS, 0, HISTORY - 1)]
         typical = sum(recent) / len(recent) if recent else DEFAULT_LEASE_S
-        holder = _text(await r.get(HOLDER))
         left = 0.0
-        if holder is not None:
-            left = max(0.0, typical - (now - Lease.loads(holder).started_at))
+        for key in HOLDERS:  # the browser is free once every slot's lease ended
+            holder = _text(await r.get(key))
+            if holder is not None:
+                left = max(left, typical - (now - Lease.loads(holder).started_at))
         # Whole minutes, rounded up: the seconds would tell how long the holder has run.
         minutes = math.ceil((left + (position - 1) * typical) / 60)
         return Waiting(purpose=purpose, position=position, estimated_wait_s=60 * minutes)
@@ -872,15 +1082,22 @@ class Leases:
         try:
             r = await self._pool()
             for _ in range(UPDATE_ATTEMPTS):
-                raw = _text(await r.get(HOLDER))
-                if raw is None:
-                    return None
-                lease = Lease.loads(raw)
-                if lease.user_id != user_id or lease.lease_id != lease_id:
+                for key in HOLDERS:
+                    raw = _text(await r.get(key))
+                    if raw is None:
+                        continue
+                    lease = Lease.loads(raw)
+                    if (lease.user_id, lease.lease_id) == (user_id, lease_id):
+                        break
+                else:
                     return None
                 change(lease, self.clock())
-                if await r.eval(CAS, 1, HOLDER, raw, lease.dumps()):
+                if await r.eval(CAS, 1, key, raw, lease.dumps()):
                     return lease
         except (RedisError, OSError, TimeoutError):
             raise StoreUnavailableError from None
         raise StoreUnavailableError
+
+
+def _by_slot(lease: Lease) -> int:
+    return lease.slot

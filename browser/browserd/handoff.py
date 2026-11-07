@@ -72,8 +72,7 @@ def bind(svc: Any) -> None:
 
 def service_of(request: Any) -> Any | None:
     for svc in list(_services):
-        lease = svc.manager.current()
-        if lease is not None and lease.request is request:
+        if svc.manager.lease_of(request) is not None:
             return svc
     return None
 
@@ -104,8 +103,10 @@ def address_of(url: Any) -> str | None:
 
 
 def watched(svc: Any, lease: Lease) -> bool:
-    """A live view of that lease is open now (its websocket counted, not one still starting)."""
-    if lease.request.purpose in UNWATCHED:
+    """A live view of that lease is open now (its websocket counted, not one still starting),
+    and the lease is the browser's only one: the hand off restarts the whole Chromium, so while
+    two slots share it a sign in waits for later, as when nobody watches (2026-11-06)."""
+    if lease.request.purpose in UNWATCHED or len(svc.manager.held()) > 1:
         return False
     viewers = live.live_of(svc).viewers
     return any(v.lease_id == lease.lease_id and not v.closed for v in viewers)
@@ -122,8 +123,8 @@ async def request(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
     if set(args) - ARGS or not site:
         return failure("bad_args", BAD_SITE)
     svc = service_of(tab.request)
-    lease = svc.manager.current() if svc is not None else None
-    if lease is None or lease.request is not tab.request:
+    lease = svc.manager.lease_of(tab.request) if svc is not None else None
+    if lease is None:
         return failure("lease_ended", "The lease ended.")
     if not watched(svc, lease):
         log.info("lease %s: sign in asked, nobody watching", tab.lease_tag)
@@ -140,7 +141,7 @@ async def request(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
     await handoff.lock.acquire()  # free, so taken at once: a `done` waits for the swap below
     # Shielded: a release that cancels this call never interrupts a Chromium half started.
     await asyncio.shield(_to_person(svc, lease, handoff))
-    if svc.manager.current() is not lease:  # a swap that failed, or a cancel meanwhile
+    if svc.manager.get(lease.lease_id) is not lease:  # a swap that failed, or a cancel meanwhile
         return failure("lease_ended", "The lease ended.")
     return failure(
         "waiting_person",
@@ -195,8 +196,8 @@ async def open_address(browser: Any, address: str) -> Any:
 
 
 def _waiting(svc: Any, lease_id: str) -> tuple[Lease, HandOff]:
-    lease = svc.manager.current()
-    if lease is None or lease.lease_id != lease_id:
+    lease = svc.manager.get(lease_id)
+    if lease is None:
         raise LeaseError(404, "no_such_lease")
     if lease.state == "waiting_person" and lease.wait_reason != SIGNIN:
         raise LeaseError(409, "not_waiting")
@@ -211,7 +212,7 @@ async def done(svc: Any, _: Any, match: re.Match[str]) -> tuple[int, Any]:
     async with handoff.lock:
         if handoff.done:
             return 200, {"lease_id": lease.lease_id, "state": lease.state, "restarted": False}
-        if lease.state != "waiting_person" or svc.manager.current() is not lease:
+        if lease.state != "waiting_person" or svc.manager.get(lease.lease_id) is not lease:
             raise LeaseError(409, "not_waiting")
         # The person's keys stop before any Chromium with CDP exists.
         lease.person_input = False

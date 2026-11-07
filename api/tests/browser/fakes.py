@@ -63,27 +63,39 @@ class RedirectTools(FakeTools):
 
 
 class FakeLeases:
-    def __init__(self, busy: bool = False, max_s: int = 900) -> None:
-        self.busy, self.max_s = busy, max_s
+    """The lease store of one person's sweep: `slots` leases at once (BROWSER_SLOTS 1 by default,
+    the websites one after the other as the tests sharing one fake page expect), else a place
+    in the queue; `busy`, someone else holds the browser."""
+
+    def __init__(self, busy: bool = False, max_s: int = 900, slots: int = 1) -> None:
+        self.busy, self.max_s, self.slots = busy, max_s, slots
+        self.held: set[str] = set()
         self.acquired: list[tuple[str, str, list[str]]] = []
+        self.sources: list[str | None] = []  # the sweep's website each lease was asked for
         self.released: list[str] = []
         self.cancelled: list[str] = []
 
-    async def acquire(self, user: str, purpose: str, automation: bool, *, hosts: Any) -> Acquired:
+    async def acquire(
+        self, user: str, purpose: str, automation: bool, *, hosts: Any, source_id: str | None = None
+    ) -> Acquired:
         self.acquired.append((user, purpose, list(hosts)))
-        if self.busy:
+        self.sources.append(source_id)
+        if self.busy or len(self.held) >= self.slots:
             return Acquired(waiting=Waiting(purpose, 1, 60))
+        self.held.add(f"lease-{len(self.acquired)}")
         lease = Lease(
             lease_id=f"lease-{len(self.acquired)}", user_id=user, purpose=purpose,
             automation=True, profile_id="p", max_s=self.max_s, idle_s=300, started_at=0.0,
+            source_id=source_id,
         )  # fmt: skip
         return Acquired(lease=lease, token="invented-token")
 
     async def release(self, user: str, lease_id: str, reason: str = "") -> bool:
         self.released.append(lease_id)
+        self.held.discard(lease_id)
         return True
 
-    async def cancel(self, user: str, purposes: Any = None) -> int:
+    async def cancel(self, user: str, purposes: Any = None, key: str | None = None) -> int:
         self.cancelled.append(user)
         return 1
 

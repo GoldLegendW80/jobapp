@@ -223,6 +223,15 @@ class Tab:
     # A20: on the review lease, this call let the agent act on a submit element as a wizard's
     # step (detect.review_step): the act may have sent the form, so the result says so too.
     step_submit: bool = False
+    # Two browsers at once (2026-11-06): the lease's slot (chromium.Slot), its own contexts and
+    # tabs; None with one browser, where the lease's context is the person's own (contexts[0]).
+    slot: Any = None
+
+    async def home(self) -> Any:
+        """The context the lease's tabs live in, when it is not a discovery's own."""
+        if self.slot is not None:
+            return await self.slot.home()
+        return self.browser.browser.contexts[0]
 
     @property
     def agent(self) -> bool:
@@ -280,20 +289,28 @@ class Tab:
                 raise UnsupportedDiscovery
             return
         browser = self.browser.browser
-        if name != "browser_navigate" or any(
-            p.url != ABOUT_BLANK for c in browser.contexts for p in c.pages
-        ):
+        mine = (
+            self.slot.pages()
+            if self.slot is not None
+            else [p for c in browser.contexts for p in c.pages]
+        )
+        if name != "browser_navigate" or any(p.url != ABOUT_BLANK for p in mine):
             raise UnsupportedDiscovery
         self.state.discovery = True
         self.state.signed_in = scope.signed_in
         try:
             async with asyncio.timeout(ACTION_S):
+                options = {
+                    "java_script_enabled": True,
+                    "service_workers": "allow",
+                    "accept_downloads": False,
+                }
                 if scope.signed_in:
-                    context = browser.contexts[0]
+                    context = await self.home()
+                elif self.slot is not None:
+                    context = await self.slot.new_context(**options)
                 else:
-                    context = await browser.new_context(
-                        java_script_enabled=True, service_workers="allow", accept_downloads=False
-                    )
+                    context = await browser.new_context(**options)
                 self.state.native_context = self.state.guarded = context
                 await context.route("**/*", self._line_route)
                 context.on("request", self._hop)
@@ -434,7 +451,7 @@ class Tab:
             if self.state.native_context is None or self.state.native_failed:
                 raise UnsupportedDiscovery
             return self.state.native_context
-        context = self.browser.browser.contexts[0]
+        context = await self.home()
         if self.state.guarded is not context:
             await context.route("**/*", self._guard)
             context.on("request", self._hop)
@@ -481,7 +498,7 @@ class Tab:
     async def settle(self, result: dict[str, Any]) -> dict[str, Any]:
         if self.state.native_failed:
             return failure(discovery.UNSUPPORTED, "Refused: native discovery is unavailable.")
-        context = self.state.native_context or self.browser.browser.contexts[0]
+        context = self.state.native_context or await self.home()
         for other in list(context.pages):
             off = not self.allowed(other.url)
             if other is not self.state.page and off:
@@ -1199,7 +1216,7 @@ async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     settled = await tab.settle({"ok": True})  # tabs off the list are closed before any is listed
     if not settled.get("ok"):
         return settled
-    context = tab.state.native_context if tab.discovery else tab.browser.browser.contexts[0]
+    context = tab.state.native_context if tab.discovery else await tab.home()
     found = list(context.pages)
     if action in ("select", "close"):
         index = args.get("index")

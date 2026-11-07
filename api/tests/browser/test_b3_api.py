@@ -117,6 +117,8 @@ def test_nothing_yet(api: Api, user_a: tuple[uuid.UUID, str]) -> None:
         "available": True,
         "profile": {"exists": False, "size_bytes": 0, "last_used_at": None},
         "lease": None,
+        "slots": [],
+        "browsers": 2,
         "holder": None,
         "queue": [],
     }
