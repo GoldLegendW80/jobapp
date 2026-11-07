@@ -123,7 +123,7 @@ export function LiveViewSlot({
           </LiveViewPlaceholder>
         </div>
       ) : (
-        <HandoffBanner liveOpen />
+        <HandoffBanner liveOpen leaseId={lease.id} />
       );
     }
     // A wait on the page (a captcha, an e-mail code, a 403 page): browserd gave the person the
@@ -183,5 +183,7 @@ export function LiveViewSlot({
  */
 export function FillHandoff({ applicationId }: { applicationId: string }) {
   const lease = useApplicationLease({ application: applicationId });
-  return signingIn(lease) ? <HandoffBanner /> : null;
+  return lease && signingIn(lease) ? (
+    <HandoffBanner leaseId={lease.id} />
+  ) : null;
 }

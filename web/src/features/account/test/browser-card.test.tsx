@@ -449,6 +449,28 @@ describe("websites you are signed in to", () => {
     ).toBeEnabled();
   });
 
+  it("watches and takes over the second window of a lease alone in it", async () => {
+    const second = { ...LEASE, slot: 1 };
+    const calls = fakeServer({
+      browser: { ...MINE, lease: second, slots: [second] },
+    });
+    const user = userEvent.setup();
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
+    await connected();
+    const ticket = only(
+      calls.tickets as Array<{ viewer: string; slot: number }>,
+    );
+    expect(ticket.slot).toBe(1);
+    await user.click(
+      screen.getByRole("button", { name: "Use the browser myself" }),
+    );
+    expect(calls.takeovers).toEqual([{ viewer: ticket.viewer, slot: 1 }]);
+  });
+
   it("sends no key while the assistant has the browser", async () => {
     fakeServer({ browser: MINE });
     const user = userEvent.setup();

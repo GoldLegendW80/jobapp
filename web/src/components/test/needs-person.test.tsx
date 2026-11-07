@@ -177,6 +177,43 @@ describe("the job page", () => {
     expect(screen.getAllByTestId("live-screen")).toHaveLength(1);
   });
 
+  it("opens the second window for the sign in of a fill alone in it", async () => {
+    const { opened } = fakeWindows();
+    server.use(
+      http.get("*/api/browser", () => {
+        const alone = {
+          id: "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
+          purpose: "apply_fill",
+          automation: true,
+          state: "waiting_person",
+          wait_reason: "signin",
+          wait_host: "jobs.example.org",
+          wait_minutes_left: 30,
+          wait_deadline: null,
+          started_at: LEASE_START,
+          active_s: 30,
+          max_s: 900,
+          application_id: APP_ID,
+          slot: 1,
+        };
+        return HttpResponse.json({
+          ...FREE,
+          holder: "you",
+          lease: alone,
+          slots: [alone],
+        });
+      }),
+    );
+    renderWithQuery(<LiveViewSlot idle="Filling" leaseOf={OF_APP} />);
+    const banner = await screen.findByRole("region", {
+      name: "Sign in to jobs.example.org",
+    });
+    await waitFor(() => {
+      expect(opened).toHaveLength(1);
+    });
+    expect(windowIn(opened, banner)).toBe(1);
+  });
+
   it("names the site of a sign in wall once, above the later sign in", () => {
     renderWithQuery(
       <NeedsPerson

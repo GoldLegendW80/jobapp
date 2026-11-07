@@ -22,9 +22,16 @@ function minutesText(minutes: number | null): string {
  * "Open the live view" (the person at the keyboard, in a browser started without any debugging
  * port), "I'm signed in" and "Cancel". Nothing when no hand off waits.
  * `liveOpen`: the live view shows from the start (Account, where the person was watching).
+ * `leaseId`: the hand off of that lease only (an application's fill), else any of the person's.
  */
-export function HandoffBanner({ liveOpen = false }: { liveOpen?: boolean }) {
-  const { handoff, done, cancel } = useHandoff();
+export function HandoffBanner({
+  liveOpen = false,
+  leaseId,
+}: {
+  liveOpen?: boolean;
+  leaseId?: string;
+}) {
+  const { handoff, done, cancel } = useHandoff(leaseId);
   const [open, setOpen] = useState(liveOpen);
   const title = useId();
   if (!handoff) return null;
@@ -44,7 +51,9 @@ export function HandoffBanner({ liveOpen = false }: { liveOpen?: boolean }) {
         view, then click I&apos;m signed in. The app never sees what you type.{" "}
         {minutesText(handoff.minutesLeft)}
       </p>
-      {open && <LiveBrowser person status={AT_THE_KEYBOARD} />}
+      {open && (
+        <LiveBrowser person status={AT_THE_KEYBOARD} slot={handoff.slot} />
+      )}
       {failure && (
         <p role="alert" className="text-sm text-destructive">
           {errorDetail(failure) ?? describeError(failure)}

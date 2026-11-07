@@ -5,42 +5,57 @@ import {
   getBrowser,
   handoffCancel,
   handoffDone,
+  leasesOf,
   type Browser,
 } from "./browser-api";
 
 // While an assistant drives the person's browser, a sign in hand off may begin at any moment.
 const WATCH_MS = 5_000;
 
-export type Handoff = { host: string; minutesLeft: number | null };
+export type Handoff = {
+  host: string;
+  minutesLeft: number | null;
+  // The window of the person's browser the waiting lease uses (two browsers at once).
+  slot: number;
+};
 
 /**
  * The sign in hand off waiting for this person (browser B12a's state in GET /api/browser): the
- * host browserd noted for it and the whole minutes left, or null. Only the person's own lease, driven by an assistant,
- * waiting for a sign in; never another person's (the api says `holder: "other"` and no lease).
+ * host browserd noted for it, the whole minutes left and its window, or null. Only one of the
+ * person's own leases, in any window, driven by an assistant and waiting for a sign in (`leaseId`:
+ * that lease only); never another person's (the api says `holder: "other"` and no lease).
  */
-export function handoffOf(browser: Browser | undefined): Handoff | null {
-  const lease = browser?.holder === "you" ? browser.lease : null;
-  if (
-    !lease?.automation ||
-    lease.state !== "waiting_person" ||
-    lease.wait_reason !== "signin"
-  )
-    return null;
+export function handoffOf(
+  browser: Browser | undefined,
+  leaseId?: string,
+): Handoff | null {
+  const lease = leasesOf(browser).find(
+    (held) =>
+      (leaseId === undefined || held.id === leaseId) &&
+      held.automation &&
+      held.state === "waiting_person" &&
+      held.wait_reason === "signin",
+  );
+  if (!lease) return null;
   const minutesLeft = lease.wait_minutes_left ?? null;
   if (minutesLeft !== null && minutesLeft <= 0) return null;
-  return { host: lease.wait_host?.trim() || "the site", minutesLeft };
+  return {
+    host: lease.wait_host?.trim() || "the site",
+    minutesLeft,
+    slot: lease.slot ?? 0,
+  };
 }
 
 function watched(browser: Browser | undefined): boolean {
-  return browser?.holder === "you" && !!browser.lease?.automation;
+  return leasesOf(browser).some((lease) => lease.automation);
 }
 
 /**
  * The hand off of the banner, wherever it shows (Account, and apply's job page and queue): the
  * state, read again every few seconds while an assistant drives the person's browser, and "I'm
- * signed in" and "Cancel". The app shell's dot is apply A10a's.
+ * signed in" and "Cancel". The app shell's dot is apply A10a's. `leaseId`: that lease's only.
  */
-export function useHandoff() {
+export function useHandoff(leaseId?: string) {
   const client = useQueryClient();
   const query = useQuery({
     queryKey: browserQueryKey,
@@ -54,5 +69,5 @@ export function useHandoff() {
     mutationFn: handoffCancel,
     onSettled: refresh,
   });
-  return { handoff: handoffOf(query.data), done, cancel };
+  return { handoff: handoffOf(query.data, leaseId), done, cancel };
 }

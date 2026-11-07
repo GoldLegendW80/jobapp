@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { fakeWindows, windowIn } from "@/test/browser";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -143,6 +144,7 @@ describe("handoffOf", () => {
     expect(handoffOf(MINE)).toEqual({
       host: "jobs.example.org",
       minutesLeft: 12,
+      slot: 0,
     });
     expect(
       handoffOf({ ...MINE, lease: { ...WAITING, wait_host: "  " } })?.host,
@@ -292,6 +294,55 @@ describe("HandoffBanner", () => {
     await waitFor(() => {
       expect(container).toBeEmptyDOMElement();
     });
+  });
+});
+
+describe("a hand off in the second window", () => {
+  const SECOND = {
+    ...WAITING,
+    id: "1c7a8d2f-5b54-4a1f-8b62-2a3b4c5d6e7f",
+    slot: 1,
+  };
+
+  it.each([
+    [
+      "beside a lease at work in the first",
+      { ...MINE, lease: { ...ACTIVE, slot: 0 }, slots: [ACTIVE, SECOND] },
+    ],
+    [
+      "alone, once the first ended",
+      { ...MINE, lease: SECOND, slots: [SECOND] },
+    ],
+  ] as Array<[string, Browser]>)(
+    "opens that window, %s",
+    async (_, browser) => {
+      fakeServer({ browser });
+      const { opened } = fakeWindows();
+      const user = userEvent.setup();
+      renderWithQuery(<HandoffBanner />);
+      const banner = await screen.findByRole("region", {
+        name: "Sign in to jobs.example.org",
+      });
+      await user.click(
+        within(banner).getByRole("button", { name: "Open the live view" }),
+      );
+      await waitFor(() => {
+        expect(opened).toHaveLength(1);
+      });
+      expect(windowIn(opened, banner)).toBe(1);
+      expect(opened[0]?.screen.viewOnly).toBe(false);
+    },
+  );
+
+  it("names the window of the waiting lease, and of that lease only when one is named", () => {
+    const browser: Browser = {
+      ...MINE,
+      lease: { ...ACTIVE, slot: 0 },
+      slots: [{ ...ACTIVE, slot: 0 }, SECOND],
+    };
+    expect(handoffOf(browser)?.slot).toBe(1);
+    expect(handoffOf(browser, SECOND.id)?.slot).toBe(1);
+    expect(handoffOf(browser, ACTIVE.id)).toBeNull();
   });
 });
 

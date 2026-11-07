@@ -747,6 +747,42 @@ describe("two fills of the person at once", () => {
     ).toBeNull();
   });
 
+  it("opens the second window from the card of a fill alone in it that waits for a sign in", async () => {
+    const { opened } = fakeWindows();
+    const alone = {
+      ...FILL_SIGNIN,
+      id: SECOND_FILL.id,
+      application_id: SECOND_FILL.application_id,
+      slot: 1,
+    };
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json({ ...browserOf(alone), slots: [alone] }),
+      ),
+    );
+    fakeQueue([queueItem(1, "filling"), queueItem(2, "filling")]);
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const second = await screen.findByRole("article", {
+      name: /Robotics Engineer 2/,
+    });
+    const banner = await within(second).findByRole("region", {
+      name: "Sign in to jobs.example.org",
+    });
+    expect(
+      within(card("Robotics Engineer 1")).queryByRole("region", {
+        name: /Sign in to/,
+      }),
+    ).toBeNull();
+    await user.click(
+      within(banner).getByRole("button", { name: "Open the live view" }),
+    );
+    await waitFor(() => {
+      expect(opened).toHaveLength(1);
+    });
+    expect(windowIn(opened, banner)).toBe(1);
+  });
+
   it("shows both fills behind Watch the browser, each in its own window under its own name", async () => {
     const { opened } = fakeWindows();
     server.use(

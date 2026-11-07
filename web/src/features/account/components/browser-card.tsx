@@ -95,6 +95,7 @@ export function BrowserCard() {
         <LiveBrowser
           key={`${lease.id}:${personOwnsInput(lease)}`}
           person={personOwnsInput(lease)}
+          slot={lease.slot ?? 0}
         />
       ) : query.data && !query.data.available ? (
         <p className="text-sm text-muted-foreground">
