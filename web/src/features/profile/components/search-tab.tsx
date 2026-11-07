@@ -1,9 +1,10 @@
 /**
- * Search: what the search looks for. The four plain lists, job titles, unwanted titles, places and
- * unwanted places, as chips (search-lists.tsx), contract types as toggles, the remote stance, the
- * minimum fit to shortlist, the posting age window, the sign in to job websites (B17) and the
- * never-apply rules. Then what the person aims for (target-fields.tsx, O4) and, as a card with
- * its own Save, the preferences section (preferences-card.tsx). Searches run the job websites
+ * Search: what the search looks for, one settings section per group. The four plain lists, job
+ * titles, unwanted titles, places and unwanted places, as chips (search-lists.tsx), the remote
+ * stance and contract types, what the person aims for (target-fields.tsx, O4), the minimum fit to
+ * shortlist and the posting age window, where the search runs with the sign in to job websites
+ * (B17), the never-apply rules and the documents. Then, with its own Save, the preferences
+ * section (preferences-card.tsx). Searches run the job websites
  * ticked in Find jobs alone (owner, 2026-10-28): the company boards, the starter list, the fixed
  * browser readers and the freelance feeds are deleted, and the api drops any it still holds.
  */
@@ -23,10 +24,11 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { FieldTitle } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { JobWebsitesSignIn } from "@/components/shared/browser/site-signin";
 import { DocumentsSearchOptions } from "@/features/profile/components/generation-settings-card";
-import { cn } from "@/lib/utils";
 import { REMOTE_WORDS, contractWord } from "@/lib/wording";
 
 import {
@@ -37,7 +39,11 @@ import {
 } from "../api/profile-api";
 import { PreferencesCard } from "./preferences-card";
 import { SearchLists } from "@/components/shared/profile/search-lists";
-import { TargetFields } from "@/components/shared/profile/target-fields";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
+import {
+  BONUS_NOTE,
+  TargetFields,
+} from "@/components/shared/profile/target-fields";
 import { describeSchedule } from "../helpers/schedule";
 import {
   fromSearchForm,
@@ -49,7 +55,6 @@ import {
 import {
   ConflictDialog,
   FormErrorAlert,
-  Group,
   ItemControls,
   SaveBar,
   TextField,
@@ -102,22 +107,25 @@ function SearchForms({
   const { control } = form;
 
   return (
-    <div className="flex flex-col gap-6">
+    <>
       <Form {...form}>
         <form
           noValidate
           aria-label="Search"
-          className="flex flex-col gap-6"
+          className="flex flex-col gap-8"
           onSubmit={(event) => void onSubmit(event)}
         >
           <FormErrorAlert message={formError} />
-          <Group
+          <SettingsSection
             title="Titles and places"
             description="Each word or phrase matches as a whole word, in any case, with an optional plural."
           >
             <SearchLists form={form} />
-          </Group>
-          <Group title="Where and how">
+          </SettingsSection>
+          <SettingsSection
+            title="Where and how"
+            description="How far from home you work, and on which contracts."
+          >
             <FormField
               control={control}
               name="remote_stance"
@@ -139,14 +147,19 @@ function SearchForms({
               )}
             />
             <ContractTypes form={form} />
-          </Group>
-          <TargetFields form={form} />
-          <Group title="Shortlist">
+          </SettingsSection>
+          <SettingsSection title="What you aim for" description={BONUS_NOTE}>
+            <TargetFields form={form} bare />
+          </SettingsSection>
+          <SettingsSection
+            title="Shortlist"
+            description="Which of the postings found are proposed for your shortlist."
+          >
             <FormField
               control={control}
               name="min_fit"
               render={({ field }) => (
-                <FormItem>
+                <FormItem className="max-w-md">
                   <div className="flex items-baseline justify-between gap-2">
                     <FormLabel>Minimum fit</FormLabel>
                     <output className="text-sm tabular-nums text-muted-foreground">
@@ -184,19 +197,21 @@ function SearchForms({
               className="max-w-48"
               description="Only postings published within this many days."
             />
-          </Group>
-          <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
+          </SettingsSection>
           {/* Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. The
               company boards, fixed readers and feeds are deleted; the api drops any it holds. */}
-          <p className="text-sm text-muted-foreground">
-            Searches run the job websites ticked in Find jobs.
-          </p>
-          {/* B17: sign in to a job website of Find jobs, then searches read it signed in. */}
-          <JobWebsitesSignIn
-            urls={(profile.sections.search.interactive_sites ?? []).map(
-              (site) => site.url,
-            )}
-          />
+          <SettingsSection
+            title="Where the search runs"
+            description="Searches run the job websites ticked in Find jobs."
+          >
+            <AutomaticSearch schedule={form.getValues("sweep_schedule")} />
+            {/* B17: sign in to a job website of Find jobs, then searches read it signed in. */}
+            <JobWebsitesSignIn
+              urls={(profile.sections.search.interactive_sites ?? []).map(
+                (site) => site.url,
+              )}
+            />
+          </SettingsSection>
           <NeverApply form={form} />
           <DocumentsSearchOptions form={form} />
           <SaveBar
@@ -213,7 +228,7 @@ function SearchForms({
         onReload={reload}
       />
       <PreferencesCard profile={profile} onDirtyChange={onPreferencesDirty} />
-    </div>
+    </>
   );
 }
 
@@ -226,39 +241,28 @@ function ContractTypes({ form }: { form: UseFormReturn<SearchForm> }) {
         const selected = field.value;
         return (
           <FormItem>
-            <p id="contract-types-label" className="text-sm font-medium">
-              Contract types
-            </p>
-            <div
-              role="group"
+            <FieldTitle id="contract-types-label">Contract types</FieldTitle>
+            <ToggleGroup
+              type="multiple"
+              variant="outline"
+              spacing={2}
+              size="sm"
               aria-labelledby="contract-types-label"
-              className="flex flex-wrap gap-2"
-            >
-              {CONTRACT_TYPES.map((type) => {
-                const on = selected.includes(type);
-                return (
-                  <Button
-                    key={type}
-                    type="button"
-                    size="sm"
-                    variant={on ? "default" : "outline"}
-                    aria-pressed={on}
-                    className={cn(!on && "text-muted-foreground")}
-                    onClick={() => {
-                      field.onChange(
-                        on
-                          ? selected.filter((t) => t !== type)
-                          : CONTRACT_TYPES.filter(
-                              (t) => t === type || selected.includes(t),
-                            ),
-                      );
-                    }}
-                  >
-                    {contractWord(type)}
-                  </Button>
+              value={selected}
+              onValueChange={(next) => {
+                // Kept in the order of the list, whatever the order of the clicks.
+                field.onChange(
+                  CONTRACT_TYPES.filter((type) => next.includes(type)),
                 );
-              })}
-            </div>
+              }}
+              className="flex-wrap"
+            >
+              {CONTRACT_TYPES.map((type) => (
+                <ToggleGroupItem key={type} value={type}>
+                  {contractWord(type)}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
             <FormMessage />
           </FormItem>
         );
@@ -270,10 +274,10 @@ function ContractTypes({ form }: { form: UseFormReturn<SearchForm> }) {
 function NeverApply({ form }: { form: UseFormReturn<SearchForm> }) {
   const rules = useFieldArray({ control: form.control, name: "never_apply" });
   return (
-    <Group
+    <SettingsSection
       title="Never apply"
       description="Rules agents must respect whatever the fit score, in your own words."
-      action={
+      actions={
         <Button
           type="button"
           variant="outline"
@@ -312,7 +316,7 @@ function NeverApply({ form }: { form: UseFormReturn<SearchForm> }) {
           ))}
         </ol>
       )}
-    </Group>
+    </SettingsSection>
   );
 }
 
@@ -327,10 +331,7 @@ function AutomaticSearch({ schedule }: { schedule: SweepSchedule }) {
         <span className="font-medium">Automatic search:</span>{" "}
         {describeSchedule(schedule)}
       </span>
-      <Link
-        to="/jobs"
-        className="text-primary underline-offset-4 hover:underline"
-      >
+      <Link to="/jobs" className="font-medium underline underline-offset-4">
         Change in Jobs
       </Link>
     </p>

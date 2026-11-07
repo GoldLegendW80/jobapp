@@ -15,6 +15,7 @@ export const ACCOUNTS: AdminUser[] = [
     is_active: true,
     last_login_at: ago(20 * 60_000),
     sessions: 2,
+    browsers: 2,
   },
   {
     id: id(201),
@@ -25,6 +26,7 @@ export const ACCOUNTS: AdminUser[] = [
     created_at: ago(30 * DAY),
     last_login_at: ago(2 * DAY),
     sessions: 1,
+    browsers: 2,
   },
   {
     id: id(202),
@@ -35,6 +37,7 @@ export const ACCOUNTS: AdminUser[] = [
     created_at: ago(21 * DAY),
     last_login_at: ago(5 * HOUR),
     sessions: 3,
+    browsers: 2,
   },
   {
     id: id(203),
@@ -45,6 +48,7 @@ export const ACCOUNTS: AdminUser[] = [
     created_at: ago(9 * DAY),
     last_login_at: null,
     sessions: 0,
+    browsers: 2,
   },
   {
     id: id(204),
@@ -55,6 +59,7 @@ export const ACCOUNTS: AdminUser[] = [
     created_at: ago(60 * DAY),
     last_login_at: ago(40 * DAY),
     sessions: 0,
+    browsers: 2,
   },
 ];
 
@@ -121,6 +126,7 @@ export const usersPage = (items: AdminUser[]) => ({
   limit: 50,
   offset: 0,
   active_admins: items.filter((u) => u.is_active && u.role === "admin").length,
+  browsers_max: 2,
 });
 
 /** GET /api/admin/invites as the api answers it for `items`. */
@@ -130,3 +136,12 @@ export const invitesPage = (items: AdminInvite[]) => ({
   limit: 20,
   offset: 0,
 });
+
+/** A long list of links, newest first, for the pages of the invites list. */
+export const manyInvites = (count: number): AdminInvite[] =>
+  Array.from({ length: count }, (_, index) =>
+    invite(400 + index, {
+      email: `e2e-friend-${String(index + 1)}@example.org`,
+      created_at: ago((index + 1) * HOUR),
+    }),
+  );

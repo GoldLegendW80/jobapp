@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroupInput,
+  InputGroupTextarea,
+} from "@/components/ui/input-group";
 
 // On React 18 a function component drops `ref` unless it uses forwardRef. Radix triggers need the
 // button's node to place their menu (without it the menu renders off screen), and
@@ -29,5 +33,18 @@ describe("ui components forward their ref to the DOM node", () => {
     const ref = createRef<HTMLInputElement>();
     render(<Input ref={ref} />);
     expect(ref.current).toBeInstanceOf(HTMLInputElement);
+  });
+
+  it("InputGroupInput and InputGroupTextarea", () => {
+    const input = createRef<HTMLInputElement>();
+    const area = createRef<HTMLTextAreaElement>();
+    render(
+      <>
+        <InputGroupInput ref={input} />
+        <InputGroupTextarea ref={area} />
+      </>,
+    );
+    expect(input.current).toBeInstanceOf(HTMLInputElement);
+    expect(area.current).toBeInstanceOf(HTMLTextAreaElement);
   });
 });

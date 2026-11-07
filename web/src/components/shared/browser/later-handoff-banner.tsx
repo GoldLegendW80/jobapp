@@ -10,21 +10,43 @@ import {
 } from "@/features/browser/api/use-later-handoff";
 import { LiveBrowser } from "./live-browser";
 
+/** What the person does on the site: it names the banner and the button that opens the live view. */
+export type SiteStep = "signin" | "check" | "code" | "other";
+
+const STEPS: Record<SiteStep, { open: string; region: string }> = {
+  signin: { open: "Open the live view to sign in", region: "Sign in to" },
+  check: {
+    open: "Open the live view to solve the check",
+    region: "Solve the check on",
+  },
+  code: {
+    open: "Open the live view to enter the code",
+    region: "Enter the code on",
+  },
+  other: { open: "Open the live view", region: "Your step on" },
+};
+
 /**
  * Only the server's registered owner supplies the address and resumes the waiting work.
  * `heading` false: no line of its own naming the site and what to do, for a place that already
- * says both above it (the job page's Needs you alert).
+ * says both above it (the job page's Needs you alert). `step`: what the person does there, a sign
+ * in unless the caller knows better. `secondary`: the place has its own primary action (the
+ * agent question's I did it, go on), so the banner's buttons are outline.
  */
 export function LaterHandoffBanner({
   module,
   refId,
   address,
   heading = true,
+  step = "signin",
+  secondary = false,
 }: {
   module: string;
   refId: string;
   address: string;
   heading?: boolean;
+  step?: SiteStep;
+  secondary?: boolean;
 }) {
   const [leaseId, setLeaseId] = useState<string | null>(null);
   const [waiting, setWaiting] = useState(false);
@@ -59,7 +81,7 @@ export function LaterHandoffBanner({
   const error = opened.error ?? answer.error;
   return (
     <section
-      aria-label={`Sign in to ${host}`}
+      aria-label={`${STEPS[step].region} ${host}`}
       className="flex min-w-0 flex-col gap-3 rounded-md border border-warning/40 p-3 [overflow-wrap:anywhere]"
     >
       {heading ? (
@@ -91,16 +113,18 @@ export function LaterHandoffBanner({
       <div className="flex flex-wrap gap-2">
         {!live ? (
           <Button
+            variant={secondary ? "outline" : "default"}
             disabled={busy}
             onClick={() => {
               opened.mutate();
             }}
           >
-            Open the live view to sign in
+            {STEPS[step].open}
           </Button>
         ) : (
           <>
             <Button
+              variant={secondary ? "outline" : "default"}
               disabled={busy}
               onClick={() => {
                 answer.mutate("done");

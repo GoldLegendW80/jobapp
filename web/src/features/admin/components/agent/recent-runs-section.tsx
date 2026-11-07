@@ -1,5 +1,6 @@
 import { Link } from "react-router";
 
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableBody,
@@ -18,6 +19,9 @@ import type { AgentPage } from "../../api/agents-api";
 import { whenStarted } from "@/features/admin/helpers/agent-labels";
 import { AgentSection } from "./agent-section";
 
+const PRIVATE =
+  " A private agent's runs keep their numbers only, never what they read or wrote.";
+
 const HEADS = [
   "Started",
   "Person",
@@ -31,7 +35,11 @@ const HEADS = [
 /** The agent's last runs, newest first; only the admin's own link to their run page. */
 export function RecentRunsSection({ page }: { page: AgentPage }) {
   return (
-    <AgentSection id="runs" title="Recent runs">
+    <AgentSection
+      title="Recent runs"
+      description={`Newest first. Only your own runs open on their page.${page.private_io ? PRIVATE : ""}`}
+      surface="own"
+    >
       {page.runs.length ? (
         <Table aria-label="Recent runs, newest first">
           <TableHeader>
@@ -91,14 +99,12 @@ export function RecentRunsSection({ page }: { page: AgentPage }) {
           </TableBody>
         </Table>
       ) : (
-        <p className="text-sm text-muted-foreground">No run yet.</p>
+        <Card>
+          <CardContent className="text-sm text-muted-foreground">
+            No run yet.
+          </CardContent>
+        </Card>
       )}
-      {page.private_io ? (
-        <p className="text-sm text-muted-foreground">
-          A private agent&apos;s runs keep their numbers only, never what they
-          read or wrote.
-        </p>
-      ) : null}
     </AgentSection>
   );
 }

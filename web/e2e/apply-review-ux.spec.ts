@@ -168,7 +168,7 @@ async function posting(variant = "normal"): Promise<string> {
 
 async function fill(job: string): Promise<string> {
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply", exact: true });
+  const section = page.getByRole("region", { name: "Your application" });
   await startReviewFirst(page);
   await expect(
     section.getByRole("img", { name: /before the click/ }),
@@ -184,7 +184,7 @@ async function fill(job: string): Promise<string> {
 
 async function edit(answer: Answer): Promise<Locator> {
   const row = page
-    .getByRole("region", { name: "Apply", exact: true })
+    .getByRole("region", { name: "Your application" })
     .getByRole("listitem")
     .filter({
       has: page
@@ -344,7 +344,7 @@ test("the trusted letter keeps its 10000 limit after repeated person edits", asy
   seed(job, "failed");
   await page.reload();
   await expect(
-    page.getByRole("region", { name: "Apply", exact: true }),
+    page.getByRole("region", { name: "Your application" }),
   ).toContainText("your CV or letter was still being prepared after an hour");
   await shots(page, "render-failed");
 });

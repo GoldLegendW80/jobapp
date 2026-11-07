@@ -3,7 +3,9 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { fakeDocumentReads } from "@/design-system/fixtures/documents";
 
 import { createQueryClient } from "@/lib/query";
 import {
@@ -148,12 +150,19 @@ async function openChat(consent: Partial<Consent> = {}) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  await user.click(await screen.findByRole("tab", { name: "Chat" }));
+  // The chat is a section of the page's side rail: nothing to open first.
   const chat = await screen.findByTestId("document-chat");
+  await waitFor(() => {
+    expect(within(chat).queryByText("Loading the conversation")).toBeNull();
+  });
   return { api, user, chat, client };
 }
 
-describe("the Chat view", () => {
+beforeEach(() => {
+  fakeDocumentReads();
+});
+
+describe("the chat of a document", () => {
   it("sends a message, follows its generation, then shows the answer and its version", async () => {
     const state = fakeChat();
     const { user, chat, api } = await openChat({

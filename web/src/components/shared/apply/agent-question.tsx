@@ -4,7 +4,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { describeError } from "@/lib/api";
-import { LaterHandoffBanner } from "@/components/shared/browser/later-handoff-banner";
+import {
+  LaterHandoffBanner,
+  type SiteStep,
+} from "@/components/shared/browser/later-handoff-banner";
 
 import type { Application, Question } from "@/features/apply/api/apply-api";
 import { useAnswerQuestion } from "@/features/apply/api/use-application-actions";
@@ -14,14 +17,26 @@ import { useAnswerQuestion } from "@/features/apply/api/use-application-actions"
  * a field it could not fill while nobody watched. The server's fixed sentence names the field's
  * label and the site, never the assistant's words. A fact gets a text box, whose answer is given
  * to the assistant when it goes on, and saved to Saved answers when "Remember this answer" is
- * ticked; an action (a password, a code, a captcha) is the person's on the site: Take over opens
- * it, then "I did it, go on". Asked after a control that may have sent the form (`after_send`,
- * the application `submit_unknown`), the page says so first, and the answer is the person's Try
- * again: the assistant looks on the site for the earlier one before it sends again. No dashes as
- * separators.
+ * ticked; an action (a password, a code, a captcha) is the person's on the site: the live view
+ * opens it, named after the step, then "I did it, go on", the one primary action. Asked after a
+ * control that may have sent the form (`after_send`, the application `submit_unknown`), the page
+ * says so first, and the answer is the person's Try again: the assistant looks on the site for
+ * the earlier one before it sends again. No dashes as separators.
  */
 export const AFTER_SEND =
   "The assistant may have sent this application already, before it stopped here. Look for a confirmation mail or on the site first.";
+
+/** The api tells only fact or action: the step is read from the field's label, in English or French. */
+function stepOf(label: string): SiteStep {
+  const words = label.toLowerCase();
+  if (/\bcode\b|\botp\b/.test(words)) return "code";
+  if (/captcha|robot|human|humain|security check/.test(words)) return "check";
+  if (
+    /password|mot de passe|sign in|log ?in|connexion|se connecter/.test(words)
+  )
+    return "signin";
+  return "other";
+}
 
 export function AgentQuestion({
   application,
@@ -82,6 +97,8 @@ export function AgentQuestion({
           refId={application.id}
           address={application.form_url}
           heading={false}
+          step={stepOf(question.label)}
+          secondary
         />
       )}
       <Button

@@ -160,7 +160,7 @@ test("an invented candidate prepares documents", async () => {
 test("a watched login wall resumes and submits only after approval", async () => {
   const job = await posting("4012345");
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply", exact: true });
+  const section = page.getByRole("region", { name: "Your application" });
   await startReviewFirst(page);
   await signIn(false);
   await expect

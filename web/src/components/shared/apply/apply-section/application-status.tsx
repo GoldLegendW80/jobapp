@@ -19,6 +19,7 @@ export function ApplicationStatus({
   holdOffset,
   refreshFailed,
   notice,
+  reviewAgent = false,
 }: {
   application: Application | null;
   reason: string | null;
@@ -27,12 +28,14 @@ export function ApplicationStatus({
   holdOffset: number;
   refreshFailed: boolean;
   notice: string | null;
+  /** Review first filled by the apply agent: its approval is Confirm and send. */
+  reviewAgent?: boolean;
 }) {
   const waitLink = documentsWaitLink(application);
   return (
     <>
       <p role="status" className="text-sm text-muted-foreground">
-        {statusLine(application)}
+        {statusLine(application, reviewAgent)}
       </p>
       {waitLink ? (
         <Link

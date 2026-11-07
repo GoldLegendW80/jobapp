@@ -12,8 +12,11 @@ export function FirstMessageSection({
   onEdit,
 }: DraftFieldProps) {
   return (
-    <AgentSection id="first-message" title="First message">
-      <p className="text-sm">{page.first_message}</p>
+    <AgentSection
+      title="First message"
+      description="What a run first says to the agent."
+    >
+      <p className="max-w-prose text-sm">{page.first_message}</p>
       {page.uses_default_message ? (
         <AgentField
           label="Default message"

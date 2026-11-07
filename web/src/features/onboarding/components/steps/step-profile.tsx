@@ -27,7 +27,7 @@ export function StepProfile() {
       </p>
       <AdvancedSection pageKey="welcome-profile">
         <div className="flex flex-col gap-6 pt-4">
-          <StepDocuments />
+          <StepDocuments flat />
           <section
             aria-labelledby="welcome-read"
             className="flex flex-col gap-4"
@@ -44,8 +44,8 @@ export function StepProfile() {
                 goes on while you answer the next steps.
               </p>
             </div>
-            <RunStart />
-            <RunProgress />
+            <RunStart flat />
+            <RunProgress flat />
           </section>
         </div>
       </AdvancedSection>

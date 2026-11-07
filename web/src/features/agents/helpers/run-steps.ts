@@ -1,6 +1,6 @@
 /**
  * What the timeline of a run shows for each step: an icon, a title, what the step says and a
- * tone. Data only; components/run/run-timeline.tsx draws it.
+ * tone. Data only; components/shared/agents/run/timeline-step.tsx draws it.
  */
 import { runErrorWords } from "@/lib/wording";
 

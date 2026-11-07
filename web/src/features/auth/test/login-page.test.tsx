@@ -71,7 +71,7 @@ describe("login page", () => {
     const { location } = renderApp("/login?next=/admin/users");
     await fillAndSubmit("  Harald@Example.org ", "correct horse");
     expect(
-      await screen.findByRole("heading", { name: "Users" }),
+      await screen.findByRole("heading", { name: "Admin", level: 1 }),
     ).toBeInTheDocument();
     expect(location()).toBe("/admin/users");
     expect(seen).toHaveLength(1);
@@ -355,7 +355,7 @@ describe("login page", () => {
     fakeSession(admin);
     const { location } = renderApp("/login?next=/admin/users");
     expect(
-      await screen.findByRole("heading", { name: "Users" }),
+      await screen.findByRole("heading", { name: "Admin", level: 1 }),
     ).toBeInTheDocument();
     expect(location()).toBe("/admin/users");
   });

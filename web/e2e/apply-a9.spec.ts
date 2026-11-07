@@ -131,7 +131,7 @@ test("an invented person has a posting on the fake Ashby form with its CV and le
 
 test("the person applies in the live view, submits on the form and records it", async () => {
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply", exact: true });
+  const section = page.getByRole("region", { name: "Your application" });
   await section.getByRole("button", { name: "Apply myself" }).click();
 
   const panel = page.getByTestId("manual-panel");

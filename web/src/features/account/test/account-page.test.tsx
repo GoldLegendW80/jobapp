@@ -103,6 +103,7 @@ describe("account page", () => {
       "Change password",
       "Gmail",
       "Websites you are signed in to",
+      "Other keys",
     ]);
     // No LinkedIn switch, search words or session of its own on the page any more.
     expect(screen.queryByRole("region", { name: "LinkedIn" })).toBeNull();

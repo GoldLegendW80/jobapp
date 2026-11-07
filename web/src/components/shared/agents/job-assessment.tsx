@@ -19,8 +19,10 @@ import { useId, useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
+import { Section } from "@/components/blocks/section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
@@ -66,7 +68,7 @@ function payloadText(proposal: Proposal, key: string): string {
   return typeof value === "string" ? value : "";
 }
 
-function ProposalCard({
+function ProposalRow({
   proposal,
   job,
 }: {
@@ -118,7 +120,7 @@ function ProposalCard({
       data-testid="proposal"
       data-kind={proposal.kind}
       data-status={proposal.status}
-      className="flex flex-col gap-3 rounded-lg border p-4"
+      className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0"
     >
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="text-sm font-medium">{title}</h4>
@@ -166,7 +168,7 @@ function ProposalCard({
                 }}
               />
               <Button
-                variant="ghost"
+                variant="outline"
                 size="sm"
                 disabled={busy}
                 onClick={() => {
@@ -261,16 +263,7 @@ function ActionButton({
   );
 }
 
-/** The level of the section's title: h2 on its own, deeper inside a posting's sections. */
-type HeadingLevel = "h2" | "h3" | "h4";
-
-export function JobAssessment({
-  job,
-  heading: Heading = "h2",
-}: {
-  job: JobDetail;
-  heading?: HeadingLevel;
-}) {
+export function JobAssessment({ job }: { job: JobDetail }) {
   const credential = useModelCredential();
   const latest = useLatestJobRun(job.id, TRIAGE, POLL_MS);
   const run = latest.data ?? null;
@@ -285,6 +278,7 @@ export function JobAssessment({
     },
   });
 
+  const needsId = useId();
   const noCredential = credential.isSuccess && credential.data === null;
   const disabled =
     credential.isPending ||
@@ -299,28 +293,16 @@ export function JobAssessment({
   );
 
   return (
-    <section
-      aria-labelledby="assessment-title"
-      className="flex flex-col gap-4 rounded-lg border p-4"
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <Heading
-            id="assessment-title"
-            className="text-lg font-semibold tracking-tight"
-          >
-            Agent assessment
-          </Heading>
-          <p className="text-sm text-muted-foreground">
-            An agent reads this posting against your profile and proposes a note
-            and a status. Nothing changes until you accept.
-          </p>
-        </div>
+    <Section
+      title="Agent assessment"
+      description="An agent reads this posting against your profile and proposes a note and a status. Nothing changes until you accept."
+      actions={
         <Button
-          className="w-fit shrink-0"
+          variant="outline"
+          size="sm"
           disabled={disabled}
           aria-busy={start.isPending}
-          aria-describedby={noCredential ? "assessment-needs" : undefined}
+          aria-describedby={noCredential ? needsId : undefined}
           onClick={() => {
             start.mutate();
           }}
@@ -332,9 +314,10 @@ export function JobAssessment({
           )}
           {running ? "Assessing" : "Assess with agent"}
         </Button>
-      </div>
+      }
+    >
       {noCredential ? (
-        <p id="assessment-needs" className="text-sm text-muted-foreground">
+        <p id={needsId} className="text-sm text-muted-foreground">
           Agents run with your own model credential, and none is saved yet.{" "}
           <Link to="/account" className="underline underline-offset-4">
             Add one on the Account page
@@ -346,19 +329,21 @@ export function JobAssessment({
         <RunPanel key={run.id} runId={run.id} title="Triage agent" />
       ) : null}
       {pending.length || decided.length ? (
-        <div className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium">Proposals</h3>
-          <ul aria-label="Proposals" className="flex flex-col gap-3">
-            {[...pending, ...decided].map((proposal) => (
-              <ProposalCard key={proposal.id} proposal={proposal} job={job} />
-            ))}
-          </ul>
-        </div>
+        <Card>
+          <CardContent className="flex flex-col gap-2">
+            <h3 className="text-sm font-medium">Proposals</h3>
+            <ul aria-label="Proposals" className="flex flex-col divide-y">
+              {[...pending, ...decided].map((proposal) => (
+                <ProposalRow key={proposal.id} proposal={proposal} job={job} />
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
       ) : run && !running && proposals.isSuccess ? (
         <p className="text-sm text-muted-foreground">
           The last assessment proposed nothing.
         </p>
       ) : null}
-    </section>
+    </Section>
   );
 }

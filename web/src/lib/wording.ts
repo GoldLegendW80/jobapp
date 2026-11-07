@@ -282,6 +282,10 @@ export const WORDING = {
     "Add a few websites to your list in Find jobs and start a search: what the app finds shows up here.",
   findJobs: "Find jobs",
   addSkills: "Add your skills",
+  yourDeck: "Your deck",
+  changeTheMode: "Change the mode",
+  matches: "Matches",
+  gap: "Gap",
   // The summary's optional model key (welcome step 8), saved as Account's Model access does.
   yourApiKeyOptional: "Your Anthropic API key (optional)",
   apiKey: "API key",

@@ -25,9 +25,10 @@ async function shots(page: Page, name: string, fullPage = true) {
 
 /**
  * Profile P6 against the real stack through Caddy, no mocks, one fresh account and only made up
- * data: it fills a profile from empty to 100% in the browser (no JSON, no CLI), edits a section
- * twice, opens its History, compares and restores the first version, exports the profile,
- * changes it, imports the export back and finds the data and the completeness restored.
+ * data: it fills a profile from empty to 100% (no CLI; without a model key the skills and the
+ * answers are fields of About you), edits a section twice,
+ * opens its History from More actions, compares and restores the first version, exports the
+ * profile, changes it, imports the export back and finds the data and the completeness restored.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8096 docker compose -p jobapp-p6 -f compose.yml -f compose.mac.yml up -d --build --wait
@@ -48,21 +49,35 @@ const PASSWORD = `history journey ${run} passphrase`;
 const FIRST = "Applied AI Engineer";
 const SECOND = "Staff AI Engineer";
 
-const tab = (page: Page, name: string) =>
-  page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
+const CSRF = { "X-Requested-With": "jobapp" };
 
-async function openTab(page: Page, name: string) {
-  // The search is in Settings, Search (owner, 2026-11-05); the other sections in the classic
-  // editor's tabs.
-  if (name === "Search") {
-    await page.goto("/settings/search");
-    await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
-    return;
-  }
-  if ((await tab(page, name).count()) === 0)
-    await page.goto(`/profile?tab=${name.toLowerCase()}`);
-  await tab(page, name).click();
-  await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
+interface Stored {
+  revision: number;
+  sections: Record<string, Record<string, unknown> | null>;
+  completeness: { sections: Record<string, { percent: number }> };
+}
+
+async function stored(page: Page): Promise<Stored> {
+  const answer = await page.request.get("/api/profile");
+  expect(answer.ok()).toBe(true);
+  return (await answer.json()) as Stored;
+}
+
+/** Saves a section through the api, as Fill my profile or a reading of About you would. */
+async function putSection(
+  page: Page,
+  section: string,
+  change: (data: Record<string, unknown>) => Record<string, unknown>,
+) {
+  const profile = await stored(page);
+  const saved = await page.request.put(`/api/profile/${section}`, {
+    headers: CSRF,
+    data: {
+      base_revision: profile.revision,
+      data: change(profile.sections[section] ?? {}),
+    },
+  });
+  expect(saved.status(), await saved.text()).toBe(200);
 }
 
 async function save(page: Page, section: string) {
@@ -70,21 +85,26 @@ async function save(page: Page, section: string) {
     .getByRole("button", { name: `Save ${section.toLowerCase()}` })
     .click();
   await expect(page.getByText(`${section} saved.`).first()).toBeVisible();
-  await expect(tab(page, section)).toHaveAccessibleName(
-    `${section}, 100% complete`,
-  );
+  expect(
+    (await stored(page)).completeness.sections[section.toLowerCase()]?.percent,
+  ).toBe(100);
 }
 
-const completeness = (page: Page) =>
-  page.getByRole("progressbar", { name: "Profile completeness" });
+const completeness = (page: Page) => page.getByTestId("profile-completeness");
 
-async function addTerm(page: Page, label: string, term: string) {
-  await page.getByLabel(`New term for ${label}`, { exact: true }).fill(term);
-  await page.keyboard.press("Enter");
-  await expect(
-    page.getByRole("list", { name: `Terms of ${label}` }),
-  ).toContainText(term);
+/** The History drawer of one section, from the page's More actions. */
+async function openHistory(page: Page, section: string) {
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "History" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await page.getByRole("menuitem", { name: section, exact: true }).click();
+  const drawer = page.getByRole("dialog", { name: `${section} history` });
+  await expect(drawer).toBeVisible();
+  return drawer;
 }
+
+const part = (page: Page, name: string) =>
+  page.getByRole("region", { name, exact: true });
 
 let context: BrowserContext;
 let page: Page;
@@ -105,11 +125,11 @@ test.afterAll(async () => {
   fs.rmSync(work, { recursive: true, force: true });
 });
 
-test("a new account fills its profile from empty to 100% in the browser", async () => {
+test("a new account fills its profile from empty to 100%", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile?tab=identity");
-  await expect(completeness(page)).toHaveAttribute("aria-valuenow", "0");
+  await page.goto("/profile");
+  await expect(completeness(page)).toHaveText("0% complete");
 
   // Identity
   await page.getByLabel("Full name", { exact: true }).fill(NAME);
@@ -123,7 +143,6 @@ test("a new account fills its profile from empty to 100% in the browser", async 
   await save(page, "Identity");
 
   // Experience
-  await openTab(page, "Experience");
   await page.getByRole("button", { name: "Add employer" }).click();
   await page
     .getByLabel("Organisation of employer 1", { exact: true })
@@ -138,25 +157,33 @@ test("a new account fills its profile from empty to 100% in the browser", async 
   await page.getByLabel("Degree at school 1", { exact: true }).fill("MSc");
   await save(page, "Experience");
 
-  // Facts
-  await openTab(page, "Facts");
-  await page.getByRole("button", { name: "Add block" }).click();
-  await page.getByLabel("Title of block 1", { exact: true }).fill("HARD RULES");
-  await page
-    .getByLabel("Text of block 1", { exact: true })
+  // Facts: a part of About you, saved to the profile at Done without a model.
+  await page.getByRole("button", { name: "Add a part" }).click();
+  await part(page, "New part")
+    .getByLabel("Heading", { exact: true })
+    .fill("HARD RULES");
+  const rules = part(page, "HARD RULES");
+  await rules
+    .getByLabel("Text", { exact: true })
     .fill("1. Every claim traces to this base.\n2. No invented metric.");
-  await save(page, "Facts");
+  await expect(rules.getByText("Saved", { exact: true })).toBeVisible();
+  await rules.getByRole("button", { name: "Done" }).click();
+  await expect(rules.getByText("Applied to your profile:")).toBeVisible();
+  expect((await stored(page)).completeness.sections.facts?.percent).toBe(100);
 
-  // Skills
-  await openTab(page, "Skills");
-  await page.getByLabel("Years of experience", { exact: true }).fill("4");
-  await page
-    .getByRole("button", { name: "Add category to competencies you have" })
+  // Skills: without a model key, About you shows them as fields (owner, 2026-11-07).
+  const skills = page.getByRole("form", { name: "Skills" });
+  await skills.getByLabel("Years of experience", { exact: true }).fill("4");
+  await skills.getByRole("button", { name: /^What I have,/ }).click();
+  await skills
+    .getByRole("button", { name: "Add category to what I have" })
     .click();
-  await page
-    .getByLabel("Name of have category 1", { exact: true })
+  await skills
+    .getByLabel("Name of category 1 of what I have", { exact: true })
     .fill("agents");
-  await addTerm(page, "agents", "agent");
+  const term = skills.getByLabel("New term for agents", { exact: true });
+  await term.fill("agent");
+  await term.press("Enter");
   await save(page, "Skills");
 
   // Search, in Find jobs: every search runs the job websites ticked there (owner, 2026-10-28),
@@ -186,44 +213,45 @@ test("a new account fills its profile from empty to 100% in the browser", async 
   await setup.getByLabel("Remote preference").selectOption("hybrid");
   await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
-  // The search is in Settings, Search now: its completeness is read from the api.
-  const searched = (await (await page.request.get("/api/profile")).json()) as {
-    completeness: { sections: { search: { percent: number } } };
-  };
-  expect(searched.completeness.sections.search.percent).toBe(100);
-  await page.goto("/profile?tab=identity");
+  expect((await stored(page)).completeness.sections.search?.percent).toBe(100);
 
-  // Answers
-  await openTab(page, "Answers");
-  await page.getByRole("button", { name: "Add country" }).click();
-  await page.getByLabel("Country or region 1", { exact: true }).fill("France");
-  await page
+  // Answers: like the skills, fields of About you without a model key.
+  await page.goto("/profile");
+  const answers = page.getByRole("form", { name: "Answers" });
+  await answers.getByRole("button", { name: /^Work authorisation,/ }).click();
+  await answers.getByRole("button", { name: "Add country" }).click();
+  await answers
+    .getByLabel("Country or region 1", { exact: true })
+    .fill("France");
+  await answers
     .getByLabel("Answer for country 1", { exact: true })
     .fill("French citizen, no sponsorship needed.");
-  await page.getByLabel("Notice period", { exact: true }).fill("One month.");
-  await page.getByLabel("Earliest start", { exact: true }).fill("January 2027");
-  await page
+  await answers
+    .getByRole("button", { name: /^Availability and conditions,/ })
+    .click();
+  await answers.getByLabel("Notice period", { exact: true }).fill("One month.");
+  await answers
+    .getByLabel("Earliest start", { exact: true })
+    .fill("January 2027");
+  await answers
     .getByLabel("Salary policy", { exact: true })
     .fill("Against the band for the role.");
-  await page
+  await answers.getByRole("button", { name: /^In your own words,/ }).click();
+  await answers
     .getByLabel("Motivation", { exact: true })
     .fill("I turn prototypes into products.");
   await save(page, "Answers");
-
-  await expect(completeness(page)).toHaveAttribute("aria-valuenow", "100");
+  await expect(completeness(page)).toHaveText("100% complete");
   expect(errors).toEqual([]);
 });
 
 test("edit a section twice, compare in History, restore the first version", async () => {
-  await openTab(page, "Identity");
   const headline = page.getByLabel("Headline", { exact: true });
   await headline.fill(SECOND);
   await page.getByLabel("City", { exact: true }).fill("Paris");
   await save(page, "Identity"); // revision 7
 
-  await page.getByRole("button", { name: "History of identity" }).click();
-  const drawer = page.getByRole("dialog", { name: "Identity history" });
-  await expect(drawer).toBeVisible();
+  const drawer = await openHistory(page, "Identity");
   const versions = drawer.getByRole("navigation", {
     name: "Versions of identity",
   });
@@ -262,14 +290,17 @@ test("edit a section twice, compare in History, restore the first version", asyn
   );
 
   // The fact base compares line by line.
-  await openTab(page, "Facts");
-  await page.getByRole("button", { name: "HARD RULES, block 1" }).click();
-  await page
-    .getByLabel("Text of block 1", { exact: true })
+  const rules = part(page, "HARD RULES");
+  await rules.getByRole("button", { name: "Edit HARD RULES" }).click();
+  await rules
+    .getByLabel("Text", { exact: true })
     .fill("1. Every claim traces to this base.\n3. Lead with the business.");
-  await save(page, "Facts"); // revision 9
-  await page.getByRole("button", { name: "History of facts" }).click();
-  const factsDrawer = page.getByRole("dialog", { name: "Facts history" });
+  await expect(rules.getByText("Saved", { exact: true })).toBeVisible();
+  await rules.getByRole("button", { name: "Done" }).click(); // revision 9
+  await expect
+    .poll(async () => (await stored(page)).revision, { timeout: 15_000 })
+    .toBe(9);
+  const factsDrawer = await openHistory(page, "Facts");
   await factsDrawer.getByRole("button", { name: /^Revision 3, saved/ }).click();
   const lines = factsDrawer.getByRole("list", {
     name: "Lines of the fact base",
@@ -285,13 +316,13 @@ test("edit a section twice, compare in History, restore the first version", asyn
   await expect(factsDrawer).toBeHidden();
 
   // After a reload the restored version is still there.
-  await page.goto("/profile?tab=identity");
+  await page.goto("/profile");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(FIRST);
   expect(errors).toEqual([]);
 });
 
 test("export, change, import the export back: data and completeness restored", async () => {
-  await page.getByRole("button", { name: "Export or import" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
   const download = page.waitForEvent("download");
   await page.getByRole("menuitem", { name: "Export profile" }).click();
   const file = await download;
@@ -313,17 +344,18 @@ test("export, change, import the export back: data and completeness restored", a
     "I turn prototypes into products.",
   );
 
-  // Change two sections; the answers lose a required field.
+  // Change two sections; the answers lose a required field (through the api, as above).
+  await putSection(page, "answers", (answers) => ({
+    ...answers,
+    motivation: null,
+  }));
+  await page.reload();
   await page.getByLabel("City", { exact: true }).fill("Marseille");
   await save(page, "Identity");
-  await openTab(page, "Answers");
-  await page.getByLabel("Motivation", { exact: true }).fill("");
-  await page.getByRole("button", { name: "Save answers" }).click();
-  await expect(page.getByText("Answers saved.").first()).toBeVisible();
-  await expect(completeness(page)).toHaveAttribute("aria-valuenow", "97");
+  await expect(completeness(page)).toHaveText("97% complete");
 
   // A file that is not an export is refused in the browser.
-  await page.getByRole("button", { name: "Export or import" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
   await page.getByRole("menuitem", { name: "Import profile" }).click();
   const dialog = page.getByRole("dialog", { name: "Import profile" });
   const input = dialog.getByLabel("Profile file");
@@ -362,20 +394,23 @@ test("export, change, import the export back: data and completeness restored", a
   await dialog.getByRole("button", { name: "Replace my profile" }).click();
   await expect(page.getByText("Profile imported.")).toBeVisible();
   await expect(dialog).toBeHidden();
-  await expect(completeness(page)).toHaveAttribute("aria-valuenow", "100");
-  await expect(page.getByLabel("Motivation", { exact: true })).toHaveValue(
+  await expect(completeness(page)).toHaveText("100% complete");
+  await expect(page.getByLabel("City", { exact: true })).toHaveValue(
+    "Bordeaux",
+  );
+  const imported = await stored(page);
+  expect(imported.sections.answers?.motivation).toBe(
     "I turn prototypes into products.",
   );
 
   // Persisted: a reload shows the imported data, and the history records the import.
-  await page.goto("/profile?tab=identity");
+  await page.goto("/profile");
   await expect(page.getByLabel("City", { exact: true })).toHaveValue(
     "Bordeaux",
   );
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(FIRST);
-  await expect(completeness(page)).toHaveAttribute("aria-valuenow", "100");
-  await page.getByRole("button", { name: "History of identity" }).click();
-  const drawer = page.getByRole("dialog", { name: "Identity history" });
+  await expect(completeness(page)).toHaveText("100% complete");
+  const drawer = await openHistory(page, "Identity");
   // 6 fills, an identity edit, the restore, a facts edit, 2 edits (10, 11), then the import
   // saves the six sections as 12 to 17, identity first.
   await expect(

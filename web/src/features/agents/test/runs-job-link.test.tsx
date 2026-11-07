@@ -66,8 +66,8 @@ afterEach(() => {
 describe("runs and their job (A3)", () => {
   it("links each run on a job to that job, outside the run's own link", async () => {
     renderApp("/runs");
-    const list = await screen.findByRole("list", { name: "Runs" });
-    const rows = within(list).getAllByRole("listitem");
+    const table = await screen.findByRole("table", { name: "Runs" });
+    const rows = within(table).getAllByRole("row").slice(1);
     const job = within(rows[0]!).getByRole("link", {
       name: "Applied AI Engineer at Mistral AI",
     });

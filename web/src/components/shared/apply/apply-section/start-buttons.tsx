@@ -31,7 +31,7 @@ export function StartButtons({
       <>
         <p className="text-sm text-muted-foreground">{LINKEDIN_OFF}</p>
         {linkedinPosting ? (
-          <Button variant="outline" className="w-full sm:w-fit" asChild>
+          <Button variant="outline" className="w-full @sm:w-fit" asChild>
             <a href={linkedinPosting} target="_blank" rel="noopener noreferrer">
               Open LinkedIn and apply myself
             </a>
@@ -42,7 +42,7 @@ export function StartButtons({
   return (
     <>
       <Button
-        className="w-full sm:w-fit"
+        className="w-full @sm:w-fit"
         disabled={busy || !settingsRead}
         onClick={() => {
           onStart("apply");
@@ -55,7 +55,7 @@ export function StartButtons({
       </Button>
       <Button
         variant="outline"
-        className="w-full sm:w-fit"
+        className="w-full @sm:w-fit"
         disabled={busy}
         onClick={() => {
           onStart("manual");

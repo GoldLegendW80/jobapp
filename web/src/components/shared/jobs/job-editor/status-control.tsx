@@ -35,12 +35,11 @@ export function StatusControl({ job, save }: { job: JobDetail; save: Save }) {
   };
 
   return (
-    <Field className="w-auto gap-1.5">
+    <Field className="gap-1.5">
       <FieldLabel htmlFor={id}>Status</FieldLabel>
       <NativeSelect
         id={id}
         value={job.status}
-        className="sm:w-48"
         onChange={(event) => {
           const next = event.target.value;
           if (next === job.status) return;

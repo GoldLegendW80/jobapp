@@ -2,7 +2,6 @@ import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 import type { Control, FieldPath, FieldValues } from "react-hook-form";
 
-import { Button } from "@/components/ui/button";
 import {
   FormControl,
   FormDescription,
@@ -11,7 +10,12 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 
 /**
  * A password input with its label, optional hint, error and a show toggle: a real button with
@@ -41,38 +45,37 @@ export function PasswordField<T extends FieldValues>({
       render={({ field }) => (
         <FormItem>
           <FormLabel>{label}</FormLabel>
-          <div className="relative">
+          <InputGroup data-disabled={disabled}>
             <FormControl>
-              <Input
+              <InputGroupInput
                 type={shown ? "text" : "password"}
                 autoComplete={autoComplete}
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
-                className="pr-11"
                 disabled={disabled}
                 {...field}
               />
             </FormControl>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
-              aria-label={`Show ${label.toLowerCase()}`}
-              aria-pressed={shown}
-              disabled={disabled}
-              onClick={() => {
-                setShown((value) => !value);
-              }}
-            >
-              {shown ? (
-                <EyeOff aria-hidden="true" />
-              ) : (
-                <Eye aria-hidden="true" />
-              )}
-            </Button>
-          </div>
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                size="icon-sm"
+                className="hover:text-foreground"
+                aria-label={`Show ${label.toLowerCase()}`}
+                aria-pressed={shown}
+                disabled={disabled}
+                onClick={() => {
+                  setShown((value) => !value);
+                }}
+              >
+                {shown ? (
+                  <EyeOff aria-hidden="true" />
+                ) : (
+                  <Eye aria-hidden="true" />
+                )}
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
           {description ? (
             <FormDescription>{description}</FormDescription>
           ) : null}

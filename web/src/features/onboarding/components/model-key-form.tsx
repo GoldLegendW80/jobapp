@@ -10,7 +10,12 @@ import { useId, useState, type FormEvent } from "react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import {
   Field,
   FieldDescription,
@@ -107,7 +112,7 @@ export function ModelKeyForm() {
     return (
       <section
         aria-labelledby={ids.title}
-        className="flex flex-col gap-3 rounded-md border p-4"
+        className="flex flex-col gap-3 border-t pt-5"
         data-simple-card
       >
         <h3 id={ids.title} className="text-sm font-medium">
@@ -164,7 +169,7 @@ export function ModelKeyForm() {
   return (
     <section
       aria-labelledby={ids.title}
-      className="flex flex-col gap-3 rounded-md border p-4"
+      className="flex flex-col gap-3 border-t pt-5"
       data-simple-card
     >
       <h3 id={ids.title} className="text-sm font-medium">
@@ -200,8 +205,8 @@ export function ModelKeyForm() {
           <FieldLabel htmlFor={ids.secret} className="leading-none">
             {WORDING.apiKey}
           </FieldLabel>
-          <div className="relative">
-            <Input
+          <InputGroup>
+            <InputGroupInput
               id={ids.secret}
               name="secret"
               type={shown ? "text" : "password"}
@@ -209,7 +214,7 @@ export function ModelKeyForm() {
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
-              className="pr-11 font-mono"
+              className="font-mono"
               placeholder="sk-ant-api03-…"
               value={secret}
               maxLength={4096}
@@ -222,24 +227,24 @@ export function ModelKeyForm() {
                 setSecretError(undefined);
               }}
             />
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
-              aria-label={WORDING.showApiKey}
-              aria-pressed={shown}
-              onClick={() => {
-                setShown((value) => !value);
-              }}
-            >
-              {shown ? (
-                <EyeOff aria-hidden="true" />
-              ) : (
-                <Eye aria-hidden="true" />
-              )}
-            </Button>
-          </div>
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                size="icon-sm"
+                className="hover:text-foreground"
+                aria-label={WORDING.showApiKey}
+                aria-pressed={shown}
+                onClick={() => {
+                  setShown((value) => !value);
+                }}
+              >
+                {shown ? (
+                  <EyeOff aria-hidden="true" />
+                ) : (
+                  <Eye aria-hidden="true" />
+                )}
+              </InputGroupButton>
+            </InputGroupAddon>
+          </InputGroup>
           <FieldDescription id={ids.hint} className="text-xs nth-last-2:mt-0">
             It is stored encrypted and never shown again: only its last four
             characters are.

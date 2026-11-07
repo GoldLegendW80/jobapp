@@ -17,12 +17,12 @@ const shots = makeShots("profile-about", "about");
 
 /**
  * The one page profile and its About you document (SPEC-profile, "About you") against the real
- * stack through Caddy: a fresh account gets a made up profile through the operator CLI, finds its
- * skills, facts and answers written once as text (the jobs stay a form, the search is in
- * Settings, Search), saves a fact part to the profile at Done without a key, edits the Skills
- * part in place, sees without a key what is missing, saves a made up API key, clicks Update my
- * profile (the worker replays the fake stream `profile_interpret`: no model is called), reads what
- * the app understood (the years and two skills changed, one term the text does not write
+ * stack through Caddy: a fresh account gets a made up profile through the operator CLI and, with
+ * no model key, finds its skills and answers as fields and its facts as text (the jobs stay a
+ * form, the search is in Settings, Search). It saves a fact part to the profile at Done, changes
+ * an answer by hand (owner, 2026-11-07), saves a made up API key, edits the Skills part in place,
+ * clicks Done (the worker replays the fake stream `profile_interpret`: no model is called), reads
+ * what the app understood (the years and two skills changed, one term the text does not write
  * refused), applies it in one click and undoes it.
  *
  * Locally, on a scratch Compose project with the fake agent backend (as profile-titles):
@@ -130,6 +130,7 @@ async function profile() {
     sections: {
       skills: { years_experience: number; have: { terms: string[] }[] };
       facts: { blocks: { title: string; body: string }[] };
+      answers: { notice_period: string | null };
     };
   };
 }
@@ -145,7 +146,7 @@ test.afterAll(async () => {
   clearAttempts([EMAIL]);
 });
 
-test("the profile is one page and About you holds the skills, facts and answers as text", async () => {
+test("the profile is one page; without a key About you holds the skills and answers as fields", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   expect(cliImportProfile(EMAIL, fakeExport())).toMatch(/revision/i);
@@ -159,10 +160,20 @@ test("the profile is one page and About you holds the skills, facts and answers 
       .getByRole("navigation", { name: "Parts of About you" })
       .getByRole("link"),
   ).toHaveText(["Skills", "Answers"]);
-  await expect(skills()).toContainText("data: SQL, dbt");
-  await expect(page.getByRole("region", { name: "Answers" })).toContainText(
-    "Three months.",
-  );
+  const fields = page.getByRole("form", { name: "Skills" });
+  await expect(
+    fields.getByLabel("Years of experience", { exact: true }),
+  ).toHaveValue("4");
+  await expect(
+    fields.getByRole("button", { name: "What I have, data" }),
+  ).toBeVisible();
+  const answers = page.getByRole("form", { name: "Answers" });
+  await answers
+    .getByRole("button", { name: /^Availability and conditions,/ })
+    .click();
+  await expect(
+    answers.getByLabel("Notice period", { exact: true }),
+  ).toHaveValue("Three months.");
   // The jobs stay a form; the search is in Settings, Search.
   await expect(page.getByRole("form", { name: "Experience" })).toBeVisible();
   await expect(page.getByRole("form", { name: "Search" })).toHaveCount(0);
@@ -182,26 +193,23 @@ test("a fact part is saved to the profile at Done, without a key", async () => {
   ]);
 });
 
-test("without a key the skills text saves and the line under Done says what is missing", async () => {
-  await skills().getByRole("button", { name: "Edit Skills" }).click();
+test("without a key an answer changes by hand and the Answers part is written again", async () => {
   await expect(
-    skills().getByText(
-      "The app needs a model key to update your profile from this text.",
-    ),
-  ).toBeVisible();
+    skills().getByRole("button", { name: "Edit Skills" }),
+  ).toHaveCount(0);
   await expect(
     skills().getByRole("link", { name: "Add one on the Account page" }),
   ).toHaveAttribute("href", "/account");
-  await skills().getByLabel("Text").fill(EDITED);
-  await expect(skills().getByRole("region", { name: "Preview" })).toContainText(
-    "Java",
-  );
-  await skills().getByRole("button", { name: "Done" }).click();
-  await expect(skills().getByLabel("Text")).toHaveCount(0);
-  await expect(skills()).toContainText(
-    "Your profile does not have this text yet.",
-  );
-  // The text saved; the profile did not change.
+  const answers = page.getByRole("form", { name: "Answers" });
+  await answers
+    .getByLabel("Notice period", { exact: true })
+    .fill("Two months.");
+  await answers.getByRole("button", { name: "Save answers" }).click();
+  await expect(page.getByText("Answers saved.").first()).toBeVisible();
+  await expect
+    .poll(async () => (await profile()).sections.answers.notice_period)
+    .toBe("Two months.");
+  // The skills did not change.
   expect((await profile()).sections.skills.years_experience).toBe(4);
   await shots(page, "no-key");
 });
@@ -213,8 +221,14 @@ test("with a key: what the app understood, Apply writes it, Undo puts it back", 
   });
   expect(saved.status()).toBe(200);
   await page.reload();
+  // With a key the skills are text again: the part is edited in place and Done reads it.
+  await skills().getByRole("button", { name: "Edit Skills" }).click();
   await expect(skills()).toContainText(/at list prices\./);
-  await skills().getByRole("button", { name: "Update my profile" }).click();
+  await skills().getByLabel("Text").fill(EDITED);
+  await expect(skills().getByRole("region", { name: "Preview" })).toContainText(
+    "Java",
+  );
+  await skills().getByRole("button", { name: "Done" }).click();
   const understood = skills().getByRole("region", {
     name: "What the app understood",
   });

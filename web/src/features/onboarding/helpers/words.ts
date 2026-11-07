@@ -25,6 +25,10 @@ export {
 
 import { splitTerms, type Draft, type PayDraft, type StepId } from "./steps";
 
+/** The welcome page's one line under its title. */
+export const WELCOME_LINE =
+  "A few short answers, and the app looks for postings that fit. You can change every answer later in your profile.";
+
 /** What "Start" says once the first search was asked for, by the api's answer. */
 export const SWEEP_SENTENCE = {
   started:

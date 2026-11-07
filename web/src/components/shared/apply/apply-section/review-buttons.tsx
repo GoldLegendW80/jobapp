@@ -26,7 +26,7 @@ export function ReviewButtons({
   const blocking = blockingFields(approval.answers);
   return (
     <>
-      <div className="flex w-full flex-col gap-1 sm:w-fit">
+      <div className="flex w-full flex-col gap-1 @sm:w-fit">
         <Button
           disabled={busy || blocking.length > 0 || unsaved > 0}
           onClick={onApprove}
@@ -50,7 +50,7 @@ export function ReviewButtons({
       </div>
       <Button
         variant="outline"
-        className="w-full sm:w-fit"
+        className="w-full @sm:w-fit"
         disabled={busy}
         onClick={onReject}
       >

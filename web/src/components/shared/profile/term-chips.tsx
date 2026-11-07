@@ -22,7 +22,12 @@ import {
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -231,8 +236,8 @@ export function TermChips<F extends FieldValues>({
           })}
         </ul>
       )}
-      <div className="flex gap-2">
-        <Input
+      <InputGroup className="h-8">
+        <InputGroupInput
           aria-label={`New term for ${label}`}
           aria-invalid={problem ? true : undefined}
           aria-describedby={problem ? `${id}-problem` : undefined}
@@ -244,24 +249,20 @@ export function TermChips<F extends FieldValues>({
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
-          className={cn("h-8", isAdvanced && "font-mono")}
+          className={cn(isAdvanced && "font-mono")}
           onChange={(event) => {
             setDraft(event.target.value);
             if (problem) setProblem(undefined);
           }}
           onKeyDown={onKeyDown}
         />
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          aria-label={`Add term to ${label}`}
-          onClick={add}
-        >
-          <Plus aria-hidden="true" />
-          Add
-        </Button>
-      </div>
+        <InputGroupAddon align="inline-end">
+          <InputGroupButton aria-label={`Add term to ${label}`} onClick={add}>
+            <Plus aria-hidden="true" />
+            Add
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
       {problem ? (
         <p
           id={`${id}-problem`}

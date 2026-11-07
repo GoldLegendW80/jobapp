@@ -1,7 +1,9 @@
 /**
  * Calls of /api/browser (SPEC-browser.md, API): the person's browser, their session in the live
  * view, the live view's one use ticket, and who holds the keyboard and the mouse. The user always
- * comes from the session; no lease id is ever sent.
+ * comes from the session; no lease id is ever sent. Two browsers at once (owner, 2026-11-06): the
+ * person's browser has up to two windows (slots), one lease each; the ticket, Take over and Give
+ * back name the slot of the window they are for.
  */
 import { z } from "zod";
 
@@ -24,6 +26,9 @@ const leaseSchema = z.object({
   max_s: z.number(),
   // The id of the application a submit lease sends (apply), else null.
   application_id: z.string().nullable().optional(),
+  // The window of the person's browser this lease uses, and the sweep's website it searches.
+  slot: z.number().int().nonnegative().optional(),
+  source_id: z.string().nullable().optional(),
 });
 export type Lease = z.infer<typeof leaseSchema>;
 
@@ -56,6 +61,10 @@ export const browserSchema = z.object({
     last_used_at: z.string().nullable(),
   }),
   lease: leaseSchema.nullable(),
+  // Every lease of the person, one per window (slot); `lease` is the first.
+  slots: z.array(leaseSchema).optional(),
+  // The person's own browsers at once, as an admin set it (2026-11-07).
+  browsers: z.number().int().positive().optional(),
   holder: z.enum(["you", "other"]).nullable(),
   queue: z.array(queueSchema),
 });
@@ -114,28 +123,35 @@ export function forgetLogins(): Promise<void> {
   return request("/browser/profile", { method: "DELETE" });
 }
 
-/** A ticket for one websocket of the live view, bound to this tab's `viewer` id. */
-export function liveTicket(viewer: string): Promise<Ticket> {
+/** The person's own leases now, one per window of their browser. */
+export function leasesOf(browser: Browser | undefined): Lease[] {
+  if (browser?.holder !== "you") return [];
+  if (browser.slots?.length) return browser.slots;
+  return browser.lease ? [browser.lease] : [];
+}
+
+/** A ticket for one websocket of the live view of window `slot`, bound to this tab's `viewer` id. */
+export function liveTicket(viewer: string, slot = 0): Promise<Ticket> {
   return request("/browser/live/ticket", {
     method: "POST",
-    body: { viewer },
+    body: { viewer, slot },
     validate: (data) => ticketSchema.parse(data),
   });
 }
 
-export function takeOver(viewer: string): Promise<InputHolder> {
+export function takeOver(viewer: string, slot = 0): Promise<InputHolder> {
   return request("/browser/takeover", {
     method: "POST",
-    body: { viewer },
+    body: { viewer, slot },
     validate: (data) => inputSchema.parse(data).input,
   });
 }
 
 /** Gives the input back to the assistant, only if this view (`viewer`) is the one that holds it. */
-export function giveBack(viewer: string): Promise<InputHolder> {
+export function giveBack(viewer: string, slot = 0): Promise<InputHolder> {
   return request("/browser/giveback", {
     method: "POST",
-    body: { viewer },
+    body: { viewer, slot },
     validate: (data) => inputSchema.parse(data).input,
   });
 }

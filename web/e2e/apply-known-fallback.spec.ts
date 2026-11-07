@@ -326,7 +326,9 @@ test("a changed hosted Ashby form uses the default worker and submits only after
     noLeft(view);
     expect(await sent()).toEqual([]);
     await reviewPage.goto(`/jobs/${job.id}`);
-    const section = reviewPage.getByRole("region", { name: "Apply" });
+    const section = reviewPage.getByRole("region", {
+      name: "Your application",
+    });
     await shots(reviewPage, "hosted-review");
     await section.getByRole("button", { name: "Approve and submit" }).click();
     await reviewPage

@@ -111,7 +111,9 @@ afterEach(() => {
 async function openSection() {
   const user = userEvent.setup();
   renderApp(PATH);
-  const heading = await screen.findByRole("heading", { name: "Apply" });
+  const heading = await screen.findByRole("heading", {
+    name: "Your application",
+  });
   return { user, section: heading.closest("section") as HTMLElement };
 }
 

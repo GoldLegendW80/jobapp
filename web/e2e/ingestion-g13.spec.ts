@@ -246,11 +246,13 @@ test("accept a whole section: one revision in the History drawer of the profile"
     relocation: "Open to moving within France",
   });
 
-  await page.goto("/profile?tab=identity");
-  await page.getByRole("tab", { name: /^Answers,/ }).click();
-  await page.getByRole("button", { name: "History of answers" }).click();
+  await page.goto("/profile");
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "History" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await page.getByRole("menuitem", { name: "Answers", exact: true }).click();
   const versions = page
-    .getByRole("dialog")
+    .getByRole("dialog", { name: "Answers history" })
     .getByLabel("Versions of answers")
     .getByRole("listitem");
   await expect(versions).toHaveCount(1);

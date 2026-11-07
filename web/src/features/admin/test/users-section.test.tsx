@@ -14,7 +14,7 @@ const HOUR = 3_600_000;
 const LAST_ADMIN =
   "This is the last active admin. Make someone else an admin first, then try again.";
 
-const me: AdminUser = { ...admin, is_active: true, sessions: 2 };
+const me: AdminUser = { ...admin, is_active: true, sessions: 2, browsers: 2 };
 
 let serial = 100;
 function makeUser(overrides: Partial<AdminUser> = {}): AdminUser {
@@ -28,6 +28,7 @@ function makeUser(overrides: Partial<AdminUser> = {}): AdminUser {
     created_at: new Date().toISOString(),
     last_login_at: new Date(Date.now() - 3 * HOUR).toISOString(),
     sessions: 1,
+    browsers: 2,
     ...overrides,
   };
 }
@@ -70,6 +71,7 @@ function fakeUsers(
         limit,
         offset,
         active_admins: activeAdmins(),
+        browsers_max: 2,
       });
     }),
     http.patch("*/api/admin/users/:id", async ({ params, request }) => {
@@ -177,6 +179,7 @@ describe("accounts table", () => {
       "Status",
       "Last sign in",
       "Sessions",
+      "Browsers at once",
       "Actions",
     ]);
 
@@ -475,5 +478,67 @@ describe("actions", () => {
       await screen.findByRole("heading", { level: 1, name: "Jobs" }),
     ).toBeInTheDocument();
     expect(state.patches).toEqual([{ id: me.id, body: { role: "member" } }]);
+  });
+});
+
+describe("browsers at once", () => {
+  // Owner, 2026-11-07: "As an admin, i want being able to set the make browser parallel by
+  // person". Every account starts at the server's most; the pick saves at once.
+  it("lowers one account to 1 at once, the admin's own row too, and says so", async () => {
+    fakeSession(admin);
+    const mia = makeUser({ name: "Mia" });
+    const state = fakeUsers([me, mia]);
+    const user = userEvent.setup();
+    renderApp("/admin/users");
+
+    const group = within(await rowOf("Mia")).getByRole("radiogroup", {
+      name: "Browsers at once for Mia",
+    });
+    expect(within(group).getByRole("radio", { name: "2" })).toBeChecked();
+    await user.click(within(group).getByRole("radio", { name: "1" }));
+    expect(
+      await screen.findByText("Mia now has 1 browser at once."),
+    ).toBeInTheDocument();
+    expect(state.patches).toEqual([{ id: mia.id, body: { browsers: 1 } }]);
+    await waitFor(async () => {
+      expect(
+        within(await rowOf("Mia")).getByRole("radio", { name: "1" }),
+      ).toBeChecked();
+    });
+
+    const mine = within(await rowOf(me.name)).getByRole("radiogroup", {
+      name: `Browsers at once for ${me.name}`,
+    });
+    await user.click(within(mine).getByRole("radio", { name: "1" }));
+    await waitFor(() => {
+      expect(state.patches).toHaveLength(2);
+    });
+    expect(state.patches[1]).toEqual({ id: me.id, body: { browsers: 1 } });
+  });
+
+  it("shows the api's refusal and keeps the saved value", async () => {
+    fakeSession(admin);
+    const mia = makeUser({ name: "Mia" });
+    fakeUsers([me, mia], {
+      patch: () =>
+        HttpResponse.json(
+          { detail: "Browsers at once is 1 to 2." },
+          { status: 422 },
+        ),
+    });
+    const user = userEvent.setup();
+    renderApp("/admin/users");
+    const group = within(await rowOf("Mia")).getByRole("radiogroup", {
+      name: "Browsers at once for Mia",
+    });
+    await user.click(within(group).getByRole("radio", { name: "1" }));
+    expect(
+      await screen.findByText("Browsers at once is 1 to 2."),
+    ).toBeInTheDocument();
+    await waitFor(async () => {
+      expect(
+        within(await rowOf("Mia")).getByRole("radio", { name: "2" }),
+      ).toBeChecked();
+    });
   });
 });

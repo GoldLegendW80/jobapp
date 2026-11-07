@@ -8,7 +8,6 @@ import {
   cliLink,
   makeShots,
   newContext,
-  openPostingMore,
   setPassword,
   watchErrors,
 } from "./stack";
@@ -92,9 +91,6 @@ test("without a credential, Assess with agent is disabled and says why", async (
   const job = (await created.json()) as { id: string };
   jobUrl = `/jobs/${job.id}`;
   await page.goto(jobUrl);
-  // The assessment, the notes and the history are folded under "More about this posting"; the
-  // page keeps it open from here on, reloads included.
-  await openPostingMore(page);
   await expect(section()).toBeVisible();
   const button = section().getByRole("button", { name: "Assess with agent" });
   await expect(button).toBeDisabled();
@@ -200,7 +196,7 @@ test("a second assessment's note is edited, then accepted", async () => {
 
 test("/runs links both triage runs to the job", async () => {
   await page.goto("/runs");
-  const list = page.getByRole("list", { name: "Runs" });
+  const list = page.getByRole("table", { name: "Runs" });
   const links = list.getByRole("link", {
     name: "Applied AI Engineer at Example Agents",
   });

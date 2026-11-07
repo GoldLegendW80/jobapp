@@ -43,7 +43,7 @@ export function templateLabel(slug: string): string {
 
 export const WAIT_SENTENCES: Record<WaitReason, string> = {
   consent:
-    "Waiting for you to confirm what is sent. Open the CV tab of your profile.",
+    "Waiting for you to confirm what is sent. Open Your CVs on your profile.",
   credential: "Waiting for a model credential. Add one in your account.",
   base_cv: "Waiting for your base CV to exist.",
   daily_ceiling:

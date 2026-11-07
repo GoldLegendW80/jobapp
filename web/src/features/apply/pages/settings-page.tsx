@@ -1,18 +1,13 @@
 import { CircleAlert } from "lucide-react";
-import { useId, useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
-import { PageHeader } from "@/components/blocks/page-header";
+import { LoadError } from "@/components/blocks/load-error";
+import { LoadingCard } from "@/components/blocks/loading-card";
+import { PageBody } from "@/components/blocks/page";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Field,
@@ -25,15 +20,15 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { message } from "@/features/admin/helpers/errors";
-import { SettingsTabs } from "@/components/shared/profile/settings-tabs";
+import {
+  SettingsFrame,
+  SettingsSection,
+} from "@/components/shared/profile/settings-frame";
 import { useTitle } from "@/hooks/use-title";
 
 import { AnswerBank } from "../components/answer-bank";
 import { CapsEditor } from "../components/caps-editor";
-import {
-  FullAutoAdvanced,
-  FullAutoModeCard,
-} from "../components/full-auto-settings";
+import { FullAutoSection } from "../components/full-auto-settings";
 import { readFit, type ApplySettings } from "../api/settings-api";
 import {
   useApplySettings,
@@ -41,69 +36,47 @@ import {
 } from "../api/use-apply-settings";
 
 /**
- * /settings/applications, "Applications" (SPEC-apply.md, "Frontend", Settings): what Apply does
- * (the review box, issue #738), the mode after a Like (Review first or Full auto, full-auto-settings.tsx), the pause switch, the three fit
- * thresholds labelled apart (only "Apply automatically from" is changed here), the Advanced
- * values (the hold length is changed there), the company caps and the saved answers.
+ * /settings/applications, Settings, Applications (SPEC-apply.md, "Frontend", Settings): what
+ * Apply does (the review box, issue #738), the mode after a Like (Review first or Full auto, with
+ * its Advanced hold length, full-auto-settings.tsx), the pause switch, the three fit thresholds
+ * side by side (only "Apply automatically from" is changed here), the company caps and the saved
+ * answers.
  */
 export function ApplicationsSettingsPage() {
   useTitle("Application settings");
   const query = useApplySettings();
 
   return (
-    <div className="mx-auto flex max-w-xl flex-col gap-8">
-      <PageHeader
-        title="Application settings"
-        description="How the app applies for you: what Apply does, what a Like does, the pause switch, your fit thresholds, your company caps and your saved answers."
-      />
-      <SettingsTabs />
-      {query.isPending ? (
-        <p
-          role="status"
-          className="flex items-center gap-2 text-sm text-muted-foreground"
-        >
-          <Spinner aria-hidden="true" role={undefined} />
-          Loading your settings
-        </p>
-      ) : query.isError ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription className="flex flex-col items-start gap-2">
-            {message(query.error)}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void query.refetch()}
-            >
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <>
-          <ReviewBeforeSendCard settings={query.data} />
-          <FullAutoModeCard settings={query.data} />
-          <PauseCard settings={query.data} />
-          <ThresholdCard
-            id="show-postings"
-            heading="Show postings from"
-            value={query.data.show_postings_from}
-            sentence="Postings are listed from this fit score. You set it on your profile, Search, as Minimum fit."
-            link={{ to: "/settings/search", text: "Open Settings, Search" }}
-          />
-          <ThresholdCard
-            id="write-documents"
-            heading="Write documents from"
-            value={query.data.write_documents_from}
-            sentence="The app writes a CV and a letter for postings from this fit score. It is a documents setting, read only here."
-          />
-          <MinFitCard settings={query.data} />
-          <FullAutoAdvanced settings={query.data} />
-        </>
-      )}
-      <CapsEditor />
-      <AnswerBank />
-    </div>
+    <SettingsFrame>
+      <PageBody>
+        {query.isPending ? (
+          <LoadingCard>Loading your settings</LoadingCard>
+        ) : query.isError ? (
+          <LoadError query={query}>
+            Your settings could not be loaded.
+          </LoadError>
+        ) : (
+          <>
+            <ReviewBeforeSendSection settings={query.data} />
+            <FullAutoSection settings={query.data} />
+            <PauseSection settings={query.data} />
+            <ThresholdsSection settings={query.data} />
+          </>
+        )}
+        <CapsEditor />
+        <AnswerBank />
+      </PageBody>
+    </SettingsFrame>
+  );
+}
+
+function Problem({ text }: { text: string | null }) {
+  if (!text) return null;
+  return (
+    <Alert variant="destructive">
+      <CircleAlert aria-hidden="true" />
+      <AlertDescription>{text}</AlertDescription>
+    </Alert>
   );
 }
 
@@ -112,169 +85,182 @@ export function ApplicationsSettingsPage() {
  * page's Apply then fills the form and sends it; ticked, the fill stops for Approve and submit.
  * Likes follow "After a Like" below, not this box.
  */
-function ReviewBeforeSendCard({ settings }: { settings: ApplySettings }) {
+function ReviewBeforeSendSection({ settings }: { settings: ApplySettings }) {
   const id = useId();
   const save = useSaveApplySettings();
   const [problem, setProblem] = useState<string | null>(null);
   return (
-    <Card aria-labelledby={`${id}-title`}>
-      <CardHeader>
-        <CardTitle>
-          <h2 id={`${id}-title`} className="text-lg">
-            When you click Apply
-          </h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {problem ? (
-          <Alert variant="destructive">
-            <CircleAlert aria-hidden="true" />
-            <AlertDescription>{problem}</AlertDescription>
-          </Alert>
-        ) : null}
-        <Field orientation="horizontal" className="gap-2">
-          <Checkbox
-            id={`${id}-box`}
-            checked={settings.review_before_send}
-            disabled={save.isPending}
-            aria-describedby={`${id}-text`}
-            onCheckedChange={(checked) => {
-              const review = checked === true;
-              setProblem(null);
-              save.mutate(
-                { review_before_send: review },
-                {
-                  onSuccess: () => {
-                    toast.success(
-                      review
-                        ? "You check each filled form before it is sent."
-                        : "Apply now fills the form and sends it for you.",
-                    );
-                  },
-                  onError: (error) => {
-                    setProblem(message(error));
-                  },
+    <SettingsSection
+      title="When you click Apply"
+      description="Whether you check each filled form before it is sent."
+    >
+      <Problem text={problem} />
+      <Field orientation="horizontal" className="gap-2">
+        <Checkbox
+          id={`${id}-box`}
+          checked={settings.review_before_send}
+          disabled={save.isPending}
+          aria-describedby={`${id}-text`}
+          onCheckedChange={(checked) => {
+            const review = checked === true;
+            setProblem(null);
+            save.mutate(
+              { review_before_send: review },
+              {
+                onSuccess: () => {
+                  toast.success(
+                    review
+                      ? "You check each filled form before it is sent."
+                      : "Apply now fills the form and sends it for you.",
+                  );
                 },
-              );
-            }}
-          />
-          <FieldContent className="gap-0.5">
-            <FieldLabel htmlFor={`${id}-box`}>
-              Let me review each filled form before it is sent
-            </FieldLabel>
-            <FieldDescription id={`${id}-text`}>
-              When it is off, Apply fills the form and sends it for you. When it
-              is on, you check each filled form and send it yourself.
-            </FieldDescription>
-          </FieldContent>
-        </Field>
-      </CardContent>
-    </Card>
+                onError: (error) => {
+                  setProblem(message(error));
+                },
+              },
+            );
+          }}
+        />
+        <FieldContent className="gap-0.5">
+          <FieldLabel htmlFor={`${id}-box`}>
+            Let me review each filled form before it is sent
+          </FieldLabel>
+          <FieldDescription id={`${id}-text`}>
+            When it is off, Apply fills the form and sends it for you. When it
+            is on, you check each filled form and send it yourself.
+          </FieldDescription>
+        </FieldContent>
+      </Field>
+    </SettingsSection>
   );
 }
 
-function PauseCard({ settings }: { settings: ApplySettings }) {
+function PauseSection({ settings }: { settings: ApplySettings }) {
   const id = useId();
   const save = useSaveApplySettings();
   const [problem, setProblem] = useState<string | null>(null);
   return (
-    <Card aria-labelledby={`${id}-title`}>
-      <CardHeader>
-        <CardTitle>
-          <h2 id={`${id}-title`} className="text-lg">
-            Pause
-          </h2>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        {problem ? (
-          <Alert variant="destructive">
-            <CircleAlert aria-hidden="true" />
-            <AlertDescription>{problem}</AlertDescription>
-          </Alert>
-        ) : null}
-        <Field orientation="horizontal" className="gap-2">
-          <Switch
-            id={`${id}-switch`}
-            checked={settings.paused}
-            disabled={save.isPending}
-            aria-describedby={`${id}-text`}
-            onCheckedChange={(paused) => {
-              setProblem(null);
-              save.mutate(
-                { paused },
-                {
-                  onSuccess: () => {
-                    toast.success(
-                      paused
-                        ? "Automatic applications paused."
-                        : "Automatic applications back on.",
-                    );
-                  },
-                  onError: (error) => {
-                    setProblem(message(error));
-                  },
+    <SettingsSection
+      title="Pause"
+      description="One switch that stops every automatic application."
+    >
+      <Problem text={problem} />
+      <Field orientation="horizontal" className="gap-2">
+        <Switch
+          id={`${id}-switch`}
+          checked={settings.paused}
+          disabled={save.isPending}
+          aria-describedby={`${id}-text`}
+          onCheckedChange={(paused) => {
+            setProblem(null);
+            save.mutate(
+              { paused },
+              {
+                onSuccess: () => {
+                  toast.success(
+                    paused
+                      ? "Automatic applications paused."
+                      : "Automatic applications back on.",
+                  );
                 },
-              );
-            }}
-          />
-          <FieldContent className="gap-0.5">
-            <FieldLabel htmlFor={`${id}-switch`}>
-              Pause automatic applications
-            </FieldLabel>
-            <FieldDescription id={`${id}-text`}>
-              {settings.paused
-                ? "Paused. The app submits nothing for you until you turn this off; your filled forms wait for you."
-                : "While paused, the app submits nothing for you: an approval is refused and the form waits for you."}
-            </FieldDescription>
-          </FieldContent>
-        </Field>
-      </CardContent>
-    </Card>
+                onError: (error) => {
+                  setProblem(message(error));
+                },
+              },
+            );
+          }}
+        />
+        <FieldContent className="gap-0.5">
+          <FieldLabel htmlFor={`${id}-switch`}>
+            Pause automatic applications
+          </FieldLabel>
+          <FieldDescription id={`${id}-text`}>
+            {settings.paused
+              ? "Paused. The app submits nothing for you until you turn this off; your filled forms wait for you."
+              : "While paused, the app submits nothing for you: an approval is refused and the form waits for you."}
+          </FieldDescription>
+        </FieldContent>
+      </Field>
+    </SettingsSection>
   );
 }
 
-function ThresholdCard({
-  id,
-  heading,
-  value,
-  sentence,
-  link,
+/**
+ * The three fit thresholds side by side: the two set elsewhere, read only with the way to them,
+ * and "Apply automatically from", changed here.
+ */
+function ThresholdsSection({ settings }: { settings: ApplySettings }) {
+  return (
+    <SettingsSection
+      title="Fit thresholds"
+      description="Three fit scores, from 0 to 100: what the app shows you, writes documents for, and applies to by itself."
+      className="@container max-w-none"
+    >
+      <div className="grid gap-6 @3xl:grid-cols-3">
+        <Threshold title="Show postings from">
+          <Score value={settings.show_postings_from} />
+          <p className="text-sm text-muted-foreground">
+            Postings are listed from this fit score. You set it in Settings,
+            Search, as Minimum fit.
+          </p>
+          <ThresholdLink to="/settings/search">
+            Open Settings, Search
+          </ThresholdLink>
+        </Threshold>
+        <Threshold title="Write documents from">
+          <Score value={settings.write_documents_from} />
+          <p className="text-sm text-muted-foreground">
+            The app writes a CV and a letter for postings from this fit score.
+            It is a documents setting, read only here.
+          </p>
+          <ThresholdLink to="/settings/search">
+            Open the documents settings
+          </ThresholdLink>
+        </Threshold>
+        <MinFit settings={settings} />
+      </div>
+    </SettingsSection>
+  );
+}
+
+function Threshold({
+  title,
+  children,
 }: {
-  id: string;
-  heading: string;
-  value: number | null;
-  sentence: string;
-  link?: { to: string; text: string };
+  title: string;
+  children: ReactNode;
 }) {
+  const id = useId();
   return (
-    <Card aria-labelledby={`${id}-title`}>
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 id={`${id}-title`} className="text-lg">
-            {heading}
-          </h2>
-          <span className="text-lg font-semibold tabular-nums">
-            {value ?? "Not set"}
-          </span>
-        </CardTitle>
-        <CardDescription>{sentence}</CardDescription>
-      </CardHeader>
-      {link ? (
-        <CardContent>
-          <Link
-            to={link.to}
-            className="text-sm font-medium underline underline-offset-4"
-          >
-            {link.text}
-          </Link>
-        </CardContent>
-      ) : null}
-    </Card>
+    <section aria-labelledby={id} className="flex min-w-0 flex-col gap-2">
+      <h3 id={id} className="text-sm font-medium">
+        {title}
+      </h3>
+      {children}
+    </section>
   );
 }
 
-function MinFitCard({ settings }: { settings: ApplySettings }) {
+function Score({ value }: { value: number | null }) {
+  return (
+    <p className="text-2xl font-medium tracking-tight tabular-nums">
+      {value ?? "Not set"}
+    </p>
+  );
+}
+
+function ThresholdLink({ to, children }: { to: string; children: string }) {
+  return (
+    <Link
+      to={to}
+      className="w-fit text-sm font-medium underline underline-offset-4"
+    >
+      {children}
+    </Link>
+  );
+}
+
+function MinFit({ settings }: { settings: ApplySettings }) {
   const id = useId();
   const save = useSaveApplySettings();
   const [typed, setTyped] = useState(String(settings.min_fit));
@@ -306,65 +292,53 @@ function MinFitCard({ settings }: { settings: ApplySettings }) {
   const unchanged =
     settings.min_fit_chosen && readFit(typed) === settings.min_fit;
   return (
-    <Card aria-labelledby={`${id}-title`}>
-      <CardHeader>
-        <CardTitle>
-          <h2 id={`${id}-title`} className="text-lg">
-            Apply automatically from
-          </h2>
-        </CardTitle>
-        <CardDescription>
-          Full auto applies only to postings from this fit score.
-          {settings.min_fit_chosen
-            ? null
-            : ` You have not chosen one yet, so ${settings.min_fit} applies.`}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form
-          noValidate
-          aria-label="Apply automatically from"
-          className="flex flex-col gap-3"
-          onSubmit={onSubmit}
-        >
-          {failed ? (
-            <Alert variant="destructive">
-              <CircleAlert aria-hidden="true" />
-              <AlertDescription>{failed}</AlertDescription>
-            </Alert>
+    <Threshold title="Apply automatically from">
+      <form
+        noValidate
+        aria-label="Apply automatically from"
+        className="flex flex-col gap-2"
+        onSubmit={onSubmit}
+      >
+        <Problem text={failed} />
+        <Field className="gap-2">
+          <FieldLabel htmlFor={`${id}-input`} className="sr-only">
+            Fit score, 0 to 100
+          </FieldLabel>
+          <div className="flex flex-wrap gap-2">
+            <Input
+              id={`${id}-input`}
+              inputMode="numeric"
+              maxLength={3}
+              className="w-20"
+              value={typed}
+              aria-invalid={problem ? true : undefined}
+              aria-describedby={problem ? `${id}-problem` : undefined}
+              onChange={(event) => {
+                setTyped(event.target.value);
+              }}
+            />
+            <Button
+              type="submit"
+              disabled={save.isPending || unchanged}
+              aria-busy={save.isPending}
+            >
+              {save.isPending ? (
+                <Spinner aria-hidden="true" role={undefined} />
+              ) : null}
+              Save threshold
+            </Button>
+          </div>
+          {problem ? (
+            <FieldError id={`${id}-problem`}>{problem}</FieldError>
           ) : null}
-          <Field className="gap-2">
-            <FieldLabel htmlFor={`${id}-input`}>Fit score, 0 to 100</FieldLabel>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <Input
-                id={`${id}-input`}
-                inputMode="numeric"
-                maxLength={3}
-                className="sm:w-28"
-                value={typed}
-                aria-invalid={problem ? true : undefined}
-                aria-describedby={problem ? `${id}-problem` : undefined}
-                onChange={(event) => {
-                  setTyped(event.target.value);
-                }}
-              />
-              <Button
-                type="submit"
-                disabled={save.isPending || unchanged}
-                aria-busy={save.isPending}
-              >
-                {save.isPending ? (
-                  <Spinner aria-hidden="true" role={undefined} />
-                ) : null}
-                Save threshold
-              </Button>
-            </div>
-            {problem ? (
-              <FieldError id={`${id}-problem`}>{problem}</FieldError>
-            ) : null}
-          </Field>
-        </form>
-      </CardContent>
-    </Card>
+        </Field>
+      </form>
+      <p className="text-sm text-muted-foreground">
+        Full auto applies only to postings from this fit score.
+        {settings.min_fit_chosen
+          ? null
+          : ` You have not chosen one yet, so ${settings.min_fit} applies.`}
+      </p>
+    </Threshold>
   );
 }

@@ -366,11 +366,11 @@ describe("uploaded CV capture controls", () => {
       expect(
         await screen.findByRole("link", { name: "Download PDF" }),
       ).toBeVisible();
-      await user.click(screen.getByRole("tab", { name: "Edit" }));
-      expect(screen.getByRole("tab", { name: "Edit" })).toHaveAttribute(
-        "aria-selected",
-        "true",
+      // The CV's text is edited on its page, where it is read.
+      await user.click(
+        screen.getByRole("button", { name: "Edit the summary" }),
       );
+      expect(screen.getByLabelText("Summary")).toHaveFocus();
       expect(screen.queryByText("The last attempt failed")).toBeNull();
     },
   );
@@ -405,7 +405,9 @@ describe("capture completion across CV navigation", () => {
       client.setQueryData(templatesKey, TEMPLATES);
       const versions = [...versionsKey("cv-1"), 1];
       client.setQueryData(versions, [fakeVersion()]);
-      await user.click(screen.getByRole("link", { name: "All my CVs" }));
+      await user.click(
+        within(screen.getByRole("main")).getByRole("link", { name: "Profile" }),
+      );
       await screen.findByRole("link", { name: "My CV" });
       expect(screen.queryByTestId("document-view")).toBeNull();
       if (remount) await act(() => router.navigate("/profile"));
@@ -525,7 +527,9 @@ describe("capture completion across CV navigation", () => {
     expect(
       await screen.findByRole("img", { name: "Page 1 of version 1" }),
     ).toBeVisible();
-    await user.click(screen.getByRole("link", { name: "All my CVs" }));
+    await user.click(
+      within(screen.getByRole("main")).getByRole("link", { name: "Profile" }),
+    );
     await user.click(await screen.findByRole("link", { name: "My CV" }));
     expect(await screen.findByText("Copying your CV's design.")).toBeVisible();
     const gets = (path: string) =>

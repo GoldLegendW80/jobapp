@@ -1,13 +1,17 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useState } from "react";
 
-import { FitHistogram } from "@/features/jobs/components/fit-histogram";
+import { FitHistogram } from "@/components/shared/jobs/filters/fit-histogram";
+import { StatusFilter } from "@/components/shared/jobs/filters/status-filter";
 import {
   FitBadge,
   PayText,
   StatusBadge,
 } from "@/components/shared/jobs/badges";
-import { KpiTiles } from "@/features/jobs/components/kpi-tiles";
+import {
+  EMPTY_FILTERS,
+  type JobFilters,
+} from "@/features/jobs/helpers/filters";
 import { STATUSES, type JobStatus } from "@/features/jobs/helpers/labels";
 
 const meta = {
@@ -88,42 +92,46 @@ const COUNTS: Record<JobStatus, number> = {
   skipped: 57,
 };
 
-/** The pipeline as filters on the Jobs page: a click shows that status alone. Try it, then look at the loading and unavailable stories. */
+/** The pipeline as a filter of both Jobs views: a status shows it alone, a second click shows them all. Try it, then look at the loading and unavailable stories. */
 export const PipelineTiles: Story = {
-  render: function PipelineTilesDemo() {
-    const [selected, setSelected] = useState<JobStatus[]>(["shortlisted"]);
+  name: "Status filter",
+  render: function StatusFilterDemo() {
+    const [filters, setFilters] = useState<JobFilters>({
+      ...EMPTY_FILTERS,
+      statuses: ["shortlisted"],
+    });
     return (
-      <KpiTiles
+      <StatusFilter
+        filters={filters}
+        onChange={setFilters}
         counts={COUNTS}
-        selected={selected}
-        onSelect={(status) => {
-          setSelected((current) => (current.includes(status) ? [] : [status]));
-        }}
         loading={false}
       />
     );
   },
 };
 
-/** While the list loads, the tiles hold their shape. */
+/** While the list loads, the counts hold their place. */
 export const PipelineTilesLoading: Story = {
+  name: "Status filter, loading",
   render: () => (
-    <KpiTiles
+    <StatusFilter
+      filters={EMPTY_FILTERS}
+      onChange={() => undefined}
       counts={undefined}
-      selected={[]}
-      onSelect={() => undefined}
       loading
     />
   ),
 };
 
-/** When the list could not be loaded, the tiles say so instead of pulsing forever. */
+/** When the list could not be loaded, the toggles name no count instead of pulsing forever. */
 export const PipelineTilesUnavailable: Story = {
+  name: "Status filter, unavailable",
   render: () => (
-    <KpiTiles
+    <StatusFilter
+      filters={EMPTY_FILTERS}
+      onChange={() => undefined}
       counts={undefined}
-      selected={[]}
-      onSelect={() => undefined}
       loading={false}
       unavailable
     />

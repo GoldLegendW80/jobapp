@@ -9,7 +9,7 @@ import { useState } from "react";
 import { type UseFormReturn } from "react-hook-form";
 
 import { AdvancedSection } from "@/components/blocks/advanced-section";
-import { Button } from "@/components/ui/button";
+import { FieldTitle } from "@/components/ui/field";
 import {
   FormControl,
   FormField,
@@ -18,7 +18,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { NativeSelect } from "@/components/ui/native-select";
-import { cn } from "@/lib/utils";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 import {
   COMPANY_TYPES,
@@ -48,14 +48,21 @@ const COMPANY_TYPE_LABELS: Record<(typeof COMPANY_TYPES)[number], string> = {
   consulting: "Consulting firm",
 };
 
-const BONUS_NOTE =
+export const BONUS_NOTE =
   "A posting that names one of these scores a little higher. Nothing is hidden because of them.";
 
-export function TargetFields({ form }: { form: UseFormReturn<SearchForm> }) {
+/** `bare` leaves out the titled card, for a page that gives the fields its own section. */
+export function TargetFields({
+  form,
+  bare = false,
+}: {
+  form: UseFormReturn<SearchForm>;
+  bare?: boolean;
+}) {
   const errors = form.formState.errors;
   const [advanced, setAdvanced] = useState(false);
-  return (
-    <Group title="What you aim for" description={BONUS_NOTE}>
+  const fields = (
+    <>
       <Toggles
         form={form}
         name="seniority"
@@ -85,6 +92,12 @@ export function TargetFields({ form }: { form: UseFormReturn<SearchForm> }) {
           labels={COMPANY_TYPE_LABELS}
         />
       </AdvancedSection>
+    </>
+  );
+  if (bare) return fields;
+  return (
+    <Group title="What you aim for" description={BONUS_NOTE}>
+      {fields}
     </Group>
   );
 }
@@ -111,39 +124,26 @@ function Toggles<V extends string>({
         const selected = field.value as string[];
         return (
           <FormItem>
-            <p id={labelId} className="text-sm font-medium">
-              {label}
-            </p>
-            <div
-              role="group"
+            <FieldTitle id={labelId}>{label}</FieldTitle>
+            <ToggleGroup
+              type="multiple"
+              variant="outline"
+              spacing={2}
+              size="sm"
               aria-labelledby={labelId}
-              className="flex flex-wrap gap-2"
+              value={selected}
+              onValueChange={(next) => {
+                // Kept in the order of the list, whatever the order of the clicks.
+                field.onChange(values.filter((value) => next.includes(value)));
+              }}
+              className="flex-wrap"
             >
-              {values.map((value) => {
-                const on = selected.includes(value);
-                return (
-                  <Button
-                    key={value}
-                    type="button"
-                    size="sm"
-                    variant={on ? "default" : "outline"}
-                    aria-pressed={on}
-                    className={cn(!on && "text-muted-foreground")}
-                    onClick={() => {
-                      field.onChange(
-                        on
-                          ? selected.filter((v) => v !== value)
-                          : values.filter(
-                              (v) => v === value || selected.includes(v),
-                            ),
-                      );
-                    }}
-                  >
-                    {labels[value]}
-                  </Button>
-                );
-              })}
-            </div>
+              {values.map((value) => (
+                <ToggleGroupItem key={value} value={value}>
+                  {labels[value]}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
             <FormMessage />
           </FormItem>
         );

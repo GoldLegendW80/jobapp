@@ -1,41 +1,41 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 
-import { Spinner } from "@/components/ui/spinner";
+import { Kbd } from "@/components/ui/kbd";
+import { MessageScrollerItem } from "@/components/ui/message-scroller";
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { describeError } from "@/lib/api";
 
+import { MESSAGE_MAX } from "@/features/agents/api/chat-api";
 import { useModelCredential } from "@/features/agents/api/use-model-credential";
 import { useAnswerAnnouncement } from "@/features/agents/hooks/use-answer-announcement";
 import { useHeldMessage } from "@/features/agents/hooks/use-held-message";
 import { useJobThread } from "@/features/agents/api/use-job-thread";
 import { useSendChatMessage } from "@/features/agents/api/use-send-chat-message";
-import { useStickToBottom } from "@/features/agents/hooks/use-stick-to-bottom";
-import { ChatComposer } from "./chat-composer";
 import { ChatEmptyState } from "./chat-empty-state";
 import { ChatMessageList } from "./chat-message-list";
+import { ChatPrompt } from "./chat-prompt";
+import { ChatThread } from "./chat-thread";
 import { DeleteConversation } from "./delete-conversation";
 import { HeldMessage } from "./held-message";
+
+const EXAMPLE_QUESTIONS = [
+  "Does this role fit my profile?",
+  "What should I stress in my application?",
+  "What should I check before applying?",
+];
 
 /** The body of the chat panel: the conversation of one job and the composer under it. */
 export function ChatConversation({ job }: { job: JobDetail }) {
   const composer = useRef<HTMLTextAreaElement>(null);
-  const list = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState("");
   const { held, hold, drop } = useHeldMessage(job.id);
-  const { follow } = useStickToBottom(list);
 
   const credential = useModelCredential();
   const conversation = useJobThread(job.id);
   const { threadId, detail, messages, activeRun, loading, refresh } =
     conversation;
   const { announcement, forget } = useAnswerAnnouncement(detail);
-
-  // Keep the newest message in view, for a reader who is at the bottom (always after sending:
-  // `follow(true)` below). Someone reading further up is left there.
-  const liveSteps = activeRun ?? "";
-  useLayoutEffect(() => {
-    follow();
-  }, [follow, messages.length, liveSteps, held]);
 
   const send = useSendChatMessage({
     jobId: job.id,
@@ -45,7 +45,6 @@ export function ChatConversation({ job }: { job: JobDetail }) {
     onSent: () => {
       setDraft("");
       drop();
-      follow(true); // the reader just sent: show the message and the answer to come
     },
   });
 
@@ -74,7 +73,7 @@ export function ChatConversation({ job }: { job: JobDetail }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* The new answer only, once: the list itself is not live. */}
+      {/* The new answer only, once: the thread itself is not live. */}
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
       </p>
@@ -83,66 +82,92 @@ export function ChatConversation({ job }: { job: JobDetail }) {
           jobId={job.id}
           threadId={threadId}
           onDeleted={forget}
+          focusAfterDelete={composer}
         />
       ) : null}
-      <div
-        ref={list}
-        data-testid="chat-scroll"
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+      <ChatThread
+        scrollTestId="chat-scroll"
+        loading={loading}
+        error={
+          conversation.failedToLoad
+            ? describeError(conversation.loadError)
+            : undefined
+        }
+        empty={
+          messages.length === 0 && !busy ? (
+            <ChatEmptyState
+              testId="chat-empty"
+              title="Ask anything about this posting."
+              description="The agent reads the posting and your profile to answer. It changes nothing, and it only knows what they say."
+              examples={EXAMPLE_QUESTIONS}
+              examplesLabel="Example questions"
+              onPick={(prompt) => {
+                setDraft(prompt);
+                drop();
+                composer.current?.focus();
+              }}
+            />
+          ) : null
+        }
       >
-        {loading ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner aria-hidden="true" role={undefined} />
-            Loading the conversation
-          </p>
-        ) : conversation.failedToLoad ? (
-          <p className="text-sm text-destructive">
-            The conversation could not be loaded.{" "}
-            {describeError(conversation.loadError)}
-          </p>
-        ) : messages.length === 0 && !busy ? (
-          <ChatEmptyState
-            onPick={(prompt) => {
-              setDraft(prompt);
-              drop();
-              composer.current?.focus();
-            }}
-          />
-        ) : (
+        {loading || conversation.failedToLoad ? null : (
           <ChatMessageList
             messages={messages}
             truncated={detail?.messages_truncated ?? false}
             activeRun={activeRun}
             onAnswerEnd={refresh}
-            onAnswerGrow={follow}
           />
         )}
         {holding ? (
-          <HeldMessage
-            text={held}
-            onCancel={() => {
-              drop();
-              composer.current?.focus();
-            }}
-          />
+          <MessageScrollerItem messageId="held">
+            <HeldMessage
+              text={held}
+              onCancel={() => {
+                drop();
+                composer.current?.focus();
+              }}
+            />
+          </MessageScrollerItem>
         ) : null}
+      </ChatThread>
+      <div className="flex flex-col gap-2 border-t p-4">
+        {noCredential ? (
+          <p className="text-sm text-muted-foreground">
+            Agents run with your own model credential, and none is saved yet.{" "}
+            <Link to="/account" className="underline underline-offset-4">
+              Add one on the Account page
+            </Link>
+            .
+          </p>
+        ) : null}
+        <ChatPrompt
+          textareaRef={composer}
+          value={draft}
+          max={MESSAGE_MAX}
+          placeholder="Ask about this job"
+          hint={
+            holding ? (
+              `Your message will be sent when ${
+                busy ? "the answer is complete" : "the conversation has loaded"
+              }. Edit or clear it to cancel.`
+            ) : busy ? (
+              <>
+                <Kbd>Enter</Kbd> sends your message once the answer is complete.
+              </>
+            ) : undefined
+          }
+          disabled={noCredential}
+          canSend={canSend}
+          sending={send.isPending}
+          onChange={(value) => {
+            setDraft(value);
+            // Clearing cancels, and so does any edit: what is in the composer is no longer
+            // the text Enter was pressed on, so it is sent when its author says so.
+            drop();
+          }}
+          onSubmit={submit}
+        />
       </div>
-      <ChatComposer
-        composerRef={composer}
-        draft={draft}
-        noCredential={noCredential}
-        canSend={canSend}
-        sending={send.isPending}
-        answering={busy}
-        holding={holding}
-        onDraftChange={(value) => {
-          setDraft(value);
-          // Clearing cancels, and so does any edit: what is in the composer is no longer
-          // the text Enter was pressed on, so it is sent when its author says so.
-          drop();
-        }}
-        onSubmit={submit}
-      />
     </div>
   );
 }

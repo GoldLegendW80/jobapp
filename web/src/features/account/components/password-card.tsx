@@ -7,17 +7,10 @@ import { z } from "zod";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 import { message } from "@/features/admin/helpers/errors";
 import type { User } from "@/features/auth/api/auth-api";
 import { useChangePassword } from "@/features/auth/api/use-me";
@@ -118,22 +111,15 @@ export function PasswordCard({ user }: { user: User }) {
   const pending = mutation.isPending;
 
   return (
-    <Card aria-labelledby="password-card-title">
-      <CardHeader>
-        <CardTitle>
-          <h2 id="password-card-title" className="text-lg">
-            Change password
-          </h2>
-        </CardTitle>
-        <CardDescription>
-          Every other browser signed in to your account is signed out. This one
-          stays signed in.
-        </CardDescription>
-      </CardHeader>
+    <SettingsSection
+      title="Change password"
+      description="Every other browser signed in to your account is signed out. This one stays signed in."
+    >
       <Form {...form}>
         <form
           noValidate
           aria-label="Change password"
+          className="flex max-w-md flex-col gap-4"
           onSubmit={(event) =>
             void form.handleSubmit((values) => {
               mutation.mutate({
@@ -152,59 +138,55 @@ export function PasswordCard({ user }: { user: User }) {
             readOnly
             hidden
           />
-          <CardContent className="flex flex-col gap-4">
-            {formError ? (
-              <Alert variant="destructive">
-                <CircleAlert aria-hidden="true" />
-                <AlertDescription>{formError}</AlertDescription>
-              </Alert>
-            ) : null}
-            <PasswordField
-              control={form.control}
-              name="current"
-              label="Current password"
-              autoComplete="current-password"
-            />
-            <PasswordField
-              control={form.control}
-              name="next"
-              label="New password"
-              autoComplete="new-password"
-              description={PASSWORD_HINT}
-            />
-            <PasswordField
-              control={form.control}
-              name="confirm"
-              label="Confirm new password"
-              autoComplete="new-password"
-            />
-          </CardContent>
-          <CardFooter className="mt-6 justify-end">
-            <Button
-              type="submit"
-              className="w-full sm:w-auto"
-              disabled={pending || locked}
-              aria-busy={pending}
-            >
-              {pending ? (
-                <>
-                  <Spinner aria-hidden="true" role={undefined} />
-                  Changing password
-                </>
-              ) : locked ? (
-                <>
-                  <Timer aria-hidden="true" />
-                  <span className="tabular-nums">
-                    Try again in {formatWait(countdown.remaining)}
-                  </span>
-                </>
-              ) : (
-                "Change password"
-              )}
-            </Button>
-          </CardFooter>
+          {formError ? (
+            <Alert variant="destructive">
+              <CircleAlert aria-hidden="true" />
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <PasswordField
+            control={form.control}
+            name="current"
+            label="Current password"
+            autoComplete="current-password"
+          />
+          <PasswordField
+            control={form.control}
+            name="next"
+            label="New password"
+            autoComplete="new-password"
+            description={PASSWORD_HINT}
+          />
+          <PasswordField
+            control={form.control}
+            name="confirm"
+            label="Confirm new password"
+            autoComplete="new-password"
+          />
+          <Button
+            type="submit"
+            className="w-fit"
+            disabled={pending || locked}
+            aria-busy={pending}
+          >
+            {pending ? (
+              <>
+                <Spinner aria-hidden="true" role={undefined} />
+                Changing password
+              </>
+            ) : locked ? (
+              <>
+                <Timer aria-hidden="true" />
+                <span className="tabular-nums">
+                  Try again in {formatWait(countdown.remaining)}
+                </span>
+              </>
+            ) : (
+              "Change password"
+            )}
+          </Button>
         </form>
       </Form>
-    </Card>
+    </SettingsSection>
   );
 }

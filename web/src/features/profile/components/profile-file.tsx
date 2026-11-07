@@ -1,4 +1,4 @@
-import { CircleAlert, Download, FileJson, Upload } from "lucide-react";
+import { CircleAlert, Upload } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -13,19 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import { type Profile, type SectionName } from "../api/profile-api";
-import { useExportProfile, useImportProfile } from "../api/use-profile-file";
+import { useImportProfile } from "../api/use-profile-file";
 import {
   checkImportFile,
   formatBytes,
@@ -34,77 +28,16 @@ import {
 import { SECTION_LABELS } from "../helpers/labels";
 import { absoluteTime } from "../helpers/when";
 
-/**
- * The page's "Export or import" menu. Export downloads GET /api/profile/export as
- * profile-YYYY-MM-DD.json; Import opens a dialog that checks a file in the browser, says what it
- * would replace, and posts it with the page's revision.
- */
-export function ProfileFileMenu({
-  profile,
-  dirtySection,
-  onImported,
-}: {
-  profile: Profile;
-  /** the tab with unsaved changes, if any: an import throws them away */
-  dirtySection: SectionName | undefined;
-  onImported: () => void;
-}) {
-  const [importing, setImporting] = useState(false);
-  const exporting = useExportProfile();
-  return (
-    <>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={exporting.isPending}
-            aria-busy={exporting.isPending}
-          >
-            {exporting.isPending ? (
-              <Spinner aria-hidden="true" />
-            ) : (
-              <FileJson aria-hidden="true" />
-            )}
-            Export or import
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            onSelect={() => {
-              exporting.mutate();
-            }}
-          >
-            <Download aria-hidden="true" />
-            Export profile
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={() => {
-              setImporting(true);
-            }}
-          >
-            <Upload aria-hidden="true" />
-            Import profile
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <ImportDialog
-        open={importing}
-        onOpenChange={setImporting}
-        profile={profile}
-        dirtySection={dirtySection}
-        onImported={onImported}
-      />
-    </>
-  );
-}
-
 interface ChosenFile {
   name: string;
   size: number;
   text: string;
 }
 
+/**
+ * Import profile, from the profile page's More actions: checks a file in the browser, says what it
+ * would replace, and posts it with the page's revision. Export is the menu's own item.
+ */
 export function ImportDialog({
   open,
   onOpenChange,

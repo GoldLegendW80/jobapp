@@ -122,15 +122,15 @@ test("the map of synthetic postings: pins from the api, tooltip, panel, detail a
     ROWS.length,
   );
 
-  // From the list to the map with the tab.
+  // From the list to the map with the tab, under the same header.
   await page.goto("/jobs");
   await page
-    .getByRole("navigation", { name: "Jobs views" })
-    .getByRole("link", { name: "Map" })
+    .getByRole("tablist", { name: "Jobs views" })
+    .getByRole("tab", { name: "Map" })
     .click();
   await expect(page).toHaveURL(/\/jobs\/map$/);
   await expect(
-    page.getByRole("heading", { level: 1, name: "Jobs map" }),
+    page.getByRole("heading", { level: 1, name: "Jobs" }),
   ).toBeVisible();
 
   const api = (await (
@@ -189,7 +189,10 @@ test("the map of synthetic postings: pins from the api, tooltip, panel, detail a
   const href = await first.getAttribute("href");
   await first.click();
   await expect(page).toHaveURL(new RegExp(`${href ?? "none"}$`));
-  await page.getByRole("link", { name: "Back to jobs" }).click();
+  await page
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: "Jobs", exact: true })
+    .click();
   await expect(page).toHaveURL(/\/jobs\/map$/);
   await expect(pins(page)).toHaveCount(api.places.length);
   expect(errors).toEqual([]);
@@ -198,9 +201,10 @@ test("the map of synthetic postings: pins from the api, tooltip, panel, detail a
 test("a status filter changes the pins and stays in the URL", async () => {
   await page.goto("/jobs/map");
   await expect(pins(page)).toHaveCount(10);
-  await page.getByRole("button", { name: /^Status/ }).click();
-  await page.getByRole("menuitemcheckbox", { name: "Applied" }).click();
-  await page.keyboard.press("Escape");
+  await page
+    .getByRole("toolbar", { name: "Postings per status" })
+    .getByRole("button", { name: /^Applied: / })
+    .click();
   await expect(page).toHaveURL(/\/jobs\/map\?status=applied$/);
   const api = (await (
     await page.request.get("/api/jobs/places?status=applied")
@@ -219,8 +223,8 @@ test("a status filter changes the pins and stays in the URL", async () => {
 
   // The list tab keeps the filter.
   await page
-    .getByRole("navigation", { name: "Jobs views" })
-    .getByRole("link", { name: "List" })
+    .getByRole("tablist", { name: "Jobs views" })
+    .getByRole("tab", { name: "List" })
     .click();
   await expect(page).toHaveURL(/\/jobs\?status=applied$/);
   expect(errors).toEqual([]);
@@ -252,8 +256,8 @@ test("the keyboard zooms and pans, the regions frame Europe", async () => {
   await page.keyboard.press("-");
   await expect(map).toHaveAttribute("data-zoom", "1.00");
   await page
-    .getByRole("group", { name: "Region" })
-    .getByRole("button", { name: "Europe" })
+    .getByRole("radiogroup", { name: "Region" })
+    .getByRole("radio", { name: "Europe" })
     .click();
   await expect(pin(page, "Paris")).toBeVisible();
   await expect(pin(page, "Sydney")).toHaveCount(0);
@@ -284,8 +288,8 @@ test("on a phone the map, the pins and the panel fit in 375 px", async () => {
   // At the world view European pins crowd a phone: frame Europe, then a pin opens its panel
   // below the map.
   await page
-    .getByRole("group", { name: "Region" })
-    .getByRole("button", { name: "Europe" })
+    .getByRole("radiogroup", { name: "Region" })
+    .getByRole("radio", { name: "Europe" })
     .click();
   await pin(page, "London").click();
   const panel = page.getByRole("complementary", { name: "London" });

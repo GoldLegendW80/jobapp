@@ -8,13 +8,13 @@ import { renderApp } from "@/test/render";
 
 // Settings, Search (owner, 2026-11-05: "search setting should be in the settings of the user").
 describe("Settings, Search", () => {
-  it("holds the Search tab as it was, with its save, beside Applications", async () => {
+  it("holds the Search tab with its save under the Settings heading, beside Applications", async () => {
     fakeSession(member);
     fakeProfile();
     const user = userEvent.setup();
     const { location } = renderApp("/settings/search");
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Search settings" }),
+      await screen.findByRole("heading", { level: 1, name: "Settings" }),
     ).toBeVisible();
     expect(document.title).toBe("Search settings · jobapp");
     const form = await screen.findByRole("form", { name: "Search" });
@@ -37,11 +37,12 @@ describe("Settings, Search", () => {
       expect(location()).toBe("/settings/applications");
     });
     expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "Application settings",
-      }),
+      await screen.findByRole("heading", { name: "When you click Apply" }),
     ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Settings" }),
+    ).toBeVisible();
+    expect(document.title).toBe("Application settings · jobapp");
   });
 
   it("is what the user menu's Settings opens first", async () => {

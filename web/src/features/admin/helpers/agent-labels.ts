@@ -36,3 +36,9 @@ export function codeValueInWords(value: Editable[EditableField]): string {
   }
   return value === "" ? "none" : String(value);
 }
+
+/** The pages above one agent's page: Admin, then its Agents view. */
+export const AGENT_TRAIL = [
+  { to: "/admin/users", label: "Admin" },
+  { to: "/admin/agents", label: "Agents" },
+];

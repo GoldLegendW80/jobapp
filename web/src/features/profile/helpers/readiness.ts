@@ -1,18 +1,23 @@
-/** "Ready for" of the one page profile (analysis B7): what each use of the profile still lacks,
+/** "Ready for" of the profile page (analysis B7): what each use of the profile still lacks,
  * from the completeness the api computes, and the one button that fixes it. */
 import type { Profile, SectionName } from "../api/profile-api";
+import { missingLabel } from "./labels";
 
 export interface Readiness {
   name: string;
   ready: boolean;
   /** the one button that fixes it: a place on the page (#...) or another page */
   fix?: { label: string; href: string };
+  /** the required fields still empty, in words */
+  missing: string[];
 }
 
 /** What each use of the profile still lacks, from the completeness the api computes. */
 export function readiness(profile: Profile): Readiness[] {
   const missing = (section: SectionName) =>
     profile.completeness.sections[section]?.missing ?? [];
+  const words = (...sections: SectionName[]) =>
+    sections.flatMap(missing).map(missingLabel);
   const first = (...fixes: [boolean, string, string][]) => {
     const found = fixes.find(([lacking]) => lacking);
     return found ? { label: found[1], href: found[2] } : undefined;
@@ -34,8 +39,28 @@ export function readiness(profile: Profile): Readiness[] {
     [missing("answers").length > 0, "Add your answers", "#about-answers"],
   );
   return [
-    { name: "Scoring postings", ready: !scoring, fix: scoring },
-    { name: "Writing CVs", ready: !writing, fix: writing },
-    { name: "Filling forms", ready: !filling, fix: filling },
+    {
+      name: "Scoring postings",
+      ready: !scoring,
+      fix: scoring,
+      missing: [
+        ...words("skills"),
+        ...missing("search")
+          .filter((field) => field === "title_include")
+          .map(missingLabel),
+      ],
+    },
+    {
+      name: "Writing CVs",
+      ready: !writing,
+      fix: writing,
+      missing: words("experience", "facts"),
+    },
+    {
+      name: "Filling forms",
+      ready: !filling,
+      fix: filling,
+      missing: words("identity", "answers"),
+    },
   ];
 }

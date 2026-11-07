@@ -163,6 +163,43 @@ export function parseFitInput(raw: string): number | null | "invalid" {
   return number <= 100 ? number : "invalid";
 }
 
+const MONTHS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
+
+/**
+ * A date typed in the found range, as ISO: "6 Nov 2026" (as the app shows dates, a month of three
+ * letters or more) or "2026-11-06". None when empty, false when it is no calendar date.
+ */
+export function parseTypedDate(raw: string): string | null | false {
+  const text = raw.trim();
+  if (text === "") return null;
+  if (isIsoDate(text)) return text;
+  const match = /^(\d{1,2})\s+([a-z]{3,})\.?\s+(\d{4})$/i.exec(text);
+  if (!match) return false;
+  const [, day, word, year] = match as unknown as [
+    string,
+    string,
+    string,
+    string,
+  ];
+  const month = MONTHS.findIndex((name) => name.startsWith(word.toLowerCase()));
+  if (month < 0) return false;
+  const iso = `${year}-${String(month + 1).padStart(2, "0")}-${day.padStart(2, "0")}`;
+  return isIsoDate(iso) ? iso : false;
+}
+
 /** The status filter after a click on its KPI tile: that status alone, or none if it was. */
 export function toggleOnlyStatus(
   filters: JobFilters,

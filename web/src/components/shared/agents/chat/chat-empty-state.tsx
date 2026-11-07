@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -7,43 +9,51 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 
-const EXAMPLE_PROMPTS = [
-  "Does this role fit my profile?",
-  "What should I stress in my application?",
-  "What should I check before applying?",
-];
-
-/** A conversation with no message yet, and questions to start it. Left aligned, as the
- * conversation that takes its place. */
-export function ChatEmptyState({ onPick }: { onPick: (text: string) => void }) {
+/** A conversation with no message yet: what the chat does, and examples that fill the prompt.
+ * Left aligned, as the conversation that takes its place. */
+export function ChatEmptyState({
+  title,
+  description,
+  examples,
+  examplesLabel,
+  testId,
+  onPick,
+}: {
+  title?: ReactNode;
+  description: ReactNode;
+  examples: readonly string[];
+  /** The accessible name of the list of examples. */
+  examplesLabel: string;
+  testId: string;
+  onPick: (text: string) => void;
+}) {
   return (
     <Empty
-      data-testid="chat-empty"
+      data-testid={testId}
       className="items-stretch gap-4 px-0 py-6 text-left text-wrap md:px-0 md:py-6"
     >
       <EmptyHeader className="max-w-none items-start gap-1 text-left">
-        <EmptyTitle className="text-sm font-medium tracking-normal">
-          Ask anything about this posting.
-        </EmptyTitle>
-        <EmptyDescription className="text-sm">
-          The agent reads the posting and your profile to answer. It changes
-          nothing, and it only knows what they say.
-        </EmptyDescription>
+        {title ? (
+          <EmptyTitle className="text-sm font-medium tracking-normal">
+            {title}
+          </EmptyTitle>
+        ) : null}
+        <EmptyDescription className="text-sm">{description}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent className="max-w-none items-stretch text-wrap">
-        <ul aria-label="Example questions" className="flex flex-col gap-2">
-          {EXAMPLE_PROMPTS.map((prompt) => (
-            <li key={prompt}>
+        <ul aria-label={examplesLabel} className="flex flex-col gap-2">
+          {examples.map((example) => (
+            <li key={example}>
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
                 className="h-auto w-full justify-start py-2 text-left whitespace-normal"
                 onClick={() => {
-                  onPick(prompt);
+                  onPick(example);
                 }}
               >
-                {prompt}
+                {example}
               </Button>
             </li>
           ))}

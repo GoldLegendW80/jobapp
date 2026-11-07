@@ -1,17 +1,11 @@
-import { ArrowLeft } from "lucide-react";
 import { useCallback, useEffect, type ComponentType } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
+import { Page } from "@/components/blocks/page";
 import { PageHeader } from "@/components/blocks/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Item,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useTitle } from "@/hooks/use-title";
 import { cn } from "@/lib/utils";
 
@@ -34,6 +28,11 @@ interface Step {
   Panel: ComponentType<StepProps>;
 }
 
+/** The documents step on its own page: the ways to add, and the documents beside them. */
+function DocumentsPanel() {
+  return <StepDocuments />;
+}
+
 /**
  * The steps in the order the user takes them. Each step's file says whether it is ready
  * (PROMPT_READY, REVIEW_READY), so the task that builds a step turns it on from its own file.
@@ -53,7 +52,7 @@ const STEPS: readonly Step[] = [
     summary: "Add what you already have",
     heading: "Add your documents",
     ready: true,
-    Panel: StepDocuments,
+    Panel: DocumentsPanel,
   },
   {
     id: "review",
@@ -120,56 +119,54 @@ export function FillPage() {
   const number = STEPS.indexOf(current) + 1;
   const Panel = current.Panel;
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <Button asChild variant="ghost" size="sm" className="-ml-3 self-start">
-          <Link to="/profile">
-            <ArrowLeft aria-hidden="true" />
-            Back to your profile
-          </Link>
-        </Button>
-        <PageHeader
-          title="Fill my profile with an agent"
-          description="Add what you already have: a CV, a cover letter, notes on your projects. An agent reads it and proposes what to put in each section of your profile. Nothing is written to your profile until you accept it."
-        />
-      </div>
+    <Page>
+      <PageHeader
+        trail={[{ to: "/profile", label: "Profile" }]}
+        title="Fill my profile with an agent"
+        description="An agent reads your CV, letters and notes, and proposes what to put in your profile. Nothing is written to your profile until you accept it."
+      />
 
       <nav aria-label="Steps">
-        <ol className="grid gap-2 sm:grid-cols-3">
+        <ol className="flex items-start gap-1 sm:gap-2">
           {STEPS.map((step, index) => (
-            <li key={step.id} className="min-w-0">
+            <li key={step.id} className="flex min-w-0 flex-1 items-start gap-2">
               <StepLink
                 step={step}
                 number={index + 1}
                 current={!deciding && step.id === current.id}
                 onOpen={goTo}
               />
+              {index < STEPS.length - 1 ? (
+                <span
+                  aria-hidden="true"
+                  className="mt-5 hidden h-px min-w-6 flex-1 bg-border sm:block"
+                />
+              ) : null}
             </li>
           ))}
         </ol>
       </nav>
 
       {deciding ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading your documents.
-        </p>
+        <div role="status" aria-live="polite" className="flex flex-col gap-4">
+          <span className="sr-only">Loading your documents</span>
+          <Skeleton aria-hidden="true" className="h-7 w-64" />
+          <Skeleton aria-hidden="true" className="h-56" />
+        </div>
       ) : (
         <section
           aria-labelledby="step-heading"
-          className="flex flex-col gap-5"
+          className="flex flex-col gap-6"
           data-step={current.id}
         >
-          <h2
-            id="step-heading"
-            className="text-lg font-semibold tracking-tight"
-          >
-            <span className="text-muted-foreground">Step {number}:</span>{" "}
-            {current.heading}
+          {/* The steps above show which one is open: "Step N" is said, not shown again. */}
+          <h2 id="step-heading" className="text-lg font-medium tracking-tight">
+            <span className="sr-only">Step {number}:</span> {current.heading}
           </h2>
           <Panel goTo={goTo} />
         </section>
       )}
-    </div>
+    </Page>
   );
 }
 
@@ -186,57 +183,52 @@ function StepLink({
 }) {
   const body = (
     <>
-      <ItemMedia>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "grid size-6 shrink-0 place-items-center rounded-full border text-xs font-medium tabular-nums",
+          current
+            ? "border-primary bg-primary text-primary-foreground"
+            : "bg-card text-muted-foreground",
+        )}
+      >
+        {number}
+      </span>
+      <span className="flex min-w-0 flex-col items-start gap-0.5 text-left">
         <span
-          aria-hidden="true"
           className={cn(
-            "grid size-6 place-items-center rounded-full bg-muted text-xs font-semibold tabular-nums",
-            current && "bg-primary text-primary-foreground",
+            "text-sm",
+            current ? "font-medium text-foreground" : "text-muted-foreground",
           )}
         >
-          {number}
-        </span>
-      </ItemMedia>
-      <ItemContent className="min-w-0">
-        <ItemTitle>
           <span className="sr-only">Step {number}:</span> {step.title}{" "}
-          {step.ready ? null : <Badge variant="secondary">Soon</Badge>}
-        </ItemTitle>{" "}
-        <ItemDescription className="text-xs">{step.summary}</ItemDescription>
-      </ItemContent>
+          {step.ready ? null : <Badge variant="outline">Soon</Badge>}
+        </span>
+        <span className="text-xs font-normal text-muted-foreground max-sm:sr-only">
+          {step.summary}
+        </span>
+      </span>
     </>
   );
   if (!step.ready) {
     // Not a control: there is nothing to open yet, so nothing takes the keyboard focus.
     return (
-      <Item
-        variant="outline"
-        size="sm"
-        className="h-full items-start rounded-xl border-dashed opacity-70"
-      >
+      <span className="flex items-start gap-3 px-2 py-2 opacity-70">
         {body}
-      </Item>
+      </span>
     );
   }
   return (
-    <Item
-      asChild
-      size="sm"
-      className={cn(
-        "h-full w-full flex-nowrap items-start justify-start rounded-xl text-left font-normal whitespace-normal hover:bg-card/60",
-        current && "bg-card hover:bg-card",
-      )}
+    <Button
+      type="button"
+      variant="ghost"
+      aria-current={current ? "step" : undefined}
+      className="h-auto min-w-0 shrink items-start justify-start gap-3 px-2 py-2 whitespace-normal"
+      onClick={() => {
+        onOpen(step.id);
+      }}
     >
-      <Button
-        type="button"
-        variant="ghost"
-        aria-current={current ? "step" : undefined}
-        onClick={() => {
-          onOpen(step.id);
-        }}
-      >
-        {body}
-      </Button>
-    </Item>
+      {body}
+    </Button>
   );
 }

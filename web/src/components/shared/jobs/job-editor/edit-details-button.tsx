@@ -7,7 +7,7 @@ import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import type { Save } from "@/features/jobs/api/use-job-editor";
 import { EditDetailsDialog } from "./edit-details-dialog";
 
-/** "Edit details" beside the posting's title: opens the details dialog. */
+/** "Edit details" in the posting's header: opens the details dialog. */
 export function EditDetailsButton({
   job,
   save,
@@ -20,7 +20,6 @@ export function EditDetailsButton({
     <>
       <Button
         variant="outline"
-        size="sm"
         onClick={() => {
           setOpen(true);
         }}

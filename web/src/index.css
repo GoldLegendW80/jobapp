@@ -219,3 +219,46 @@
     animation-duration: 1ms;
   }
 }
+
+/* Work in progress (a run step, a file uploading): the text breathes. A pulse of opacity, never
+   gradient text; still under reduced motion. */
+@keyframes shimmer {
+  50% {
+    opacity: 0.5;
+  }
+}
+@utility shimmer {
+  animation: shimmer 1.6s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+@utility shimmer-none {
+  animation: none;
+}
+
+/* A scroller's edge fades where more content waits (the chat's bottom, a strip's sides). */
+@utility scroll-fade-b {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5rem), transparent);
+}
+@utility scroll-fade-x {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 1rem,
+    #000 calc(100% - 1rem),
+    transparent
+  );
+}
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+}
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+@utility scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
+}

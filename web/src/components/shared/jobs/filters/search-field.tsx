@@ -1,9 +1,12 @@
 import { Search } from "lucide-react";
 import { useId } from "react";
 
-import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Label } from "@/components/ui/label";
-import { cn } from "@/lib/utils";
 
 import { useDebouncedField } from "@/features/jobs/hooks/use-job-filters";
 import {
@@ -27,15 +30,11 @@ export function SearchField({
   );
   const id = useId();
   return (
-    <div className={cn("relative", className)}>
+    <InputGroup className={className}>
       <Label htmlFor={id} className="sr-only">
         Search postings
       </Label>
-      <Search
-        aria-hidden="true"
-        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-      />
-      <Input
+      <InputGroupInput
         id={id}
         type="search"
         placeholder="Search company, title, location, notes"
@@ -47,8 +46,10 @@ export function SearchField({
         onKeyDown={(event) => {
           if (event.key === "Enter") search.flush();
         }}
-        className="pl-9"
       />
-    </div>
+      <InputGroupAddon>
+        <Search aria-hidden="true" />
+      </InputGroupAddon>
+    </InputGroup>
   );
 }

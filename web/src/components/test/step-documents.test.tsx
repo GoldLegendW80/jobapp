@@ -60,9 +60,8 @@ const announced = () =>
 describe("documents: the list", () => {
   it("says so when there is no document yet", async () => {
     await open();
-    expect(
-      screen.getByText("No document yet. Add a file or paste a text above."),
-    ).toBeVisible();
+    expect(screen.getByText("No document yet")).toBeVisible();
+    expect(screen.getByText("Add a file or paste a text.")).toBeVisible();
     expect(screen.queryByText(/used$/)).toBeNull();
   });
 
@@ -233,11 +232,13 @@ describe("documents: the list", () => {
     const user = userEvent.setup();
     renderApp("/profile/fill?step=documents");
     expect(
-      await screen.findByText("Your documents could not be loaded"),
+      await screen.findByText(/^Your documents could not be loaded\./),
     ).toBeVisible();
     // A sentence of ours: neither the server's words nor its status are for the user.
     expect(
-      screen.getByText("The server could not answer. Try again in a moment."),
+      screen.getByText(
+        /The server could not answer\. Try again in a moment\.$/,
+      ),
     ).toBeVisible();
     expect(screen.queryByText(/database down|The API|503/)).toBeNull();
     fail = false;

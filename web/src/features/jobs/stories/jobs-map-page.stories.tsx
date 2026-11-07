@@ -10,6 +10,7 @@ import {
 } from "@/design-system/fixtures/posting-details";
 import { POSTINGS } from "@/design-system/fixtures/postings";
 import { member, fakeSession } from "@/test/auth";
+import { fakeJobsApi } from "@/test/jobs";
 
 const meta = {
   title: "Pages/Jobs/Map",
@@ -19,7 +20,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The postings of the current filters on a world map: a pin per city or country their location names, the places listed beside it, and the locations no place matches. Route /jobs/map, with the same filters in the address as the list.",
+          "The Map view of Jobs: the postings of the current filters on a world map, a pin per city or country their location names, the places listed beside it, and the locations no place matches. Route /jobs/map, under the same header, tabs and toolbar as the list, with the same filters in the address.",
       },
     },
   },
@@ -29,19 +30,24 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+/** The map of `rows`, and the list answer the toolbar counts from. */
+function postings(rows = POSTINGS) {
+  fakeSession(member);
+  fakeJobsApi(rows);
+  fakePlaces(rows);
+}
+
 /** As a job seeker, I want my postings pinned on a map, so that I see at a glance where the work is. */
 export const SeeWhereThePostingsAre: Story = {
   beforeEach: () => {
-    fakeSession(member);
-    fakePlaces(POSTINGS);
+    postings();
   },
 };
 
 /** As a job seeker, I want to pick a city and tick its postings, so that I can act on every posting in one place at once. */
 export const PickAPlace: Story = {
   beforeEach: () => {
-    fakeSession(member);
-    fakePlaces(POSTINGS);
+    postings();
   },
   play: async ({ canvasElement }) => {
     const page = within(canvasElement);
@@ -62,6 +68,7 @@ export const SeeOnlyTheFilteredPostings: Story = {
   render: () => <AppAt path="/jobs/map?type=CDI" />,
   beforeEach: () => {
     fakeSession(member);
+    fakeJobsApi(POSTINGS);
     fakePlaces(POSTINGS.filter((posting) => posting.contract_type === "CDI"));
   },
 };
@@ -69,8 +76,7 @@ export const SeeOnlyTheFilteredPostings: Story = {
 /** As a job seeker, I want a long title and a posting without a score to read well in a place's list, so that each one stays recognisable. */
 export const ReadALongTitleInAPlace: Story = {
   beforeEach: () => {
-    fakeSession(member);
-    fakePlaces([LONG_TITLE_POSTING, NO_PAY_NO_FIT_POSTING, ...POSTINGS]);
+    postings([LONG_TITLE_POSTING, NO_PAY_NO_FIT_POSTING, ...POSTINGS]);
   },
   play: async ({ canvasElement }) => {
     const map = await within(canvasElement).findByRole("group", {
@@ -82,11 +88,10 @@ export const ReadALongTitleInAPlace: Story = {
   },
 };
 
-/** As a job seeker, I want an empty map to say there is nothing to place yet, so that I am never left guessing. */
+/** As a job seeker, I want an empty map to say there is nothing to place yet and how to find postings, so that I am never left guessing. */
 export const NothingToPlaceYet: Story = {
   beforeEach: () => {
-    fakeSession(member);
-    fakePlaces([]);
+    postings([]);
   },
 };
 
@@ -94,6 +99,7 @@ export const NothingToPlaceYet: Story = {
 export const MapUnavailable: Story = {
   beforeEach: () => {
     fakeSession(member);
+    fakeJobsApi(POSTINGS);
     fakePlaces([], () =>
       HttpResponse.json({ detail: "Server error" }, { status: 500 }),
     );
@@ -104,7 +110,6 @@ export const MapUnavailable: Story = {
 export const SeeTheMapOnMyPhone: Story = {
   globals: { viewport: { value: "mobile2", isRotated: false } },
   beforeEach: () => {
-    fakeSession(member);
-    fakePlaces(POSTINGS);
+    postings();
   },
 };

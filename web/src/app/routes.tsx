@@ -1,5 +1,5 @@
 import { lazy } from "react";
-import { Outlet, type RouteObject } from "react-router";
+import { Navigate, Outlet, type RouteObject } from "react-router";
 
 import { AppShell } from "@/app/layouts/app-shell";
 import { NotFoundPage } from "@/components/blocks/not-found-page";
@@ -132,6 +132,11 @@ const ProfilePage = lazy(() =>
     default: m.ProfilePage,
   })),
 );
+const CvPage = lazy(() =>
+  import("@/features/profile/pages/cv-page").then((m) => ({
+    default: m.CvPage,
+  })),
+);
 
 /**
  * Every route of the app. Public: /, /privacy, /terms, /login, /invite/:token, /reset/:token.
@@ -189,7 +194,11 @@ export const routes: RouteObject[] = [
                 element: <AccountPage />,
               },
               { path: "profile", element: <ProfilePage /> },
-              { path: "profile/cv/:id?", element: <ProfilePage /> },
+              {
+                path: "profile/cv",
+                element: <Navigate to="/profile#your-cv" replace />,
+              },
+              { path: "profile/cv/:id", element: <CvPage /> },
               { path: "profile/fill", element: <FillPage /> },
               { path: "runs", element: <RunsPage /> },
               { path: "runs/:id", element: <RunPage /> },

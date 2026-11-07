@@ -4,19 +4,23 @@ import type {
   SkillList,
   SkillsForm,
 } from "@/features/profile/helpers/editor-forms";
-import { SKILL_LIST_LABELS } from "@/features/profile/helpers/skill-list-labels";
 import {
   ItemControls,
   TextField,
 } from "@/components/shared/profile/section-ui";
 import { TermChips } from "@/components/shared/profile/term-chips";
 
-/** One category of a skills list: its name, its place in the list and its terms. */
+/**
+ * One category of a skills list: its name, its place in the list and its terms. `where` names it
+ * for screen readers ("have category 2"); without `regexSwitch` its terms are words only.
+ */
 export function CategoryFields({
   form,
   list,
   index,
   count,
+  where,
+  regexSwitch,
   onMove,
   onRemove,
 }: {
@@ -24,11 +28,11 @@ export function CategoryFields({
   list: SkillList;
   index: number;
   count: number;
+  where: string;
+  regexSwitch: boolean;
   onMove: (from: number, to: number) => void;
   onRemove: (index: number) => void;
 }) {
-  const n = index + 1;
-  const where = `${SKILL_LIST_LABELS[list].one} category ${n}`;
   const name = useWatch({
     control: form.control,
     name: `${list}.${index}.name`,
@@ -58,6 +62,7 @@ export function CategoryFields({
         label={name.trim() || where}
         title="Terms"
         compact
+        regexSwitch={regexSwitch}
       />
     </div>
   );

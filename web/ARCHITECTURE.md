@@ -34,6 +34,7 @@ src/
   features/<feature>/     one folder per product area: jobs, apply, profile, documents, ...
     api/                  requests, query keys, schemas (zod) and the hooks that fetch:
                           use-jobs.ts, use-application.ts, ...
+    assets/               files a page imports: Discover's built Rive scenes (discover.riv)
     components/           the components of this feature's pages, each used by one page
     helpers/              pure functions, no React: labels, formatting, parsing, rules
     hooks/                React hooks that fetch nothing: UI state, keyboard, media
@@ -45,6 +46,8 @@ src/
   design-system/          Storybook only: foundations, patterns, fixtures, story helpers
   test/                   test support: the fake api (MSW), fixtures, render helpers, setup
   index.css               the design tokens (Storybook, Foundations)
+rive/<scene>/             Rive sources (RML), built with the Rive CLI into a feature's assets/:
+                          `rive rive/discover --once` (no Luau scripts: web runtimes refuse them unsigned)
 ```
 
 A feature may have no `pages/` (mail, browser): its data is shown by other features' pages
@@ -82,6 +85,40 @@ module (Vercel's `bundle-barrel-imports`).
 6. Its test in the `test/` folder of the same area, named after the file (`x.tsx`,
    `test/x.test.tsx`); its story in the `stories/` folder beside it.
 
+## How a page is built
+
+Every signed-in page has one structure (Storybook: Patterns, Page structure):
+
+```tsx
+<Page>
+  <PageHeader trail={[...]} title="..." description="..." actions={...} />
+  <PageTabs label="..." tabs={[...]}>          {/* only when the area has several views */}
+    <PageBody aside={...}>                      {/* aside: the side rail, when there is one */}
+      <Section title="..." description="..." actions={...}>
+        <Card>...</Card>                         {/* one surface per section, never nested */}
+      </Section>
+    </PageBody>
+  </PageTabs>
+</Page>
+```
+
+- **Width:** the page spans the shell (1440 px at most). Text keeps short lines; the width goes to
+  columns: a workspace uses it whole, an item puts what accompanies it in the side rail, settings
+  use `Section layout="side"` (the group's name on the left, its controls on the right).
+- **Views:** List and Map, Search and Applications, Users and Agents are `PageTabs` (shadcn Tabs),
+  each at its own address. A page below others has their breadcrumb instead, `trail` in its
+  header: the pages above from the top, named as they name themselves ("Jobs", "Profile"), then
+  the page itself; a phone shows only the last page above, with an arrow.
+- **Actions:** one primary per header and per section, first; two others at most beside it, the
+  rest in a menu. Secondary actions are `outline` buttons; `ghost` is for icon buttons and dense
+  rows, `link` for a link inside a sentence.
+- **Item pages:** `PageBody lead` holds what the person must reach first (Your application on a
+  posting): it opens the rail on a wide screen and comes before the main column on a phone. Facts
+  about the item (dates, figures) are `Facts` of `Fact`s.
+- **States:** `LoadError` for what could not be loaded (with Retry, and `reason` when the server's
+  own words must not show), `EmptyState` for a view with nothing in it (with the action that fills
+  it), skeletons or `LoadingCard` while loading.
+
 ## How data flows
 
 page or component → hook of `features/<f>/api/` (`useJobs(filters)`) → request function of the
@@ -102,5 +139,11 @@ state in the address (filters, the selected posting) or in the component.
 
 - Vitest runs `src/**/*.test.{ts,tsx}` against the fake api of `src/test/`.
 - `pnpm storybook`: page stories render the real routes with the same fake api
-  (`src/design-system/app-at.tsx`), so a page in Storybook is the page of the app.
+  (`src/design-system/app-at.tsx`), so a page in Storybook is the page of the app. A shared
+  component's story wraps it in `withApp` (`src/design-system/with-app.tsx`: a query client and
+  a router) and fakes its requests with `server.use`; stories live in
+  `src/components/stories/shared/<feature>/`, under Shared in Storybook.
+- Agentation (`src/app/dev-feedback.tsx`, development only, also in Storybook): click an element,
+  write a note, and it reaches Claude Code through the agentation MCP server on port 4747
+  (`claude mcp add --scope local agentation -- npx -y agentation-mcp@1.3.2 server`).
 - Playwright journeys in `web/e2e/` run against the real stack.

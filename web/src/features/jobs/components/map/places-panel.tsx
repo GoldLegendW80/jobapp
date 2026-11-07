@@ -4,6 +4,7 @@ import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Progress } from "@/components/ui/progress";
 import {
   Item,
   ItemContent,
@@ -17,7 +18,7 @@ import { dominantStatus } from "@/features/jobs/helpers/map/geometry";
 import {
   describePlace,
   plural,
-  STATUS_FILL,
+  STATUS_BAR,
 } from "@/features/jobs/helpers/map/format";
 import type { MapSelection } from "../../hooks/use-map-selection";
 import type { PlacesMap } from "@/features/jobs/api/map/places-api";
@@ -34,13 +35,15 @@ export function PlacesPanel({
   onSelect,
   from,
   selection,
+  className,
 }: {
   data: PlacesMap;
   selected: string | null;
   onSelect: (name: string | null) => void;
-  /** Passed to the detail page, so "Back to jobs" returns to this map view. */
+  /** Passed to the detail page, so its breadcrumb's Jobs returns to this map view. */
   from: string;
   selection?: MapSelection;
+  className?: string;
 }) {
   const place = data.places.find((p) => p.name === selected);
   if (place) {
@@ -49,9 +52,12 @@ export function PlacesPanel({
     return (
       <aside
         aria-labelledby="place-title"
-        className="flex min-w-0 flex-col rounded-lg border bg-card"
+        className={cn(
+          "flex min-w-0 flex-col rounded-xl bg-card text-card-foreground",
+          className,
+        )}
       >
-        <div className="flex items-center gap-2 border-b p-2">
+        <div className="p-2">
           <Button
             variant="ghost"
             size="sm"
@@ -63,8 +69,8 @@ export function PlacesPanel({
             All places
           </Button>
         </div>
-        <div className="px-4 pt-3">
-          <h2 id="place-title" className="text-base font-semibold">
+        <div className="px-4">
+          <h2 id="place-title" className="text-base font-medium">
             {place.name}
           </h2>
           <p className="text-sm text-muted-foreground">
@@ -93,7 +99,7 @@ export function PlacesPanel({
         </div>
         <ul
           aria-label={`Postings in ${place.name}`}
-          className="flex max-h-[32rem] flex-col overflow-auto p-2"
+          className="flex max-h-[32rem] min-h-0 flex-col overflow-auto p-2 lg:max-h-none"
         >
           {place.job_ids.map((id) => {
             const job = data.jobs[id];
@@ -133,7 +139,7 @@ export function PlacesPanel({
           })}
         </ul>
         {place.job_ids_truncated ? (
-          <p className="border-t px-4 py-2 text-xs text-muted-foreground">
+          <p className="px-4 pb-3 text-xs text-muted-foreground">
             {`Showing the first ${place.job_ids.length} of ${place.count}. Narrow the filters to see the others.`}
           </p>
         ) : null}
@@ -145,10 +151,13 @@ export function PlacesPanel({
   return (
     <aside
       aria-labelledby="places-title"
-      className="flex min-w-0 flex-col rounded-lg border bg-card"
+      className={cn(
+        "flex min-w-0 flex-col rounded-xl bg-card text-card-foreground",
+        className,
+      )}
     >
-      <div className="border-b px-4 py-3">
-        <h2 id="places-title" className="text-base font-semibold">
+      <div className="px-4 pt-4 pb-2">
+        <h2 id="places-title" className="text-base font-medium">
           Places
         </h2>
         <p className="text-sm text-muted-foreground">
@@ -158,7 +167,7 @@ export function PlacesPanel({
       {data.places.length ? (
         <ul
           aria-label="Places, most postings first"
-          className="flex max-h-[24rem] flex-col overflow-auto py-1"
+          className="flex max-h-[24rem] min-h-0 flex-col overflow-auto py-1 lg:max-h-none"
         >
           {data.places.map((p) => {
             const status = dominantStatus(p.counts_by_status);
@@ -174,18 +183,14 @@ export function PlacesPanel({
                   className="grid h-auto w-full grid-cols-[minmax(0,1fr)_4.5rem_3ch] justify-stretch gap-2.5 rounded-none px-4 py-1.5 text-left font-normal hover:text-foreground focus-visible:ring-inset dark:hover:bg-accent"
                 >
                   <span className="truncate">{p.name}</span>
-                  <span
+                  <Progress
                     aria-hidden="true"
-                    className="h-1 overflow-hidden rounded-full bg-muted"
-                  >
-                    <span
-                      className={cn(
-                        "block h-full rounded-full",
-                        status ? STATUS_FILL[status] : "bg-muted-foreground",
-                      )}
-                      style={{ width: `${(p.count / max) * 100}%` }}
-                    />
-                  </span>
+                    value={(p.count / max) * 100}
+                    className={cn(
+                      "h-1 bg-muted",
+                      status ? STATUS_BAR[status] : "*:bg-muted-foreground",
+                    )}
+                  />
                   <span className="text-right text-muted-foreground tabular-nums">
                     {p.count}
                   </span>
@@ -195,14 +200,14 @@ export function PlacesPanel({
           })}
         </ul>
       ) : (
-        <p className="px-4 py-3 text-sm text-muted-foreground">
+        <p className="px-4 py-2 text-sm text-muted-foreground">
           No posting in this view names a known place.
         </p>
       )}
       {data.unplaced.length ? (
         <section
           aria-labelledby="unplaced-title"
-          className="border-t px-4 py-3"
+          className="shrink-0 px-4 pt-3 pb-4"
         >
           <h3
             id="unplaced-title"

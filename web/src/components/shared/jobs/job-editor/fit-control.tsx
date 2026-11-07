@@ -94,7 +94,7 @@ export function FitControl({ job, save }: { job: JobDetail; save: Save }) {
           {job.fit_overridden ? (
             <Button
               type="button"
-              variant="ghost"
+              variant="outline"
               size="sm"
               onClick={backToComputed}
             >

@@ -1,4 +1,4 @@
-/** The Skills tab's "Try it": which categories and requirements a pasted posting matches. */
+/** "Try a posting" of Advanced matching: which categories and requirements a posting matches. */
 import { WORDING } from "@/lib/wording";
 
 import {

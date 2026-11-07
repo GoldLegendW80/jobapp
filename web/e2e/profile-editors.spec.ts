@@ -21,10 +21,14 @@ async function shots(page: Page, name: string, fullPage = true) {
 }
 
 /**
- * The Facts, Skills and Search editors against the real stack through Caddy, no mocks: a fresh
- * account gets a made up profile through the operator CLI (never Harald's data), then the
- * journey edits each tab, saves, reloads and finds every change. The Search tab shows no company
- * boards and the profile holds none (owner, 2026-10-28: the board engine is deleted).
+ * The fact parts of About you, Advanced matching and Settings, Search against the real stack
+ * through Caddy, no mocks: a fresh account gets a made up profile through the operator CLI (never
+ * Harald's data), then the journey writes a fact part in Markdown and saves it to the profile,
+ * moves it up (the fact base keeps the order, owner 2026-11-07), edits the regular expression
+ * categories (refused in the browser, then by the server), tries a posting against all the
+ * skills, saves and sees the rescore, changes the years in the Skills fields (no model key),
+ * toggles a contract in Search, reloads and finds every change. Search shows no company boards and the profile holds none
+ * (owner, 2026-10-28: the board engine is deleted).
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8095 docker compose -p jobapp-p5 -f compose.yml -f compose.mac.yml up -d --build --wait
@@ -157,21 +161,33 @@ function importProfile(email: string) {
   return cliImportProfile(email, fakeExport());
 }
 
-const tab = (page: Page, name: string) =>
-  page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
-
-async function openTab(page: Page, name: string) {
-  // The search is in Settings, Search (owner, 2026-11-05); the other sections in the classic
-  // editor's tabs.
-  if (name === "Search") {
+/** The profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
+async function visit(page: Page, where: "profile" | "search") {
+  if (where === "search") {
     await page.goto("/settings/search");
     await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
     return;
   }
-  if ((await tab(page, name).count()) === 0)
-    await page.goto(`/profile?tab=${name.toLowerCase()}`);
-  await tab(page, name).click();
-  await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
+  if (!new URL(page.url()).pathname.endsWith("/profile"))
+    await page.goto("/profile");
+  await expect(
+    page.getByRole("form", { name: "Advanced matching" }),
+  ).toBeVisible();
+}
+
+const part = (page: Page, name: string) =>
+  page.getByRole("region", { name, exact: true });
+const matching = (page: Page) =>
+  page.getByRole("form", { name: "Advanced matching" });
+
+/** The fact blocks the api holds now. */
+async function factBlocks(page: Page) {
+  const answer = await page.request.get("/api/profile");
+  expect(answer.ok()).toBe(true);
+  const body = (await answer.json()) as {
+    sections: { facts: { blocks: { title: string; body: string }[] } };
+  };
+  return body.sections.facts.blocks;
 }
 
 async function save(page: Page, section: string) {
@@ -201,30 +217,29 @@ test("a new account gets a made up profile through the CLI", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   expect(importProfile(EMAIL)).toMatch(/revision/i);
-  await page.goto("/profile?tab=facts");
-  await expect(
-    page.getByRole("progressbar", { name: "Profile completeness" }),
-  ).toHaveAttribute("aria-valuenow", "100");
+  await visit(page, "profile");
+  await expect(page.getByTestId("profile-completeness")).toHaveText(
+    "100% complete",
+  );
 });
 
-test("Facts: add a Markdown block, preview it, save", async () => {
-  await openTab(page, "Facts");
-  await expect(
-    page.getByRole("button", { name: "HARD RULES, block 1" }),
-  ).toHaveAttribute("aria-expanded", "false");
-  const meter = page.getByRole("meter", { name: "Fact base size" });
-  const before = Number(await meter.getAttribute("aria-valuenow"));
-
-  await page.getByRole("button", { name: "Add block" }).click();
-  const title = page.getByLabel("Title of block 3", { exact: true });
-  await expect(title).toBeFocused();
-  await title.fill("POSITIONING");
-  await page
-    .getByLabel("Text of block 3", { exact: true })
+test("Facts: write a Markdown part, preview it, save it to the profile", async () => {
+  await visit(page, "profile");
+  await expect(part(page, "HARD RULES")).toContainText(
+    "Every claim traces to this base.",
+  );
+  await page.getByRole("button", { name: "Add a part" }).click();
+  await part(page, "New part")
+    .getByLabel("Heading", { exact: true })
+    .fill("POSITIONING");
+  const positioning = part(page, "POSITIONING");
+  // A level two heading would start a part of its own: the editor writes it as level three.
+  await positioning
+    .getByLabel("Text", { exact: true })
     .fill(
       "## Lead with the business\n\nHumans set direction, **agents run operations**.\n\n- Sport\n- Casino\n- Poker\n\nSee [the site](https://example.org).",
     );
-  const preview = page.getByRole("region", { name: "Preview of block 3" });
+  const preview = positioning.getByRole("region", { name: "Preview" });
   await expect(
     preview.getByRole("heading", { name: "Lead with the business" }),
   ).toBeVisible();
@@ -234,74 +249,105 @@ test("Facts: add a Markdown block, preview it, save", async () => {
     "href",
     "https://example.org",
   );
-  expect(Number(await meter.getAttribute("aria-valuenow"))).toBeGreaterThan(
-    before,
-  );
-  await page.getByRole("button", { name: "WHAT SAM BUILT, block 2" }).click();
   await shots(page, "facts");
 
-  // On a phone the editor and the preview take turns.
+  // On a phone the text and its preview stack, the text first.
   await page.setViewportSize({ width: 375, height: 812 });
-  const views = page.getByRole("group", { name: "Editor view of block 3" });
-  await expect(
-    page.getByLabel("Text of block 3", { exact: true }),
-  ).toBeVisible();
-  await expect(preview).toBeHidden();
-  await views.getByRole("button", { name: "Preview" }).click();
+  const text = positioning.getByLabel("Text", { exact: true });
+  await expect(text).toBeVisible();
+  await preview.scrollIntoViewIfNeeded();
   await expect(preview).toBeVisible();
-  await expect(
-    page.getByLabel("Text of block 3", { exact: true }),
-  ).toBeHidden();
-  await takeShots(page, "facts-mobile-preview", false);
-  // takeShots ends at desktop size, where both panes show again.
-  await expect(
-    page.getByLabel("Text of block 3", { exact: true }),
-  ).toBeVisible();
+  const [above, below] = await Promise.all([
+    text.boundingBox(),
+    preview.boundingBox(),
+  ]);
+  expect((below?.y ?? 0) > (above?.y ?? 0)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 800 });
 
-  await save(page, "Facts");
+  // A fact part needs no model: Done saves it to the profile as written.
+  await expect(positioning.getByText("Saved", { exact: true })).toBeVisible();
+  await positioning.getByRole("button", { name: "Done" }).click();
+  await expect(positioning.getByText("Applied to your profile:")).toBeVisible();
+  const blocks = await factBlocks(page);
+  expect(blocks.map((block) => block.title)).toContain("POSITIONING");
+  expect(blocks.find((block) => block.title === "POSITIONING")?.body).toContain(
+    "### Lead with the business",
+  );
   expect(errors).toEqual([]);
 });
 
-test("Skills: add a term, regex errors from the browser and the server, Try it", async () => {
-  await openTab(page, "Skills");
-  await page.getByLabel("New term for agents", { exact: true }).fill("crewai");
+test("Facts: a part moves up, the fact base keeps the order, the meter says its size", async () => {
+  await visit(page, "profile");
+  await expect(
+    page.getByRole("meter", { name: "Fact base size" }),
+  ).toHaveAttribute("aria-valuetext", / of 200 KB$/);
+  await page.getByRole("button", { name: "Move POSITIONING up" }).click();
+  await expect
+    .poll(async () => (await factBlocks(page)).map((block) => block.title))
+    .toEqual(["HARD RULES", "POSITIONING", "WHAT SAM BUILT"]);
+  await expect(
+    page.getByRole("button", { name: "Move POSITIONING up" }),
+  ).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test("Advanced matching: add a regular expression, errors from the browser and the server, Try a posting", async () => {
+  await visit(page, "profile");
+  const form = matching(page);
+  // Only the categories written as regular expressions are here; the others are About you's.
+  await expect(form.getByRole("list", { name: "Terms of llm" })).toContainText(
+    "\\bllms?\\b",
+  );
+  await expect(form.getByRole("list", { name: "Terms of agents" })).toHaveCount(
+    0,
+  );
+  await form
+    .getByRole("button", { name: "Add category to competencies you have" })
+    .click();
+  await form
+    .getByLabel("Name of have category 2", { exact: true })
+    .fill("crews");
+  await form
+    .getByLabel("New term for crews", { exact: true })
+    .fill("\\bcrewai\\b");
   await page.keyboard.press("Enter");
   await expect(
-    page.getByRole("list", { name: "Terms of agents" }),
-  ).toContainText("crewai");
+    form.getByRole("list", { name: "Terms of crews" }),
+  ).toContainText("\\bcrewai\\b");
 
   // Refused in the browser: nested quantifiers.
-  const llm = page.getByLabel("New term for llm", { exact: true });
+  const llm = form.getByLabel("New term for llm", { exact: true });
   await llm.fill("(a+)+");
   await page.keyboard.press("Enter");
   await expect(
-    page.getByText(
+    form.getByText(
       "Nested quantifiers such as (a+)+ are not allowed: they can make matching hang.",
     ),
   ).toBeVisible();
   // Accepted by the browser, refused by Python: the server's message lands under the chip.
   await llm.fill("(?<n>a)");
   await page.keyboard.press("Enter");
-  await page.getByRole("button", { name: "Save skills" }).click();
-  const terms = page.getByRole("list", { name: "Terms of llm" });
+  await form.getByRole("button", { name: "Save advanced matching" }).click();
+  const terms = form.getByRole("list", { name: "Terms of llm" });
   await expect(terms.getByRole("alert")).toContainText(
     /Invalid regular expression at position \d+/,
   );
   await shots(page, "skills-regex-error", false);
-  await page.getByRole("button", { name: "Remove (?<n>a)" }).click();
+  await form.getByRole("button", { name: "Remove (?<n>a)" }).click();
 
+  // Try a posting reads the skills in words of About you and the expressions being edited.
   await page
     .getByLabel("Posting text", { exact: true })
     .fill(
       "We are hiring an Applied AI Engineer to build agents with LangGraph and CrewAI on top of LLMs. Python and FastAPI. PyTorch is a plus. A PhD is not required.",
     );
   const results = page.getByRole("region", { name: "Matches" });
-  await expect(
-    results.getByRole("list", { name: "Competencies you have results" }),
-  ).toContainText("agentsmatches agents, langgraph, crewai");
-  await expect(
-    results.getByRole("list", { name: "Competencies you have results" }),
-  ).toContainText("llmmatches llms");
+  const have = results.getByRole("list", {
+    name: "Competencies you have results",
+  });
+  await expect(have).toContainText("agentsmatches agents, langgraph");
+  await expect(have).toContainText("llmmatches llms");
+  await expect(have).toContainText("crewsmatches crewai");
   await expect(
     results.getByRole("list", { name: "Requirements you do not meet results" }),
   ).toContainText("phdmatches phd");
@@ -309,7 +355,8 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
     results.getByRole("list", { name: "Competencies you lack results" }),
   ).toContainText("researchmatches pytorch");
   await shots(page, "skills");
-  await save(page, "Skills");
+  await form.getByRole("button", { name: "Save advanced matching" }).click();
+  await expect(page.getByText("Skills saved.").first()).toBeVisible();
   // Owner, 2026-11-05: the postings are rescored by themselves after a skills change; the
   // worker's tick runs it within seconds and the line beside Save says what changed.
   const rescored = page.getByTestId("rescore-line");
@@ -318,11 +365,44 @@ test("Skills: add a term, regex errors from the browser and the server, Try it",
     { timeout: 60_000 },
   );
   await expect(rescored).not.toContainText(/[–—]| - /);
+  // The categories in words were kept by the save.
+  const stored = (await (await page.request.get("/api/profile")).json()) as {
+    sections: { skills: { have: { name: string }[] } };
+  };
+  expect(stored.sections.skills.have.map((one) => one.name).sort()).toEqual([
+    "agents",
+    "crews",
+    "llm",
+    "python",
+  ]);
+  expect(errors).toEqual([]);
+});
+
+test("Skills without a model key: the years change by hand, the expressions are kept", async () => {
+  await visit(page, "profile");
+  const skills = page.getByRole("form", { name: "Skills" });
+  await expect(
+    skills.getByRole("button", { name: "What I have, agents, python" }),
+  ).toBeVisible();
+  await skills.getByLabel("Years of experience", { exact: true }).fill("5");
+  await save(page, "Skills");
+  const stored = (await (await page.request.get("/api/profile")).json()) as {
+    sections: {
+      skills: { years_experience: number; have: { name: string }[] };
+    };
+  };
+  expect(stored.sections.skills.years_experience).toBe(5);
+  expect(stored.sections.skills.have.map((one) => one.name).sort()).toEqual([
+    "agents",
+    "crews",
+    "llm",
+    "python",
+  ]);
   expect(errors).toEqual([]);
 });
 
 test("Search: no boards shown nor held, toggle contracts", async () => {
-  await openTab(page, "Search");
+  await visit(page, "search");
   // Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone, so the tab shows
   // no company boards and the profile holds none.
   await expect(page.getByRole("table", { name: "Boards" })).toHaveCount(0);
@@ -355,23 +435,21 @@ async function holdsBoards(page: Page): Promise<boolean> {
 }
 
 test("a reload shows every saved change", async () => {
-  await page.goto("/profile?tab=facts");
-  await page.getByRole("button", { name: "POSITIONING, block 3" }).click();
+  await page.goto("/profile");
   await expect(
-    page
-      .getByRole("region", { name: "Preview of block 3" })
-      .getByRole("heading", { name: "Lead with the business" }),
+    part(page, "POSITIONING").getByRole("heading", {
+      name: "Lead with the business",
+    }),
   ).toBeVisible();
-
-  await openTab(page, "Skills");
+  const form = matching(page);
   await expect(
-    page.getByRole("list", { name: "Terms of agents" }),
-  ).toContainText("crewai");
+    form.getByRole("list", { name: "Terms of crews" }),
+  ).toContainText("\\bcrewai\\b");
   await expect(
-    page.getByRole("list", { name: "Terms of llm" }),
+    form.getByRole("list", { name: "Terms of llm" }),
   ).not.toContainText("(?<n>a)");
 
-  await openTab(page, "Search");
+  await visit(page, "search");
   await expect(page.getByRole("button", { name: "VIE" })).toHaveAttribute(
     "aria-pressed",
     "true",

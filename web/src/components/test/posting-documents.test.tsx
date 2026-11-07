@@ -15,6 +15,7 @@ import { fakeProfile } from "@/test/profile";
 import { waitForOnFakeClock } from "@/test/clock";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { crumb } from "@/test/breadcrumb";
 
 import type { PostingDocument } from "@/features/documents/api/posting-documents-api";
 import { POLL_MS } from "@/features/documents/helpers/labels";
@@ -347,8 +348,8 @@ describe("the Documents section of a posting", () => {
         "Waiting for you to confirm what is sent.",
       );
       expect(
-        within(card).getByRole("link", { name: "Open the CV tab" }),
-      ).toHaveAttribute("href", "/profile/cv");
+        within(card).getByRole("link", { name: "Open your CVs" }),
+      ).toHaveAttribute("href", "/profile#your-cv");
       expect(
         within(card).queryByRole("button", { name: "Write now" }),
       ).toBeNull();
@@ -427,7 +428,7 @@ describe("the Documents section of a posting", () => {
     const { section } = await openSection();
     const letter = within(section).getByTestId("posting-letter");
     expect(letter).toHaveTextContent(
-      "Longer than one page. Shorten the longest fields in Edit, or choose a more compact template.",
+      "Longer than one page. Open it to shorten the longest texts, or choose a more compact template.",
     );
     expect(
       within(letter).queryByRole("button", { name: "Make it fit" }),
@@ -664,12 +665,14 @@ describe("the document page of a posting", () => {
     api.api.documents.set("cv-doc", ready("cv"));
     renderApp(`${PATH}/documents/cv`);
     expect(
-      await screen.findByRole("heading", { level: 1, name: "CV" }),
+      await screen.findByRole("heading", {
+        level: 1,
+        name: `CV for ${api.job.title} at ${api.job.company}`,
+      }),
     ).toBeVisible();
     expect(await screen.findByTestId("document-view")).toBeVisible();
-    expect(
-      screen.getByRole("link", { name: "Back to the posting" }),
-    ).toHaveAttribute("href", PATH);
+    expect(crumb(api.job.title)).toHaveAttribute("href", PATH);
+    expect(crumb("Jobs")).toHaveAttribute("href", "/jobs");
   });
 
   it("says a letter that was never written has not been", async () => {

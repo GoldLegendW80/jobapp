@@ -47,7 +47,7 @@ describe("protected routes", () => {
     await user.type(screen.getByLabelText("Password"), "correct horse");
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(
-      await screen.findByRole("heading", { name: "Users" }),
+      await screen.findByRole("heading", { name: "Admin", level: 1 }),
     ).toBeInTheDocument();
     expect(location()).toBe("/admin/users");
   });
@@ -114,7 +114,7 @@ describe("roles", () => {
     const user = userEvent.setup();
     await user.click(within(nav).getByRole("link", { name: "Admin" }));
     expect(
-      await screen.findByRole("heading", { name: "Users" }),
+      await screen.findByRole("heading", { name: "Admin", level: 1 }),
     ).toBeInTheDocument();
     expect(location()).toBe("/admin/users");
     expect(within(nav).getByRole("link", { name: "Admin" })).toHaveAttribute(
@@ -139,7 +139,7 @@ describe("roles", () => {
       await screen.findByRole("heading", { name: "Page not found" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("heading", { name: "Users" }),
+      screen.queryByRole("heading", { name: "Admin", level: 1 }),
     ).not.toBeInTheDocument();
     expect(location()).toBe("/admin/users");
   });
@@ -199,7 +199,7 @@ describe("user menu and sign out", () => {
     const { router, location } = renderApp("/");
     const user = userEvent.setup();
     await user.click(await screen.findByRole("link", { name: "Admin" }));
-    await screen.findByRole("heading", { name: "Users" });
+    await screen.findByRole("heading", { name: "Admin", level: 1 });
     const menu = await openMenu(user, admin.name);
     await user.click(within(menu).getByRole("menuitem", { name: "Sign out" }));
     await screen.findByRole("heading", { name: "Sign in" });
@@ -214,7 +214,7 @@ describe("user menu and sign out", () => {
         screen.queryByRole("heading", { name: "Jobs" }),
       ).not.toBeInTheDocument();
       expect(
-        screen.queryByRole("heading", { name: "Users" }),
+        screen.queryByRole("heading", { name: "Admin", level: 1 }),
       ).not.toBeInTheDocument();
       expect(location()).toMatch(/^\/login/);
     }
@@ -280,7 +280,7 @@ describe("global 401", () => {
   it("keeps a deep page, its query and hash in next", async () => {
     const state = fakeSession(admin);
     const { location } = renderApp("/admin/users?tab=invites#list");
-    await screen.findByRole("heading", { name: "Users" });
+    await screen.findByRole("heading", { name: "Admin", level: 1 });
     state.user = null;
     server.use(http.get("*/api/anything", () => unauthorized()));
     // Any api call answering 401 does it, whichever feature made it.

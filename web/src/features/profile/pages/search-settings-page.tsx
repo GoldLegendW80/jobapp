@@ -1,25 +1,22 @@
-import { RotateCw } from "lucide-react";
 import { useCallback, useState } from "react";
 
-import { PageHeader } from "@/components/blocks/page-header";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
-import { describeError } from "@/lib/api";
+import { LoadError } from "@/components/blocks/load-error";
+import { LoadingCard } from "@/components/blocks/loading-card";
+import { PageBody } from "@/components/blocks/page";
 import { useTitle } from "@/hooks/use-title";
 
 import { useProfile } from "../api/use-profile";
 import { HistoryDrawer } from "@/components/shared/profile/history-drawer";
 import { SearchTab } from "../components/search-tab";
-import { SettingsTabs } from "@/components/shared/profile/settings-tabs";
+import { SettingsFrame } from "@/components/shared/profile/settings-frame";
 import { UnsavedGuard } from "@/components/shared/profile/unsaved-guard";
 
 /**
- * /settings/search, "Search settings" (owner, 2026-11-05: "search setting should be in the
- * settings of the user"): the profile's Search tab as it was, the four word lists with the job
- * title ideas and the place chip, contracts, remote stance, minimum fit, posting age, the never
- * apply rules, what the person aims for and the documents cards, with their save bars. It still
- * saves the profile's `search` and `preferences` sections; /profile?tab=search comes here.
+ * /settings/search, Settings, Search (owner, 2026-11-05: "search setting should be in the
+ * settings of the user"): the four word lists with the job title ideas and the place chip,
+ * contracts, remote stance, what the person aims for, minimum fit, posting age, where the search
+ * runs, the never apply rules, the documents and the preferences, with their save bars. It saves
+ * the profile's `search` and `preferences` sections; /profile?tab=search comes here.
  */
 export function SearchSettingsPage() {
   useTitle("Search settings");
@@ -31,53 +28,33 @@ export function SearchSettingsPage() {
   }, []);
 
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6">
-      <PageHeader
-        title="Search settings"
-        description="What the search keeps and leaves out, and when documents are written for a posting."
-        actions={
-          query.data ? (
-            <HistoryDrawer
-              section="search"
-              profile={query.data}
-              dirty={dirty}
-              onRestored={() => {
-                setDirty(false);
-                setGeneration((value) => value + 1);
-              }}
-            />
-          ) : null
-        }
-      />
-      <SettingsTabs />
+    <SettingsFrame
+      actions={
+        query.data ? (
+          <HistoryDrawer
+            section="search"
+            profile={query.data}
+            dirty={dirty}
+            onRestored={() => {
+              setDirty(false);
+              setGeneration((value) => value + 1);
+            }}
+          />
+        ) : null
+      }
+    >
       {query.isPending ? (
-        <p
-          role="status"
-          className="flex items-center gap-2 text-sm text-muted-foreground"
-        >
-          <Spinner aria-hidden="true" />
-          Loading your settings
-        </p>
+        <LoadingCard>Loading your settings</LoadingCard>
       ) : query.isError ? (
-        <Alert variant="destructive">
-          <AlertTitle>Your settings could not be loaded</AlertTitle>
-          <AlertDescription>{describeError(query.error)}</AlertDescription>
-          <Button
-            variant="outline"
-            size="sm"
-            className="mt-2 w-fit"
-            onClick={() => void query.refetch()}
-          >
-            <RotateCw aria-hidden="true" />
-            Retry
-          </Button>
-        </Alert>
+        <LoadError query={query}>Your settings could not be loaded.</LoadError>
       ) : (
-        <SearchTab
-          key={generation}
-          profile={query.data}
-          onDirtyChange={onDirtyChange}
-        />
+        <PageBody>
+          <SearchTab
+            key={generation}
+            profile={query.data}
+            onDirtyChange={onDirtyChange}
+          />
+        </PageBody>
       )}
       <UnsavedGuard
         dirty={dirty}
@@ -87,6 +64,6 @@ export function SearchSettingsPage() {
           setGeneration((value) => value + 1);
         }}
       />
-    </div>
+    </SettingsFrame>
   );
 }

@@ -6,7 +6,7 @@ import { AgentSection } from "./agent-section";
 import { FoldedJson } from "./folded-json";
 import { PromptDiff } from "./prompt-diff";
 
-/** The system prompt, what it changes from the code's, and the code's own. */
+/** The system prompt, what it changes from the code's, and the code's own; the code's guards beside it. */
 export function SystemPromptSection({
   page,
   draft,
@@ -14,9 +14,10 @@ export function SystemPromptSection({
   onEdit,
 }: DraftFieldProps) {
   return (
-    <AgentSection id="prompt" title="System prompt">
+    <AgentSection title="System prompt" description={page.guards}>
       <AgentField
         label="System prompt"
+        hideLabel
         error={problems.system_prompt}
         hint={`${draft.system_prompt.length.toLocaleString("en")} of ${page.choices.prompt_max.toLocaleString("en")} characters. Only its size is checked, never what it says.`}
         changed={draft.system_prompt !== page.code.system_prompt}

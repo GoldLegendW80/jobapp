@@ -16,15 +16,22 @@ import {
   type UserAction,
 } from "@/features/admin/helpers/user-actions";
 import { Moment } from "@/components/shared/admin/moment";
+import { BrowsersControl } from "./browsers-control";
 import { UserActionsMenu } from "./user-actions-menu";
 
-/** One page of accounts: name, role, status, last sign in, sessions and the actions menu. */
+/**
+ * One page of accounts: name, role, status, last sign in, sessions, browsers at once (saved as
+ * soon as it is picked) and the actions menu.
+ */
 export function UsersTable({
   items,
   now,
   meId,
   lastAdmin,
   busy,
+  browsersMax,
+  savingBrowsers,
+  onBrowsers,
   onAction,
 }: {
   items: AdminUser[];
@@ -32,6 +39,9 @@ export function UsersTable({
   meId: string | undefined;
   lastAdmin: boolean;
   busy: boolean;
+  browsersMax: number;
+  savingBrowsers: string | undefined;
+  onBrowsers: (user: AdminUser, browsers: number) => void;
   onAction: (user: AdminUser, action: UserAction) => void;
 }) {
   return (
@@ -44,6 +54,7 @@ export function UsersTable({
           <TableHead>Status</TableHead>
           <TableHead>Last sign in</TableHead>
           <TableHead>Sessions</TableHead>
+          <TableHead>Browsers at once</TableHead>
           <TableHead className="text-right">
             <span className="sr-only">Actions</span>
           </TableHead>
@@ -94,6 +105,16 @@ export function UsersTable({
               </TableCell>
               <TableCell label="Sessions">
                 <span className="tabular-nums">{user.sessions}</span>
+              </TableCell>
+              <TableCell label="Browsers at once">
+                <BrowsersControl
+                  user={user}
+                  max={browsersMax}
+                  saving={savingBrowsers === user.id}
+                  onChange={(browsers) => {
+                    onBrowsers(user, browsers);
+                  }}
+                />
               </TableCell>
               <TableCell className="text-right max-sm:pt-2 max-sm:text-left">
                 <UserActionsMenu

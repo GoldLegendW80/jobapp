@@ -7,6 +7,7 @@ import {
   ACCOUNTS,
   INVITES,
   invitesPage,
+  manyInvites,
   usersPage,
 } from "@/design-system/fixtures/admin-users";
 import type { AdminInvite, AdminUser } from "@/features/admin/api/admin-api";
@@ -68,6 +69,62 @@ export const InviteSomeone: Story = {
       await canvas.findByRole("button", { name: "Invite someone" }),
     );
     await screen.findByRole("dialog", { name: "Invite someone" });
+  },
+};
+
+/** As an administrator, I want the new link shown once in its box with Copy link beside it, so that I copy it and send it right away. */
+export const CopyTheNewLink: Story = {
+  beforeEach: () => {
+    fakeSession(admin);
+    fakeLists(ACCOUNTS, INVITES);
+    server.use(
+      http.post("*/api/admin/invites", () =>
+        HttpResponse.json(
+          {
+            invite: { ...INVITES[0], email: "e2e-new-friend@example.org" },
+            path: `/invite/${"Q2xvdWRzX2FuZF9yaXZlcnNfb2ZfaW52ZW50ZWRfZGF0YQ".slice(0, 43)}`,
+          },
+          { status: 201 },
+        ),
+      ),
+    );
+  },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(
+      await within(canvasElement).findByRole("button", {
+        name: "Invite someone",
+      }),
+    );
+    const dialog = within(
+      await screen.findByRole("dialog", { name: "Invite someone" }),
+    );
+    await userEvent.type(
+      dialog.getByLabelText("Email"),
+      "e2e-new-friend@example.org",
+    );
+    await userEvent.click(dialog.getByRole("button", { name: "Create link" }));
+    await screen.findByRole("dialog", { name: "Invite link ready" });
+  },
+};
+
+/** As an administrator who sent many links, I want them a page at a time with where I am in the list, so that the page stays short and I can go back and forth. */
+export const PageThroughManyLinks: Story = {
+  beforeEach: () => {
+    fakeSession(admin);
+    fakeLists(ACCOUNTS, INVITES);
+    const many = manyInvites(45);
+    server.use(
+      http.get("*/api/admin/invites", ({ request }) => {
+        const offset = Number(
+          new URL(request.url).searchParams.get("offset") ?? "0",
+        );
+        return HttpResponse.json({
+          ...invitesPage(many.slice(offset, offset + 20)),
+          total: many.length,
+          offset,
+        });
+      }),
+    );
   },
 };
 

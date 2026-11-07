@@ -391,7 +391,9 @@ describe("dead and broken links", () => {
     });
     renderApp(`/invite/${TOKEN}`);
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("The server could not be reached.");
+    expect(alert).toHaveTextContent(
+      "Your link could not be checked. The app cannot reach the server.",
+    );
     await userEvent
       .setup()
       .click(screen.getByRole("button", { name: "Retry" }));

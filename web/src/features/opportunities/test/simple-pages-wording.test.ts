@@ -7,8 +7,12 @@ const pages = import.meta.glob<string>(
   [
     "../pages/deck-page.tsx",
     "../components/deck/filter-row.tsx",
+    "../components/deck/deck-rail.tsx",
     "../components/deck/swipe-card.tsx",
     "../components/deck/posting-sheet.tsx",
+    "../components/deck/deck-controls.tsx",
+    "../components/deck/deck-top-bar.tsx",
+    "../components/deck/deck-empty.tsx",
     "../../onboarding/components/steps/step-profile.tsx",
     "../../onboarding/components/steps/step-looking.tsx",
     "../../onboarding/components/steps/step-where.tsx",

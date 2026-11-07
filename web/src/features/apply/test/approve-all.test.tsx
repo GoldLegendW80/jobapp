@@ -285,7 +285,7 @@ describe("Remember this answer for next forms", () => {
       name: "Remember this answer for next forms",
     });
     expect(box).not.toBeChecked();
-    await user.click(within(card).getByRole("button", { name: "No" }));
+    await user.click(within(card).getByRole("radio", { name: "No" }));
     await waitFor(() => {
       expect(api.puts).toEqual([
         { id: item.id, field: "before", value: false },

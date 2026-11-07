@@ -15,6 +15,19 @@ export const STATUS_FILL: Record<JobStatus, string> = {
   skipped: "bg-muted-foreground/30",
 };
 
+/** The same colours on the bar of a place in the list: they fill a Progress's indicator. */
+export const STATUS_BAR: Record<JobStatus, string> = {
+  found: "*:bg-muted-foreground",
+  shortlisted: "*:bg-info",
+  cv_ready: "*:bg-highlight",
+  staged: "*:bg-warning",
+  applied: "*:bg-success/60",
+  interview: "*:bg-success",
+  rejected: "*:bg-destructive",
+  closed: "*:bg-muted-foreground/50",
+  skipped: "*:bg-muted-foreground/30",
+};
+
 export const plural = (n: number, word: string) =>
   `${n} ${word}${n === 1 ? "" : "s"}`;
 

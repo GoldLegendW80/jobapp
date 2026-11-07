@@ -47,7 +47,9 @@ afterEach(() => {
 async function openSection() {
   const user = userEvent.setup();
   const app = renderApp(PATH);
-  const heading = await screen.findByRole("heading", { name: "Apply" });
+  const heading = await screen.findByRole("heading", {
+    name: "Your application",
+  });
   const section = heading.closest("section") as HTMLElement;
   return { user, section, ...app };
 }
@@ -345,7 +347,7 @@ describe("the review", () => {
     expect(await within(section).findByText(/Approved\./)).toBeInTheDocument();
   });
 
-  it("saves a yes or no with two buttons and a choice with its select, as the value", async () => {
+  it("saves a yes or no with its Yes and No choice and a choice with its select, as the value", async () => {
     const api = fakeApply({
       application: fakeApplication("ready"),
       answers: [
@@ -357,10 +359,10 @@ describe("the review", () => {
       ],
     });
     const { user, section } = await openSection();
-    const group = await within(section).findByRole("group", {
+    const group = await within(section).findByRole("radiogroup", {
       name: "Answer for Open to remote work",
     });
-    await user.click(within(group).getByRole("button", { name: "Yes" }));
+    await user.click(within(group).getByRole("radio", { name: "Yes" }));
     await user.selectOptions(
       await within(section).findByRole("combobox", {
         name: "Answer for Start date",
@@ -883,8 +885,8 @@ describe("a failing refresh", () => {
       await within(section).findByText(/nothing is written before\.$/),
     ).toBeVisible();
     expect(
-      within(section).getByRole("link", { name: "Open the CV tab" }),
-    ).toHaveAttribute("href", "/profile/cv");
+      within(section).getByRole("link", { name: "Open your CVs" }),
+    ).toHaveAttribute("href", "/profile#your-cv");
   });
 
   it("says plainly that a writer failed and nothing was sent", async () => {
@@ -1579,5 +1581,31 @@ describe("one click Apply (issue #738)", () => {
     const { section } = await openSection();
     await within(section).findByRole("button", { name: "Approve and submit" });
     expect(within(section).queryByText(/Why it waits for you/)).toBeNull();
+  });
+});
+
+describe("Review first filled by the apply agent (A20)", () => {
+  it("shows the agent's list to confirm, never a filled form that is never read", async () => {
+    const api = fakeApply({ application: fakeApplication("ready") });
+    Object.assign(api.detail, {
+      review_agent: true,
+      filled: {
+        fields: [
+          { step: "Your details", label: "Name", kind: "text", value: "Alex" },
+        ],
+        submit: "Submit application",
+        fields_hash: "ab".repeat(32),
+      },
+    });
+    const { section } = await openSection();
+    expect(
+      await within(section).findByRole("button", { name: "Confirm and send" }),
+    ).toBeVisible();
+    expect(within(section).queryByText("Loading the filled form")).toBeNull();
+    // Its one approval is Confirm and send: the status line says confirm, the same word.
+    expect(section).toHaveTextContent(
+      "Nothing is sent until you click Confirm and send.",
+    );
+    expect(section).not.toHaveTextContent("until you approve");
   });
 });

@@ -1,9 +1,15 @@
 import type { ComponentProps, ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 
+import {
+  NavigationMenu,
+  NavigationMenuItem,
+  NavigationMenuLink,
+  NavigationMenuList,
+} from "@/components/ui/navigation-menu";
 import { cn } from "@/lib/utils";
 
-/** Sections side by side in one white pill; the current one is a black pill. */
+/** The app's sections side by side in one white pill (shadcn NavigationMenu); the current one is black. */
 export function PillNav({
   label,
   className,
@@ -15,15 +21,15 @@ export function PillNav({
   children: ReactNode;
 }) {
   return (
-    <nav
+    <NavigationMenu
       aria-label={label}
-      className={cn(
-        "flex min-w-0 items-center gap-1 overflow-x-auto rounded-full bg-card p-1 [scrollbar-width:none]",
-        className,
-      )}
+      viewport={false}
+      className={cn("min-w-0", className)}
     >
-      {children}
-    </nav>
+      <NavigationMenuList className="min-w-0 justify-start overflow-x-auto rounded-full bg-card p-1 [scrollbar-width:none]">
+        {children}
+      </NavigationMenuList>
+    </NavigationMenu>
   );
 }
 
@@ -48,16 +54,10 @@ export function PillNavLink({
   const current =
     pathname === section || (!end && pathname.startsWith(`${section}/`));
   return (
-    <Link
-      to={to}
-      aria-current={current ? "page" : undefined}
-      className={cn(
-        "flex h-9 shrink-0 items-center gap-1.5 rounded-full px-4 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        current &&
-          "bg-primary text-primary-foreground hover:text-primary-foreground",
-        className,
-      )}
-      {...props}
-    />
+    <NavigationMenuItem>
+      <NavigationMenuLink asChild active={current} className={className}>
+        <Link to={to} {...props} />
+      </NavigationMenuLink>
+    </NavigationMenuItem>
   );
 }

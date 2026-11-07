@@ -3,17 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fakeApplication } from "@/test/apply";
 import { admin, fakeSession } from "@/test/auth";
-import {
-  csvJobs,
-  fakeJobDetail,
-  fakeJobsApi,
-  makeDetail,
-  unfoldPostingMore,
-} from "@/test/jobs";
+import { csvJobs, fakeJobDetail, fakeJobsApi, makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { crumb } from "@/test/breadcrumb";
 
 import type { JobFile } from "../api/jobs-api";
 
@@ -45,9 +39,6 @@ const pdfBytes = () =>
 beforeEach(() => {
   fakeSession(admin);
   window.localStorage.clear();
-  // Files, history and imported fields live under "More about this posting", opened here; the
-  // tests of the fold itself clear it again.
-  unfoldPostingMore();
 });
 
 async function openDetail(path = PATH) {
@@ -56,13 +47,19 @@ async function openDetail(path = PATH) {
   return app;
 }
 
-const header = () => document.querySelector("article > header") as HTMLElement;
+/** The h1 and the line under it: company, place and pay. */
+const header = () =>
+  screen.getByRole("heading", { level: 1 }).parentElement as HTMLElement;
+/** Status, fit, contract and work mode, at the top of the posting. */
+const badges = () => screen.getByTestId("posting-badges");
+/** The side rail, beside the posting on a wide page. */
+const rail = () => document.querySelector("aside") as HTMLElement;
 /** True when `a` comes before `b` in the page. */
 const before = (a: Element, b: Element) =>
   Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
 
 describe("job detail", () => {
-  it("shows the pay prominently in the header with separators, and the work mode in words", async () => {
+  it("shows the pay set apart in the header line with separators, and the work mode in words", async () => {
     fakeJobDetail(
       makeDetail({
         pay_min: 45000,
@@ -75,11 +72,10 @@ describe("job detail", () => {
     await openDetail();
     const pay = within(header()).getByTestId("posting-pay");
     expect(pay).toHaveTextContent("Pay: 45,000 to 1,250,000 EUR a year");
-    expect(pay).toHaveClass("text-lg", "font-semibold");
-    expect(
-      within(pay).getByText("45,000 to 1,250,000 EUR a year"),
-    ).not.toHaveClass("text-muted-foreground");
-    expect(within(header()).getByText("On site")).toBeInTheDocument();
+    const figures = within(pay).getByText("45,000 to 1,250,000 EUR a year");
+    expect(figures).toHaveClass("font-medium", "text-foreground");
+    expect(figures).not.toHaveClass("text-muted-foreground");
+    expect(within(badges()).getByText("On site")).toBeInTheDocument();
   });
 
   it("says Pay not given, muted, when the posting states no pay, and no work mode when none", async () => {
@@ -90,122 +86,89 @@ describe("job detail", () => {
     expect(within(pay).getByText("Pay not given")).toHaveClass(
       "text-muted-foreground",
     );
-    expect(within(header()).queryByText("Remote")).toBeNull();
-    expect(within(header()).queryByText("On site")).toBeNull();
+    expect(within(badges()).queryByText("Remote")).toBeNull();
+    expect(within(badges()).queryByText("On site")).toBeNull();
   });
 
   it("says the contract in words and the fit as Fit and its number, never a code or a bare number", async () => {
     fakeJobDetail(makeDetail({ contract_type: "CDI", fit: 13 }));
     await openDetail();
-    expect(within(header()).getByText("Permanent")).toBeInTheDocument();
-    expect(within(header()).queryByText("CDI")).toBeNull();
-    const fit = within(header()).getByLabelText("Fit 13 out of 100");
+    expect(within(badges()).getByText("Permanent")).toBeInTheDocument();
+    expect(within(badges()).queryByText("CDI")).toBeNull();
+    const fit = within(badges()).getByLabelText("Fit 13 out of 100");
     expect(fit).toHaveTextContent(/^Fit 13$/);
     expect(fit).toHaveAttribute("data-tone", "low");
   });
 
-  it("puts Your application right under the header: Apply before the posting text and the assessment", async () => {
+  it("leads with Your application, Apply first in it, then the posting in the main column and the rest in the side rail", async () => {
     fakeJobDetail(makeDetail({ posting_text: "We build robots." }));
     await openDetail();
-    const application = screen.getByRole("region", {
-      name: "Your application",
-    });
-    const apply = within(application).getByRole("heading", { name: "Apply" });
-    const documents = within(application).getByRole("heading", {
-      name: "Documents",
-    });
-    const text = screen.getByTestId("posting-text");
-    const assessment = screen.getByRole("region", { name: "Agent assessment" });
-    const notes = screen.getByRole("textbox", { name: "Notes" });
-    expect(before(header(), application)).toBe(true);
-    expect(before(apply, documents)).toBe(true);
-    expect(before(apply, text)).toBe(true);
-    expect(before(apply, assessment)).toBe(true);
-    expect(before(documents, text)).toBe(true);
-    expect(before(text, assessment)).toBe(true);
-    expect(before(text, notes)).toBe(true);
-    expect(
-      await within(application).findByRole("button", { name: "Apply" }),
-    ).toBeVisible();
-  });
-
-  it("sets Apply and the documents side by side while nothing is under way, and stacks them once it is", async () => {
-    fakeJobDetail(makeDetail());
-    const app = await openDetail();
-    await screen.findByText("No application yet.");
-    expect(screen.getByTestId("application-row")).toHaveAttribute(
-      "data-layout",
-      "side",
+    const region = (name: string) => screen.getByRole("region", { name });
+    const application = region("Your application");
+    // It opens the rail and comes before the posting in the page, so a phone shows it first.
+    expect(rail()).not.toContainElement(application);
+    expect(before(application, region("Posting"))).toBe(true);
+    const inRail = [
+      region("Documents"),
+      region("Status and fit"),
+      region("Agent assessment"),
+      region("Details"),
+    ];
+    for (const one of inRail) expect(rail()).toContainElement(one);
+    for (const [index, one] of inRail.slice(1).entries())
+      expect(before(inRail[index]!, one)).toBe(true);
+    const inMain = [
+      region("Posting"),
+      region("Notes"),
+      region("Files"),
+      region("History"),
+    ];
+    for (const one of inMain) expect(rail()).not.toContainElement(one);
+    for (const [index, one] of inMain.slice(1).entries())
+      expect(before(inMain[index]!, one)).toBe(true);
+    expect(region("Posting")).toContainElement(
+      screen.getByTestId("posting-text"),
     );
-    app.unmount();
-    server.use(
-      http.get("*/api/applications", () =>
-        HttpResponse.json({ items: [fakeApplication("filling")] }),
+    const apply = await within(application).findByRole("button", {
+      name: "Apply",
+    });
+    expect(apply).toBeVisible();
+    expect(
+      before(
+        apply,
+        within(application).getByRole("button", { name: "Apply myself" }),
       ),
-    );
-    await openDetail();
-    await waitFor(() => {
-      expect(screen.getByTestId("application-row")).toHaveAttribute(
-        "data-layout",
-        "stacked",
-      );
-    });
+    ).toBe(true);
   });
 
-  it("folds status and fit, the assessment, notes, files and history under More about this posting", async () => {
-    window.localStorage.clear();
+  it("shows status and fit, the assessment, notes, files and history at once, without a fold", async () => {
     fakeJobDetail(makeDetail());
     await openDetail();
-    const more = screen.getByRole("button", {
-      name: "More about this posting",
-    });
-    expect(more).toHaveAttribute("aria-expanded", "false");
     expect(
-      screen.queryByRole("region", { name: "Agent assessment" }),
+      screen.queryByRole("button", { name: "More about this posting" }),
     ).toBeNull();
-    expect(screen.queryByRole("textbox", { name: "Notes" })).toBeNull();
+    for (const name of ["Status and fit", "Agent assessment"])
+      expect(screen.getByRole("region", { name })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "Notes" })).toBeVisible();
+    expect(screen.getByText("No files attached.")).toBeVisible();
     expect(
-      screen.queryByRole("list", { name: "History, newest first" }),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("region", { name: "Edit status and fit" }),
-    ).toBeNull();
-    await userEvent.setup().click(more);
-    expect(more).toHaveAttribute("aria-expanded", "true");
-    const folded = screen.getByRole("region", {
-      name: "More about this posting",
-    });
-    for (const name of ["Edit status and fit", "Agent assessment"])
-      expect(within(folded).getByRole("region", { name })).toBeVisible();
-    expect(
-      within(folded).getByRole("textbox", { name: "Notes" }),
+      screen.getByRole("list", { name: "History, newest first" }),
     ).toBeVisible();
-    expect(within(folded).getByText("No files attached.")).toBeVisible();
-    expect(
-      within(folded).getByRole("list", { name: "History, newest first" }),
-    ).toBeVisible();
-    expect(window.localStorage.getItem("advanced:posting-more")).toBe("1");
   });
 
-  it("keeps unsaved notes when the section is folded and opened again", async () => {
-    window.localStorage.clear();
-    // The save never answers: the text typed is only in the editor.
-    server.use(http.patch("*/api/jobs/:id", () => new Promise(() => {})));
-    fakeJobDetail(makeDetail({ notes: "" }));
-    const user = userEvent.setup();
+  it("keeps one h1, the posting's title, and puts every section a level below it", async () => {
+    fakeJobDetail(makeDetail({ title: "Applied AI Engineer" }));
     await openDetail();
-    const more = screen.getByRole("button", {
-      name: "More about this posting",
+    expect(screen.getAllByRole("heading", { level: 1 })).toEqual([
+      screen.getByRole("heading", { name: "Applied AI Engineer" }),
+    ]);
+    const article = screen.getByRole("article", {
+      name: "Applied AI Engineer",
     });
-    await user.click(more);
-    const notes = screen.getByRole("textbox", { name: "Notes" });
-    await user.type(notes, "Call Camille on Monday");
-    await user.click(more);
-    expect(screen.queryByRole("textbox", { name: "Notes" })).toBeNull();
-    await user.click(more);
-    const again = screen.getByRole("textbox", { name: "Notes" });
-    expect(again).toBe(notes);
-    expect(again).toHaveValue("Call Camille on Monday");
+    for (const name of ["Your application", "Posting", "Notes", "History"])
+      expect(
+        within(article).getByRole("heading", { level: 2, name }),
+      ).toBeInTheDocument();
   });
 
   it("shows the header: company, title, location, badges, dates, source and link", async () => {
@@ -230,8 +193,7 @@ describe("job detail", () => {
     expect(
       screen.getByRole("heading", { level: 1, name: "Applied AI Engineer" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Mistral AI")).toBeInTheDocument();
-    expect(screen.getByText("Paris, France")).toBeInTheDocument();
+    expect(header()).toHaveTextContent("Mistral AI, Paris, France");
     expect(
       screen.getByText("CV ready", { selector: "[data-status]" }),
     ).toBeInTheDocument();
@@ -364,9 +326,7 @@ describe("job detail", () => {
   ])("does not make %s a link", async (url) => {
     fakeJobDetail(makeDetail({ url }));
     await openDetail();
-    const posting = screen.getByText("Posting", {
-      selector: "dt",
-    }).parentElement!;
+    const posting = screen.getByTestId("posting-link");
     expect(within(posting).queryByRole("link")).toBeNull();
     expect(within(posting).getByText(url.trim())).toBeInTheDocument();
     for (const link of screen.getAllByRole("link"))
@@ -378,7 +338,7 @@ describe("job detail", () => {
   it("shows no link at all when the job has no url", async () => {
     fakeJobDetail(makeDetail({ url: null }));
     await openDetail();
-    expect(screen.queryByText("Posting", { selector: "dt" })).toBeNull();
+    expect(screen.queryByTestId("posting-link")).toBeNull();
   });
 
   it("falls back to a readable label for an unknown status", async () => {
@@ -571,11 +531,15 @@ describe("job detail", () => {
       }),
     );
     await openDetail();
-    const trigger = screen.getByRole("button", { name: "Imported fields" });
+    expect(
+      screen.getByRole("region", { name: "Imported fields" }),
+    ).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "Show the 2 fields" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByText("data/reports/x.html")).toBeNull();
     await userEvent.setup().click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveTextContent("Hide the 2 fields");
     const details = document.getElementById(
       trigger.getAttribute("aria-controls")!,
     )!;
@@ -592,7 +556,9 @@ describe("job detail", () => {
   it("hides the imported fields section when there are none", async () => {
     fakeJobDetail(makeDetail({ legacy: {} }));
     await openDetail();
-    expect(screen.queryByText("Imported fields")).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Imported fields" }),
+    ).toBeNull();
   });
 
   it("shows the not found page for a job that is not there (or not yours)", async () => {
@@ -642,7 +608,7 @@ describe("back to the list", () => {
     await user.click(within(item).getByRole("link", { name: "Engineer 1" }));
     await screen.findByRole("heading", { level: 1, name: "Engineer 1" });
     expect(location()).toBe(PATH);
-    const back = screen.getByRole("link", { name: "Back to jobs" });
+    const back = crumb("Jobs");
     expect(back).toHaveAttribute(
       "href",
       `/jobs?q=Engineer&status=found&sort=fit&job=${JOB_ID}`,
@@ -666,10 +632,7 @@ describe("back to the list", () => {
   it("goes to the plain list when opened directly", async () => {
     fakeJobDetail(makeDetail());
     await openDetail();
-    expect(screen.getByRole("link", { name: "Back to jobs" })).toHaveAttribute(
-      "href",
-      "/jobs",
-    );
+    expect(crumb("Jobs")).toHaveAttribute("href", "/jobs");
   });
 
   it("ignores a crafted state that is not a list query", async () => {
@@ -678,9 +641,6 @@ describe("back to the list", () => {
     await act(async () => {
       await app.router.navigate(PATH, { state: { from: "//evil.example" } });
     });
-    expect(screen.getByRole("link", { name: "Back to jobs" })).toHaveAttribute(
-      "href",
-      "/jobs",
-    );
+    expect(crumb("Jobs")).toHaveAttribute("href", "/jobs");
   });
 });

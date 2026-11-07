@@ -10,6 +10,12 @@ import {
   inMinutes,
   ONE_LEFT,
 } from "@/design-system/fixtures/applications";
+import {
+  browserHolds,
+  fakeLiveScreens,
+  lease,
+  liveRoutes,
+} from "@/design-system/fixtures/live-browser";
 import { fakeQueue } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
 import { server } from "@/test/server";
@@ -100,6 +106,26 @@ export const FollowApplicationsUnderWay: Story = {
       application(3, "filling", 2, { mode: "direct" }),
       application(4, "approved", 3),
     ]);
+  },
+};
+
+/** As a job seeker, I want to watch the assistant fill and send my applications in my browser, so that I see what it does and can take over. */
+export const WatchApplicationsInTheBrowser: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    liveRoutes();
+    browserHolds(lease({ purpose: "apply_agent", max_s: 3600 }));
+    fakeQueue([
+      application(3, "filling", 2, { mode: "direct" }),
+      application(4, "approved", 3),
+    ]);
+    return fakeLiveScreens({ pages: ["form"] });
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await userEvent.click(
+      await page.findByRole("button", { name: "Watch the browser" }),
+    );
   },
 };
 

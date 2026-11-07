@@ -119,7 +119,7 @@ async function answerWhatIsLeft(card: Locator) {
     } else if (await choices.count()) {
       await choices.selectOption({ index: 1 });
     } else {
-      await row.getByRole("button", { name: "No", exact: true }).click();
+      await row.getByRole("radio", { name: "No", exact: true }).click();
     }
     await expect(open).toHaveCount(before - 1);
   }
@@ -181,7 +181,7 @@ test("Like the three postings on the jobs list: all three appear in the queue", 
     .getByRole("link", { name: /^Applications/ })
     .click();
   await expect(
-    page.getByRole("heading", { level: 1, name: "Application queue" }),
+    page.getByRole("heading", { level: 1, name: "Applications" }),
   ).toBeVisible();
   for (const key of KEYS) await expect(cardOf(key)).toBeVisible();
 });
@@ -294,7 +294,7 @@ test("the Ashby item: rejected on a phone by keyboard, the posting skipped, noth
   await expect(dialog).toBeHidden();
   await expect(card).toHaveCount(0);
   await expect(
-    page.getByRole("heading", { level: 1, name: "Application queue" }),
+    page.getByRole("heading", { level: 1, name: "Applications" }),
   ).toBeFocused();
   await expect(page.getByText(/Your queue is empty/)).toBeVisible();
   await expect(

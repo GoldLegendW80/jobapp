@@ -1,13 +1,12 @@
-import {
-  ChevronLeft,
-  ChevronRight,
-  CircleAlert,
-  MailPlus,
-  RotateCw,
-} from "lucide-react";
+import { CircleAlert, MailPlus } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
+import { EmptyState } from "@/components/blocks/empty-state";
+import { LoadError } from "@/components/blocks/load-error";
+import { LoadingCard } from "@/components/blocks/loading-card";
+import { Section } from "@/components/blocks/section";
+import { Moment } from "@/components/shared/admin/moment";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -20,14 +19,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Table,
@@ -48,8 +39,7 @@ import {
 import { useInvites, useRevokeInvite } from "../api/use-invites";
 import { message } from "../helpers/errors";
 import { InviteDialog } from "./invite-dialog";
-import { LoadingCard } from "@/components/blocks/loading-card";
-import { Moment } from "@/components/shared/admin/moment";
+import { ListPager } from "./list-pager";
 
 const STATUS: Record<InviteStatus, { label: string; className: string }> = {
   active: {
@@ -75,107 +65,44 @@ export function InvitesSection() {
   const [offset, setOffset] = useState(0);
   const [revoking, setRevoking] = useState<AdminInvite | null>(null);
   const invites = useInvites(offset);
-
-  const page = invites.data;
   const now = new Date();
 
   return (
-    <section aria-labelledby="invites-title" className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h2
-            id="invites-title"
-            className="text-lg font-semibold tracking-tight"
-          >
-            Invites
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            One-time links to create an account or reset a password.
-          </p>
-        </div>
-        <InviteDialog />
-      </div>
-
+    <Section
+      title="Invites"
+      description="One-time links to create an account or reset a password."
+      actions={<InviteDialog />}
+    >
       {invites.isPending ? (
         <LoadingCard>Loading invites</LoadingCard>
       ) : invites.isError ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription className="flex flex-col items-start gap-3">
-            <p>The invites could not be loaded. {message(invites.error)}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void invites.refetch()}
-              disabled={invites.isFetching}
-            >
-              <RotateCw aria-hidden="true" />
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : page && page.total === 0 ? (
-        <Card className="py-0">
-          <Empty className="flex-none gap-2 px-4 py-10 md:px-4 md:py-10">
-            <EmptyHeader className="max-w-none">
-              <EmptyMedia className="mb-0 text-muted-foreground">
-                <MailPlus aria-hidden="true" className="size-6" />
-              </EmptyMedia>
-              <EmptyTitle className="text-base tracking-normal">
-                No invites yet
-              </EmptyTitle>
-              <EmptyDescription className="max-w-sm">
-                Invite someone to give them access. Their link appears here so
-                you can follow it and revoke it.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        </Card>
-      ) : page ? (
+        <LoadError query={invites}>The invites could not be loaded.</LoadError>
+      ) : invites.data.total === 0 ? (
+        <EmptyState
+          icon={MailPlus}
+          title="No invites yet"
+          description="Invite someone to give them access. Their link appears here so you can follow it and revoke it."
+        />
+      ) : (
         <>
           <InvitesTable
-            items={page.items}
+            items={invites.data.items}
             now={now}
             onRevoke={setRevoking}
             busy={invites.isPlaceholderData}
           />
-          {page.total > INVITES_PAGE_SIZE ? (
-            <nav
-              aria-label="Invites pages"
-              className="flex items-center justify-between gap-2 text-sm text-muted-foreground"
-            >
-              <span>
-                {page.offset + 1} to {page.offset + page.items.length} of{" "}
-                {page.total}
-              </span>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page.offset === 0}
-                  onClick={() => {
-                    setOffset(Math.max(0, page.offset - INVITES_PAGE_SIZE));
-                  }}
-                >
-                  <ChevronLeft aria-hidden="true" />
-                  Previous
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={page.offset + page.items.length >= page.total}
-                  onClick={() => {
-                    setOffset(page.offset + INVITES_PAGE_SIZE);
-                  }}
-                >
-                  Next
-                  <ChevronRight aria-hidden="true" />
-                </Button>
-              </div>
-            </nav>
+          {invites.data.total > INVITES_PAGE_SIZE ? (
+            <ListPager
+              label="Invites pages"
+              pageSize={INVITES_PAGE_SIZE}
+              offset={invites.data.offset}
+              shown={invites.data.items.length}
+              total={invites.data.total}
+              onOffset={setOffset}
+            />
           ) : null}
         </>
-      ) : null}
+      )}
 
       <RevokeDialog
         invite={revoking}
@@ -183,7 +110,7 @@ export function InvitesSection() {
           setRevoking(null);
         }}
       />
-    </section>
+    </Section>
   );
 }
 

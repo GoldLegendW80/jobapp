@@ -33,6 +33,12 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
@@ -317,8 +323,8 @@ function LinkResult({
         <FieldLabel htmlFor={inputId}>
           {kind === "invite" ? "Invite link" : "Reset link"}
         </FieldLabel>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <Input
+        <InputGroup>
+          <InputGroupInput
             id={inputId}
             ref={input}
             readOnly
@@ -328,19 +334,21 @@ function LinkResult({
             }}
             className="font-mono text-xs md:text-xs"
           />
-          <Button
-            type="button"
-            variant={copy === "copied" ? "secondary" : "default"}
-            onClick={() => void onCopy()}
-          >
-            {copy === "copied" ? (
-              <Check aria-hidden="true" />
-            ) : (
-              <Copy aria-hidden="true" />
-            )}
-            {copy === "copied" ? "Copied" : "Copy link"}
-          </Button>
-        </div>
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton
+              size="sm"
+              variant={copy === "copied" ? "ghost" : "default"}
+              onClick={() => void onCopy()}
+            >
+              {copy === "copied" ? (
+                <Check aria-hidden="true" />
+              ) : (
+                <Copy aria-hidden="true" />
+              )}
+              {copy === "copied" ? "Copied" : "Copy link"}
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
         <FieldDescription
           role="status"
           aria-live="polite"

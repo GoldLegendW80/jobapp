@@ -1,7 +1,21 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
 import { jobKey } from "@/features/jobs/api/jobs-api";
@@ -925,23 +939,34 @@ describe("job detail: chat panel", () => {
     });
     const { user, panel } = await openChat(`/jobs/${JOB}?chat=open`);
     await within(panel).findByText("Hi there");
-    await user.click(
-      within(panel).getByRole("button", { name: "Delete conversation" }),
-    );
-    expect(
-      within(panel).getByText("Delete this conversation?"),
-    ).toBeInTheDocument();
-    await user.click(within(panel).getByRole("button", { name: "Keep" }));
+    const opener = within(panel).getByRole("button", {
+      name: "Delete conversation",
+    });
+    await user.click(opener);
+    // Asked in a dialog: Keep goes back to the button, nothing deleted.
+    let dialog = await screen.findByRole("alertdialog", {
+      name: "Delete this conversation?",
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Keep" }));
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
     expect(state.deletes).toBe(0);
-    await user.click(
-      within(panel).getByRole("button", { name: "Delete conversation" }),
-    );
-    await user.click(within(panel).getByRole("button", { name: "Delete" }));
+    expect(opener).toHaveFocus();
+    await user.click(opener);
+    dialog = await screen.findByRole("alertdialog", {
+      name: "Delete this conversation?",
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() => {
       expect(state.deletes).toBe(1);
     });
     expect(await within(panel).findByTestId("chat-empty")).toBeInTheDocument();
     expect(within(panel).queryByText("Hi there")).not.toBeInTheDocument();
+    // The button went with the conversation: the focus is in the composer.
+    await waitFor(() => {
+      expect(composer()).toHaveFocus();
+    });
   });
 
   it("says so when the previous message is still being answered", async () => {
@@ -1092,7 +1117,7 @@ describe("job detail: chat panel", () => {
     ]);
     const settling = answers[1]!;
     expect(settling).toHaveAttribute("data-settling", "true");
-    const box = settling.querySelector("div")!.className;
+    const box = settling.querySelector("[data-slot=bubble-content]")!.className;
     // The stored answer arrives: one answer, the same box, announced once.
     state.messages = [
       ...state.messages.map((m) =>
@@ -1104,7 +1129,9 @@ describe("job detail: chat panel", () => {
     release();
     await waitFor(() => {
       expect(
-        within(panel).queryByText("It fits well.")?.closest("li"),
+        within(panel)
+          .queryByText("It fits well.")
+          ?.closest("[data-testid=chat-message]"),
       ).not.toHaveAttribute("data-settling");
     });
     answers = within(panel)
@@ -1114,7 +1141,9 @@ describe("job detail: chat panel", () => {
       "Agent:Earlier answer",
       "Agent:It fits well.",
     ]);
-    expect(answers[1]!.querySelector("div")!.className).toBe(box);
+    expect(
+      answers[1]!.querySelector("[data-slot=bubble-content]")!.className,
+    ).toBe(box);
     await waitFor(() => {
       expect(within(panel).getByRole("status")).toHaveTextContent(
         "Answer: It fits well.",
@@ -1151,35 +1180,102 @@ describe("job detail: chat panel", () => {
     },
   );
 
-  it("follows the growing answer only while the reader is at the bottom", async () => {
+  /** The thread's resize observers, called by hand: jsdom lays nothing out. */
+  function fakeResizeObservers() {
+    const callbacks: ResizeObserverCallback[] = [];
+    // Writable, not configurable (test/setup.ts): assigned, then put back.
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    onTestFinished(() => {
+      globalThis.ResizeObserver = original;
+    });
+    return async () => {
+      act(() => {
+        for (const callback of callbacks) callback([], {} as ResizeObserver);
+      });
+      // The thread measures on the next frame.
+      await act(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              resolve();
+            });
+          }),
+      );
+    };
+  }
+
+  /**
+   * jsdom lays nothing out: the thread gets a frame 400 px high, a content `height()` high whose
+   * last row ends at its bottom, rows of `tops` (by message id) 40 px high at that place, and a
+   * scrollTo.
+   */
+  function layout(
+    list: HTMLElement,
+    height: () => number,
+    tops: Record<string, number> = {},
+  ) {
+    Object.defineProperty(list, "clientHeight", { get: () => 400 });
+    Object.defineProperty(list, "scrollHeight", { get: height });
+    list.scrollTo = ((options: ScrollToOptions) => {
+      list.scrollTop = options.top ?? 0;
+    }) as typeof list.scrollTo;
+    const rects = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.dataset.slot !== "message-scroller-item") return new DOMRect();
+        const at = tops[this.dataset.messageId ?? ""];
+        const top = (at ?? 0) - list.scrollTop;
+        const bottom = (at === undefined ? height() : at + 40) - list.scrollTop;
+        return DOMRect.fromRect({
+          x: 0,
+          y: top,
+          width: 0,
+          height: bottom - top,
+        });
+      });
+    onTestFinished(() => {
+      rects.mockRestore();
+    });
+  }
+
+  it("follows the growing answer until the reader scrolls up, and again once back at the bottom", async () => {
+    const resized = fakeResizeObservers();
     const { panel, emit } = await answering();
     const list = within(panel).getByTestId("chat-scroll");
-    // jsdom lays nothing out: give the list a height and a content that grows with the text.
-    let height = 0;
-    Object.defineProperty(list, "clientHeight", { get: () => 400 });
-    Object.defineProperty(list, "scrollHeight", { get: () => height });
-    height = 1000;
-    const grow = (offset: number, text: string) => {
+    let height = 1000;
+    layout(list, () => height);
+    const grow = async (offset: number, text: string) => {
       height += 60;
       emit("partial", { block: 1, after: 1, offset, text });
+      await resized();
     };
-    // At the bottom: each piece brings the list to its new bottom.
-    grow(0, "One ");
-    expect(list.scrollTop).toBe(1060);
-    grow(4, "two ");
-    expect(list.scrollTop).toBe(1120);
+    // At the bottom: each piece brings the thread to its new end.
+    await grow(0, "One ");
+    expect(list.scrollTop).toBe(660);
+    await grow(4, "two ");
+    expect(list.scrollTop).toBe(720);
     // The reader scrolls up to read an earlier message: the view is left alone.
+    fireEvent.wheel(list, { deltaY: -500 });
     list.scrollTop = 200;
-    grow(8, "three ");
-    grow(14, "four ");
+    await grow(8, "three ");
+    await grow(14, "four ");
     expect(list.scrollTop).toBe(200);
-    // Back at the bottom (within a few pixels): it follows again.
-    list.scrollTop = height - 400 - 10;
-    grow(19, "five");
-    expect(list.scrollTop).toBe(height);
+    // Back at the bottom: it follows again.
+    list.scrollTop = height - 400;
+    fireEvent.scroll(list);
+    await grow(19, "five");
+    expect(list.scrollTop).toBe(height - 400);
   });
 
-  it("goes to the bottom when the reader sends, even from further up", async () => {
+  it("brings the question just sent to the top of the thread, even from further up", async () => {
     fakeApi({
       thread: true,
       messages: [
@@ -1190,16 +1286,51 @@ describe("job detail: chat panel", () => {
     const { user, panel } = await openChat(`/jobs/${JOB}?chat=open`);
     await within(panel).findByText("Earlier answer");
     const list = within(panel).getByTestId("chat-scroll");
-    Object.defineProperty(list, "clientHeight", { get: () => 400 });
-    Object.defineProperty(list, "scrollHeight", { get: () => 2000 });
+    // The new question (id 100, from the fake api) will sit 1,600 px down the thread.
+    layout(list, () => 2000, { "100": 1600 });
     list.scrollTop = 100;
     await waitFor(() => {
       expect(composer()).toBeEnabled();
     });
     await user.type(composer(), "A new question{Enter}");
-    await within(panel).findByText("A new question");
+    const sent = await within(panel).findByText("A new question");
+    expect(sent.closest("[data-slot=message-scroller-item]")).toHaveAttribute(
+      "data-scroll-anchor",
+      "true",
+    );
+    // At the top, the end of the message before it still in view above it (64 px).
     await waitFor(() => {
-      expect(list.scrollTop).toBe(2000);
+      expect(list.scrollTop).toBe(1536);
     });
+  });
+
+  it("lets the reader scroll the thread with the keyboard, and marks only their messages as anchors", async () => {
+    fakeApi({
+      thread: true,
+      messages: [
+        message(1, "user", "Earlier question"),
+        message(2, "assistant", "Earlier answer"),
+      ],
+    });
+    const { panel } = await openChat(`/jobs/${JOB}?chat=open`);
+    await within(panel).findByText("Earlier answer");
+    const list = within(panel).getByRole("region", { name: "Messages" });
+    expect(list).toBe(within(panel).getByTestId("chat-scroll"));
+    expect(list).toHaveAttribute("tabindex", "0");
+    expect(
+      within(panel)
+        .getAllByTestId("chat-message")
+        .map((row) =>
+          row
+            .closest("[data-slot=message-scroller-item]")!
+            .getAttribute("data-scroll-anchor"),
+        ),
+    ).toEqual(["true", "false"]);
+    // Nothing to go back to at the newest message: the button is out of reach.
+    const back = within(panel).getByRole("button", {
+      name: "Go to the newest message",
+      hidden: true,
+    });
+    expect(back).toHaveAttribute("tabindex", "-1");
   });
 });

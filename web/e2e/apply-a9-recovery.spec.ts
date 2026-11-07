@@ -134,7 +134,7 @@ test("an invented candidate prepares documents", async () => {
 async function open(job: string): Promise<string> {
   await page.goto(`/jobs/${job}`);
   await page
-    .getByRole("region", { name: "Apply", exact: true })
+    .getByRole("region", { name: "Your application" })
     .getByRole("button", { name: "Apply myself", exact: true })
     .click();
   const panel = page.getByTestId("manual-panel");

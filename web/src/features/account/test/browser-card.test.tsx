@@ -246,6 +246,19 @@ describe("websites you are signed in to", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows the person's browsers at once, as an admin set it, read only", async () => {
+    fakeServer({ browser: { ...FREE, browsers: 1 }, sites: [] });
+    renderWithQuery(
+      <MemoryRouter>
+        <BrowserCard />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("browsers")).toHaveTextContent(
+      "Your searches and applications use up to 1 browser at once. An admin sets this.",
+    );
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+  });
+
   it("says so when the websites cannot be read, and reads them again", async () => {
     const state = { browser: FREE, sites: TWO_SITES };
     fakeServer(state);
@@ -267,7 +280,7 @@ describe("websites you are signed in to", () => {
       "Your websites could not be read.",
     );
     fail = false;
-    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(
       await screen.findByRole("list", { name: TITLE }),
     ).toBeInTheDocument();
@@ -409,7 +422,7 @@ describe("websites you are signed in to", () => {
       screen.getByRole("button", { name: "Use the browser myself" }),
     );
     const ticket = only(calls.tickets as Array<{ viewer: string }>);
-    expect(calls.takeovers).toEqual([{ viewer: ticket.viewer }]);
+    expect(calls.takeovers).toEqual([{ viewer: ticket.viewer, slot: 0 }]);
     expect(view.screen.viewOnly).toBe(false);
     expect(view.screen.focused).toBe(1);
     expect(
@@ -429,7 +442,7 @@ describe("websites you are signed in to", () => {
     await user.click(
       screen.getByRole("button", { name: "Let the assistant continue" }),
     );
-    expect(calls.givebacks).toEqual([{ viewer: ticket.viewer }]);
+    expect(calls.givebacks).toEqual([{ viewer: ticket.viewer, slot: 0 }]);
     expect(view.screen.viewOnly).toBe(true);
     expect(
       screen.getByRole("button", { name: "Use the browser myself" }),
@@ -509,7 +522,7 @@ describe("websites you are signed in to", () => {
     const ticket = only(calls.tickets as Array<{ viewer: string }>);
     unmount();
     await waitFor(() => {
-      expect(calls.givebacks).toEqual([{ viewer: ticket.viewer }]);
+      expect(calls.givebacks).toEqual([{ viewer: ticket.viewer, slot: 0 }]);
     });
   });
 

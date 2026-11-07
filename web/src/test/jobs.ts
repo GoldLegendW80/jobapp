@@ -4,15 +4,6 @@ import type { JobDetail, JobListItem } from "@/features/jobs/api/jobs-api";
 
 import { server } from "./server";
 
-/**
- * Opens "More about this posting" on the posting page (status and fit, the assessment, the notes,
- * the files and the history) before the page renders: AdvancedSection keeps its open state in
- * local storage under "advanced:" and the page's key.
- */
-export function unfoldPostingMore() {
-  window.localStorage.setItem("advanced:posting-more", "1");
-}
-
 /** Harald's status counts (data/jobs.csv, 433 rows). */
 export const CSV_COUNTS: Record<string, number> = {
   found: 158,

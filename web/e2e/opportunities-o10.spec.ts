@@ -127,10 +127,8 @@ test("the product pages fold details, retain settings and restore the open choic
 
 const AUDIT_PAGES = [
   ["jobs", "/jobs"],
-  ...["identity", "skills", "experience", "answers", "facts", "search"].map(
-    (tab) => [`profile-${tab}`, `/profile?tab=${tab}`],
-  ),
-  ["profile-cv", "/profile/cv"],
+  ["profile", "/profile"],
+  ["search-settings", "/settings/search"],
   ["applications-settings", "/settings/applications"],
   ["account", "/account"],
   ["document-templates", "/documents/templates"],
@@ -155,7 +153,7 @@ test("records each other page at 375px for the owning lane's follow-up", async (
     ...AUDIT_PAGES,
     ["posting-documents", `/jobs/${postingId}`],
     ["document-editor", `/jobs/${postingId}/documents/cv`],
-    ["base-cv-editor", `/profile/cv/${baseId}`],
+    ["base-cv", `/profile/cv/${baseId}`],
   ];
   for (const [name, route] of pages) {
     await page.goto(route);

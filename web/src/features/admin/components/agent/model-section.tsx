@@ -19,8 +19,11 @@ export function ModelSection({
   onEdit,
 }: DraftFieldProps) {
   return (
-    <AgentSection id="model" title="Model and limits">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <AgentSection
+      title="Model and limits"
+      description="Which model runs it, with which credential, how hard it thinks, and how long a run may go on."
+    >
+      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2 2xl:grid-cols-3">
         <AgentField
           label="Model"
           code={page.code.model}
@@ -147,12 +150,14 @@ export function ModelSection({
           )}
         </AgentField>
       </div>
-      <h3 className="text-sm font-medium">What ends a run</h3>
-      <ul className="list-disc pl-5 text-sm">
-        {page.ends.map((end) => (
-          <li key={end}>{end}</li>
-        ))}
-      </ul>
+      <div className="flex flex-col gap-2">
+        <h3 className="text-sm font-medium">What ends a run</h3>
+        <ul className="list-disc pl-5 text-sm text-muted-foreground">
+          {page.ends.map((end) => (
+            <li key={end}>{end}</li>
+          ))}
+        </ul>
+      </div>
     </AgentSection>
   );
 }

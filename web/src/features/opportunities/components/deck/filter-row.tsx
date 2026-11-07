@@ -63,7 +63,7 @@ export function DeckFilterRow({
           ))}
         </div>
       </FieldSet>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4">
         <Field className="gap-2">
           <FieldLabel htmlFor={remoteId}>{WORDING.remoteOrOnSite}</FieldLabel>
           <NativeSelect

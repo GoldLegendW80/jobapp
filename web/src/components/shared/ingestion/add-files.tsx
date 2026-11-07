@@ -1,6 +1,15 @@
-import { Upload, X } from "lucide-react";
+import { FileText, Upload, X } from "lucide-react";
 import { useEffect, useId, useRef, useState, type DragEvent } from "react";
 
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -187,6 +196,14 @@ export function AddFiles({
   );
 }
 
+/** How the file's chip shows where it is: waiting, on its way, refused or already there. */
+const ATTACHMENT_STATE = {
+  queued: "idle",
+  uploading: "uploading",
+  failed: "error",
+  duplicate: "done",
+} as const;
+
 function UploadRow({
   item,
   onRemove,
@@ -207,49 +224,49 @@ function UploadRow({
           ? "Already there"
           : "Not added";
   return (
-    <li
-      data-upload={item.id}
-      data-state={item.state}
-      className="flex flex-col gap-1.5 rounded-md border px-3 py-2 text-sm"
-    >
-      <div className="flex items-center gap-2">
-        <bdi className="min-w-0 flex-1 truncate font-medium">{item.name}</bdi>
+    <li data-upload={item.id} data-state={item.state}>
+      <Attachment state={ATTACHMENT_STATE[item.state]} className="w-full">
+        <AttachmentMedia>
+          <FileText aria-hidden="true" />
+        </AttachmentMedia>
+        <AttachmentContent>
+          <AttachmentTitle>
+            <bdi>{item.name}</bdi>
+          </AttachmentTitle>
+          <AttachmentDescription className="tabular-nums">
+            {moving ? `${sizeLabel(item.size)}, ` : null}
+            <span className={cn(item.state === "failed" && "font-medium")}>
+              {state}
+            </span>
+          </AttachmentDescription>
+        </AttachmentContent>
+        <AttachmentActions>
+          <AttachmentAction
+            aria-label={`${moving ? "Cancel" : "Dismiss"} ${item.name}`}
+            onClick={onRemove}
+          >
+            <X aria-hidden="true" />
+          </AttachmentAction>
+        </AttachmentActions>
         {moving ? (
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {sizeLabel(item.size)}
-          </span>
-        ) : null}
-        <span
-          className={cn(
-            "shrink-0 text-xs tabular-nums text-muted-foreground",
-            item.state === "failed" && "font-medium text-destructive",
-          )}
-        >
-          {state}
-        </span>
-        <Button
-          type="button"
-          size="icon-xs"
-          variant="ghost"
-          aria-label={`${moving ? "Cancel" : "Dismiss"} ${item.name}`}
-          onClick={onRemove}
-        >
-          <X aria-hidden="true" />
-        </Button>
-      </div>
-      {moving ? (
-        <Progress
-          value={percent}
-          aria-valuenow={percent}
-          aria-label={`Sending ${item.name}`}
-          className="h-1.5"
-        />
-      ) : item.state === "failed" ? (
-        // No role="alert": the live region below already says it, once.
-        <p className="text-destructive">{item.message}</p>
-      ) : (
-        <p className="text-muted-foreground">{item.message}</p>
-      )}
+          <Progress
+            value={percent}
+            aria-valuenow={percent}
+            aria-label={`Sending ${item.name}`}
+            className="h-1.5 basis-full"
+          />
+        ) : (
+          // No role="alert": the live region below already says it, once.
+          <p
+            className={cn(
+              "basis-full text-sm text-muted-foreground",
+              item.state === "failed" && "text-destructive",
+            )}
+          >
+            {item.message}
+          </p>
+        )}
+      </Attachment>
     </li>
   );
 }

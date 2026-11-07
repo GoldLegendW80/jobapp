@@ -1,8 +1,10 @@
 import { CircleAlert } from "lucide-react";
 import { useId } from "react";
 
+import { Section } from "@/components/blocks/section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,30 +24,15 @@ const STATE_WORDS: Record<NotesState, string> = {
   error: "",
 };
 
-/** The posting's notes, saved as the person types (use-notes-autosave.ts). `heading` is the
- * level of its title under the posting's. */
-export function NotesEditor({
-  job,
-  save,
-  heading = "h2",
-}: {
-  job: JobDetail;
-  save: Save;
-  heading?: "h2" | "h3";
-}) {
+/** The posting's notes, saved as the person types (use-notes-autosave.ts). */
+export function NotesEditor({ job, save }: { job: JobDetail; save: Save }) {
   const id = useId();
   const notes = useNotesAutosave(job, save);
-  const Heading = heading;
 
   return (
-    <section aria-labelledby={`${id}-title`} className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <Heading
-          id={`${id}-title`}
-          className="text-lg font-semibold tracking-tight"
-        >
-          Notes
-        </Heading>
+    <Section
+      title="Notes"
+      actions={
         <p
           role="status"
           aria-live="polite"
@@ -57,41 +44,46 @@ export function NotesEditor({
           ) : null}
           {STATE_WORDS[notes.state]}
         </p>
-      </div>
-      <Field className="gap-2">
-        <FieldLabel htmlFor={id} className="sr-only">
-          Notes
-        </FieldLabel>
-        <Textarea
-          id={id}
-          value={notes.draft}
-          rows={5}
-          placeholder="What you learnt, who you talked to, what comes next."
-          aria-invalid={notes.tooLong || notes.state === "error"}
-          aria-describedby={`${id}-help`}
-          onChange={(event) => {
-            notes.edit(event.target.value);
-          }}
-          onBlur={notes.flush}
-          className="min-h-28 text-sm"
-        />
-        <FieldDescription id={`${id}-help`} className="text-xs leading-4">
-          {notes.tooLong
-            ? `Too long: ${notes.draft.length.toLocaleString("en-GB")} characters, at most ${NOTES_MAX.toLocaleString("en-GB")}.`
-            : "Saved automatically as you type."}
-        </FieldDescription>
-      </Field>
-      {notes.state === "error" ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription className="flex flex-wrap items-center gap-3">
-            <span>{notes.error}</span>
-            <Button size="sm" variant="outline" onClick={notes.retry}>
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : null}
-    </section>
+      }
+    >
+      <Card>
+        <CardContent className="flex flex-col gap-3">
+          <Field className="gap-2">
+            <FieldLabel htmlFor={id} className="sr-only">
+              Notes
+            </FieldLabel>
+            <Textarea
+              id={id}
+              value={notes.draft}
+              rows={5}
+              placeholder="What you learnt, who you talked to, what comes next."
+              aria-invalid={notes.tooLong || notes.state === "error"}
+              aria-describedby={`${id}-help`}
+              onChange={(event) => {
+                notes.edit(event.target.value);
+              }}
+              onBlur={notes.flush}
+              className="min-h-28 text-sm"
+            />
+            <FieldDescription id={`${id}-help`} className="text-xs leading-4">
+              {notes.tooLong
+                ? `Too long: ${notes.draft.length.toLocaleString("en-GB")} characters, at most ${NOTES_MAX.toLocaleString("en-GB")}.`
+                : "Saved automatically as you type."}
+            </FieldDescription>
+          </Field>
+          {notes.state === "error" ? (
+            <Alert variant="destructive">
+              <CircleAlert aria-hidden="true" />
+              <AlertDescription className="flex flex-wrap items-center gap-3">
+                <span>{notes.error}</span>
+                <Button size="sm" variant="outline" onClick={notes.retry}>
+                  Retry
+                </Button>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </CardContent>
+      </Card>
+    </Section>
   );
 }

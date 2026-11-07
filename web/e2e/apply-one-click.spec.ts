@@ -173,7 +173,7 @@ async function ready(browser: Browser, tag: string): Promise<Who> {
 /** Apply on the job page with the box unticked, until the application is `direct`. */
 async function applyNow(who: Who, job: string) {
   await who.page.goto(`/jobs/${job}`);
-  const section = who.page.getByRole("region", { name: "Apply", exact: true });
+  const section = who.page.getByRole("region", { name: "Your application" });
   await expect(section).toContainText(
     "The assistant fills the form and sends it. You can watch it live here.",
   );
@@ -249,7 +249,7 @@ test("box ticked: the agent fills, the page lists every field, Confirm sends it 
   await setReviewBeforeSend(page.request, true);
   const job = await postingOn(first, AGENT_SITE, ", Controls");
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply", exact: true });
+  const section = page.getByRole("region", { name: "Your application" });
   await expect(section).toContainText(
     "The assistant fills the form, then you check it and send it.",
   );
@@ -346,7 +346,7 @@ test("box unticked, no documents: Apply on the Jobs list row writes them, then t
   });
 
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply", exact: true });
+  const section = page.getByRole("region", { name: "Your application" });
   await sentByTheAgent(first, job, section);
   await waitForPostingDocuments(page.request, job);
   expect(await agentSent()).toHaveLength(sent + 1);

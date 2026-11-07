@@ -203,11 +203,14 @@ export function ListField({
   max,
   itemMax,
   multiline = false,
+  hideLegend = false,
   children,
 }: {
   form: Form;
   path: Path;
   legend: string;
+  /** The page shows the list's heading itself: the legend only names the group for a screen reader. */
+  hideLegend?: boolean;
   /** One entry, "Bullet". */
   noun: string;
   /** Said after the entry's number in its label: "Bullet 2, Example Corp". */
@@ -224,7 +227,10 @@ export function ListField({
   const of = context === undefined ? "" : ` of ${context}`;
   return (
     <FieldSet className="min-w-0 gap-2">
-      <FieldLegend variant="label" className="mb-0">
+      <FieldLegend
+        variant="label"
+        className={cn("mb-0", hideLegend && "sr-only")}
+      >
         {legend}
       </FieldLegend>
       {children}

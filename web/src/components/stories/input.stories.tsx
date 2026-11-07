@@ -39,7 +39,7 @@ export const Typical: Story = {
   ),
 };
 
-/** The type brings the right keyboard on a phone and lets the browser help: email, number with inputMode, url, date, file. */
+/** The type brings the right keyboard on a phone and lets the browser help: email, number with inputMode, url, file. A date is picked on the Calendar. */
 export const Types: Story = {
   render: () => (
     <FieldGroup className="max-w-sm">
@@ -68,15 +68,6 @@ export const Types: Story = {
           id="types-portfolio"
           type="url"
           placeholder="https://camille-martin.example.org"
-        />
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="types-start">Available from</FieldLabel>
-        <Input
-          id="types-start"
-          type="date"
-          className="max-w-48"
-          defaultValue="2027-01-04"
         />
       </Field>
       <Field>

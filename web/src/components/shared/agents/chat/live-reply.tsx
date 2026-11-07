@@ -1,12 +1,10 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
-
-import { Spinner } from "@/components/ui/spinner";
+import { useEffect, useRef } from "react";
 
 import { FINAL_STATUSES } from "@/features/agents/api/runs-api";
 import { useRunStream } from "@/features/agents/api/use-run-stream";
 import { replyActivity } from "@/features/agents/helpers/chat-messages";
 import { lastText } from "@/features/agents/helpers/live-text";
-import { ChatBubble } from "./chat-bubble";
+import { ChatTurn } from "./chat-turn";
 
 /**
  * The answer being written: its text as it grows (the run's live text), else the newest text the
@@ -18,19 +16,15 @@ import { ChatBubble } from "./chat-bubble";
 export function LiveReply({
   runId,
   onEnd,
-  onGrow,
 }: {
   runId: string;
   onEnd: () => void;
-  onGrow: () => void;
 }) {
   const { steps, live, status } = useRunStream(runId);
   const ended = status !== undefined && FINAL_STATUSES.has(status);
   const endRef = useRef(onEnd);
-  const growRef = useRef(onGrow);
   useEffect(() => {
     endRef.current = onEnd;
-    growRef.current = onGrow;
   });
   useEffect(() => {
     if (ended) endRef.current();
@@ -38,50 +32,43 @@ export function LiveReply({
   const stored = lastText(steps);
   const writing = live?.text ? live.text : undefined;
   const text = writing ?? stored;
-  // Before paint: the list is at its bottom again in the frame that shows the new text.
-  useLayoutEffect(() => {
-    growRef.current();
-  }, [text, ended]);
   if (ended) {
     if (status !== "done" || stored === undefined) return null;
     return (
-      <li
+      <ChatTurn
+        from="agent"
         data-testid="chat-message"
         data-role="assistant"
         data-settling="true"
-        className="flex flex-col items-start gap-1"
       >
-        <span className="sr-only">Agent:</span>
-        <ChatBubble from="agent">{stored}</ChatBubble>
-      </li>
+        {stored}
+      </ChatTurn>
     );
   }
   return (
-    <li
+    <ChatTurn
+      from="agent"
+      label="The agent is answering:"
       data-testid="chat-live-reply"
       data-writing={writing ? "true" : undefined}
-      className="relative flex flex-col items-start gap-1"
       aria-busy="true"
       aria-live="off"
+      contentTestId="chat-live-text"
+      footer={
+        <span className="shimmer">
+          {writing
+            ? "Writing"
+            : text
+              ? replyActivity(steps, false)
+              : "Answering"}
+        </span>
+      }
     >
-      <span className="sr-only">The agent is answering:</span>
-      <ChatBubble from="agent" data-testid="chat-live-text">
-        {text ?? (
-          <span className="text-muted-foreground">
-            {replyActivity(steps, status === "queued")}
-          </span>
-        )}
-      </ChatBubble>
-      {/* Out of the flow, in the space the list keeps free below its last item: the bubble
-          does not move when this line goes. */}
-      <span className="absolute top-full mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Spinner
-          aria-hidden="true"
-          role={undefined}
-          className="size-3 motion-reduce:animate-none"
-        />
-        {writing ? "Writing" : text ? replyActivity(steps, false) : "Answering"}
-      </span>
-    </li>
+      {text ?? (
+        <span className="text-muted-foreground">
+          {replyActivity(steps, status === "queued")}
+        </span>
+      )}
+    </ChatTurn>
   );
 }

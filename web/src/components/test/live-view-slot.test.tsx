@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import type { QueryClient } from "@tanstack/react-query";
 import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -169,5 +169,138 @@ describe("the fill slot", () => {
       await screen.findByRole("button", { name: "Use the browser myself" }),
     ).toBeEnabled();
     expect(screen.getByLabelText("Type into your browser")).toBeInTheDocument();
+  });
+});
+
+describe("the fill of the apply agent", () => {
+  it.each([
+    ["One click Apply's", "apply_agent"],
+    ["Review first's", "apply_review"],
+  ])("shows %s fill lease, with Take over", async (_, purpose) => {
+    const opened = fakeScreens();
+    browser(lease({ purpose, application_id: null }));
+    slot("any", false);
+    await connected(opened);
+    expect(
+      await screen.findByRole("button", { name: "Use the browser myself" }),
+    ).toBeEnabled();
+  });
+
+  it("says what the agent asks the person on the page", async () => {
+    const opened = fakeScreens();
+    browser(
+      lease({
+        purpose: "apply_agent",
+        application_id: null,
+        state: "waiting_person",
+        wait_reason: "ask_person",
+        wait_host: "jobs.example.org",
+      }),
+    );
+    slot("any", false);
+    await connected(opened);
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "The assistant needs your help on jobs.example.org.",
+    );
+  });
+});
+
+describe("a slot in a grid of views", () => {
+  function labelled(leaseOf: LeaseOf, submit = false) {
+    return renderWithQuery(
+      <LiveViewSlot
+        label="Robotics Engineer"
+        detail="Example Robotics"
+        idle="Waiting for your browser."
+        leaseOf={leaseOf}
+        submit={submit}
+      />,
+    );
+  }
+  const VIEW = "Live view of your browser: Robotics Engineer";
+
+  it("names its application and says it is live", async () => {
+    const opened = fakeScreens();
+    browser(lease({ purpose: "apply_fill" }));
+    labelled("any");
+    await connected(opened);
+    const view = screen.getByRole("region", { name: VIEW });
+    expect(view).toHaveTextContent("Example Robotics");
+    expect(await within(view).findByText("Live")).toBeInTheDocument();
+  });
+
+  it("says why its screen is not shown yet, under the same name", async () => {
+    const opened = fakeScreens();
+    browser(null, null);
+    const { client } = labelled(OF_MINE, true);
+    await read(client);
+    const view = screen.getByRole("region", { name: VIEW });
+    expect(view).toHaveTextContent("Waiting for your browser.");
+    expect(within(view).getByText("Waiting")).toBeInTheDocument();
+    expect(opened).toHaveLength(0);
+  });
+
+  it("sends a sign in to the application's card instead of a second view", async () => {
+    const opened = fakeScreens();
+    browser(
+      lease({
+        purpose: "apply_fill",
+        state: "waiting_person",
+        wait_reason: "signin",
+        wait_host: "jobs.example.org",
+      }),
+    );
+    labelled("any");
+    await waitFor(() => {
+      expect(screen.getByRole("region", { name: VIEW })).toHaveTextContent(
+        "The assistant waits for you to sign in to jobs.example.org. Sign in from this application's card.",
+      );
+    });
+    expect(
+      within(screen.getByRole("region", { name: VIEW })).getByText("Needs you"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "I'm signed in" })).toBeNull();
+    expect(opened).toHaveLength(0);
+  });
+});
+
+describe("two browsers at once", () => {
+  it("shows this application's lease among the person's windows, and asks the ticket for its slot", async () => {
+    const opened = fakeScreens();
+    const asked: unknown[] = [];
+    server.use(
+      http.post("*/api/browser/live/ticket", async ({ request }) => {
+        asked.push(await request.json());
+        return HttpResponse.json(
+          {
+            ticket: "t".repeat(43),
+            url: `/vnc/websockify?ticket=${"t".repeat(43)}`,
+            expires_in_s: 30,
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const search = lease({
+      id: "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d",
+      purpose: "sweep",
+      application_id: null,
+      slot: 0,
+    });
+    const mine = lease({ slot: 1 });
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json({
+          ...FREE,
+          holder: "you",
+          lease: search,
+          slots: [search, mine],
+        }),
+      ),
+    );
+    slot(OF_MINE);
+    await connected(opened);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ slot: 1 });
   });
 });

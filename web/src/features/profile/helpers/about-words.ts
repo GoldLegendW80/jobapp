@@ -1,4 +1,4 @@
-/** The words of "About you" (about-document.tsx) and of the one page profile (profile-page.tsx). */
+/** The words of "About you" (about-document.tsx) on the profile page. */
 import type { PartKind } from "../api/about-api";
 
 const plural = (count: number, one: string, more = `${one}s`) =>
@@ -7,7 +7,7 @@ const plural = (count: number, one: string, more = `${one}s`) =>
 export const ABOUT_WORDS = {
   title: "About you",
   intro:
-    "Your skills, your answers to application forms and the facts about your work, in your own words. Edit a part, then click Done: the app reads your skills and answers and shows what it would change in your profile; a fact part is saved as written.",
+    "Your skills, your answers to application forms and the facts about your work. Write a fact part in your own words and click Done: it is saved as written. With a model key your skills and answers are text too, and the app shows what it would change in your profile.",
   loading: "Loading your document",
   notLoaded: "Your document could not be loaded",
   contents: "Parts of About you",
@@ -63,10 +63,22 @@ export const ABOUT_WORDS = {
   rewrite: "Rewrite from my profile",
   advanced: (count: number) =>
     `${plural(count, "advanced category", "advanced categories")} (regular expressions) stay as they are.`,
-  classic: "Edit them in the classic editor",
+  advancedLink: "Edit them in Advanced matching",
   newPart: "New part",
   addPart: "Add a part",
   missing: (count: number) =>
     `${plural(count, "fact block")} of your profile ${count === 1 ? "is" : "are"} not in this document.`,
   addThem: "Add them",
+  plainSkills: "What the fit of a posting reads, changed here by hand.",
+  plainAnswers:
+    "What the apply agent writes when a form asks something your CV does not say, changed here by hand.",
+  plainKey: "With a model key you write them as text and the app reads it.",
+  years: "Years of experience",
+  yearsUnit: "years",
+  yearsHelp: "Postings that ask for more years than this lose points.",
+  moved: (heading: string, direction: "up" | "down") =>
+    `${heading} moved ${direction}.`,
+  orderNotSaved: "The order of your fact blocks was not saved.",
+  size: "Fact base size",
+  overSize: "Over the limit: shorten or remove a fact part before you save it.",
 } as const;

@@ -85,7 +85,7 @@ function FormPanel({
         </section>
       ) : null}
       {before || after ? (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 @md:grid-cols-2">
           {before ? (
             <ShotView
               applicationId={application.id}

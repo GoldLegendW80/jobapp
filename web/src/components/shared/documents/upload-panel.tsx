@@ -29,10 +29,13 @@ import { UploadStatus } from "./upload-panel/upload-status";
  */
 export function UploadPanel({
   openHref,
+  titled = true,
   className,
 }: {
   /** The address of a base CV of the list, by its id. */
   openHref: (baseId: string) => string;
+  /** false: the section around the panel already says "Upload your CV". */
+  titled?: boolean;
   className?: string;
 }) {
   const titleId = useId();
@@ -42,13 +45,16 @@ export function UploadPanel({
   return (
     <Card
       role="region"
-      aria-labelledby={titleId}
+      aria-labelledby={titled ? titleId : undefined}
+      aria-label={titled ? undefined : "Upload your CV"}
       className={cn("gap-3 p-4 sm:p-5", className)}
       data-testid="upload-panel"
     >
-      <CardTitle>
-        <h3 id={titleId}>Upload your CV</h3>
-      </CardTitle>
+      {titled ? (
+        <CardTitle>
+          <h3 id={titleId}>Upload your CV</h3>
+        </CardTitle>
+      ) : null}
       <UploadDropZone busy={upload.busy} onFile={upload.take} />
 
       {upload.problem !== undefined ? (

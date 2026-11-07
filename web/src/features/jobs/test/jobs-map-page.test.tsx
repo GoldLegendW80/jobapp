@@ -14,6 +14,7 @@ import { fakeJobDetail, fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
 import { phoneScreen } from "@/test/media";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { crumb } from "@/test/breadcrumb";
 
 import type { PlacesMap } from "../api/map/places-api";
 
@@ -124,7 +125,7 @@ const mapGroup = () => screen.getByRole("group", { name: "World map" });
 
 async function openMap(path = "/jobs/map") {
   const app = renderApp(path);
-  await screen.findByRole("heading", { level: 1, name: "Jobs map" });
+  await screen.findByRole("heading", { level: 1, name: "Jobs" });
   await screen.findByRole("list", { name: "Places, most postings first" });
   return app;
 }
@@ -261,7 +262,7 @@ describe("map page", () => {
       level: 1,
       name: "Applied AI Engineer",
     });
-    const back = screen.getByRole("link", { name: "Back to jobs" });
+    const back = crumb("Jobs");
     expect(back).toHaveAttribute("href", "/jobs/map?status=found");
     await user.click(back);
     await waitFor(() => {
@@ -338,7 +339,7 @@ describe("map page", () => {
     ).not.toHaveTextContent("most frequent");
   });
 
-  it("has no unplaced section and says so when nothing is placed", async () => {
+  it("has no unplaced section and says so when nothing in the view is placed", async () => {
     fakePlaces(() =>
       HttpResponse.json({
         places: [],
@@ -350,7 +351,7 @@ describe("map page", () => {
         unplaced_total: 0,
       }),
     );
-    renderApp("/jobs/map");
+    renderApp("/jobs/map?q=nowhere");
     expect(
       await screen.findByText("No posting in this view names a known place."),
     ).toBeVisible();
@@ -409,14 +410,17 @@ describe("map page", () => {
     await user.click(reset);
     expect(map).toHaveAttribute("data-zoom", "1.00");
 
-    const regions = screen.getByRole("group", { name: "Region" });
+    const regions = screen.getByRole("radiogroup", { name: "Region" });
+    expect(within(regions).getByRole("radio", { name: "World" })).toBeChecked();
+    await user.click(within(regions).getByRole("radio", { name: "Europe" }));
     expect(
-      within(regions).getByRole("button", { name: "World" }),
-    ).toHaveAttribute("aria-pressed", "true");
-    await user.click(within(regions).getByRole("button", { name: "Europe" }));
+      within(regions).getByRole("radio", { name: "Europe" }),
+    ).toBeChecked();
+    // Picking the framed region again keeps it.
+    await user.click(within(regions).getByRole("radio", { name: "Europe" }));
     expect(
-      within(regions).getByRole("button", { name: "Europe" }),
-    ).toHaveAttribute("aria-pressed", "true");
+      within(regions).getByRole("radio", { name: "Europe" }),
+    ).toBeChecked();
     expect(Number(map.getAttribute("data-zoom"))).toBeGreaterThan(3);
     // Europe hides the United States pin; Paris and London stay.
     expect(
@@ -465,7 +469,9 @@ describe("map page", () => {
     const requests = fakePlaces();
     const user = userEvent.setup();
     const app = await openMap("/jobs/map?status=found");
-    await user.click(screen.getByRole("button", { name: /^Status/ }));
+    await user.click(screen.getByRole("button", { name: /^Filters/ }));
+    const sheet = await screen.findByRole("dialog", { name: "Filters" });
+    await user.click(within(sheet).getByRole("button", { name: /^Status/ }));
     await user.click(
       await screen.findByRole("menuitemcheckbox", { name: "Applied" }),
     );
@@ -498,27 +504,81 @@ describe("map page", () => {
 });
 
 describe("view tabs", () => {
-  it("switch between list and map, keeping the filters", async () => {
+  it("switch between list and map under one header, keeping the filters", async () => {
     fakeJobsApi([makeJob(1)]);
+    fakeJobDetail(makeDetail(makeJob(1)));
     fakePlaces();
     const user = userEvent.setup();
     const app = renderApp("/jobs?status=found");
-    const views = await screen.findByRole("navigation", { name: "Jobs views" });
-    expect(within(views).getByRole("link", { name: "List" })).toHaveAttribute(
-      "aria-current",
-      "page",
+    const views = await screen.findByRole("tablist", { name: "Jobs views" });
+    expect(within(views).getByRole("tab", { name: "List" })).toHaveAttribute(
+      "aria-selected",
+      "true",
     );
-    await user.click(within(views).getByRole("link", { name: "Map" }));
-    await screen.findByRole("heading", { level: 1, name: "Jobs map" });
+    await user.click(within(views).getByRole("tab", { name: "Map" }));
+    await screen.findByRole("list", { name: "Places, most postings first" });
     expect(app.location()).toBe("/jobs/map?status=found");
-    const mapViews = screen.getByRole("navigation", { name: "Jobs views" });
-    expect(within(mapViews).getByRole("link", { name: "Map" })).toHaveAttribute(
-      "aria-current",
-      "page",
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Jobs" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Find jobs" })).toBeVisible();
+    const mapViews = screen.getByRole("tablist", { name: "Jobs views" });
+    expect(within(mapViews).getByRole("tab", { name: "Map" })).toHaveAttribute(
+      "aria-selected",
+      "true",
     );
-    await user.click(within(mapViews).getByRole("link", { name: "List" }));
-    await screen.findByRole("heading", { level: 1, name: "Jobs" });
+    await user.click(within(mapViews).getByRole("tab", { name: "List" }));
+    await screen.findByRole("list", { name: "Postings" });
     expect(app.location()).toBe("/jobs?status=found");
+  });
+});
+
+describe("the map's header and toolbar", () => {
+  it("counts the postings per status as the list does, and a status shows it alone", async () => {
+    fakeJobsApi([makeJob(1), makeJob(2), makeJob(3)]);
+    const requests = fakePlaces();
+    const user = userEvent.setup();
+    const app = await openMap();
+    const statuses = await screen.findByRole("toolbar", {
+      name: "Postings per status",
+    });
+    const found = await within(statuses).findByRole("button", {
+      name: /^Found: [1-9]/,
+    });
+    await user.click(found);
+    await waitFor(() => {
+      expect(app.location()).toBe("/jobs/map?status=found");
+    });
+    await waitFor(() => {
+      expect(requests.at(-1)?.getAll("status")).toEqual(["found"]);
+    });
+    expect(found).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("says when there is no posting at all, with Find jobs and Add a posting by hand there", async () => {
+    fakePlaces(() =>
+      HttpResponse.json({
+        places: [],
+        jobs: {},
+        unplaced: [],
+        unplaced_locations: 0,
+        total: 0,
+        placed: 0,
+        unplaced_total: 0,
+      }),
+    );
+    renderApp("/jobs/map");
+    const empty = await screen.findByRole("region", {
+      name: "No postings yet",
+    });
+    expect(screen.queryByRole("group", { name: "World map" })).toBeNull();
+    expect(screen.queryByRole("search")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Find jobs" })).toEqual([
+      within(empty).getByRole("button", { name: "Find jobs" }),
+    ]);
+    expect(
+      within(empty).getByRole("button", { name: "Add a posting by hand" }),
+    ).toBeVisible();
   });
 });
 
@@ -638,7 +698,7 @@ describe("the map's selection", () => {
       "bottom-[calc(var(--bottom-bar,0px)+0.75rem)]",
     );
     // The shell gives the bar the tab bar's height, safe area included.
-    const frame = region.closest<HTMLElement>("[style]");
+    const frame = region.closest<HTMLElement>("[style*='--bottom-bar']");
     expect(frame?.style.getPropertyValue("--bottom-bar")).toContain(
       "safe-area-inset-bottom",
     );

@@ -7,6 +7,7 @@ import {
   type KeyboardEvent,
 } from "react";
 
+import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
@@ -19,6 +20,8 @@ import {
 } from "@/features/browser/api/browser-api";
 import { useLiveView } from "@/features/browser/api/use-browser";
 import { screenFactory, type Screen } from "@/features/browser/helpers/screen";
+
+import { LiveViewHeading, type LiveViewState } from "./live-views";
 
 const SPECIAL_KEYS: Record<string, number> = {
   Backspace: 0xff08,
@@ -52,20 +55,32 @@ function sentence(error: unknown): string {
  * filling the form"), or while the person has it (a sign in hand off). `person`: the person's own session (no assistant, browser B7), where this
  * view has the keyboard and the mouse from the start and there is nothing to take over or give
  * back. `watchOnly`: the person only watches, with no Take over and no keyboard (the submit lease,
- * whose read back a person's input would void). Used by Account's "Your browser" card and by the
- * apply module's job page, and by the page of a website search run (browser B18).
+ * whose read back a person's input would void). `label` (and its `detail`): what this view shows,
+ * a website or an application, named above the screen with the view's state, for a grid of views
+ * (LiveViews); `needsYou`: the assistant waits for the person in it, which that state says. Used
+ * by Account, the job page, the page of a website search run (browser B18), Find jobs' progress
+ * and the Applications page. `slot`: the window of the person's browser it shows (two browsers at
+ * once, 2026-11-06), the lease's own.
  */
 export function LiveBrowser({
+  label,
+  detail,
+  needsYou = false,
   status,
   person = false,
   watchOnly = false,
+  slot = 0,
 }: {
+  label?: string;
+  detail?: string;
+  needsYou?: boolean;
   status?: string;
   person?: boolean;
   watchOnly?: boolean;
+  slot?: number;
 }) {
   const [viewer] = useState(() => crypto.randomUUID());
-  const live = useLiveView(viewer);
+  const live = useLiveView(viewer, slot);
   const target = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLElement>(null);
   const keyboard = useRef<HTMLTextAreaElement>(null);
@@ -190,17 +205,37 @@ export function LiveBrowser({
             ? STATUS.you
             : (status ?? (watchOnly ? WATCHING : STATUS.assistant));
 
+  const state: LiveViewState =
+    phase === "connecting"
+      ? "connecting"
+      : phase === "connected"
+        ? needsYou
+          ? "needs-you"
+          : "live"
+        : problem
+          ? "unavailable"
+          : "ended";
+
   return (
     <section
       ref={frame}
-      aria-label="Live view of your browser"
-      className="flex flex-col gap-3 bg-background"
+      aria-label={
+        label
+          ? `Live view of your browser: ${label}`
+          : "Live view of your browser"
+      }
+      className="flex min-w-0 flex-col gap-3 [&:fullscreen]:bg-background [&:fullscreen]:p-4"
     >
-      <div
-        ref={target}
-        data-testid="live-screen"
-        className="aspect-[4/3] w-full overflow-hidden rounded-md border bg-muted"
-      />
+      {label ? (
+        <LiveViewHeading label={label} detail={detail} state={state} />
+      ) : null}
+      {/* browserd's screen is 1440 by 900 (SPEC-browser, Display). */}
+      <AspectRatio
+        ratio={16 / 10}
+        className="overflow-hidden rounded-md border bg-muted"
+      >
+        <div ref={target} data-testid="live-screen" className="size-full" />
+      </AspectRatio>
       <p
         role="status"
         className="flex items-center gap-2 text-sm text-muted-foreground"

@@ -119,18 +119,6 @@ export const FIT_TONE_CLASSES: Record<FitTone, string> = {
   none: "border-border bg-transparent text-muted-foreground",
 };
 
-/** Bar fill of the histogram bucket that starts at `low`, on the same scale as the badges. */
-export function bucketTone(low: number): string {
-  const tone = fitTone(low);
-  return {
-    top: "bg-success",
-    good: "bg-success/60",
-    fair: "bg-muted-foreground/40",
-    low: "bg-muted-foreground/25",
-    none: "bg-muted-foreground/15",
-  }[tone];
-}
-
 // Browser B8: the job sites of a sweep read in the person's browser (sweep-sources.tsx).
 const KIND_NAMES: Record<string, string> = {
   google_careers: "Google Careers",

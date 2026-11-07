@@ -112,7 +112,7 @@ test("an invented person has a credential, the consent, a base CV and an Ashby p
 
 test("the open question is answered by the agent, shown as its answer, and editable", async () => {
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply" });
+  const section = page.getByRole("region", { name: "Your application" });
   await startReviewFirst(page);
 
   // The worker's tick starts the fill within 30 seconds; the answer agent runs inside it.

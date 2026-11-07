@@ -11,13 +11,6 @@ import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -32,7 +25,9 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { message } from "@/features/admin/helpers/errors";
 
+import { LoadError } from "@/components/blocks/load-error";
 import { ConfirmDialog } from "@/components/shared/apply/confirm-dialog";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 import {
   capSentence,
   days,
@@ -91,154 +86,131 @@ export function CapsEditor() {
   };
 
   return (
-    <Card aria-labelledby="caps-card-title">
-      <CardHeader>
-        <CardTitle>
-          <h2 id="caps-card-title" className="text-lg">
-            Company caps
-          </h2>
-        </CardTitle>
-        <CardDescription>
-          Your own limits per company. An application the app submitted, or may
-          have submitted, counts toward its cap.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {notice ? (
-          <Alert variant="destructive">
-            <CircleAlert aria-hidden="true" />
-            <AlertDescription>{notice}</AlertDescription>
-          </Alert>
-        ) : null}
-        {query.isPending ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            Loading your caps
-          </p>
-        ) : query.isError ? (
-          <Alert variant="destructive">
-            <CircleAlert aria-hidden="true" />
-            <AlertDescription className="flex flex-col items-start gap-2">
-              {message(query.error)}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void query.refetch()}
-              >
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : (
-          <>
-            {query.data.items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                No cap yet. Add one to limit how often the app applies to a
-                company.
-              </p>
-            ) : (
-              <ItemGroup aria-label="Your caps">
-                {query.data.items.map((cap, index) => (
-                  // Every save replaces the rows and their ids, so a row is keyed on its label.
-                  <Fragment key={cap.label}>
-                    {index > 0 ? <ItemSeparator /> : null}
-                    {editing === cap.label ? (
-                      <div role="listitem" className="py-3">
-                        <CapForm
-                          formLabel={`Edit the cap of ${cap.label}`}
-                          initial={cap}
-                          pending={save.isPending}
-                          submit="Save cap"
-                          onCancel={() => {
-                            setEditing(null);
+    <SettingsSection
+      title="Company caps"
+      description="Your own limits per company. An application the app submitted, or may have submitted, counts toward its cap."
+      actions={
+        caps && !adding ? (
+          <Button
+            variant="outline"
+            disabled={save.isPending}
+            onClick={() => {
+              setEditing(null);
+              setAdding(true);
+            }}
+          >
+            <Plus aria-hidden="true" />
+            Add a cap
+          </Button>
+        ) : null
+      }
+    >
+      {notice ? (
+        <Alert variant="destructive">
+          <CircleAlert aria-hidden="true" />
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
+      ) : null}
+      {query.isPending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading your caps
+        </p>
+      ) : query.isError ? (
+        <LoadError query={query}>Your caps could not be loaded.</LoadError>
+      ) : (
+        <>
+          {query.data.items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              No cap yet. Add one to limit how often the app applies to a
+              company.
+            </p>
+          ) : (
+            <ItemGroup aria-label="Your caps">
+              {query.data.items.map((cap, index) => (
+                // Every save replaces the rows and their ids, so a row is keyed on its label.
+                <Fragment key={cap.label}>
+                  {index > 0 ? <ItemSeparator /> : null}
+                  {editing === cap.label ? (
+                    <div role="listitem" className="py-3">
+                      <CapForm
+                        formLabel={`Edit the cap of ${cap.label}`}
+                        initial={cap}
+                        pending={save.isPending}
+                        submit="Save cap"
+                        onCancel={() => {
+                          setEditing(null);
+                        }}
+                        onSave={(draft) => {
+                          change(
+                            query.data.items.map((one) =>
+                              one.label === cap.label ? draft : toDraft(one),
+                            ),
+                            "Cap saved.",
+                          );
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <Item
+                      role="listitem"
+                      size="sm"
+                      className="flex-col items-stretch gap-2 rounded-none border-0 px-0 sm:flex-row sm:items-center"
+                    >
+                      <ItemContent className="min-w-0 gap-0.5">
+                        <ItemTitle className="break-words">
+                          {capSentence(cap)}
+                        </ItemTitle>
+                        <ItemDescription>
+                          {cap.used} of {cap.max_count} used in the last{" "}
+                          {days(cap.window_days)}
+                        </ItemDescription>
+                      </ItemContent>
+                      <ItemActions className="shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`Edit the cap of ${cap.label}`}
+                          disabled={save.isPending}
+                          onClick={() => {
+                            setAdding(false);
+                            setEditing(cap.label);
                           }}
-                          onSave={(draft) => {
-                            change(
-                              query.data.items.map((one) =>
-                                one.label === cap.label ? draft : toDraft(one),
-                              ),
-                              "Cap saved.",
-                            );
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          aria-label={`Remove the cap of ${cap.label}`}
+                          disabled={save.isPending}
+                          onClick={() => {
+                            setRemoving(cap);
                           }}
-                        />
-                      </div>
-                    ) : (
-                      <Item
-                        role="listitem"
-                        size="sm"
-                        className="flex-col items-stretch gap-2 rounded-none border-0 px-0 sm:flex-row sm:items-center"
-                      >
-                        <ItemContent className="min-w-0 gap-0.5">
-                          <ItemTitle className="break-words">
-                            {capSentence(cap)}
-                          </ItemTitle>
-                          <ItemDescription>
-                            {cap.used} of {cap.max_count} used in the last{" "}
-                            {days(cap.window_days)}
-                          </ItemDescription>
-                        </ItemContent>
-                        <ItemActions className="shrink-0">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            aria-label={`Edit the cap of ${cap.label}`}
-                            disabled={save.isPending}
-                            onClick={() => {
-                              setAdding(false);
-                              setEditing(cap.label);
-                            }}
-                          >
-                            Edit
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            aria-label={`Remove the cap of ${cap.label}`}
-                            disabled={save.isPending}
-                            onClick={() => {
-                              setRemoving(cap);
-                            }}
-                          >
-                            Remove
-                          </Button>
-                        </ItemActions>
-                      </Item>
-                    )}
-                  </Fragment>
-                ))}
-              </ItemGroup>
-            )}
-            {adding ? (
-              <CapForm
-                formLabel="New cap"
-                pending={save.isPending}
-                submit="Add cap"
-                onCancel={() => {
-                  setAdding(false);
-                }}
-                onSave={(draft) => {
-                  change(
-                    [...query.data.items.map(toDraft), draft],
-                    "Cap added.",
-                  );
-                }}
-              />
-            ) : (
-              <Button
-                variant="outline"
-                className="w-full sm:w-auto sm:self-start"
-                disabled={save.isPending}
-                onClick={() => {
-                  setEditing(null);
-                  setAdding(true);
-                }}
-              >
-                <Plus aria-hidden="true" />
-                Add a cap
-              </Button>
-            )}
-          </>
-        )}
-      </CardContent>
+                        >
+                          Remove
+                        </Button>
+                      </ItemActions>
+                    </Item>
+                  )}
+                </Fragment>
+              ))}
+            </ItemGroup>
+          )}
+          {adding ? (
+            <CapForm
+              formLabel="New cap"
+              pending={save.isPending}
+              submit="Add cap"
+              onCancel={() => {
+                setAdding(false);
+              }}
+              onSave={(draft) => {
+                change([...query.data.items.map(toDraft), draft], "Cap added.");
+              }}
+            />
+          ) : null}
+        </>
+      )}
       <ConfirmDialog
         ask={
           removing
@@ -263,7 +235,7 @@ export function CapsEditor() {
           );
         }}
       />
-    </Card>
+    </SettingsSection>
   );
 }
 
@@ -325,7 +297,7 @@ function CapForm({
     <form
       noValidate
       aria-label={formLabel}
-      className="flex flex-col gap-4 rounded-md border p-3"
+      className="flex max-w-2xl flex-col gap-4"
       onSubmit={onSubmit}
     >
       <div className="grid gap-4 sm:grid-cols-2">
@@ -363,7 +335,11 @@ function CapForm({
           );
         })}
       </div>
-      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={pending} aria-busy={pending}>
+          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
+          {submit}
+        </Button>
         <Button
           type="button"
           variant="outline"
@@ -371,10 +347,6 @@ function CapForm({
           onClick={onCancel}
         >
           Cancel
-        </Button>
-        <Button type="submit" disabled={pending} aria-busy={pending}>
-          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
-          {submit}
         </Button>
       </div>
     </form>

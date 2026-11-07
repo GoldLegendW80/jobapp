@@ -206,17 +206,23 @@ export function SiteSignIn({
 export function JobWebsitesSignIn({ urls }: { urls: string[] }) {
   if (!urls.length) return null;
   return (
-    <section aria-label="Sign in to your job websites" className="space-y-2">
-      <h3 className="font-medium">Sign in to your job websites</h3>
+    <section
+      aria-label="Sign in to your job websites"
+      className="flex flex-col gap-2"
+    >
+      <h3 className="text-sm font-medium">Sign in to your job websites</h3>
       <p className="text-sm text-muted-foreground">
         For a website of Find jobs that shows its jobs to members only: sign in
         once, and the next searches read it signed in, in your own browser only.
       </p>
-      <ItemGroup className="rounded-md border">
+      <ItemGroup>
         {urls.map((url, index) => (
           <Fragment key={`${url}:${index}`}>
             {index > 0 ? <ItemSeparator /> : null}
-            <Item role="listitem" className="min-w-0 gap-2 rounded-none p-2">
+            <Item
+              role="listitem"
+              className="min-w-0 gap-2 rounded-none px-0 py-2"
+            >
               <ItemContent className="min-w-0">
                 <ItemTitle className="w-auto font-normal break-all">
                   {url}

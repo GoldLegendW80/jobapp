@@ -1,11 +1,9 @@
-import { ShieldCheck } from "lucide-react";
-
+import { Page, PageBody } from "@/components/blocks/page";
 import { PageHeader } from "@/components/blocks/page-header";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 
 import type { AgentPage } from "../../api/agents-api";
 import { useAgentDraft } from "@/features/admin/api/use-agent-draft";
+import { AGENT_TRAIL } from "@/features/admin/helpers/agent-labels";
 import { ClaudeCodeSection } from "./claude-code-section";
 import { CodeChangedNotice } from "./code-changed-notice";
 import { FirstMessageSection } from "./first-message-section";
@@ -30,47 +28,31 @@ export function AgentView({ page }: { page: AgentPage }) {
   };
 
   return (
-    <div className="flex flex-col gap-8">
-      <div className="flex flex-col gap-3">
-        <PageHeader
-          title={page.name}
-          description={page.effective.description}
-        />
-        <div className="flex flex-wrap gap-1">
-          {page.test_only ? <Badge variant="outline">Test only</Badge> : null}
-          {page.internal ? <Badge variant="outline">Internal</Badge> : null}
-          {page.private_io ? <Badge variant="outline">Private</Badge> : null}
-          <Badge variant="secondary">
-            {Object.keys(page.saved).length && page.version !== null
-              ? `Runs use version ${String(page.version)}`
-              : "Runs use the code's definition"}
-          </Badge>
-        </div>
-      </div>
-
-      {page.code_changed.length ? (
-        <CodeChangedNotice
-          page={page}
-          onRevert={agent.askRevert}
-          busy={agent.saving}
-        />
-      ) : null}
-
-      <Alert>
-        <ShieldCheck aria-hidden="true" />
-        <AlertDescription>{page.guards}</AlertDescription>
-      </Alert>
-
-      <IdentitySection {...fields} />
-      <ParametersSection page={page} />
-      <SystemPromptSection {...fields} />
-      <FirstMessageSection {...fields} />
-      <ToolsSection {...fields} />
-      <ModelSection {...fields} />
-      <SaveSection page={page} agent={agent} />
-      <ClaudeCodeSection page={page} />
-      <RecentRunsSection page={page} />
-      <VersionHistorySection page={page} />
+    <Page>
+      <PageHeader
+        trail={AGENT_TRAIL}
+        title={page.name}
+        description={page.effective.description}
+      />
+      <PageBody>
+        {page.code_changed.length ? (
+          <CodeChangedNotice
+            page={page}
+            onRevert={agent.askRevert}
+            busy={agent.saving}
+          />
+        ) : null}
+        <IdentitySection {...fields} />
+        <ParametersSection page={page} />
+        <SystemPromptSection {...fields} />
+        <FirstMessageSection {...fields} />
+        <ToolsSection {...fields} />
+        <ModelSection {...fields} />
+        <SaveSection page={page} agent={agent} />
+        <ClaudeCodeSection page={page} />
+        <RecentRunsSection page={page} />
+        <VersionHistorySection page={page} />
+      </PageBody>
 
       <RevertDialog
         name={page.name}
@@ -80,6 +62,6 @@ export function AgentView({ page }: { page: AgentPage }) {
         onCancel={agent.cancelRevert}
         onRevert={agent.revert}
       />
-    </div>
+    </Page>
   );
 }

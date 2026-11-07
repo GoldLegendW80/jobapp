@@ -11,6 +11,7 @@ import {
 } from "@/test/documents";
 import { renderApp } from "@/test/render";
 import { fakeGallery } from "@/test/templates";
+import { crumb } from "@/test/breadcrumb";
 
 import type { DocumentOut } from "../api/documents-api";
 
@@ -56,7 +57,7 @@ const writes = (api: ReturnType<typeof fakeDocuments>) =>
   api.requests.filter((one) => one.method !== "GET");
 
 describe("the gallery", () => {
-  it("lists every template served, the person's own first under From your CV, with names, descriptions and tags", async () => {
+  it("lists every template served, the person's own first under From your CV, with names, descriptions and what helps choose", async () => {
     setup();
     await openGallery();
     const headings = screen
@@ -73,16 +74,15 @@ describe("the gallery", () => {
     ]);
     const classic = screen.getByTestId("template-classic");
     expect(classic).toHaveTextContent("The classic look, in English.");
+    // What helps choose, in one line: the columns, the photo, hiring software.
+    expect(within(classic).getByTestId("template-facts")).toHaveTextContent(
+      /^One column, with a photo, easy for hiring software to read$/,
+    );
     expect(
-      within(classic)
-        .getAllByRole("listitem")
-        .map((one) => one.textContent),
-    ).toEqual([
-      "one column",
-      "sans",
-      "Easy for hiring software to read",
-      "photo",
-    ]);
+      within(screen.getByTestId("template-sidebar")).getByTestId(
+        "template-facts",
+      ),
+    ).toHaveTextContent(/^Two columns, with a photo$/);
     expect(
       within(classic).getByRole("img", { name: "Classic, the CV" }),
     ).toHaveAttribute(
@@ -114,9 +114,7 @@ describe("the gallery", () => {
     expect(screen.queryByRole("region", { name: "From your CV" })).toBeNull();
 
     await user.click(screen.getByLabelText("Easy for hiring software to read"));
-    expect(
-      screen.getByText("No template matches these filters."),
-    ).toBeVisible();
+    expect(screen.getByText("No template matches these filters")).toBeVisible();
     expect(screen.getByText("0 of 6 templates match.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear the filters" }));
     expect(screen.getByText("6 templates.")).toBeVisible();
@@ -201,9 +199,7 @@ describe("the gallery", () => {
         body: { template_slug: "compact" },
       }),
     ]);
-    expect(
-      screen.getByRole("link", { name: "Back to the document" }),
-    ).toHaveAttribute("href", "/jobs/job-1/documents/cv");
+    expect(crumb("CV")).toHaveAttribute("href", "/jobs/job-1/documents/cv");
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
 
@@ -230,9 +226,7 @@ describe("the gallery", () => {
       path: "/api/documents/b",
       body: { template_slug: "sidebar" },
     });
-    expect(
-      screen.getByRole("link", { name: "Back to the document" }),
-    ).toHaveAttribute("href", "/profile/cv/b");
+    expect(crumb("Main CV")).toHaveAttribute("href", "/profile/cv/b");
   });
 
   it("names templates in the document's language", async () => {

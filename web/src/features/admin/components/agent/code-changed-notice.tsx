@@ -24,7 +24,7 @@ export function CodeChangedNotice({
     (field): field is EditableField => field in FIELD_LABEL,
   );
   return (
-    <Alert>
+    <Alert variant="warning">
       <CircleAlert aria-hidden="true" />
       <AlertDescription className="flex min-w-0 flex-col gap-3">
         {fields.map((field) =>

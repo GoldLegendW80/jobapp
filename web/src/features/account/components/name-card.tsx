@@ -7,14 +7,6 @@ import { z } from "zod";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Field, FieldDescription, FieldTitle } from "@/components/ui/field";
 import {
   Form,
@@ -26,6 +18,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 import { message } from "@/features/admin/helpers/errors";
 import type { User } from "@/features/auth/api/auth-api";
 import { useRenameMe } from "@/features/auth/api/use-me";
@@ -72,73 +65,63 @@ export function NameCard({ user }: { user: User }) {
   const unchanged = cleanName(typed) === user.name;
 
   return (
-    <Card aria-labelledby="name-card-title">
-      <CardHeader>
-        <CardTitle>
-          <h2 id="name-card-title" className="text-lg">
-            Profile name
-          </h2>
-        </CardTitle>
-        <CardDescription>
-          How you appear in the header and to the admin.
-        </CardDescription>
-      </CardHeader>
+    <SettingsSection
+      title="Profile name"
+      description="How you appear in the header and to the admin."
+    >
       <Form {...form}>
         <form
           noValidate
           aria-label="Profile name"
+          className="flex max-w-md flex-col gap-4"
           onSubmit={(event) =>
             void form.handleSubmit((values) => {
               mutation.mutate(cleanName(values.name));
             })(event)
           }
         >
-          <CardContent className="flex flex-col gap-4">
-            {formError ? (
-              <Alert variant="destructive">
-                <CircleAlert aria-hidden="true" />
-                <AlertDescription>{formError}</AlertDescription>
-              </Alert>
-            ) : null}
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Name</FormLabel>
-                  <FormControl>
-                    <Input autoComplete="name" maxLength={1024} {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <Field className="gap-2">
-              <FieldTitle>Email</FieldTitle>
-              <FieldDescription className="break-all">
-                {user.email}
-              </FieldDescription>
-            </Field>
-          </CardContent>
-          <CardFooter className="mt-6 justify-end">
-            <Button
-              type="submit"
-              className="w-full sm:w-auto"
-              disabled={mutation.isPending || unchanged}
-              aria-busy={mutation.isPending}
-            >
-              {mutation.isPending ? (
-                <>
-                  <Spinner aria-hidden="true" role={undefined} />
-                  Saving
-                </>
-              ) : (
-                "Save name"
-              )}
-            </Button>
-          </CardFooter>
+          {formError ? (
+            <Alert variant="destructive">
+              <CircleAlert aria-hidden="true" />
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <FormField
+            control={form.control}
+            name="name"
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>Name</FormLabel>
+                <FormControl>
+                  <Input autoComplete="name" maxLength={1024} {...field} />
+                </FormControl>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+          <Field className="gap-2">
+            <FieldTitle>Email</FieldTitle>
+            <FieldDescription className="break-all">
+              {user.email}
+            </FieldDescription>
+          </Field>
+          <Button
+            type="submit"
+            className="w-fit"
+            disabled={mutation.isPending || unchanged}
+            aria-busy={mutation.isPending}
+          >
+            {mutation.isPending ? (
+              <>
+                <Spinner aria-hidden="true" role={undefined} />
+                Saving
+              </>
+            ) : (
+              "Save name"
+            )}
+          </Button>
         </form>
       </Form>
-    </Card>
+    </SettingsSection>
   );
 }

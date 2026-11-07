@@ -129,7 +129,7 @@ const BLOCKED: Record<string, string> = {
  */
 function waitingLine(needs: string | null, mode?: string): string {
   if (needs === "documents:consent") {
-    return "Waiting for your CV and letter to be written. Confirm what is sent to the writer in the CV tab of your profile first: nothing is written before.";
+    return "Waiting for your CV and letter to be written. Confirm what is sent to the writer in Your CVs, on your profile, first: nothing is written before.";
   }
   if (needs === "documents:credential") {
     return "Waiting for your CV and letter to be written. Add a model credential in your account first.";
@@ -170,8 +170,14 @@ const DIRECT_LINES: Record<string, string> = {
   submitted: "Sent. Below is what the assistant sent.",
 };
 
-/** The status line under the section's title. */
-export function statusLine(application: Application | null | undefined) {
+/**
+ * The status line under the section's title. `reviewAgent`: Review first filled by the apply
+ * agent, whose one approval is Confirm and send (A20), so its line says confirm, not approve.
+ */
+export function statusLine(
+  application: Application | null | undefined,
+  reviewAgent = false,
+) {
   if (!application) return "No application yet.";
   if (
     application.mode === "manual" &&
@@ -195,8 +201,10 @@ export function statusLine(application: Application | null | undefined) {
         : line;
     }
     case "ready":
-      return application.mode === "full_auto"
-        ? "Full auto: filled. The app checks it now, then holds it so you can cancel."
+      if (application.mode === "full_auto")
+        return "Full auto: filled. The app checks it now, then holds it so you can cancel.";
+      return reviewAgent
+        ? "Filled and waiting for you to confirm. Nothing is sent until you click Confirm and send."
         : "Filled and waiting for your approval. Nothing is sent until you approve.";
     case "approved":
     case "submitting":

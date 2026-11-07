@@ -16,7 +16,7 @@ import { server } from "@/test/server";
 
 import { boardKey, boardPage } from "../api/boards-api";
 import { sourceName } from "../helpers/labels";
-import { SweepSources } from "../components/sweep-sources";
+import { SweepSources } from "@/components/shared/jobs/sweep-sources";
 import type { SweepSource } from "../api/sweeps-api";
 
 const STARTER = [

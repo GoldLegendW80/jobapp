@@ -1,12 +1,21 @@
 import { http, HttpResponse } from "msw";
 
-import type { VersionSummary } from "@/features/documents/api/documents-api";
+import type { Message } from "@/features/documents/api/chat-api";
+import type {
+  DocumentOut,
+  VersionSummary,
+} from "@/features/documents/api/documents-api";
 import type { PostingDocument } from "@/features/documents/api/posting-documents-api";
+import type { Consent } from "@/features/documents/api/spend-api";
 import type { Template } from "@/features/documents/api/templates-api";
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { fakeCv, fakeDocumentOf, fakeDocuments } from "@/test/documents";
 import { fakeJobDetail } from "@/test/jobs";
+import { fakeProfile } from "@/test/profile";
 import { server } from "@/test/server";
+import { TEMPLATES } from "@/test/templates";
+
+import { camilleProfile } from "./camille-profile";
 
 const svg = (body: string) =>
   new HttpResponse(body, { headers: { "Content-Type": "image/svg+xml" } });
@@ -101,6 +110,92 @@ export function fakePageImages() {
   );
 }
 
+/** The text of Camille's CV written for a posting (camille-profile.ts), as the writer drafts it. */
+export const CV_DRAFT: Record<string, unknown> = {
+  schema: 1,
+  target: "Senior data engineer, freight data platform",
+  headline: "Senior data engineer, streaming and analytics platforms",
+  summary:
+    "Data engineer with seven years on batch and streaming pipelines. Builds the platforms analysts trust: tested dbt models, Kafka streams and clear ownership.",
+  highlights: [
+    "Cut the nightly load from four hours to forty minutes",
+    "Moved twelve teams onto one dbt project",
+  ],
+  competencies: ["Python", "SQL", "dbt", "Kafka", "Airflow", "BigQuery"],
+  experience: [
+    {
+      employer_key: "lumen-freight",
+      bullets: [
+        "Runs the streaming platform behind live shipment tracking",
+        "Wrote the data contracts every producing team signs",
+      ],
+    },
+    {
+      employer_key: "vellum-analytics",
+      bullets: ["Built the client reporting warehouse on BigQuery"],
+    },
+  ],
+  skills: [
+    { label: "Languages", items: ["Python", "SQL", "Scala"] },
+    { label: "Tools", items: ["dbt", "Airflow", "Kafka", "Terraform"] },
+  ],
+  notes: "",
+};
+
+/** The text of a cover letter written for a posting. */
+export const LETTER_DRAFT: Record<string, unknown> = {
+  schema: 1,
+  target: "Senior data engineer, freight data platform",
+  headline: "Senior data engineer",
+  recipient: "Hiring team, Lumen Freight",
+  subject: "Application for the senior data engineer role",
+  salutation: "Hello,",
+  paragraphs: [
+    "Your team is rebuilding shipment tracking on streaming data, which is the work I have done for the last three years.",
+    "I would bring tested pipelines, data contracts that producing teams sign, and the habit of explaining every number.",
+  ],
+  closing: "Kind regards,",
+};
+
+/** A short conversation with the chat of a document: one change asked, one answered. */
+export const CHAT_MESSAGES: Message[] = [
+  {
+    id: 1,
+    channel: "content",
+    role: "user",
+    text: "Make the summary shorter",
+    generation_id: "g-chat-1",
+    version_number: null,
+    at: "2026-11-05T09:20:00Z",
+  },
+  {
+    id: 2,
+    channel: "content",
+    role: "assistant",
+    text: "Changed the summary.\nThis is version 2.",
+    generation_id: "g-chat-1",
+    version_number: 2,
+    at: "2026-11-05T09:21:00Z",
+  },
+];
+
+/**
+ * What the document view reads besides the document: the person's profile (the facts printed as
+ * they are), the templates with their thumbnails, and the chat's `messages` of every document.
+ */
+export function fakeDocumentReads(messages: Message[] = []) {
+  fakeProfile(camilleProfile());
+  fakeTemplateThumbnails(TEMPLATES);
+  server.use(
+    http.get("*/api/document-templates", () =>
+      HttpResponse.json({ templates: TEMPLATES }),
+    ),
+    http.get("*/api/documents/:id/messages", () =>
+      HttpResponse.json({ messages }),
+    ),
+  );
+}
+
 /** The posting's CV or letter as GET /api/jobs/{id}/documents lists it. */
 export function postingDocument(
   kind: "cv" | "letter",
@@ -108,7 +203,10 @@ export function postingDocument(
   overrides: Partial<PostingDocument> = {},
 ): PostingDocument {
   return {
-    ...fakeDocumentOf(fakeCv({ id: `${kind}-doc` }), { latest: null }),
+    ...fakeDocumentOf(fakeCv({ id: `${kind}-doc` }), {
+      latest: null,
+      draft: kind === "cv" ? CV_DRAFT : LETTER_DRAFT,
+    }),
     scope: "posting",
     kind,
     posting_id: postingId,
@@ -123,15 +221,18 @@ export function postingDocument(
 
 /**
  * A posting and its documents: the job, the list of its documents, each document with its
- * versions (the latest first) and the image of each version's first page.
+ * versions (the latest first) and the image of each version's first page, and what the document
+ * view reads besides (`fakeDocumentReads`): the chat's `messages`, under `consent`.
  */
 export function fakePostingDocuments(
   job: JobDetail,
   documents: PostingDocument[],
   history: VersionSummary[] = [],
+  chat: { consent?: Partial<Consent>; messages?: Message[] } = {},
 ) {
   fakeJobDetail(job);
-  const api = fakeDocuments({ cvs: [fakeCv()] });
+  fakeDocumentReads(chat.messages);
+  const api = fakeDocuments({ cvs: [fakeCv()], consent: chat.consent });
   for (const one of documents) {
     api.documents.set(one.id, one);
     api.versions.set(one.id, one.latest ? [one.latest, ...history] : []);
@@ -142,4 +243,45 @@ export function fakePostingDocuments(
     ),
   );
   fakePageImages();
+  return api;
+}
+
+/**
+ * One document served on its own, as the document view reads it: the document, its versions
+ * (the latest first), its page images, saves of its draft, and what the view reads besides.
+ */
+export function fakeOneDocument(
+  document: DocumentOut,
+  options: {
+    versions?: VersionSummary[];
+    consent?: Partial<Consent>;
+    messages?: Message[];
+    corrections?: unknown[];
+  } = {},
+) {
+  fakeDocumentReads(options.messages);
+  const api = fakeDocuments({ cvs: [fakeCv()], consent: options.consent });
+  api.documents.set(document.id, document);
+  api.versions.set(
+    document.id,
+    options.versions ?? (document.latest ? [document.latest] : []),
+  );
+  if (options.corrections)
+    api.corrections.set(document.id, options.corrections);
+  server.use(
+    http.put("*/api/documents/:id/draft", async ({ request, params }) => {
+      const id = String(params.id);
+      const current = api.documents.get(id) ?? document;
+      const saved: DocumentOut = {
+        ...current,
+        draft: (await request.json()) as Record<string, unknown>,
+        draft_revision: current.draft_revision + 1,
+        draft_written_by: "user",
+      };
+      api.documents.set(id, saved);
+      return HttpResponse.json(saved);
+    }),
+  );
+  fakePageImages();
+  return api;
 }

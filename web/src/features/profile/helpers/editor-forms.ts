@@ -1,11 +1,10 @@
 /**
- * Form values, zod schemas and conversions of the three editors (facts, skills, search). Like
- * forms.ts, the schemas mirror api/app/profile/schemas.py so most mistakes are caught before a
- * save: unique fact titles and the 200 KB cap of the fact base, term rules (plain terms at most
- * 200 characters; advanced ones compiled, at most 500 characters, no nested quantifiers; see
- * matching.ts), category names unique across have, adjacent and none, gate penalties 0 to 100.
- * The api stays the judge: its 422
- * lands on the field, or the term, it names (errors.ts).
+ * Form values, zod schemas and conversions of the skills and search editors. Like forms.ts, the
+ * schemas mirror api/app/profile/schemas.py so most mistakes are caught before a save: term rules
+ * (plain terms at most 200 characters; advanced ones compiled, at most 500 characters, no nested
+ * quantifiers; see matching.ts), category names unique across have, adjacent and none, gate
+ * penalties 0 to 100. The api stays the judge: its 422 lands on the field, or the term, it names
+ * (errors.ts).
  */
 import { z } from "zod";
 
@@ -21,7 +20,6 @@ import {
   type PayRange,
   type BrowserSource,
   type Category,
-  type Facts,
   type Gate,
   type Search,
   type Skills,
@@ -31,8 +29,6 @@ import {
 import { fold, LINE_MAX, text, uniqueBy } from "./forms";
 import { cleanTerms, listProblems, termProblem } from "./matching";
 
-export const FACTS_MAX_BYTES = 200_000;
-export const FACT_BLOCKS_MAX = 200;
 export const TERMS_MAX = 300;
 export const CATEGORIES_MAX = 100;
 export const GATES_MAX = 50;
@@ -41,81 +37,7 @@ export const NEVER_APPLY_LINE = 500;
 /** schemas.py SearchSection.browser_sources: at most 10 sources. */
 export const BROWSER_SOURCES_MAX = 10;
 
-const encoder = new TextEncoder();
-export const utf8Bytes = (value: string) => encoder.encode(value).length;
-
 const cleanLine = (value: string) => value.normalize("NFC").trim();
-const cleanText = (value: string) =>
-  value.replace(/\r\n?/g, "\n").normalize("NFC").trim();
-
-// --- facts -----------------------------------------------------------------------------------
-
-/** Bytes of the fact base as the api counts them: UTF-8 of every cleaned title and body. */
-export function factBytes(blocks: readonly { title: string; body: string }[]) {
-  return blocks.reduce(
-    (sum, b) =>
-      sum + utf8Bytes(cleanLine(b.title)) + utf8Bytes(cleanText(b.body)),
-    0,
-  );
-}
-
-/** "12.3 KB of 200 KB", or exact bytes near and over the cap, where rounding would hide it. */
-export function sizeText(bytes: number, cap: number): string {
-  if (bytes >= cap * 0.99) {
-    return `${bytes.toLocaleString("en")} of ${cap.toLocaleString("en")} bytes`;
-  }
-  return `${formatBytes(bytes)} of ${formatBytes(cap)}`;
-}
-
-export function formatBytes(bytes: number): string {
-  if (bytes < 1000) return `${bytes} bytes`;
-  return `${(bytes / 1000).toLocaleString("en", { maximumFractionDigits: 1 })} KB`;
-}
-
-export const factsSchema = z
-  .object({
-    blocks: z
-      .array(
-        z.object({
-          title: text("a title", LINE_MAX, { required: true }),
-          body: text("the text of this block", FACTS_MAX_BYTES, {
-            required: true,
-            multiline: true,
-          }),
-        }),
-      )
-      .max(FACT_BLOCKS_MAX, `Keep at most ${FACT_BLOCKS_MAX} blocks.`),
-  })
-  .superRefine((values, ctx) => {
-    uniqueBy(
-      values.blocks,
-      (b) => fold(b.title),
-      "title",
-      "Another block already has this title.",
-      ctx,
-      "blocks",
-    );
-    const size = factBytes(values.blocks);
-    if (size > FACTS_MAX_BYTES) {
-      ctx.addIssue({
-        code: "custom",
-        message: `The fact base is ${size.toLocaleString("en")} bytes, at most ${FACTS_MAX_BYTES.toLocaleString("en")} allowed. Shorten or remove a block.`,
-        path: ["blocks"],
-      });
-    }
-  });
-export type FactsForm = z.infer<typeof factsSchema>;
-
-export const toFactsForm = (facts: Facts): FactsForm => ({
-  blocks: facts.blocks.map((b) => ({ title: b.title, body: b.body })),
-});
-
-export const fromFactsForm = (values: FactsForm): Facts => ({
-  blocks: values.blocks.map((b) => ({
-    title: cleanLine(b.title),
-    body: cleanText(b.body),
-  })),
-});
 
 // --- term lists ------------------------------------------------------------------------------
 
@@ -263,6 +185,60 @@ export const fromSkillsForm = (values: SkillsForm): Skills => ({
     penalty: g.penalty,
   })),
 });
+
+// --- advanced matching: the regular expressions About you does not hold ------------------------
+
+const regex = <T extends { advanced_regex: boolean }>(items: readonly T[]) =>
+  items.filter((item) => item.advanced_regex);
+const words = <T extends { advanced_regex: boolean }>(items: readonly T[]) =>
+  items.filter((item) => !item.advanced_regex);
+
+/** The regular expression categories and requirements of `skills`, without the years. */
+const advancedOf = (skills: Skills): Skills => ({
+  years_experience: null,
+  have: regex(skills.have),
+  adjacent: regex(skills.adjacent),
+  none: regex(skills.none),
+  gates: regex(skills.gates),
+});
+
+/** The form of Advanced matching: the regular expression categories and requirements only. */
+export const toAdvancedForm = (skills: Skills): SkillsForm =>
+  toSkillsForm(advancedOf(skills));
+
+/**
+ * The skills to save: `advanced` (what Advanced matching holds) first in each list, then the
+ * categories in words and the years of `current`, the skills as stored now. An item whose switch
+ * was turned off goes with them, written in words from then on.
+ */
+export const withAdvanced = (current: Skills, advanced: Skills): Skills => ({
+  years_experience: current.years_experience,
+  have: [...advanced.have, ...words(current.have)],
+  adjacent: [...advanced.adjacent, ...words(current.adjacent)],
+  none: [...advanced.none, ...words(current.none)],
+  gates: [...advanced.gates, ...words(current.gates)],
+});
+
+/** The categories and requirements written in words, as About you holds them. */
+export const inWords = (skills: Skills): Skills =>
+  withAdvanced(skills, {
+    years_experience: null,
+    have: [],
+    adjacent: [],
+    none: [],
+    gates: [],
+  });
+
+/** The form of the Skills fields of About you without a model key: the years and the words. */
+export const toWordsForm = (skills: Skills): SkillsForm =>
+  toSkillsForm(inWords(skills));
+
+/**
+ * The skills to save from those fields: the regular expressions of `current` (the skills as
+ * stored now) first in each list, as stored, then `words` with its years.
+ */
+export const withWords = (current: Skills, words: Skills): Skills =>
+  withAdvanced(words, advancedOf(current));
 
 // --- search ----------------------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-import { ListChecks } from "lucide-react";
+import { ArrowRight, ListChecks } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, matchRoutes, useLocation, useNavigate } from "react-router";
 
@@ -128,7 +128,7 @@ function PageSkeleton() {
       role="status"
       aria-live="polite"
       data-testid="page-skeleton"
-      className="delayed-appear mx-auto flex w-full max-w-6xl flex-col gap-6"
+      className="delayed-appear mx-auto flex w-full max-w-360 flex-col gap-6 sm:gap-8"
     >
       <span className="sr-only">Loading</span>
       <div aria-hidden="true" className="flex flex-col gap-3">
@@ -149,13 +149,13 @@ export function FinishSetupCard() {
   const state = useOnboarding();
   if (!state.data?.show_card) return null;
   return (
-    <Item asChild className="rounded-xl bg-card">
+    <Item asChild className="gap-4 rounded-xl bg-card p-4 sm:px-6">
       <section aria-labelledby="finish-setup">
         <ItemMedia variant="icon">
           <ListChecks aria-hidden="true" />
         </ItemMedia>
         <ItemContent className="min-w-0">
-          <ItemTitle>
+          <ItemTitle className="text-base font-medium">
             <h2 id="finish-setup">Finish setting up</h2>
           </ItemTitle>
           <ItemDescription>
@@ -164,8 +164,11 @@ export function FinishSetupCard() {
           </ItemDescription>
         </ItemContent>
         <ItemActions>
-          <Button asChild size="sm">
-            <Link to={WELCOME}>Continue setup</Link>
+          <Button asChild>
+            <Link to={WELCOME}>
+              Continue setup
+              <ArrowRight aria-hidden="true" />
+            </Link>
           </Button>
         </ItemActions>
       </section>

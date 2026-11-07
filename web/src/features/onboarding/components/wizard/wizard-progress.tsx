@@ -1,4 +1,7 @@
+import { Check } from "lucide-react";
+
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { WORDING } from "@/lib/wording";
@@ -9,16 +12,32 @@ import {
   type StepId,
 } from "@/features/onboarding/helpers/steps";
 
-/** One box for every name of the list, a button or not, so they all sit on one baseline. */
+/** One box for every name of the list, a button or not, so they all sit on one line. */
 const STEP_LABEL =
-  "inline-flex min-h-6 items-center rounded leading-5 whitespace-nowrap";
+  "inline-flex min-h-8 w-full items-center gap-2 rounded-md px-2 leading-5 whitespace-nowrap";
+
+/** The bar above the step, at every width: its value is the step, 1 to 8. */
+export function WizardBar({ current }: { current: number }) {
+  const name = STEP_NAMES[STEP_IDS[current] ?? "profile"];
+  return (
+    <Progress
+      value={((current + 1) / STEP_IDS.length) * 100}
+      aria-label={WORDING.wizardProgress}
+      aria-valuemin={1}
+      aria-valuemax={STEP_IDS.length}
+      aria-valuenow={current + 1}
+      aria-valuetext={`Step ${current + 1} of ${STEP_IDS.length}: ${name}`}
+      className="h-1.5 bg-muted *:data-[slot=progress-indicator]:motion-reduce:transition-none"
+    />
+  );
+}
 
 /**
- * The progress bar and, from sm up, the eight names, the current one marked; a step already
- * passed opens. Below sm only the bar shows: the heading under it says "Step N of 8: Name", the
- * bar's value says it too, and Back and the summary's Change open the steps passed.
+ * The eight names in the side rail, once the page is wide enough for one: the current one
+ * marked, a step already passed opens. Narrower, only the bar shows: the heading under it says
+ * "Step N of 8: Name", and Back and the summary's Change open the steps passed.
  */
-export function WizardProgress({
+export function WizardSteps({
   current,
   reachable,
   onOpen,
@@ -27,60 +46,71 @@ export function WizardProgress({
   reachable: readonly StepId[];
   onOpen: (step: StepId) => void;
 }) {
-  const name = STEP_NAMES[STEP_IDS[current] ?? "profile"];
   return (
-    <nav aria-label={WORDING.progress}>
-      {/* The value is the share of the bar filled; what is read is the step, 1 to 8. */}
-      <Progress
-        value={((current + 1) / STEP_IDS.length) * 100}
-        aria-label={WORDING.wizardProgress}
-        aria-valuemin={1}
-        aria-valuemax={STEP_IDS.length}
-        aria-valuenow={current + 1}
-        aria-valuetext={`Step ${current + 1} of ${STEP_IDS.length}: ${name}`}
-        className="h-1.5 bg-muted *:data-[slot=progress-indicator]:motion-reduce:transition-none"
-      />
-      <ol
-        className="mt-2 hidden flex-wrap items-center gap-x-3 gap-y-1 text-xs sm:flex"
-        data-testid="welcome-step-names"
-      >
-        {STEP_IDS.map((step, at) => {
-          const open = at === current;
-          const canOpen = !open && (at < current || reachable.includes(step));
-          return (
-            <li key={step} className="flex">
-              {canOpen ? (
-                <Button
-                  type="button"
-                  variant="link"
-                  // The size first: a text size after it would drop the box's leading-5.
-                  className={cn(
-                    "h-auto p-0 text-xs font-normal text-muted-foreground",
-                    STEP_LABEL,
-                  )}
-                  onClick={() => {
-                    onOpen(step);
-                  }}
-                >
-                  {STEP_NAMES[step]}
-                </Button>
-              ) : (
+    <Card className="hidden py-4 @4xl:flex">
+      <CardContent className="px-4">
+        <nav aria-label={WORDING.progress}>
+          <ol
+            className="hidden flex-col gap-0.5 text-sm @4xl:flex"
+            data-testid="welcome-step-names"
+          >
+            {STEP_IDS.map((step, at) => {
+              const open = at === current;
+              const passed = at < current || reachable.includes(step);
+              const canOpen = !open && passed;
+              const mark = (
                 <span
-                  aria-current={open ? "step" : undefined}
+                  aria-hidden="true"
                   className={cn(
-                    STEP_LABEL,
-                    open
-                      ? "font-semibold text-foreground"
-                      : "text-muted-foreground",
+                    "grid size-5 shrink-0 place-items-center rounded-full border text-[0.625rem] tabular-nums",
+                    open && "border-primary bg-primary text-primary-foreground",
+                    !open && passed && "border-success/30 bg-success/10",
                   )}
                 >
-                  {STEP_NAMES[step]}
+                  {!open && passed ? (
+                    <Check className="size-3 text-success" />
+                  ) : (
+                    at + 1
+                  )}
                 </span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
+              );
+              return (
+                <li key={step} className="flex">
+                  {canOpen ? (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className={cn(
+                        "h-auto justify-start font-normal text-muted-foreground",
+                        STEP_LABEL,
+                      )}
+                      onClick={() => {
+                        onOpen(step);
+                      }}
+                    >
+                      {mark}
+                      {STEP_NAMES[step]}
+                    </Button>
+                  ) : (
+                    <span
+                      aria-current={open ? "step" : undefined}
+                      className={cn(
+                        STEP_LABEL,
+                        open
+                          ? "bg-muted font-medium text-foreground"
+                          : "text-muted-foreground",
+                      )}
+                    >
+                      {mark}
+                      {STEP_NAMES[step]}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </nav>
+      </CardContent>
+    </Card>
   );
 }

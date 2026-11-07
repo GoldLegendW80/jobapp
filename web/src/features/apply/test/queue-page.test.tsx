@@ -1,11 +1,12 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fakeAnswer, leftAnswer } from "@/test/apply";
 import { fakeQueue, queueItem } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
+import { connected, fakeScreens } from "@/test/browser";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -93,7 +94,7 @@ describe("the review queue page", () => {
     expect(
       within(queued).queryByRole("button", { name: "Approve and submit" }),
     ).toBeNull();
-    expect(document.title).toMatch(/^Application queue/);
+    expect(document.title).toMatch(/^Applications ·/);
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
 
@@ -372,7 +373,7 @@ describe("the review queue page", () => {
       ).toBeNull();
     });
     expect(
-      screen.getByRole("heading", { name: "Application queue" }),
+      screen.getByRole("heading", { level: 1, name: "Applications" }),
     ).toHaveFocus();
 
     // The next one opens with the box clear again: skipping is never carried over.
@@ -492,7 +493,7 @@ describe("the review queue page", () => {
       ).toBeNull();
     });
     expect(
-      screen.getByRole("heading", { name: "Application queue" }),
+      screen.getByRole("heading", { level: 1, name: "Applications" }),
     ).toHaveFocus();
 
     const second = card("Robotics Engineer 2");
@@ -578,10 +579,10 @@ describe("the review queue page", () => {
     const user = userEvent.setup();
     renderApp(PATH);
     await screen.findByText(/The queue could not be loaded/);
-    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
     await screen.findByText(/Your queue is empty/);
     expect(
-      within(screen.getByRole("main")).getByRole("link", { name: "Jobs" }),
+      within(screen.getByRole("main")).getByRole("link", { name: "Open Jobs" }),
     ).toHaveAttribute("href", "/jobs");
   });
 });
@@ -745,5 +746,66 @@ describe("the app shell's Applications link", () => {
     expect(
       await within(nav).findByRole("link", { name: "Applications" }),
     ).toHaveAttribute("href", PATH);
+  });
+});
+
+describe("the live views of the applications under way", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const live = (title: string) => `Live view of your browser: ${title}`;
+
+  it("shows the browser of the application being filled and of the one being sent, each named by its posting", async () => {
+    const opened = fakeScreens();
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json(browserOf(FILL_ACTIVE)),
+      ),
+    );
+    fakeQueue([
+      queueItem(1, "filling", { mode: "direct" }),
+      queueItem(2, "approved"),
+      queueItem(3, "ready"),
+    ]);
+    renderApp(PATH);
+    const under = await screen.findByRole("region", { name: /^Under way/ });
+    expect(
+      within(under).queryByRole("list", {
+        name: "Applications in your browser",
+      }),
+    ).toBeNull();
+    await userEvent
+      .setup()
+      .click(within(under).getByRole("button", { name: "Watch the browser" }));
+    const views = await within(under).findByRole("list", {
+      name: "Applications in your browser",
+    });
+    expect(within(views).getAllByRole("listitem")).toHaveLength(2);
+    await connected(opened);
+    const filling = within(views).getByRole("region", {
+      name: live("Robotics Engineer 1"),
+    });
+    expect(filling).toHaveTextContent("Example Robotics");
+    within(filling).getByRole("button", { name: "Use the browser myself" });
+    expect(
+      within(views).getByRole("region", { name: live("Robotics Engineer 2") }),
+    ).toHaveTextContent("Waiting for your browser.");
+  });
+
+  it.each([
+    ["Apply myself", queueItem(1, "filling", { mode: "manual" })],
+    ["an application by e-mail", queueItem(1, "filling", { ats: "email" })],
+    ["one in its hold", queueItem(1, "held", { mode: "full_auto" })],
+    ["one waiting for its documents", queueItem(1, "queued")],
+  ])("shows none for %s", async (_, item) => {
+    const opened = fakeScreens();
+    fakeQueue([item]);
+    renderApp(PATH);
+    await screen.findByRole("article", { name: /Robotics Engineer 1/ });
+    expect(
+      screen.queryByRole("button", { name: "Watch the browser" }),
+    ).toBeNull();
+    expect(opened).toHaveLength(0);
   });
 });

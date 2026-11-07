@@ -90,10 +90,9 @@ function gmail(
 
 async function card() {
   const title = await screen.findByRole("heading", { name: "Gmail" });
-  const found = title.closest<HTMLElement>(
-    "[aria-labelledby='gmail-card-title']",
-  );
-  if (!found) throw new Error("the Gmail card is not labelled by its title");
+  const found = screen.getByRole("region", { name: "Gmail" });
+  if (!found.contains(title))
+    throw new Error("the Gmail section is not labelled by its title");
   return within(found);
 }
 

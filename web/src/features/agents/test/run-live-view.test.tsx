@@ -419,7 +419,7 @@ describe("a running website search", () => {
     renderApp(`/runs/${ID}`);
     await connected(opened);
     await panel();
-    const title = screen.getByTestId("run-title");
+    const title = screen.getByRole("heading", { level: 1 });
     act(() => {
       title.focus();
     });

@@ -17,9 +17,9 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
 /**
  * Documents D16 against the real stack through Caddy, the worker and the real renderer, no
  * mocks, one fresh account and only invented data: a posting's CV rendered once through the api
- * (as D12's journey ends), then, through the page, its summary changed in the Edit view with the
+ * (as D12's journey ends), then, through the page, its summary changed where it is read with the
  * template's counter, saved by itself and drawn as version 2; then version 1 restored into the
- * draft and approved from the version history of the See view. The Edit view and the history
+ * draft and approved from the version history beside it. The open summary and the history
  * are checked on a phone and a desktop viewport for horizontal overflow (`makeShots`).
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
@@ -75,9 +75,10 @@ test("a posting's CV is rendered once", async () => {
   firstSummary = String(rendered.draft.summary);
 });
 
-test("the summary changed in the Edit view is counted, saved by itself and drawn", async () => {
+test("the summary changed where it is read is counted, saved by itself and drawn", async () => {
   await page.goto(`/jobs/${postingId}/documents/cv`);
-  await page.getByRole("tab", { name: "Edit" }).click();
+  // The page is edited where it is read: a click on the summary puts its field in its place.
+  await page.getByRole("button", { name: "Edit the summary" }).click();
   const summary = page.getByLabel("Summary", { exact: true });
   await expect(summary).toHaveValue(firstSummary);
   await expect(summary).toHaveAccessibleDescription(
@@ -106,7 +107,6 @@ test("the summary changed in the Edit view is counted, saved by itself and drawn
 });
 
 test("version 1 is restored into the draft and approved from the history", async () => {
-  await page.getByRole("tab", { name: "See" }).click();
   const history = page.getByRole("region", { name: "Versions" });
   await history.getByRole("button", { name: "Restore version 1" }).click();
   const dialog = page.getByRole("alertdialog", {
@@ -134,7 +134,7 @@ test("version 1 is restored into the draft and approved from the history", async
   await expect(history).toContainText("approved");
   await makeShots(EVIDENCE, "d16")(page, "history");
 
-  await page.getByRole("tab", { name: "Edit" }).click();
+  await page.getByRole("button", { name: "Edit the summary" }).click();
   await expect(page.getByLabel("Summary", { exact: true })).toHaveValue(
     firstSummary,
   );

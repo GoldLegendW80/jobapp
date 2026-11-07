@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
 import { waitForOnFakeClock } from "@/test/clock";
-import { fakeEditableJob, makeDetail, unfoldPostingMore } from "@/test/jobs";
+import { fakeEditableJob, makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 
 import { NOTES_DEBOUNCE_MS, STALE_MESSAGE } from "../api/use-job-editor";
@@ -22,8 +22,6 @@ const PATH = `/jobs/${JOB_ID}`;
 
 beforeEach(() => {
   fakeSession(admin);
-  // Status, fit and notes live under "More about this posting", opened here.
-  unfoldPostingMore();
 });
 
 afterEach(() => {
@@ -42,7 +40,8 @@ const history = () =>
   within(screen.getByRole("list", { name: "History, newest first" }))
     .getAllByRole("listitem")
     .map((li) => li.firstElementChild?.nextSibling?.textContent);
-const badge = () => document.querySelector("header [data-status]");
+const badge = () =>
+  screen.getByTestId("posting-badges").querySelector("[data-status]");
 
 describe("status", () => {
   it("changes at once, sends the version it read, and the history follows", async () => {
@@ -410,7 +409,10 @@ describe("edit details", () => {
       updated_at: "2026-10-09T08:00:00Z",
     });
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText("Mistral AI")).toBeVisible();
+    // The line under the title: the company, the place and the pay.
+    const line = screen.getByRole("heading", { level: 1 }).nextElementSibling;
+    expect(line).toHaveTextContent(/^Mistral AI, /);
+    expect(line).toBeVisible();
     await waitFor(() => {
       expect(history()[0]).toBe("Edited the company, contract type, link");
     });

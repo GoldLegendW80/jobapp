@@ -40,9 +40,11 @@ export function HistoryBody({
         )}
       >
         {selected === undefined ? (
-          <p className="text-sm text-muted-foreground">
-            Choose a version to compare it with the current one.
-          </p>
+          versions.items.length > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Choose a version to compare it with the current one.
+            </p>
+          ) : null
         ) : (
           <VersionComparison
             key={selected}

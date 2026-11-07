@@ -35,11 +35,11 @@ export function StepSummary({
   const places = sweepCoverage(search);
   return (
     <div className="flex flex-col gap-4">
-      <dl className="flex flex-col gap-3">
+      <dl className="flex flex-col divide-y">
         {STEP_IDS.filter((step) => step !== "summary").map((step) => (
           <div
             key={step}
-            className="flex items-start justify-between gap-3 rounded-md border px-3 py-2"
+            className="flex items-start justify-between gap-3 py-3 first:pt-0"
             data-simple-card
           >
             <div className="flex min-w-0 flex-col">

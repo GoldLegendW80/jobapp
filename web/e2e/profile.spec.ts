@@ -26,9 +26,10 @@ async function shots(page: Page, name: string, fullPage = true) {
 
 /**
  * The profile page against the real stack through Caddy: no mocks. A fresh account gets a made
- * up profile through the operator CLI (never Harald's data), then the journey edits Identity
- * (with a cropped photo), Experience and Answers, reloads, saves the same section from two
- * browsers (409), and checks the unsaved changes guard.
+ * up profile through the operator CLI (never Harald's data), finds every section on one page,
+ * then the journey edits Contact and links (with a cropped photo), Experience and the answers of
+ * About you (fields without a model key, owner 2026-11-07), reloads, saves the same section from two browsers (409), and checks the
+ * unsaved changes guard.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8094 docker compose -p jobapp-p4 -f compose.yml -f compose.mac.yml up -d --build --wait
@@ -206,23 +207,20 @@ function gradientPng(width = 600, height = 400): Buffer {
   ]);
 }
 
-const TABS = ["Identity", "Experience", "Facts", "Skills", "Answers"];
-const tab = (page: Page, name: string) =>
-  page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
-
-async function openTab(page: Page, name: string) {
-  // The search is in Settings, Search (owner, 2026-11-05); the other sections in the classic
-  // editor's tabs.
-  if (name === "Search") {
+/** The profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
+async function visit(page: Page, where: "profile" | "search") {
+  if (where === "search") {
     await page.goto("/settings/search");
     await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
     return;
   }
-  if ((await tab(page, name).count()) === 0)
-    await page.goto(`/profile?tab=${name.toLowerCase()}`);
-  await tab(page, name).click();
-  await expect(tab(page, name)).toHaveAttribute("aria-selected", "true");
+  if (!new URL(page.url()).pathname.endsWith("/profile"))
+    await page.goto("/profile");
+  await expect(page.getByRole("form", { name: "Identity" })).toBeVisible();
 }
+
+const part = (page: Page, name: string) =>
+  page.getByRole("region", { name, exact: true });
 
 async function save(page: Page, section: string) {
   await page
@@ -246,7 +244,7 @@ test.afterAll(async () => {
   clearAttempts([EMAIL]);
 });
 
-test("a new account gets a profile through the CLI and sees every tab", async () => {
+test("a new account gets a profile through the CLI and sees every section", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   const output = importProfile(EMAIL);
@@ -260,43 +258,41 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
   await expect(
     page.getByRole("heading", { level: 1, name: "Profile" }),
   ).toBeVisible();
-  // The one page profile (owner, 2026-11-05): Ready for in place of the bar, and the classic
-  // tabs under More for one release.
+  // One page, no tabs: Ready for and the completeness in the side rail.
+  await expect(page.getByRole("tab")).toHaveCount(0);
   await expect(page.getByRole("list", { name: "Ready for" })).toContainText(
     "Scoring postings",
   );
-  await page.getByRole("button", { name: "More", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Classic editor" }).click();
-  await expect(page).toHaveURL(/\/profile\?tab=identity$/);
-  await expect(
-    page.getByRole("progressbar", { name: "Profile completeness" }),
-  ).toHaveAttribute("aria-valuenow", "100");
-  for (const name of TABS) await expect(tab(page, name)).toBeVisible();
+  await expect(page.getByTestId("profile-completeness")).toHaveText(
+    "100% complete",
+  );
+  for (const name of [
+    "Your CVs",
+    "Upload your CV",
+    "Experience and education",
+    "About you",
+    "Advanced matching",
+    "Contact and links",
+  ])
+    await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
 
   await expect(page.getByLabel("Full name", { exact: true })).toHaveValue(NAME);
   await expect(page.getByLabel("Language 2", { exact: true })).toHaveValue(
     "English",
   );
-  await shots(page, "identity");
-
-  await openTab(page, "Experience");
   await expect(
     page.getByLabel("Organisation of employer 1", { exact: true }),
   ).toHaveValue("Acme Robotics");
   await expect(
     page.getByLabel("Present at employer 1", { exact: true }),
   ).toBeChecked();
-  await shots(page, "experience");
+  await shots(page, "profile");
 
-  await openTab(page, "Facts");
-  await page.getByRole("button", { name: "WHAT ROBIN BUILT, block 1" }).click();
+  // The facts are parts of About you, drawn by the safe renderer.
   await expect(
-    page
-      .getByRole("region", { name: "Preview of block 1" })
-      .getByRole("link", { name: "the portfolio" }),
+    part(page, "WHAT ROBIN BUILT").getByRole("link", { name: "the portfolio" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "HOSTILE BLOCK, block 2" }).click();
-  const hostile = page.getByRole("region", { name: "Preview of block 2" });
+  const hostile = part(page, "HOSTILE BLOCK");
   await expect(
     hostile.getByText("<script>window.__xss = 1</script>"),
   ).toBeVisible();
@@ -304,33 +300,40 @@ test("a new account gets a profile through the CLI and sees every tab", async ()
     await page.evaluate(() => (window as { __xss?: number }).__xss),
   ).toBeUndefined();
   expect(await hostile.locator("script, img").count()).toBe(0);
-  await shots(page, "facts");
 
-  await openTab(page, "Skills");
+  // The skills in words are About you's, as fields without a model key; the regular expression
+  // stays in Advanced matching.
+  const skills = page.getByRole("form", { name: "Skills" });
+  await skills.getByRole("button", { name: "What I have, agents" }).click();
   await expect(
-    page.getByRole("list", { name: "Terms of agents" }),
+    skills.getByRole("list", { name: "Terms of agents" }),
   ).toContainText("langgraph");
-  await shots(page, "skills");
+  await expect(
+    page
+      .getByRole("form", { name: "Advanced matching" })
+      .getByRole("list", { name: "Terms of llm" }),
+  ).toContainText("\\bllm\\b");
+  const answers = page.getByRole("form", { name: "Answers" });
+  await answers
+    .getByRole("button", { name: /^Availability and conditions,/ })
+    .click();
+  await expect(
+    answers.getByLabel("Notice period", { exact: true }),
+  ).toHaveValue("One month.");
 
-  // Searches run the job websites ticked in Find jobs (owner, 2026-10-28): the tab shows no
-  // company boards.
-  await openTab(page, "Search");
+  // Searches run the job websites ticked in Find jobs (owner, 2026-10-28): Settings, Search
+  // shows no company boards.
+  await visit(page, "search");
   await expect(
     page.getByText("Searches run the job websites ticked in Find jobs."),
   ).toBeVisible();
   await expect(page.getByRole("table", { name: "Boards" })).toHaveCount(0);
   await shots(page, "search");
-
-  await openTab(page, "Answers");
-  await expect(page.getByLabel("Notice period", { exact: true })).toHaveValue(
-    "One month.",
-  );
-  await shots(page, "answers");
   expect(errors).toEqual([]);
 });
 
-test("Identity: edit, crop and upload a photo, save", async () => {
-  await openTab(page, "Identity");
+test("Contact and links: edit, crop and upload a photo, save", async () => {
+  await visit(page, "profile");
   await page
     .getByLabel("Headline", { exact: true })
     .fill("Senior Applied AI Engineer");
@@ -373,7 +376,7 @@ test("Identity: edit, crop and upload a photo, save", async () => {
 });
 
 test("Experience: add an employer, reorder, save", async () => {
-  await openTab(page, "Experience");
+  await visit(page, "profile");
   await page.getByRole("button", { name: "Add employer" }).click();
   await page
     .getByLabel("Organisation of employer 3", { exact: true })
@@ -402,34 +405,29 @@ test("Experience: add an employer, reorder, save", async () => {
   expect(errors).toEqual([]);
 });
 
-test("Answers: edit and save", async () => {
-  await openTab(page, "Answers");
-  await page
-    .getByLabel("Motivation", { exact: true })
-    .fill("I ship prototypes that become products.\nThen I measure them.");
-  await page.getByRole("button", { name: "Add country" }).click();
-  await page
-    .getByLabel("Country or region 2", { exact: true })
-    .fill("Switzerland");
-  await page
-    .getByLabel("Answer for country 2", { exact: true })
-    .fill("A permit would be needed.");
-  await page
-    .getByLabel("Needs visa sponsorship in country 2", { exact: true })
-    .selectOption("yes");
+test("About you without a model key: an answer is a field, saved with the answers", async () => {
+  await visit(page, "profile");
+  const answers = page.getByRole("form", { name: "Answers" });
+  await answers.getByRole("button", { name: /^In your own words,/ }).click();
+  const motivation = answers.getByLabel("Motivation", { exact: true });
+  await expect(motivation).toHaveValue(
+    "I like turning prototypes into products people use.",
+  );
+  await motivation.fill(
+    "I ship prototypes that become products.\n\nThen I measure them.",
+  );
   await save(page, "Answers");
   expect(errors).toEqual([]);
 });
 
 test("a reload shows every saved change", async () => {
-  await page.goto("/profile?tab=identity");
+  await page.goto("/profile");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Senior Applied AI Engineer",
   );
   await expect(
     page.getByRole("img", { name: "Your profile photo" }),
   ).toBeVisible();
-  await openTab(page, "Experience");
   await expect(
     page.getByLabel("Organisation of employer 1", { exact: true }),
   ).toHaveValue("Acme Robotics");
@@ -442,13 +440,11 @@ test("a reload shows every saved change", async () => {
   await expect(
     page.getByLabel("Contract at employer 2", { exact: true }),
   ).toHaveValue("internship");
-  await openTab(page, "Answers");
-  await expect(page.getByLabel("Motivation", { exact: true })).toHaveValue(
-    "I ship prototypes that become products.\nThen I measure them.",
+  const answers = page.getByRole("form", { name: "Answers" });
+  await answers.getByRole("button", { name: /^In your own words,/ }).click();
+  await expect(answers.getByLabel("Motivation", { exact: true })).toHaveValue(
+    "I ship prototypes that become products.\n\nThen I measure them.",
   );
-  await expect(
-    page.getByLabel("Needs visa sponsorship in country 2", { exact: true }),
-  ).toHaveValue("yes");
   expect(errors).toEqual([]);
 });
 
@@ -460,8 +456,8 @@ test("saving the same section from two browsers shows the conflict dialog", asyn
   const secondErrors = watchErrors(second);
   await signIn(second, EMAIL, PASSWORD);
   await expect(second).toHaveURL(/\/jobs$/);
-  await second.goto("/profile?tab=identity");
-  await page.goto("/profile?tab=identity");
+  await second.goto("/profile#contact");
+  await page.goto("/profile");
   await expect(second.getByLabel("City", { exact: true })).toHaveValue(
     "Nantes",
   );
@@ -500,31 +496,37 @@ test("saving the same section from two browsers shows the conflict dialog", asyn
   expect(errors).toEqual([]);
 });
 
-test("unsaved changes: switching tab and leaving the page ask first", async () => {
-  await page.goto("/profile?tab=identity");
+test("unsaved changes: leaving the page asks first, a place on the page does not", async () => {
+  await page.goto("/profile");
   await page.getByLabel("Headline", { exact: true }).fill("Not saved yet");
   await expect(page.getByText("Unsaved changes")).toBeVisible();
 
-  await tab(page, "Experience").click();
+  // A link to a place on the page only changes the hash: nothing is left, nothing asked.
   const guard = page.getByRole("alertdialog", {
     name: "Discard unsaved changes?",
   });
-  await expect(guard).toBeVisible();
-  await shots(page, "unsaved-guard", false);
-  await guard.getByRole("button", { name: "Keep editing" }).click();
-  await expect(tab(page, "Identity")).toHaveAttribute("aria-selected", "true");
+  await page
+    .getByRole("navigation", { name: "Parts of About you" })
+    .getByRole("link", { name: "Answers" })
+    .click();
+  await expect(page).toHaveURL(/\/profile#about-answers$/);
+  await expect(guard).toHaveCount(0);
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Not saved yet",
   );
 
   await page.getByRole("link", { name: "jobapp" }).click();
   await expect(guard).toBeVisible();
+  await shots(page, "unsaved-guard", false);
   await guard.getByRole("button", { name: "Keep editing" }).click();
-  await expect(page).toHaveURL(/\/profile\?tab=identity$/);
+  await expect(page).toHaveURL(/\/profile(#[\w-]+)?$/);
+  await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
+    "Not saved yet",
+  );
 
   // Closing the tab asks the browser's own question.
   const closing = await context.newPage();
-  await closing.goto("/profile?tab=identity");
+  await closing.goto("/profile");
   await closing.getByLabel("Headline", { exact: true }).fill("Also not saved");
   const asked = new Promise<string>((resolve) => {
     closing.once("dialog", (d) => {
@@ -538,7 +540,7 @@ test("unsaved changes: switching tab and leaving the page ask first", async () =
   await page.getByRole("link", { name: "jobapp" }).click();
   await guard.getByRole("button", { name: "Discard changes" }).click();
   await expect(page).toHaveURL(/\/jobs$/);
-  await page.goto("/profile?tab=identity");
+  await page.goto("/profile");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Senior Applied AI Engineer",
   );

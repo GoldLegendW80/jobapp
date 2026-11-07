@@ -9,10 +9,13 @@ export function RunJobLink({ run }: { run: Run }) {
     return (
       <Link
         to={`/jobs/${run.job.id}`}
-        className="inline-flex w-fit min-w-0 items-center gap-1 text-sm underline underline-offset-4"
+        className="inline-flex w-fit min-w-0 items-baseline gap-1.5 text-sm underline underline-offset-4"
       >
-        <Briefcase aria-hidden="true" className="size-3.5 shrink-0" />
-        <span className="truncate">
+        <Briefcase
+          aria-hidden="true"
+          className="size-3.5 shrink-0 translate-y-0.5"
+        />
+        <span className="break-words">
           {run.job.title} at {run.job.company}
         </span>
       </Link>

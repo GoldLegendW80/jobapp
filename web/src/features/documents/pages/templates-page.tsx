@@ -1,20 +1,18 @@
-import { ArrowLeft, Check, RotateCw, SearchX } from "lucide-react";
+import { Check, FileText, Mail, SearchX } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useSearchParams } from "react-router";
 
+import { EmptyState } from "@/components/blocks/empty-state";
+import { LoadError } from "@/components/blocks/load-error";
+import { Page, PageBody } from "@/components/blocks/page";
 import { PageHeader } from "@/components/blocks/page-header";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Section } from "@/components/blocks/section";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Empty,
-  EmptyContent,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import {
   Field,
   FieldLabel,
@@ -22,11 +20,16 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Spinner } from "@/components/ui/spinner";
-import { describeError } from "@/lib/api";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Toggle } from "@/components/ui/toggle";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { formatCount } from "@/lib/format";
 import { useTitle } from "@/hooks/use-title";
-import { WORDING, templateTagWord } from "@/lib/wording";
+import { WORDING } from "@/lib/wording";
 
 import {
   failureSentence,
@@ -41,6 +44,7 @@ import {
   COLUMNS_OPTIONS,
   descriptionOf,
   documentPath,
+  factsOf,
   galleryLanguage,
   isFiltered,
   matches,
@@ -56,10 +60,10 @@ import {
 
 /**
  * /documents/templates: every template the api serves, the person's own under "From your CV"
- * first, with names, descriptions and tags, filters (photo, columns, easy for hiring software to read), and the letter
- * on hover or tap. Opened from a document (`?document=<id>`), each offers "Use for this document",
- * which switches that document (a base CV's template is what the CVs written from it afterwards
- * take).
+ * first, with names, descriptions and what helps choose (columns, photo, easy for hiring
+ * software to read), filters, and the letter on hover or tap. Opened from a document
+ * (`?document=<id>`), each offers "Use for this document", which switches that document (a base
+ * CV's template is what the CVs written from it afterwards take).
  */
 export function TemplatesPage() {
   useTitle("Templates");
@@ -70,18 +74,17 @@ export function TemplatesPage() {
   const target = useDocument(documentId, { enabled: documentId !== "" });
   const document = target.data;
   const language = galleryLanguage(document?.language);
+  const all = templates.data ? ordered(templates.data) : undefined;
+  const shown = all?.filter((one) => matches(one, filters));
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
-      {document ? (
-        <Button asChild variant="ghost" size="sm" className="w-fit">
-          <Link to={documentPath(document)}>
-            <ArrowLeft aria-hidden="true" />
-            Back to the document
-          </Link>
-        </Button>
-      ) : null}
+    <Page>
       <PageHeader
+        trail={
+          document
+            ? [{ to: documentPath(document), label: crumbName(document) }]
+            : undefined
+        }
         title="Templates"
         description={
           document
@@ -89,52 +92,49 @@ export function TemplatesPage() {
             : "The looks a CV and its letter can take. Open a document and choose Template to use one."
         }
       />
-      {documentId !== "" && target.isError ? (
-        <Alert>
-          <AlertDescription>
+      <PageBody>
+        {documentId !== "" && target.isError ? (
+          <LoadError query={target}>
             The document this gallery was opened from could not be loaded, so no
-            template can be used from here. {describeError(target.error)}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-      <FilterBar filters={filters} onChange={setFilters} />
-      {templates.isPending ? (
-        <p
-          role="status"
-          className="flex items-center gap-2 text-sm text-muted-foreground"
-        >
-          <Spinner aria-hidden="true" role={undefined} />
-          Loading the templates
-        </p>
-      ) : templates.isError ? (
-        <Alert variant="destructive">
-          <AlertTitle>The templates could not be loaded</AlertTitle>
-          <AlertDescription className="flex flex-col gap-3">
-            <p>{describeError(templates.error)}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-fit"
-              onClick={() => void templates.refetch()}
-            >
-              <RotateCw aria-hidden="true" />
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <Gallery
-          templates={ordered(templates.data)}
-          filters={filters}
-          language={language}
-          document={document}
-          onClear={() => {
-            setFilters(NO_FILTERS);
-          }}
-        />
-      )}
-    </div>
+            template can be used from here.
+          </LoadError>
+        ) : null}
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+          <FilterBar filters={filters} onChange={setFilters} />
+          {all && shown ? (
+            <p className="text-sm text-muted-foreground" aria-live="polite">
+              {isFiltered(filters)
+                ? `${formatCount(shown.length)} of ${formatCount(all.length)} templates match.`
+                : `${formatCount(all.length)} templates.`}
+            </p>
+          ) : null}
+        </div>
+        {templates.isPending ? (
+          <GalleryLoading />
+        ) : templates.isError ? (
+          <LoadError query={templates}>
+            The templates could not be loaded.
+          </LoadError>
+        ) : (
+          <Gallery
+            templates={all ?? []}
+            shown={shown ?? []}
+            language={language}
+            document={document}
+            onClear={() => {
+              setFilters(NO_FILTERS);
+            }}
+          />
+        )}
+      </PageBody>
+    </Page>
   );
+}
+
+/** The document the gallery was opened from, as the breadcrumb names it. */
+function crumbName(document: DocumentOut): string {
+  if (document.scope === "base") return document.name || "CV";
+  return document.kind === "cv" ? "CV" : "Letter";
 }
 
 function documentName(document: DocumentOut): string {
@@ -154,13 +154,14 @@ function FilterBar({
   const columnsId = useId();
   const atsId = useId();
   return (
-    <FieldSet className="flex-row flex-wrap items-end gap-4">
+    <FieldSet className="flex-row flex-wrap items-center gap-x-6 gap-y-3">
       <FieldLegend className="sr-only">Filters</FieldLegend>
-      <Field className="w-40 gap-1">
+      <Field orientation="horizontal" className="w-auto gap-2">
         <FieldLabel htmlFor={photoId}>Photo</FieldLabel>
         <NativeSelect
           id={photoId}
           value={filters.photo}
+          className="w-36"
           onChange={(event) => {
             onChange({
               ...filters,
@@ -175,11 +176,12 @@ function FilterBar({
           ))}
         </NativeSelect>
       </Field>
-      <Field className="w-40 gap-1">
+      <Field orientation="horizontal" className="w-auto gap-2">
         <FieldLabel htmlFor={columnsId}>Columns</FieldLabel>
         <NativeSelect
           id={columnsId}
           value={filters.columns}
+          className="w-36"
           onChange={(event) => {
             onChange({
               ...filters,
@@ -194,7 +196,7 @@ function FilterBar({
           ))}
         </NativeSelect>
       </Field>
-      <Field orientation="horizontal" className="h-9 w-auto gap-2">
+      <Field orientation="horizontal" className="w-auto gap-2">
         <Checkbox
           id={atsId}
           checked={filters.ats}
@@ -208,21 +210,23 @@ function FilterBar({
   );
 }
 
+const GRID =
+  "grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6";
+
 function Gallery({
   templates,
-  filters,
+  shown,
   language,
   document,
   onClear,
 }: {
   templates: Template[];
-  filters: Filters;
+  shown: Template[];
   language: Language;
   document: DocumentOut | undefined;
   onClear: () => void;
 }) {
   const choose = useTemplateSwitch(document);
-  const shown = templates.filter((one) => matches(one, filters));
   const own = shown.filter((one) => one.user);
   const bundled = shown.filter((one) => !one.user);
   const used =
@@ -243,12 +247,7 @@ function Gallery({
   );
 
   return (
-    <div className="flex flex-col gap-6">
-      <p className="text-sm text-muted-foreground" aria-live="polite">
-        {isFiltered(filters)
-          ? `${formatCount(shown.length)} of ${formatCount(templates.length)} templates match.`
-          : `${formatCount(templates.length)} templates.`}
-      </p>
+    <>
       {used ? (
         <p role="status" className="text-sm font-medium">
           {nameOf(used, language)} is now used for this document.
@@ -263,56 +262,55 @@ function Gallery({
         </Alert>
       ) : null}
       {shown.length === 0 ? (
-        <Empty className="rounded-xl bg-card md:p-8">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <SearchX aria-hidden="true" />
-            </EmptyMedia>
-            <EmptyTitle className="text-base">
-              No template matches these filters.
-            </EmptyTitle>
-          </EmptyHeader>
-          <EmptyContent>
-            <Button variant="outline" size="sm" onClick={onClear}>
+        <EmptyState
+          icon={SearchX}
+          title="No template matches these filters"
+          actions={
+            <Button variant="outline" onClick={onClear}>
               Clear the filters
             </Button>
-          </EmptyContent>
-        </Empty>
+          }
+        />
       ) : null}
       {own.length > 0 ? (
-        <section
-          aria-labelledby="own-templates"
-          className="flex flex-col gap-3"
-        >
-          <h2 id="own-templates" className="text-lg font-medium tracking-tight">
-            From your CV
-          </h2>
+        <Section title="From your CV">
           <Grid>{own.map(card)}</Grid>
-        </section>
+        </Section>
       ) : null}
       {bundled.length > 0 ? (
-        <section
-          aria-labelledby="all-templates"
-          className="flex flex-col gap-3"
-        >
-          <h2 id="all-templates" className="text-lg font-medium tracking-tight">
-            All templates
-          </h2>
+        <Section title="All templates">
           <Grid>{bundled.map(card)}</Grid>
-        </section>
+        </Section>
       ) : null}
-    </div>
+    </>
   );
 }
 
 function Grid({ children }: { children: ReactNode }) {
   return (
-    <ul
-      className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4"
-      data-testid="template-grid"
-    >
+    <ul className={GRID} data-testid="template-grid">
       {children}
     </ul>
+  );
+}
+
+/** The gallery's place while the templates load: grey cards in the same grid. */
+function GalleryLoading() {
+  return (
+    <div role="status" className="flex flex-col gap-4">
+      <span className="sr-only">Loading the templates</span>
+      <Skeleton className="h-6 w-32" />
+      <div aria-hidden="true" className={GRID}>
+        {[0, 1, 2, 3, 4].map((one) => (
+          <Card key={one} className="gap-3 p-3">
+            <AspectRatio ratio={210 / 297}>
+              <Skeleton className="size-full" />
+            </AspectRatio>
+            <Skeleton className="h-4 w-24" />
+          </Card>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -337,6 +335,7 @@ function TemplateCard({
   const letter = hasLetter && (hover || pinned);
   const inUse = document?.template_slug === template.slug;
   const description = descriptionOf(template, language);
+  const toggle = pinned ? "See the CV" : "See the letter";
 
   return (
     <li
@@ -344,74 +343,78 @@ function TemplateCard({
       className="flex min-w-0"
       data-testid={`template-${template.slug}`}
     >
-      <Card className="w-full min-w-0 gap-2 p-3">
-        <div
-          onMouseEnter={() => {
-            setHover(true);
-          }}
-          onMouseLeave={() => {
-            setHover(false);
-          }}
-        >
-          <Thumbnail
-            template={template}
-            kind={letter ? "letter" : "cv"}
-            alt={letter ? `${name}, the letter` : `${name}, the CV`}
-          />
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 id={headingId} className="font-semibold">
-            {name}
-          </h3>
-          {inUse ? (
-            <Badge variant="secondary">
-              <Check aria-hidden="true" />
-              In use
-            </Badge>
-          ) : null}
-        </div>
-        {template.user ? (
-          <p className="text-xs text-muted-foreground">From your CV</p>
-        ) : null}
-        {description ? (
-          <p className="text-sm text-muted-foreground">{description}</p>
-        ) : null}
-        {template.tags.length > 0 ? (
-          <ul
-            aria-label={`Tags of ${name}`}
-            className="flex min-w-0 flex-wrap gap-1"
+      <Card className="w-full min-w-0 gap-3 p-3">
+        <div className="relative">
+          {/* A peek at the letter: the toggle below sits outside it, so it shows what it pins. */}
+          <div
+            onMouseEnter={() => {
+              setHover(true);
+            }}
+            onMouseLeave={() => {
+              setHover(false);
+            }}
           >
-            {template.tags.map((tag) => (
-              <li key={tag} className="max-w-full min-w-0">
-                <Badge
-                  variant="outline"
-                  className="max-w-full whitespace-normal"
-                >
-                  {templateTagWord(tag)}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        <div className="mt-auto flex flex-wrap gap-2">
+            <Thumbnail
+              template={template}
+              kind={letter ? "letter" : "cv"}
+              alt={letter ? `${name}, the letter` : `${name}, the CV`}
+            />
+          </div>
           {hasLetter ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-pressed={pinned}
-              onClick={() => {
-                setPinned((value) => !value);
-              }}
-            >
-              {pinned ? "See the CV" : "See the letter"}
-            </Button>
-          ) : null}
-          {document && !inUse ? (
-            <Button size="sm" disabled={busy} onClick={onUse}>
-              Use for this document
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Toggle
+                  size="sm"
+                  variant="outline"
+                  className="absolute right-2 bottom-2 bg-card shadow-sm"
+                  aria-label={toggle}
+                  pressed={pinned}
+                  onPressedChange={setPinned}
+                >
+                  {pinned ? (
+                    <FileText aria-hidden="true" />
+                  ) : (
+                    <Mail aria-hidden="true" />
+                  )}
+                </Toggle>
+              </TooltipTrigger>
+              <TooltipContent>{toggle}</TooltipContent>
+            </Tooltip>
           ) : null}
         </div>
+        <div className="flex min-w-0 flex-col gap-1 px-1">
+          <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+            <h3 id={headingId} className="font-medium">
+              {name}
+            </h3>
+            {inUse ? (
+              <Badge variant="success">
+                <Check aria-hidden="true" />
+                In use
+              </Badge>
+            ) : null}
+          </div>
+          {description ? (
+            <p className="text-sm text-muted-foreground">{description}</p>
+          ) : null}
+          <p
+            data-testid="template-facts"
+            className="text-xs text-muted-foreground"
+          >
+            {factsOf(template)}
+          </p>
+        </div>
+        {document && !inUse ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-auto w-full"
+            disabled={busy}
+            onClick={onUse}
+          >
+            Use for this document
+          </Button>
+        ) : null}
       </Card>
     </li>
   );

@@ -85,6 +85,12 @@ function agentsApi(
   return state;
 }
 
+/** The rows of the runs table, its header row left out. */
+async function runRows() {
+  const table = await screen.findByRole("table", { name: "Runs" });
+  return within(table).getAllByRole("row").slice(1);
+}
+
 beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
 });
@@ -114,18 +120,20 @@ describe("/runs", () => {
       ],
     });
     renderApp("/runs");
-    const list = await screen.findByRole("list", { name: "Runs" });
-    const items = within(list).getAllByRole("link");
+    const items = await runRows();
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Done");
     expect(items[0]).toHaveTextContent("4,520 in, 42 out");
     expect(items[0]).toHaveTextContent("$0.01");
     expect(items[0]).toHaveTextContent("4.2 s");
-    expect(items[0]).toHaveAttribute("href", `/runs/${ID}`);
+    expect(within(items[0]!).getByRole("link")).toHaveAttribute(
+      "href",
+      `/runs/${ID}`,
+    );
     expect(items[1]).toHaveTextContent("Failed");
     expect(items[1]).toHaveTextContent("limit of 4 turns");
     // The agent by name in words, never its id.
-    expect(items[0]).toHaveTextContent("Test agent");
+    expect(within(items[0]!).getByRole("link")).toHaveTextContent("Test agent");
     expect(items[0]).not.toHaveTextContent("echo");
     expect(document.title).toBe("Assistant activity · jobapp");
     expect(
@@ -153,14 +161,13 @@ describe("/runs", () => {
       ],
     });
     renderApp("/runs");
-    const list = await screen.findByRole("list", { name: "Runs" });
-    const [item] = within(list).getAllByRole("link");
+    const [item] = await runRows();
     expect(item).toHaveTextContent("Website search");
     expect(item).toHaveTextContent("The run reached its limit of turns.");
     expect(item).not.toHaveTextContent("max_turns");
   });
 
-  it("offers Try again when the activity could not be loaded", async () => {
+  it("offers Retry when the activity could not be loaded", async () => {
     agentsApi();
     let fail = true;
     server.use(
@@ -178,7 +185,7 @@ describe("/runs", () => {
       ),
     ).toBeVisible();
     fail = false;
-    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText(/No activity yet/)).toBeInTheDocument();
   });
 
@@ -439,13 +446,15 @@ describe("/runs/:id, the run panel", () => {
     expect(failed).toHaveTextContent("0 characters");
     expect(failed).toHaveTextContent("Tool error");
     for (const item of [call, result, hidden, failed]) {
-      expect(item.querySelector("[data-slot=collapsible]")).toBeNull();
+      expect(item.querySelector("[data-slot=trace-collapsible]")).toBeNull();
       expect(item.querySelector("pre")).toBeNull();
-      expect(within(item).queryByText("Show")).toBeNull();
+      expect(within(item).queryByRole("button")).toBeNull();
     }
     // A stored result keeps its disclosure and its text, folded until it is opened.
-    expect(stored.querySelector("[data-slot=collapsible]")).not.toBeNull();
-    const show = within(stored).getByRole("button", { name: "Show" });
+    expect(
+      stored.querySelector("[data-slot=trace-collapsible]"),
+    ).not.toBeNull();
+    const show = within(stored).getByRole("button", { name: "Tool result" });
     expect(show).toHaveAttribute("aria-expanded", "false");
     expect(stored.querySelector("pre")).toBeNull();
     await userEvent.setup().click(show);
@@ -515,7 +524,7 @@ describe("/runs/:id, the run panel", () => {
         within(panel).queryByRole("button", { name: /Cancel|Stopping/ }),
       ).not.toBeInTheDocument();
     });
-    expect(screen.getByTestId("run-title")).toHaveFocus();
+    expect(screen.getByRole("heading", { level: 1 })).toHaveFocus();
     expect(announcer).toHaveTextContent("Cancelled");
   });
 
@@ -651,7 +660,7 @@ describe("/runs/:id, the run panel", () => {
       source.emit("step", step(1, "status", { status: "running" }));
       source.emit("step", usage);
       const steps = await within(panel).findByRole("list", { name: "Steps" });
-      const metrics = panel.querySelector("dl")!;
+      const metrics = within(panel).getByTestId("run-facts");
       await waitFor(() => {
         expect(metrics).toHaveTextContent("$0.19");
       });
@@ -808,7 +817,7 @@ describe("/runs/:id, the run panel", () => {
       });
       renderApp(`/runs/${ID}`);
       const panel = await screen.findByTestId("run-panel");
-      const metrics = panel.querySelector("dl")!;
+      const metrics = within(panel).getByTestId("run-facts");
       expect(metrics).toHaveTextContent("CostNone yet");
       expect(within(panel).queryByTestId("cost-note")).not.toBeInTheDocument();
     });
@@ -830,8 +839,8 @@ describe("/runs/:id, the run panel", () => {
         ],
       });
       renderApp("/runs");
-      const list = await screen.findByRole("list", { name: "Runs" });
-      const costs = within(list)
+      const table = await screen.findByRole("table", { name: "Runs" });
+      const costs = within(table)
         .getAllByTestId("run-cost")
         .map((node) => node.textContent);
       expect(costs).toEqual([

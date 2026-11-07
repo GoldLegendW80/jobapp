@@ -428,9 +428,11 @@ describe("the CV tab", () => {
     fakeDocuments({ cvs: [fakeCv()] });
     renderApp("/profile/cv");
     const found = await screen.findByTestId("upload-panel");
+    // The section around the panel names it, and the panel is a region of that name.
     expect(
-      within(found).getByRole("heading", { name: "Upload your CV" }),
+      screen.getByRole("heading", { level: 2, name: "Upload your CV" }),
     ).toBeVisible();
+    expect(found).toHaveAccessibleName("Upload your CV");
     expect(found.textContent).not.toMatch(SEPARATOR);
   });
 });

@@ -55,9 +55,9 @@ export function QueueCardActions({
         </Button>
       ) : null}
       {item.state === "ready" && reviewable && !agentList ? (
-        <div className="flex w-full flex-col gap-1 sm:w-fit">
+        <>
           <Button
-            className="sm:w-fit"
+            className="w-full sm:w-fit"
             disabled={
               busy ||
               !approval ||
@@ -69,17 +69,18 @@ export function QueueCardActions({
           >
             Approve and submit
           </Button>
+          {/* On its own line after the buttons, so it never pushes them apart. */}
           {unsaved > 0 ? (
-            <p className="text-sm text-warning">
+            <p className="basis-full text-sm text-warning sm:order-last">
               Save your answers first: only saved answers are sent.
             </p>
           ) : blocking.length > 0 ? (
-            <p className="text-sm text-warning">
+            <p className="basis-full text-sm text-warning sm:order-last">
               Answer {blocking.map((answer) => answer.label).join(", ")} first:
               the form cannot go without it.
             </p>
           ) : null}
-        </div>
+        </>
       ) : null}
       {canReject(item) ? (
         <Button

@@ -1,8 +1,8 @@
-/** The CV tab's address, limits and the sentence of what a base CV is doing. */
+/** Your CVs' address, limits and the sentence of what a base CV is doing. */
 import type { BaseCv } from "../api/base-cvs-api";
 import { failedSentence, isOpen, WAIT_SENTENCES } from "./labels";
 
-/** The list of the CV tab; one CV opens at `${CV_LIST_PATH}/<id>`. */
+/** Your CVs on the profile (/profile/cv redirects there); one CV opens at `${CV_LIST_PATH}/<id>`. */
 export const CV_LIST_PATH = "/profile/cv";
 export const CV_NAME_MAX = 100;
 

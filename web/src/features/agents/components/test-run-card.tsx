@@ -1,16 +1,11 @@
-import { FlaskConical, Play } from "lucide-react";
+import { Play } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 
+import { Section } from "@/components/blocks/section";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -54,79 +49,76 @@ export function TestRunCard({ agents }: { agents: Agent[] }) {
       start.mutate({ agent, input: { message: message.trim(), script } });
   };
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <FlaskConical aria-hidden="true" className="size-4" />
-          Test run
-        </CardTitle>
-        <CardDescription>
-          Test agents exist only outside production. With the fake backend the
-          run replays the recorded stream you pick; with the real one, it calls
-          the model with your own credential.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
-          <Field className="gap-2">
-            <FieldLabel htmlFor={ids.agent}>Agent</FieldLabel>
-            <NativeSelect
-              id={ids.agent}
-              value={agent}
-              onChange={(e) => {
-                setAgent(e.target.value);
-              }}
-            >
-              {agents.map((a) => (
-                <option key={a.name} value={a.name}>
-                  {a.name}
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
-          <Field className="gap-2">
-            <FieldLabel htmlFor={ids.script}>Recorded stream</FieldLabel>
-            <NativeSelect
-              id={ids.script}
-              value={script}
-              onChange={(e) => {
-                setScript(e.target.value);
-              }}
-            >
-              {TEST_SCRIPTS.map(([name, label]) => (
-                <option key={name} value={name}>
-                  {label}
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
-          <Field className="gap-2 sm:col-span-2">
-            <FieldLabel htmlFor={ids.message}>Message</FieldLabel>
-            <Input
-              id={ids.message}
-              value={message}
-              maxLength={2000}
-              onChange={(e) => {
-                setMessage(e.target.value);
-              }}
-            />
-          </Field>
-          <div className="sm:col-span-2">
-            <Button
-              type="submit"
-              disabled={start.isPending || !message.trim() || !agent}
-              aria-busy={start.isPending}
-            >
-              {start.isPending ? (
-                <Spinner aria-hidden="true" role={undefined} />
-              ) : (
-                <Play aria-hidden="true" />
-              )}
-              Start test run
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+    <Section
+      title="Test run"
+      description="Test agents exist only outside production. With the fake backend the run replays the recorded stream you pick; with the real one, it calls the model with your own credential."
+    >
+      <Card>
+        <CardContent>
+          <form
+            onSubmit={submit}
+            className="grid max-w-3xl gap-4 sm:grid-cols-2"
+          >
+            <Field className="gap-2">
+              <FieldLabel htmlFor={ids.agent}>Agent</FieldLabel>
+              <NativeSelect
+                id={ids.agent}
+                value={agent}
+                onChange={(e) => {
+                  setAgent(e.target.value);
+                }}
+              >
+                {agents.map((a) => (
+                  <option key={a.name} value={a.name}>
+                    {a.name}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field className="gap-2">
+              <FieldLabel htmlFor={ids.script}>Recorded stream</FieldLabel>
+              <NativeSelect
+                id={ids.script}
+                value={script}
+                onChange={(e) => {
+                  setScript(e.target.value);
+                }}
+              >
+                {TEST_SCRIPTS.map(([name, label]) => (
+                  <option key={name} value={name}>
+                    {label}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field className="gap-2 sm:col-span-2">
+              <FieldLabel htmlFor={ids.message}>Message</FieldLabel>
+              <Input
+                id={ids.message}
+                value={message}
+                maxLength={2000}
+                onChange={(e) => {
+                  setMessage(e.target.value);
+                }}
+              />
+            </Field>
+            <div className="sm:col-span-2">
+              <Button
+                type="submit"
+                disabled={start.isPending || !message.trim() || !agent}
+                aria-busy={start.isPending}
+              >
+                {start.isPending ? (
+                  <Spinner aria-hidden="true" role={undefined} />
+                ) : (
+                  <Play aria-hidden="true" />
+                )}
+                Start test run
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+    </Section>
   );
 }

@@ -54,7 +54,7 @@ const badge = () => panel().locator("[data-slot=badge]");
 
 /** The "Step N of 30" answers shown, each must appear once. */
 async function slowSteps(): Promise<number[]> {
-  const texts = await steps().locator("li[data-kind=text]").allInnerTexts();
+  const texts = await steps().locator("[data-kind=text]").allInnerTexts();
   return texts
     .map((t) => /Step (\d+) of 30/.exec(t)?.[1])
     .filter((n): n is string => n !== undefined)
@@ -179,7 +179,7 @@ test("another run is cancelled from its panel", async () => {
   });
   await panel().getByRole("button", { name: "Cancel" }).click();
   await expect(badge()).toHaveText("Cancelled", { timeout: 15_000 });
-  await expect(steps().locator("li[data-kind=status]").last()).toContainText(
+  await expect(steps().locator("[data-kind=status]").last()).toContainText(
     "Cancelled",
   );
   await expect(
@@ -196,7 +196,7 @@ test("the first run ends with its tokens, cost and duration", async () => {
   await expect(badge()).toHaveText("Done", { timeout: 60_000 });
   const seen = await expectNoDuplicates();
   expect(seen).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
-  const metrics = panel().locator("dl").first();
+  const metrics = panel().getByTestId("run-facts");
   await expect(metrics).toContainText("13,600 in, 360 out");
   await expect(metrics).toContainText("$0.25");
   await expect(panel().getByText("Ended")).toBeVisible();
@@ -220,14 +220,11 @@ test("forbidden tools are refused in the timeline", async () => {
 
 test("the runs page lists every run with its status, tokens and cost", async () => {
   await page.goto("/runs");
-  const list = page.getByRole("list", { name: "Runs" });
-  await expect(list.getByRole("link")).toHaveCount(3);
-  await expect(
-    list.getByRole("link").filter({ hasText: "Cancelled" }),
-  ).toHaveCount(1);
-  await expect(list.getByRole("link").filter({ hasText: "Done" })).toHaveCount(
-    2,
-  );
+  const list = page.getByRole("table", { name: "Runs" });
+  const rows = list.locator("tbody tr");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.filter({ hasText: "Cancelled" })).toHaveCount(1);
+  await expect(rows.filter({ hasText: "Done" })).toHaveCount(2);
   await expect(list).toContainText("$0.25");
   await shots(page, "list");
   // The deliberate network loss leaves the browser's own lines about the cut stream.
@@ -239,10 +236,10 @@ test("the runs page lists every run with its status, tokens and cost", async () 
 test("a run on a subscription shows an estimate that is not a bill, a run on an API key its cost", async () => {
   // The run that ended with an API key: its amount is a cost, in its panel and in the list.
   await page.goto(`/runs/${firstRun}`);
-  const metrics = () => panel().locator("dl").first();
+  const metrics = () => panel().getByTestId("run-facts");
   await expect(metrics()).toContainText("Cost$0.25");
   await expect(panel().getByTestId("cost-note")).toHaveCount(0);
-  await expect(steps().locator("li[data-kind=usage]")).toContainText(
+  await expect(steps().locator("[data-kind=usage]")).toContainText(
     /out, \$0\.25$/,
   );
   await costShots(page, "cost-api-key");
@@ -261,7 +258,7 @@ test("a run on a subscription shows an estimate that is not a bill, a run on an 
   await expect(panel().getByTestId("cost-note")).toHaveText(
     "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
   );
-  await expect(steps().locator("li[data-kind=usage]")).toContainText(
+  await expect(steps().locator("[data-kind=usage]")).toContainText(
     "$0.0123 estimated at API prices, not a bill",
   );
   // Issue #80: the note is the description of the amount for assistive technology.
@@ -290,8 +287,8 @@ test("a run on a subscription shows an estimate that is not a bill, a run on an 
   expect(JSON.stringify(stored)).not.toContain(token);
 
   await page.goto("/runs");
-  const list = page.getByRole("list", { name: "Runs" });
-  await expect(list.getByRole("link")).toHaveCount(4);
+  const list = page.getByRole("table", { name: "Runs" });
+  await expect(list.locator("tbody tr")).toHaveCount(4);
   const costs = list.getByTestId("run-cost");
   await expect(costs.first()).toHaveText("$0.0123Estimate, not a bill");
   await expect(costs.filter({ hasText: "Estimate, not a bill" })).toHaveCount(

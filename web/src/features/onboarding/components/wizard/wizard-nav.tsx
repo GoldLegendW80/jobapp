@@ -28,7 +28,7 @@ export function WizardNav({ wizard }: { wizard: Wizard }) {
       </Button>
       <div className="flex flex-wrap gap-2">
         {ESSENTIAL.has(step) ? null : (
-          <Button variant="ghost" disabled={busy} onClick={wizard.skip}>
+          <Button variant="outline" disabled={busy} onClick={wizard.skip}>
             {WORDING.skipThisStep}
           </Button>
         )}

@@ -1,21 +1,17 @@
-import { CircleAlert, Inbox } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { Inbox } from "lucide-react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
+import { EmptyState } from "@/components/blocks/empty-state";
+import { LoadError } from "@/components/blocks/load-error";
+import { LoadingCard } from "@/components/blocks/loading-card";
+import { Page, PageBody } from "@/components/blocks/page";
 import { PageHeader } from "@/components/blocks/page-header";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Section } from "@/components/blocks/section";
 import { Button } from "@/components/ui/button";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import { Spinner } from "@/components/ui/spinner";
-import { describeError } from "@/lib/api";
 import { useTitle } from "@/hooks/use-title";
 
+import { ApplicationBrowsers } from "../components/application-browsers";
 import { ApproveAll } from "../components/approve-all";
 import { serverOffset } from "../helpers/full-auto-state";
 import { FullAutoSummary } from "../components/full-auto-summary";
@@ -39,14 +35,16 @@ export const FULL_AUTO_INTRO =
   "In Full auto your Like is your approval: the app sends what passes every check once the hold ends, unless you cancel it here.";
 
 /**
- * /applications, the review queue (SPEC-apply.md, "Frontend"): the person's applications (of a
- * Like or of an Apply click), those waiting for the person first, then those under way. The page reads the queue
- * again by itself while something is under way, and keeps the app shell's count in step. With
- * Full auto, its day so far comes first, and each hold counts down on the server's clock.
+ * /applications, Applications (SPEC-apply.md, "Frontend"): the person's applications (of a Like
+ * or of an Apply click), those waiting for the person first, then those under way, each group a
+ * section of item cards across the page's width, the live view of each one the assistant works on
+ * in the person's browser above those under way. The page reads the queue again by itself while
+ * something is under way, and keeps the app shell's count in step. With Full auto, its day so far
+ * comes first, and each hold counts down on the server's clock.
  */
 export function QueuePage() {
-  useTitle("Application queue");
-  const page = useRef<HTMLDivElement>(null);
+  useTitle("Applications");
+  const title = useRef<HTMLHeadingElement>(null);
   const query = useQueue();
   const settings = useApplySettings();
   const fullAuto = settings.data?.mode_after_like === "full_auto";
@@ -57,10 +55,7 @@ export function QueuePage() {
   const underWay = items.filter((item) => !isWaiting(item));
   // A card that left the queue by a click hands the focus to the page's title.
   const leave = useCallback(() => {
-    const title = page.current?.querySelector("h1");
-    if (!title) return;
-    title.tabIndex = -1;
-    title.focus();
+    title.current?.focus();
   }, []);
   // The answers typed in each card and not saved yet: such a form waits for its own Approve.
   const [unsaved, setUnsaved] = useState<Readonly<Record<string, number>>>({});
@@ -71,10 +66,10 @@ export function QueuePage() {
   }, []);
 
   return (
-    <div ref={page} className="mx-auto flex max-w-3xl flex-col gap-8">
+    <Page>
       <PageHeader
-        className="[&_h1]:outline-none"
-        title="Application queue"
+        titleRef={title}
+        title="Applications"
         description={
           <span data-testid="queue-intro">
             {INTRO}
@@ -82,105 +77,87 @@ export function QueuePage() {
           </span>
         }
       />
-      <FullAutoSummary on={fullAuto} />
-      {query.isPending ? (
-        <p
-          role="status"
-          className="flex items-center gap-2 text-sm text-muted-foreground"
-        >
-          <Spinner aria-hidden="true" role={undefined} />
-          Loading your queue
-        </p>
-      ) : query.isError && query.data === undefined ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription className="flex flex-col items-start gap-2">
-            The queue could not be loaded. {describeError(query.error)}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void query.refetch()}
-            >
-              Try again
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : (
-        <>
-          {query.isError ? (
-            <p role="status" className="text-sm text-muted-foreground">
-              Could not refresh just now: this may be out of date.
-            </p>
-          ) : null}
-          {items.length === 0 ? (
-            <Empty className="rounded-xl bg-card">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <Inbox aria-hidden="true" />
-                </EmptyMedia>
-                <EmptyTitle>Your queue is empty.</EmptyTitle>
-                <EmptyDescription>
-                  Select postings on the <Link to="/jobs">Jobs</Link> page and
-                  click Like: each application appears here.
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
-          ) : (
-            <>
-              <ApproveAll items={waiting} unsaved={unsaved} />
-              <QueueSection
-                id="queue-waiting"
-                heading={`Waiting for you (${waiting.length})`}
-                empty="Nothing waits for you."
-                items={waiting}
-                onLeave={leave}
-                offset={offset}
-                onUnsaved={onUnsaved}
+      <PageBody>
+        <FullAutoSummary on={fullAuto} />
+        {query.isPending ? (
+          <LoadingCard>Loading your queue</LoadingCard>
+        ) : query.isError && query.data === undefined ? (
+          <LoadError query={query}>The queue could not be loaded.</LoadError>
+        ) : (
+          <>
+            {query.isError ? (
+              <p role="status" className="text-sm text-muted-foreground">
+                Could not refresh just now: this may be out of date.
+              </p>
+            ) : null}
+            {items.length === 0 ? (
+              <EmptyState
+                icon={Inbox}
+                title="Your queue is empty"
+                description="Like postings on the Jobs page: each application appears here."
+                actions={
+                  <Button asChild>
+                    <Link to="/jobs">Open Jobs</Link>
+                  </Button>
+                }
               />
-              <QueueSection
-                id="queue-under-way"
-                heading={`Under way (${underWay.length})`}
-                empty="Nothing is under way."
-                items={underWay}
-                onLeave={leave}
-                offset={offset}
-              />
-              {items.length >= QUEUE_MAX ? (
-                <p className="text-sm text-muted-foreground">
-                  Only the first {QUEUE_MAX} applications are shown. The next
-                  ones appear as these leave the queue.
-                </p>
-              ) : null}
-            </>
-          )}
-        </>
-      )}
-    </div>
+            ) : (
+              <>
+                <QueueSection
+                  title={`Waiting for you (${waiting.length})`}
+                  empty="Nothing waits for you."
+                  items={waiting}
+                  onLeave={leave}
+                  offset={offset}
+                  onUnsaved={onUnsaved}
+                >
+                  <ApproveAll items={waiting} unsaved={unsaved} />
+                </QueueSection>
+                <QueueSection
+                  title={`Under way (${underWay.length})`}
+                  empty="Nothing is under way."
+                  items={underWay}
+                  onLeave={leave}
+                  offset={offset}
+                >
+                  <ApplicationBrowsers items={underWay} />
+                </QueueSection>
+                {items.length >= QUEUE_MAX ? (
+                  <p className="text-sm text-muted-foreground">
+                    Only the first {QUEUE_MAX} applications are shown. The next
+                    ones appear as these leave the queue.
+                  </p>
+                ) : null}
+              </>
+            )}
+          </>
+        )}
+      </PageBody>
+    </Page>
   );
 }
 
+/** One group of the queue, its applications as item cards; `children` come before them. */
 function QueueSection({
-  id,
-  heading,
+  title,
   empty,
   items,
   onLeave,
   offset,
   onUnsaved,
+  children,
 }: {
-  id: string;
-  heading: string;
+  title: string;
   empty: string;
   items: QueueItem[];
   onLeave: () => void;
   offset: number;
   onUnsaved?: (id: string, count: number) => void;
+  children?: ReactNode;
 }) {
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-3">
-      <h2 id={id} className="text-lg font-medium tracking-tight">
-        {heading}
-      </h2>
+    <Section title={title}>
+      {children}
       {items.length > 0 ? (
         <ul className="flex flex-col gap-4">
           {items.map((item) => (
@@ -197,6 +174,6 @@ function QueueSection({
       ) : (
         <p className="text-sm text-muted-foreground">{empty}</p>
       )}
-    </section>
+    </Section>
   );
 }

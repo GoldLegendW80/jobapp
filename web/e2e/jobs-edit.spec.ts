@@ -16,7 +16,6 @@ import {
   cliLink,
   makeShots,
   newContext,
-  openPostingMore,
   root,
   setPassword,
   watchErrors,
@@ -214,7 +213,7 @@ async function allRows(request: APIRequestContext): Promise<Row[]> {
 
 const kpi = (page: Page, label: string) =>
   page
-    .getByRole("region", { name: "Postings per status" })
+    .getByRole("toolbar", { name: "Postings per status" })
     .getByRole("button", { name: new RegExp(`^${label}: `) });
 // A tile names its count with thousands separators ("Found: 1,029").
 const kpiCount = async (page: Page, label: string) =>
@@ -283,10 +282,6 @@ test("a detail page: status, notes autosave and fit set by hand", async () => {
   ).toBeVisible();
   const id = page.url().split("/jobs/")[1]!;
   edited = { id, title };
-
-  // Status, fit, notes and the history are folded under "More about this posting"; the page
-  // keeps it open from here on, reloads included.
-  await openPostingMore(page);
 
   // Status: changes at once, the history follows, a reload keeps it.
   await page.getByLabel("Status", { exact: true }).selectOption("shortlisted");
@@ -415,7 +410,9 @@ test("add a posting by hand, then the same one again", async () => {
     page.getByRole("heading", { level: 1, name: `Agent Engineer ${run}` }),
   ).toBeVisible();
   const addedId = page.url().split("/jobs/")[1]!;
-  await expect(page.locator("header [data-tone]")).not.toHaveText("Unscored");
+  await expect(
+    page.getByTestId("posting-badges").locator("[data-tone]"),
+  ).not.toHaveText("Unscored");
 
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Add a posting" }).click();

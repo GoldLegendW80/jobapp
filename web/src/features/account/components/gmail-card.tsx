@@ -15,14 +15,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -39,6 +31,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 import { message } from "@/features/admin/helpers/errors";
 import { useMe } from "@/features/auth/api/use-me";
 
@@ -223,128 +216,116 @@ export function GmailCard() {
     return null;
 
   return (
-    <Card aria-labelledby="gmail-card-title">
-      <CardHeader>
-        <CardTitle className="flex flex-wrap items-center justify-between gap-2">
-          <h2 id="gmail-card-title" className="text-lg">
-            Gmail
-          </h2>
-          {account ? (
+    <SettingsSection
+      title="Gmail"
+      description="Lets the app read the mail about your job postings. Nothing is ever sent without your click."
+    >
+      {notice ? (
+        <Alert
+          variant={notice.tone === "bad" ? "destructive" : "default"}
+          role={notice.tone === "bad" ? "alert" : "status"}
+        >
+          {notice.tone === "good" ? (
+            <CircleCheck aria-hidden="true" />
+          ) : notice.tone === "calm" ? (
+            <Info aria-hidden="true" />
+          ) : (
+            <CircleAlert aria-hidden="true" />
+          )}
+          <AlertDescription>{notice.text}</AlertDescription>
+        </Alert>
+      ) : null}
+      {query.isError || !account ? (
+        <Alert variant="destructive">
+          <CircleAlert aria-hidden="true" />
+          <AlertDescription>{message(query.error)}</AlertDescription>
+        </Alert>
+      ) : (
+        <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-6 gap-y-2 text-sm">
+          <dt className="text-muted-foreground">Status</dt>
+          <dd>
             <Badge
               variant={
                 status === "ok"
-                  ? "default"
+                  ? "success"
                   : status === "not_connected"
-                    ? "secondary"
+                    ? "outline"
                     : "destructive"
               }
             >
               {STATUS_LABEL[status]}
             </Badge>
+          </dd>
+          {connected ? (
+            <>
+              <dt className="text-muted-foreground">Address</dt>
+              <dd className="break-all">{account.email}</dd>
+              <dt className="text-muted-foreground">Last sync</dt>
+              <dd>{when(account.last_sync_at)}</dd>
+            </>
           ) : null}
-        </CardTitle>
-        <CardDescription>
-          Lets the app read the mail about your job postings. Nothing is ever
-          sent without your click.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {notice ? (
-          <Alert
-            variant={notice.tone === "bad" ? "destructive" : "default"}
-            role={notice.tone === "bad" ? "alert" : "status"}
+        </dl>
+      )}
+      {account && !query.isError && !connected ? (
+        <p className="text-sm text-muted-foreground">
+          Connect your Gmail so the app can read the mail about your job
+          postings.
+        </p>
+      ) : null}
+      {account && !query.isError && connected ? (
+        <>
+          {status === "needs_reconnect" ? (
+            <p className="text-sm">
+              Google no longer accepts this connection. Connect again with the
+              same address.
+            </p>
+          ) : null}
+          {status === "error" ? (
+            <p className="text-sm">
+              The last sync did not work. It is tried again by itself.
+            </p>
+          ) : null}
+          {!account.can_send ? (
+            <p className="text-sm">
+              Sending is off: it was not allowed at Google. To send replies from
+              the app, disconnect and connect again with that permission ticked.
+            </p>
+          ) : null}
+          <Field
+            orientation="horizontal"
+            className="max-w-prose gap-2"
+            data-disabled={consentLocked || undefined}
           >
-            {notice.tone === "good" ? (
-              <CircleCheck aria-hidden="true" />
-            ) : notice.tone === "calm" ? (
-              <Info aria-hidden="true" />
-            ) : (
-              <CircleAlert aria-hidden="true" />
-            )}
-            <AlertDescription>{notice.text}</AlertDescription>
-          </Alert>
-        ) : null}
-        {query.isError || !account ? (
-          <Alert variant="destructive">
-            <CircleAlert aria-hidden="true" />
-            <AlertDescription>{message(query.error)}</AlertDescription>
-          </Alert>
-        ) : !connected ? (
-          <p className="text-sm text-muted-foreground">
-            Connect your Gmail so the app can read the mail about your job
-            postings.
-          </p>
-        ) : (
-          <>
-            <dl className="grid gap-3 text-sm">
-              <div className="grid gap-1">
-                <dt className="font-medium">Address</dt>
-                <dd className="break-all text-muted-foreground">
-                  {account.email}
-                </dd>
-              </div>
-              <div className="grid gap-1">
-                <dt className="font-medium">Last sync</dt>
-                <dd className="text-muted-foreground">
-                  {when(account.last_sync_at)}
-                </dd>
-              </div>
-            </dl>
-            {status === "needs_reconnect" ? (
-              <p className="text-sm">
-                Google no longer accepts this connection. Connect again with the
-                same address.
-              </p>
-            ) : null}
-            {status === "error" ? (
-              <p className="text-sm">
-                The last sync did not work. It is tried again by itself.
-              </p>
-            ) : null}
-            {!account.can_send ? (
-              <p className="text-sm">
-                Sending is off: it was not allowed at Google. To send replies
-                from the app, disconnect and connect again with that permission
-                ticked.
-              </p>
-            ) : null}
-            <Field
-              orientation="horizontal"
-              className="gap-2"
-              data-disabled={consentLocked || undefined}
-            >
-              <Checkbox
-                id={consentId}
-                checked={account.consent.granted}
-                disabled={consentLocked}
-                aria-describedby={`${consentId}-text`}
-                onCheckedChange={(checked) => {
-                  consent.mutate(checked === true, {
-                    onError: (error) => {
-                      setNotice({ tone: "bad", text: message(error) });
-                    },
-                  });
-                }}
-              />
-              <FieldContent className="gap-1">
-                <FieldLabel htmlFor={consentId}>{CONSENT_LABEL}</FieldLabel>
-                <FieldDescription id={`${consentId}-text`}>
-                  {textChanged
-                    ? "This text has changed. Reload the page to read it."
-                    : `${CONSENT_TEXT} (text version ${String(CONSENT_VERSION)})`}
-                </FieldDescription>
-              </FieldContent>
-            </Field>
-            <CardSuggestions />
-          </>
-        )}
-      </CardContent>
+            <Checkbox
+              id={consentId}
+              checked={account.consent.granted}
+              disabled={consentLocked}
+              aria-describedby={`${consentId}-text`}
+              onCheckedChange={(checked) => {
+                consent.mutate(checked === true, {
+                  onError: (error) => {
+                    setNotice({ tone: "bad", text: message(error) });
+                  },
+                });
+              }}
+            />
+            <FieldContent className="gap-1">
+              <FieldLabel htmlFor={consentId}>{CONSENT_LABEL}</FieldLabel>
+              <FieldDescription id={`${consentId}-text`}>
+                {textChanged
+                  ? "This text has changed. Reload the page to read it."
+                  : `${CONSENT_TEXT} (text version ${String(CONSENT_VERSION)})`}
+              </FieldDescription>
+            </FieldContent>
+          </Field>
+          <CardSuggestions />
+        </>
+      ) : null}
       {account ? (
-        <CardFooter className="mt-6 flex-col justify-end gap-2 sm:flex-row">
+        <div className="flex flex-wrap gap-2">
           {status === "not_connected" || status === "needs_reconnect" ? (
             <Button
               type="button"
-              className="w-full sm:w-auto"
               disabled={!account.available || leaving}
               onClick={() => {
                 if (status === "needs_reconnect") start();
@@ -358,7 +339,6 @@ export function GmailCard() {
             <Button
               type="button"
               variant="outline"
-              className="w-full sm:w-auto"
               disabled={disconnect.isPending || status === "disconnecting"}
               onClick={() => {
                 setConfirmOpen(true);
@@ -367,7 +347,7 @@ export function GmailCard() {
               Disconnect
             </Button>
           ) : null}
-        </CardFooter>
+        </div>
       ) : null}
 
       <Dialog open={connectOpen} onOpenChange={setConnectOpen}>
@@ -481,6 +461,6 @@ export function GmailCard() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Card>
+    </SettingsSection>
   );
 }

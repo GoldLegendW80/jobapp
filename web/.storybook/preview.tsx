@@ -1,6 +1,8 @@
 import { withThemeByDataAttribute } from "@storybook/addon-themes";
 import type { Preview } from "@storybook/react-vite";
 
+import { Agentation } from "agentation";
+
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -29,6 +31,7 @@ const preview: Preview = {
             "Icons",
           ],
           "Components",
+          "Shared",
           "Patterns",
           "Pages",
         ],
@@ -49,6 +52,11 @@ const preview: Preview = {
         <TooltipProvider>
           <Story />
           <Toaster position="bottom-center" />
+          {/* Notes on any story for Claude Code (app/dev-feedback.tsx); a page story has the app's. */}
+          <Agentation
+            endpoint="http://localhost:4747"
+            appName="jobapp storybook"
+          />
         </TooltipProvider>
       ),
     withThemeByDataAttribute({

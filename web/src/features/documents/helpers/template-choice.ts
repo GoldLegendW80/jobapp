@@ -8,8 +8,11 @@ import {
   type DocumentOut,
   type Kind,
   type Language,
+  type VersionSummary,
 } from "../api/documents-api";
 import { type Template } from "../api/templates-api";
+import { templateTagWord } from "@/lib/wording";
+
 import { templateLabel } from "./labels";
 
 /** The person's own templates ("From your CV") first, newest first as the api lists them, then the bundled ones. */
@@ -95,6 +98,18 @@ export function matches(template: Template, filters: Filters): boolean {
   return !filters.ats || template.tags.includes("ats friendly");
 }
 
+/** What helps choose a template, in one line: "One column, with a photo, easy for hiring software to read". */
+export function factsOf(template: Template): string {
+  const facts: string[] = [];
+  if (template.tags.includes("one column")) facts.push("one column");
+  else if (template.tags.includes("two columns")) facts.push("two columns");
+  facts.push(hasPhoto(template) ? "with a photo" : "no photo");
+  if (template.tags.includes("ats friendly"))
+    facts.push(templateTagWord("ats friendly").toLowerCase());
+  const line = facts.join(", ");
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
 export function isFiltered(filters: Filters): boolean {
   return (
     filters.photo !== NO_FILTERS.photo ||
@@ -139,4 +154,13 @@ export const REMOVED_SENTENCE =
 /** A letter is never shortened and a base CV has no shortening pass: "Make it fit" is a posting's CV's. */
 export function canShorten(document: DocumentOut): boolean {
   return document.scope === "posting" && document.kind === "cv";
+}
+
+/** The density step the draft's page starts from: the latest version's, when it has this template. */
+export function draftStep(
+  versions: readonly VersionSummary[] | undefined,
+  slug: string,
+): number | null {
+  const latest = [...(versions ?? [])].sort((a, b) => b.number - a.number)[0];
+  return latest?.template_slug === slug ? latest.fit_step : null;
 }

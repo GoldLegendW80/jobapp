@@ -76,8 +76,8 @@ let jobUrl = "";
 const panel = () => page.getByTestId("run-panel");
 const steps = (on: Page = page) =>
   on.getByTestId("run-panel").getByRole("list", { name: "Steps" });
-const writing = (on: Page = page) => steps(on).locator("li[data-live=true]");
-const answers = (on: Page = page) => steps(on).locator("li[data-kind=text]");
+const writing = (on: Page = page) => steps(on).locator("[data-live=true]");
+const answers = (on: Page = page) => steps(on).locator("[data-kind=text]");
 const badge = () => panel().locator("[data-slot=badge]");
 
 const chat = () => page.getByRole("dialog", { name: "Chat about this job" });
@@ -193,7 +193,7 @@ test("the answer grows in the run panel, then the stored step takes its place", 
   await expect(panel()).toBeVisible();
   const seen = await watch(
     page,
-    "[data-testid=run-panel] li[data-kind=text] p:last-of-type",
+    "[data-testid=run-panel] [data-kind=text] p:last-of-type",
     "__answer",
   );
   // Visibly partial: the answer is being written and is not complete.
@@ -258,7 +258,7 @@ test("a network loss in the middle of the answer ends with the whole text once",
   await page.goto(`/runs/${id}`);
   const seen = await watch(
     page,
-    "[data-testid=run-panel] li[data-kind=text] p:last-of-type",
+    "[data-testid=run-panel] [data-kind=text] p:last-of-type",
     "__cut",
   );
   await expect
@@ -379,7 +379,9 @@ test("the chat answer grows in its bubble and the stored answer takes its place"
   const answer = messages().nth(1);
   await expect(answer).toHaveAttribute("data-role", "assistant");
   await expect(answer).not.toHaveAttribute("data-settling", "true");
-  expect(await answer.locator("div").textContent()).toBe(final);
+  expect(await answer.locator("[data-slot=bubble-content]").textContent()).toBe(
+    final,
+  );
   await expect(messages()).toHaveCount(2);
   await expect(chat().getByRole("status")).toContainText(
     `Answer: You asked: ${QUESTION}`,
@@ -429,13 +431,14 @@ test("the list stays where the reader scrolled it while the answer grows", async
   const whole = `You asked: ${SECOND}\nI read the posting again.`.length;
   await ask(SECOND);
   await expect(messages()).toHaveCount(3);
-  // Sending brought the list to its bottom.
+  // Sending brought the question to the top of the list, and the list to its end.
   await expect.poll(async () => (await metrics()).gap).toBeLessThan(2);
   expect((await metrics()).overflow).toBeGreaterThan(60);
-  // The reader goes back to the top while the agent works.
-  await list.evaluate((node) => {
-    node.scrollTop = 0;
-  });
+  // The reader goes back to the top while the agent works, with the wheel: the thread stops
+  // following (a scroll by script alone is not the reader's).
+  await list.hover();
+  await page.mouse.wheel(0, -5000);
+  await expect.poll(async () => (await metrics()).top).toBe(0);
   await expect(liveText()).toContainText("You asked: Second", {
     timeout: 20_000,
   });
@@ -450,10 +453,13 @@ test("the list stays where the reader scrolled it while the answer grows", async
     .poll(async () => (await metrics()).overflow)
     .toBeGreaterThan(low);
   expect((await metrics()).top).toBe(0); // the growing text did not pull the view down
-  // Back at the bottom: the list follows the text again.
+  // Back at the bottom: the list follows the text again. Its first step drops the room kept
+  // under the question, so the height is measured from there.
   await list.evaluate((node) => {
     node.scrollTop = node.scrollHeight;
   });
+  const back = await written();
+  await expect.poll(written).toBeGreaterThan(back + 4);
   const mid = await written();
   const high = (await metrics()).overflow;
   await expect.poll(written).toBeGreaterThan(mid + 12);
@@ -467,11 +473,12 @@ test("the list stays where the reader scrolled it while the answer grows", async
   await page.setViewportSize({ width: 1280, height: 800 });
 });
 
-test("the spinner stands still under prefers-reduced-motion", async () => {
+test("the line under the answer stands still under prefers-reduced-motion", async () => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await ask("Third question.");
   await expect(liveReply()).toBeVisible();
-  const spinner = liveReply().locator("svg").last();
+  // The line under the answer breathes (shimmer), and stands still under reduced motion.
+  const spinner = liveReply().locator(".shimmer");
   await expect
     .poll(() =>
       spinner.evaluate((node) => getComputedStyle(node).animationName),

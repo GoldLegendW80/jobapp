@@ -4,6 +4,7 @@ import {
   EMPTY_FILTERS,
   hasFilters,
   isIsoDate,
+  parseTypedDate,
   parseFilters,
   TEXT_MAX,
   toggleFitRange,
@@ -160,5 +161,24 @@ describe("isIsoDate", () => {
     ["", false],
   ])("%s is %s", (value, expected) => {
     expect(isIsoDate(value)).toBe(expected);
+  });
+});
+
+describe("parseTypedDate", () => {
+  it.each([
+    ["", null],
+    ["  ", null],
+    ["2026-11-06", "2026-11-06"],
+    ["6 Nov 2026", "2026-11-06"],
+    ["06 november 2026", "2026-11-06"],
+    ["30 Sept 2026", "2026-09-30"],
+    ["1 Mar. 2026", "2026-03-01"],
+    ["31 Feb 2026", false],
+    ["6 No 2026", false],
+    ["6 Nob 2026", false],
+    ["06/11/2026", false],
+    ["yesterday", false],
+  ])("%j reads %j", (value, expected) => {
+    expect(parseTypedDate(value)).toBe(expected);
   });
 });

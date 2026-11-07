@@ -15,6 +15,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
+import { cn } from "@/lib/utils";
 import { WORDING } from "@/lib/wording";
 
 import { loadFailureSentence } from "@/features/ingestion/api/documents-api";
@@ -28,15 +29,19 @@ import { EstimateBlockers } from "./run-start/estimate-blockers";
 import { EstimateLine } from "./run-start/estimate-line";
 import { EstimateView } from "./run-start/estimate-view";
 
+/** A card already around the part (the welcome wizard): no surface of its own. */
+export const FLAT = "rounded-none bg-transparent p-0";
+
 /** The heading of the run on the page (run-progress.tsx): it takes the focus after a start. */
 export const RUN_HEADING_ID = "run-heading";
 
 /**
  * Step 3, first part: choosing the documents and starting a run. Nothing is sent to a model
  * from here until the user has read the estimate in the dialog and clicked Start. While a run
- * is active this part steps aside: the page shows that run (run-progress.tsx).
+ * is active this part steps aside: the page shows that run (run-progress.tsx). `flat`: inside
+ * a card already, no surface of its own.
  */
-export function RunStart() {
+export function RunStart({ flat = false }: { flat?: boolean } = {}) {
   const documents = useDocuments();
   const runs = useRuns();
   /** The documents ticked, in the order they were ticked: the run reads them in that order. */
@@ -74,7 +79,7 @@ export function RunStart() {
     <Card
       role="region"
       aria-labelledby="start-heading"
-      className="gap-3 p-4 sm:p-6"
+      className={cn("gap-3", flat ? FLAT : "p-4 sm:p-6")}
     >
       <CardHeader className="gap-1 px-0">
         <CardTitle className="text-base tracking-tight">

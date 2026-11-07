@@ -16,6 +16,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
 import {
   Card,
   CardAction,
@@ -182,28 +183,36 @@ export function AreaField<F extends FieldValues>({
   );
 }
 
-/** Move up, move down and remove, each named after the item for screen readers. */
+/**
+ * Move up, move down and remove (without `onRemove`, no remove), each named after the item for
+ * screen readers. `id` names the buttons (`<id>-up`, `<id>-down`), for focus to follow a move.
+ */
 export function ItemControls({
   index,
   count,
   name,
   onMove,
   onRemove,
+  disabled = false,
+  id,
 }: {
   index: number;
   count: number;
   name: string;
   onMove: (from: number, to: number) => void;
-  onRemove: (index: number) => void;
+  onRemove?: (index: number) => void;
+  disabled?: boolean;
+  id?: string;
 }) {
   return (
-    <div className="flex items-center gap-1">
+    <ButtonGroup aria-label={`Order of ${name}`}>
       <Button
         type="button"
         variant="ghost"
         size="icon-sm"
+        id={id ? `${id}-up` : undefined}
         aria-label={`Move ${name} up`}
-        disabled={index === 0}
+        disabled={disabled || index === 0}
         onClick={() => {
           onMove(index, index - 1);
         }}
@@ -214,26 +223,30 @@ export function ItemControls({
         type="button"
         variant="ghost"
         size="icon-sm"
+        id={id ? `${id}-down` : undefined}
         aria-label={`Move ${name} down`}
-        disabled={index === count - 1}
+        disabled={disabled || index === count - 1}
         onClick={() => {
           onMove(index, index + 1);
         }}
       >
         <ArrowDown aria-hidden="true" />
       </Button>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon-sm"
-        aria-label={`Remove ${name}`}
-        onClick={() => {
-          onRemove(index);
-        }}
-      >
-        <Trash2 aria-hidden="true" />
-      </Button>
-    </div>
+      {onRemove ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Remove ${name}`}
+          disabled={disabled}
+          onClick={() => {
+            onRemove(index);
+          }}
+        >
+          <Trash2 aria-hidden="true" />
+        </Button>
+      ) : null}
+    </ButtonGroup>
   );
 }
 
@@ -318,6 +331,10 @@ export function ConflictDialog({
     </AlertDialog>
   );
 }
+
+/** The items of a Group (employers, schools, languages): told apart by space and a hairline. */
+export const ITEM_LIST = "flex flex-col divide-y";
+export const ITEM = "py-5 first:pt-0 last:pb-0";
 
 /** A titled group of fields inside a tab. */
 export function Group({

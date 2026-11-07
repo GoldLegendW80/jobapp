@@ -19,7 +19,7 @@ import { clearAttempts, newContext, root, watchErrors } from "./stack";
 /**
  * Documents D18 against the real stack through Caddy, driven through the page: the gallery with
  * its "no photo" filter and its grid of two on a phone; a posting's CV switched to `compact` from
- * the Template view, a new page drawn, its base CV unchanged; `sidebar` set on the base CV from
+ * the template choice on its page, a new page drawn, its base CV unchanged; `sidebar` set on the base CV from
  * the gallery, then a posting added afterwards whose CV takes `sidebar`. No model runs: the base
  * CV and the documents are made in the api container (`seedDocuments`, and `postingCv` below) and
  * the CV draft is written by hand, so the real renderer draws every page.
@@ -163,9 +163,8 @@ test("on a phone the gallery is a grid of two", async () => {
   await page.setViewportSize({ width: 1280, height: 900 });
 });
 
-test("a posting's CV switches to compact in the Template view, and its base CV is unchanged", async () => {
+test("a posting's CV switches to compact from its page, and its base CV is unchanged", async () => {
   await page.goto(`/jobs/${posting}/documents/cv`);
-  await page.getByRole("tab", { name: "Template" }).click();
   await expect(
     page.getByText(
       "Only this CV changes. The base CV it was written from keeps its template.",
@@ -191,7 +190,6 @@ test("a posting's CV switches to compact in the Template view, and its base CV i
       has_pdf: true,
     }),
   );
-  await page.getByRole("tab", { name: "See" }).click();
   await expect(
     page.getByRole("img", { name: "Page 1 of version 2" }),
   ).toBeVisible({ timeout: 30_000 });

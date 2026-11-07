@@ -14,8 +14,8 @@ import type { Answer, Approval } from "../../api/apply-api";
 import { FieldsList } from "@/components/shared/apply/fields-list";
 
 /**
- * The answers of a queue card behind "Review the answers": the fields to read and correct once the
- * form is read, else why it could not be read with Try again, or that it is loading.
+ * The answers of a queue card, folded behind "Review the answers": the fields to read and correct
+ * once the form is read, else why it could not be read with Try again, or that it is loading.
  */
 export function QueueCardAnswers({
   applicationId,
@@ -47,12 +47,15 @@ export function QueueCardAnswers({
       onOpenChange={onOpenChange}
       className="flex flex-col gap-3"
     >
-      {/* The answers stay mounted while folded: an unsaved edit keeps Approve waiting. */}
-      <CollapsibleTrigger asChild aria-controls={panelId}>
-        <Button variant="outline" className="w-full sm:w-fit">
-          {open ? "Hide the answers" : "Review the answers"}
-        </Button>
-      </CollapsibleTrigger>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-medium">The answers on the form</h4>
+        {/* The answers stay mounted while folded: an unsaved edit keeps Approve waiting. */}
+        <CollapsibleTrigger asChild aria-controls={panelId}>
+          <Button variant="outline" size="sm">
+            {open ? "Hide the answers" : "Review the answers"}
+          </Button>
+        </CollapsibleTrigger>
+      </div>
       <CollapsibleContent forceMount id={panelId} hidden={!open}>
         {approval ? (
           <FieldsList

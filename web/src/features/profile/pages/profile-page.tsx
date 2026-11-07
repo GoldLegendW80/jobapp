@@ -1,337 +1,135 @@
-import { FileUp, RotateCw } from "lucide-react";
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  Link,
-  Navigate,
-  useBlocker,
-  useLocation,
-  useNavigate,
-  useSearchParams,
-} from "react-router";
-
-import { PageHeader } from "@/components/blocks/page-header";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
-import { Spinner } from "@/components/ui/spinner";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { describeError } from "@/lib/api";
-import { useTitle } from "@/hooks/use-title";
-import { cn } from "@/lib/utils";
-
-import {
-  TAB_SECTIONS,
-  type Profile,
-  type TabSection,
-} from "../api/profile-api";
-import { useProfile } from "../api/use-profile";
-import { CvTab } from "@/features/profile/components/cv-tab";
-
-import { AnswersTab } from "../components/answers-tab";
-import { ExperienceTab } from "../components/experience-tab";
-import { FactsTab } from "../components/facts-tab";
-import { HistoryDrawer } from "@/components/shared/profile/history-drawer";
-import { IdentityTab } from "../components/identity-tab";
-import { missingLabel, SECTION_LABELS } from "../helpers/labels";
-import { OneProfilePage } from "../components/profile-one-page";
-import { ProfileFileMenu } from "../components/profile-file";
-import { SkillsTab } from "../components/skills-tab";
-
-/** The classic tabs: the search is in Settings, Search now. */
-const CLASSIC_SECTIONS = TAB_SECTIONS.filter((name) => name !== "search");
-const isSection = (value: string | null): value is TabSection =>
-  value !== null && (CLASSIC_SECTIONS as readonly string[]).includes(value);
-
-/** The CV tab is not a profile section: it lives at /profile/cv and /profile/cv/:id. */
-const CV_TAB = "cv";
-type TabName = TabSection | typeof CV_TAB;
-
 /**
- * /profile: the completeness of the whole profile, then one tab per section, each an editor that
- * saves on its own.
- * The open tab lives in `?tab=`, except the CV tab (documents D11), which has paths of its own
- * so a base CV can be linked. With unsaved changes, switching tab, following a link away or
- * closing the page asks first. Each tab has a History drawer (view and restore past saves), and
- * the header an Export or import menu. A restore or an import remounts the open tab, so its form
- * reloads from the new current version.
+ * /profile, the one place the profile is edited (product audit, chapter 2, analysis B6 and B7;
+ * the tabbed classic editor is gone, owner 2026-11-06). The main column, top to bottom: Your CVs
+ * and Upload your CV; Experience and education (its form); About you (the skills, the answers
+ * and the facts, as text; without a model key the skills and the answers are forms); Advanced
+ * matching (the skills written as regular expressions, which About you leaves out, and Try a
+ * posting); Contact and links (the identity form, with the languages and the photo). The side rail is the person at a glance and what the profile is
+ * Ready for. History, Export and Import are under More actions. The search is in Settings,
+ * Search. Each form saves on its own; leaving the page with one unsaved asks first.
  */
+import { FileUp } from "lucide-react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { Link, Navigate, useSearchParams } from "react-router";
+
+import { LoadError } from "@/components/blocks/load-error";
+import { Page, PageBody } from "@/components/blocks/page";
+import { PageHeader } from "@/components/blocks/page-header";
+import { Section } from "@/components/blocks/section";
+import { UnsavedGuard } from "@/components/shared/profile/unsaved-guard";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useTitle } from "@/hooks/use-title";
+
+import type { SectionName } from "../api/profile-api";
+import { useProfile } from "../api/use-profile";
+import { AboutDocument } from "../components/about-document";
+import { AdvancedMatching } from "../components/advanced-matching";
+import { ExperienceForm } from "../components/experience-form";
+import { IdentityForm } from "../components/identity-form";
+import { ProfileMenu } from "../components/profile-menu";
+import { ProfileRail } from "../components/profile-rail";
+import { YourCvs } from "../components/your-cvs";
+import { ABOUT_WORDS } from "../helpers/about-words";
+import {
+  anchorOfTab,
+  fallbackAnchor,
+  PROFILE_ANCHORS,
+} from "../helpers/anchors";
+import { useScrollToAnchor } from "../hooks/use-scroll-to-anchor";
+
+const TITLE = "Profile";
+const DESCRIPTION =
+  "What the app reads to score postings, write your CVs and fill forms.";
+
+/** The forms of the page, the section each saves, and their names in the unsaved changes guard. */
+const FORMS = {
+  experience: { section: "experience", label: "Experience and education" },
+  skills: { section: "skills", label: "Skills" },
+  answers: { section: "answers", label: "Answers" },
+  matching: { section: "skills", label: "Advanced matching" },
+  identity: { section: "identity", label: "Contact and links" },
+} as const satisfies Record<string, { section: SectionName; label: string }>;
+type FormName = keyof typeof FORMS;
+const FORM_NAMES = Object.keys(FORMS) as FormName[];
+const counts = (value: number) =>
+  Object.fromEntries(FORM_NAMES.map((name) => [name, value])) as Record<
+    FormName,
+    number
+  >;
+
 /**
- * /profile is the one page profile (profile-one-page.tsx); `?tab=` and the CV paths keep the
- * classic editor below, reachable from More for one release so a rollback is a click.
+ * The addresses of the former tabs keep working: `?tab=search` goes to Settings, Search, and the
+ * other tabs land on the section of this page that holds what they showed.
  */
 export function ProfilePage() {
   const [params] = useSearchParams();
-  const onCv = /^\/profile\/cv(\/|$)/.test(useLocation().pathname);
-  // The search moved to Settings (owner, 2026-11-05): old links and bookmarks go there.
-  if (params.get("tab") === "search")
-    return <Navigate to="/settings/search" replace />;
-  return onCv || params.has("tab") ? (
-    <ClassicProfilePage />
-  ) : (
-    <OneProfilePage />
-  );
+  const tab = params.get("tab");
+  if (tab === "search") return <Navigate to="/settings/search" replace />;
+  if (tab !== null)
+    return (
+      <Navigate to={{ pathname: "/profile", hash: anchorOfTab(tab) }} replace />
+    );
+  return <OneProfilePage />;
 }
 
-function ClassicProfilePage() {
-  useTitle("Profile");
+function OneProfilePage() {
+  useTitle(TITLE);
+  useScrollToAnchor(fallbackAnchor);
   const query = useProfile();
-  const [params] = useSearchParams();
-  const navigate = useNavigate();
-  const onCv = /^\/profile\/cv(\/|$)/.test(useLocation().pathname);
-  const requested = params.get("tab");
-  const tab: TabSection = isSection(requested) ? requested : "identity";
-  const active: TabName = onCv ? CV_TAB : tab;
-  const [dirty, setDirty] = useState(false);
-  const [pendingTab, setPendingTab] = useState<TabName>();
-  // Bumped after a restore or an import: the tabs remount and read the new current version.
-  const [generation, setGeneration] = useState(0);
-  const reloadTabs = useCallback(() => {
-    setDirty(false);
-    setGeneration((value) => value + 1);
+  // The forms with unsaved changes, in the order they were changed.
+  const [unsaved, setUnsaved] = useState<FormName[]>([]);
+  // Bumped per form after a restore of its section, for every form after an import: a new key
+  // remounts the form, which reads the new current version.
+  const [keys, setKeys] = useState(() => counts(0));
+  const onDirty = useMemo(
+    () =>
+      Object.fromEntries(
+        FORM_NAMES.map((name) => [
+          name,
+          (value: boolean) => {
+            setUnsaved((was) =>
+              was.filter((one) => one !== name).concat(value ? [name] : []),
+            );
+          },
+        ]),
+      ) as Record<FormName, (dirty: boolean) => void>,
+    [],
+  );
+  const reload = useCallback((section?: SectionName) => {
+    const hit = (name: FormName) =>
+      section === undefined || FORMS[name].section === section;
+    setUnsaved((was) => was.filter((name) => !hit(name)));
+    setKeys(
+      (was) =>
+        Object.fromEntries(
+          FORM_NAMES.map((name) => [name, was[name] + (hit(name) ? 1 : 0)]),
+        ) as Record<FormName, number>,
+    );
   }, []);
-  const onDirtyChange = useCallback((value: boolean) => {
-    setDirty(value);
-  }, []);
-
-  // Set while the tab guard's own "Discard changes" navigates: the person has just answered, so
-  // the blocker must not ask a second time for a change of pathname (the CV tab has its own).
-  const discarding = useRef(false);
-  const blocker = useBlocker(
-    ({ currentLocation, nextLocation }) =>
-      !discarding.current &&
-      dirty &&
-      currentLocation.pathname !== nextLocation.pathname,
+  const plainForms = useMemo(
+    () => ({
+      onDirty: { skills: onDirty.skills, answers: onDirty.answers },
+      keys: { skills: keys.skills, answers: keys.answers },
+    }),
+    [onDirty, keys.skills, keys.answers],
   );
 
-  useEffect(() => {
-    if (!dirty) return;
-    const onBeforeUnload = (event: BeforeUnloadEvent) => {
-      // Asks the browser to confirm leaving; it shows its own message.
-      event.preventDefault();
-    };
-    window.addEventListener("beforeunload", onBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", onBeforeUnload);
-    };
-  }, [dirty]);
-
-  const openTab = (next: TabName) => {
-    void navigate(
-      next === CV_TAB
-        ? { pathname: "/profile/cv" }
-        : { pathname: "/profile", search: `?tab=${next}` },
-      { replace: true },
-    );
-  };
-
-  if (query.isPending) {
+  if (query.isPending) return <ProfileSkeleton />;
+  if (query.isError)
     return (
-      <div
-        role="status"
-        className="mx-auto flex max-w-3xl items-center gap-2 text-sm text-muted-foreground"
-      >
-        <Spinner aria-hidden="true" />
-        Loading your profile
-      </div>
+      <Page>
+        <PageHeader title={TITLE} description={DESCRIPTION} />
+        <LoadError query={query}>Your profile could not be loaded.</LoadError>
+      </Page>
     );
-  }
-  if (query.isError) {
-    return (
-      <div className="mx-auto flex max-w-3xl flex-col gap-4">
-        <PageHeader title="Profile" />
-        <Alert variant="destructive">
-          <AlertTitle>Your profile could not be loaded</AlertTitle>
-          <AlertDescription>{describeError(query.error)}</AlertDescription>
-        </Alert>
-        <div>
-          <Button
-            variant="outline"
-            disabled={query.isFetching}
-            onClick={() => void query.refetch()}
-          >
-            <RotateCw aria-hidden="true" />
-            Retry
-          </Button>
-        </div>
-      </div>
-    );
-  }
 
   const profile = query.data;
-  const leaving = blocker.state === "blocked";
-  const guardOpen = leaving || pendingTab !== undefined;
-
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-6">
-      <Header
-        profile={profile}
-        actions={
-          <ProfileFileMenu
-            profile={profile}
-            dirtySection={dirty ? tab : undefined}
-            onImported={reloadTabs}
-          />
-        }
-      />
-      <Tabs
-        value={active}
-        onValueChange={(value) => {
-          if (!(isSection(value) || value === CV_TAB) || value === active)
-            return;
-          if (dirty) setPendingTab(value);
-          else openTab(value);
-        }}
-      >
-        <TabsList
-          aria-label="Profile sections"
-          className="grid h-auto grid-cols-3 gap-1 sm:grid-cols-6"
-        >
-          <TabsTrigger value={CV_TAB}>CV</TabsTrigger>
-          {CLASSIC_SECTIONS.map((name) => {
-            const percent = profile.completeness.sections[name]?.percent ?? 0;
-            return (
-              <TabsTrigger
-                key={name}
-                value={name}
-                aria-label={`${SECTION_LABELS[name]}, ${percent}% complete`}
-              >
-                <CompletenessDot percent={percent} />
-                {SECTION_LABELS[name]}
-              </TabsTrigger>
-            );
-          })}
-        </TabsList>
-        <TabsContent value={CV_TAB} className="flex flex-col gap-4">
-          <CvTab />
-        </TabsContent>
-        {CLASSIC_SECTIONS.map((name) => (
-          <TabsContent key={name} value={name} className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <Missing
-                missing={profile.completeness.sections[name]?.missing ?? []}
-              />
-              <div className="ml-auto">
-                <HistoryDrawer
-                  section={name}
-                  profile={profile}
-                  dirty={dirty}
-                  onRestored={reloadTabs}
-                />
-              </div>
-            </div>
-            {/* A new key after a restore or an import: the editor reloads its form. */}
-            <Fragment key={generation}>
-              {name === "identity" ? (
-                <IdentityTab profile={profile} onDirtyChange={onDirtyChange} />
-              ) : name === "experience" ? (
-                <ExperienceTab
-                  profile={profile}
-                  onDirtyChange={onDirtyChange}
-                />
-              ) : name === "answers" ? (
-                <AnswersTab profile={profile} onDirtyChange={onDirtyChange} />
-              ) : name === "facts" ? (
-                <FactsTab profile={profile} onDirtyChange={onDirtyChange} />
-              ) : (
-                <SkillsTab profile={profile} onDirtyChange={onDirtyChange} />
-              )}
-            </Fragment>
-          </TabsContent>
-        ))}
-      </Tabs>
-      <AlertDialog
-        open={guardOpen}
-        onOpenChange={(open) => {
-          if (open) return;
-          if (leaving) blocker.reset();
-          setPendingTab(undefined);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your changes to {SECTION_LABELS[tab]} are not saved. Keep editing
-              to save them first, or discard them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (leaving) blocker.reset();
-                setPendingTab(undefined);
-              }}
-            >
-              Keep editing
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (leaving) {
-                  setDirty(false);
-                  blocker.proceed();
-                } else if (pendingTab) {
-                  setDirty(false);
-                  discarding.current = true;
-                  try {
-                    openTab(pendingTab);
-                  } finally {
-                    discarding.current = false;
-                  }
-                  setPendingTab(undefined);
-                }
-              }}
-            >
-              Discard changes
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
-  );
-}
-
-function Header({
-  profile,
-  actions,
-}: {
-  profile: Profile;
-  actions: ReactNode;
-}) {
-  const overall = profile.completeness.overall;
-  return (
-    <div className="flex flex-col gap-4">
+    <Page>
       <PageHeader
-        title="Profile"
-        description={
-          <>
-            The classic editor: everything search and document generation read
-            about you, one tab per section. Each section saves on its own.{" "}
-            <Link
-              to="/profile"
-              className="font-medium text-foreground underline underline-offset-4"
-            >
-              Back to your profile page
-            </Link>
-          </>
-        }
+        title={TITLE}
+        description={DESCRIPTION}
         actions={
           <>
             <Button asChild variant="outline">
@@ -340,54 +138,102 @@ function Header({
                 Fill my profile with an agent
               </Link>
             </Button>
-            {actions}
+            <ProfileMenu
+              profile={profile}
+              dirty={unsaved.map((name) => FORMS[name].section)}
+              onChanged={reload}
+            />
           </>
         }
       />
-      <Card className="gap-1.5 px-4 py-4 sm:px-6">
-        <div className="flex items-baseline justify-between text-sm">
-          <span id="completeness-label" className="font-medium">
-            Profile completeness
-          </span>
-          <span className="tabular-nums text-muted-foreground">{overall}%</span>
-        </div>
-        {/* shadcn's Progress fills the bar from value but does not hand it to Radix: the
-            aria values are given here. */}
-        <Progress
-          value={overall}
-          aria-labelledby="completeness-label"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={overall}
-          className="bg-muted *:data-[slot=progress-indicator]:motion-reduce:transition-none"
-        />
-      </Card>
+      <PageBody aside={<ProfileRail profile={profile} />}>
+        <Anchor id={PROFILE_ANCHORS.cvs}>
+          <YourCvs />
+        </Anchor>
+        <Anchor id={PROFILE_ANCHORS.experience}>
+          <Section
+            title="Experience and education"
+            description="Your jobs and schools, with their dates, as every CV prints them."
+          >
+            <ExperienceForm
+              key={keys.experience}
+              profile={profile}
+              onDirtyChange={onDirty.experience}
+            />
+          </Section>
+        </Anchor>
+        <Anchor id={PROFILE_ANCHORS.about}>
+          <Section title={ABOUT_WORDS.title} description={ABOUT_WORDS.intro}>
+            <AboutDocument profile={profile} forms={plainForms} />
+          </Section>
+        </Anchor>
+        <Anchor id={PROFILE_ANCHORS.matching}>
+          <Section
+            title="Advanced matching"
+            description="Skill categories and requirements written as regular expressions, which About you leaves out, and a posting tried against all your skills."
+          >
+            <AdvancedMatching
+              key={keys.matching}
+              profile={profile}
+              onDirtyChange={onDirty.matching}
+            />
+          </Section>
+        </Anchor>
+        <Anchor id={PROFILE_ANCHORS.contact}>
+          <Section
+            title="Contact and links"
+            description="Your name, contact details, links, languages and photo, as every document shows them."
+          >
+            <IdentityForm
+              key={keys.identity}
+              profile={profile}
+              onDirtyChange={onDirty.identity}
+            />
+          </Section>
+        </Anchor>
+      </PageBody>
+      <UnsavedGuard
+        dirty={unsaved.length > 0}
+        what={unsaved.map((name) => FORMS[name].label).join(", ")}
+        onDiscard={() => {
+          for (const name of unsaved) reload(FORMS[name].section);
+        }}
+      />
+    </Page>
+  );
+}
+
+/** Where Ready for and the links of the page land, clear of the shell's sticky header. */
+function Anchor({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <div id={id} className="scroll-mt-24">
+      {children}
     </div>
   );
 }
 
-/** Full when the section is complete, a ring when empty, half filled in between. */
-function CompletenessDot({ percent }: { percent: number }) {
+/**
+ * The page's place while the profile loads: the header, the rail and the first sections, in
+ * grey. No h1 yet: the title shows with the profile, so whatever waits for it finds the page.
+ */
+function ProfileSkeleton() {
   return (
-    <span
-      aria-hidden="true"
-      data-percent={percent}
-      className={cn(
-        "inline-block size-2 shrink-0 rounded-full border border-current",
-        percent >= 100 && "border-success bg-success",
-        percent > 0 &&
-          percent < 100 &&
-          "border-warning bg-[linear-gradient(90deg,currentColor_50%,transparent_50%)] text-warning",
-      )}
-    />
-  );
-}
-
-function Missing({ missing }: { missing: string[] }) {
-  if (missing.length === 0) return null;
-  return (
-    <p className="min-w-0 flex-1 basis-60 text-sm text-muted-foreground">
-      To complete this section, add: {missing.map(missingLabel).join(", ")}.
-    </p>
+    <Page>
+      <div role="status" aria-live="polite" className="flex flex-col gap-2">
+        <span className="sr-only">Loading your profile</span>
+        <Skeleton aria-hidden="true" className="h-9 w-40" />
+        <Skeleton aria-hidden="true" className="h-4 w-full max-w-md" />
+      </div>
+      <PageBody aside={<Skeleton aria-hidden="true" className="h-64" />}>
+        <div aria-hidden="true" className="flex flex-col gap-4">
+          <Skeleton className="h-6 w-40" />
+          <Skeleton className="h-40" />
+        </div>
+        <div aria-hidden="true" className="flex flex-col gap-4">
+          <Skeleton className="h-6 w-56" />
+          <Skeleton className="h-72" />
+        </div>
+      </PageBody>
+    </Page>
   );
 }

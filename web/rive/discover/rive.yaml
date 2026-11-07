@@ -1,0 +1,9 @@
+# The Rive scenes of Discover, in RML. Build from web/: rive rive/discover --once
+# (writes the unsigned src/features/opportunities/assets/discover.riv the page loads).
+name: discover
+main: Reaction
+output:
+  dir: ../../src/features/opportunities/assets
+logs:
+  file: build/rive.log
+  problems: build/problems.log

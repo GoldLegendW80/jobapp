@@ -20,13 +20,9 @@ const meta = {
     docs: {
       description: {
         component:
-          "The postings found for the person, scored against their profile. Route /jobs, the first page after signing in. From 1024px wide the list and the selected posting sit side by side, each scrolling on its own; the selection is in the address (`/jobs?job=<id>`), the first posting when none. Below, the list alone, a tap opening the posting's page.",
+          "The postings found for the person, scored against their profile: the List view of Jobs. Route /jobs, the first page after signing in. One header for both views (Find jobs, Add a posting, and More actions: the automatic search, past searches, rescoring), the List and Map tabs, then a toolbar: search, Filters, and the status toggles with their counts. From 1024px wide the list and the selected posting sit side by side, each scrolling on its own; the selection is in the address (`/jobs?job=<id>`), the first posting when none. Below, the list alone, a tap opening the posting's page.",
       },
     },
-  },
-  // The pane's "More about this posting" keeps its open state in local storage: start folded.
-  beforeEach: () => {
-    window.localStorage.removeItem("advanced:posting-more");
   },
   render: () => <AppAt path="/jobs" />,
 } satisfies Meta;
@@ -87,6 +83,33 @@ export const FilterThePostings: Story = {
     const page = within(canvasElement);
     await userEvent.click(
       await page.findByRole("button", { name: /^Filters/ }),
+    );
+  },
+};
+
+/** As a job seeker, I want to see the postings of one status with their count in one click, so that I can work through my pipeline a stage at a time. */
+export const PickAStatus: Story = {
+  beforeEach: () => {
+    postings();
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await userEvent.click(
+      await page.findByRole("button", { name: /^Shortlisted: \d/ }),
+    );
+  },
+};
+
+/** As a job seeker, I want to see whether the app searches by itself and change it from the page's menu, so that I know when new postings come in. */
+export const CheckTheAutomaticSearch: Story = {
+  beforeEach: () => {
+    postings();
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await page.findByRole("list", { name: "Postings" });
+    await userEvent.click(
+      await page.findByRole("button", { name: "More actions" }),
     );
   },
 };

@@ -1,4 +1,4 @@
-import { CircleAlert } from "lucide-react";
+import { CircleAlert, Plus } from "lucide-react";
 import {
   Fragment,
   useEffect,
@@ -11,13 +11,6 @@ import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,7 +27,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { message } from "@/features/admin/helpers/errors";
 import { errorDetail, isApiError } from "@/lib/api";
 
+import { LoadError } from "@/components/blocks/load-error";
 import { ConfirmDialog } from "@/components/shared/apply/confirm-dialog";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 import {
   ANSWER_MAX,
   QUESTION_MAX,
@@ -102,24 +97,13 @@ export function AnswerBank() {
   });
 
   return (
-    <Card aria-labelledby="bank-card-title">
-      <CardHeader>
-        <CardTitle>
-          <h2 id="bank-card-title" className="text-lg">
-            Saved answers
-          </h2>
-        </CardTitle>
-        <CardDescription>
-          Answers the app reuses when the same question comes back on another
-          form. Add one, change one, or forget it. Edits to an application stay
-          on that application. Current profile answers take priority.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
+    <SettingsSection
+      title="Saved answers"
+      description="Answers the app reuses when the same question comes back on another form. Edits to an application stay on that application. Current profile answers take priority."
+      actions={
         <Button
           ref={addButton}
           variant="outline"
-          className="self-start"
           disabled={
             query.isPending ||
             query.isError ||
@@ -133,121 +117,109 @@ export function AnswerBank() {
             setAdding(true);
           }}
         >
+          <Plus aria-hidden="true" />
           Add answer
         </Button>
-        {adding ? (
-          <AddAnswerForm
-            pending={create.isPending}
-            onCancel={() => {
-              setAdding(false);
-            }}
-            onSave={(question, answer) => {
-              create.mutate({ question, answer });
-            }}
-          />
-        ) : null}
-        {notice ? (
-          <Alert variant="destructive" role="alert">
-            <CircleAlert aria-hidden="true" />
-            <AlertDescription>{notice}</AlertDescription>
-          </Alert>
-        ) : null}
-        {query.isPending ? (
-          <p role="status" className="text-sm text-muted-foreground">
-            Loading your saved answers
-          </p>
-        ) : query.isError ? (
-          <Alert variant="destructive">
-            <CircleAlert aria-hidden="true" />
-            <AlertDescription className="flex flex-col items-start gap-2">
-              {message(query.error)}
-              <Button
-                variant="outline"
+      }
+    >
+      {adding ? (
+        <AddAnswerForm
+          pending={create.isPending}
+          onCancel={() => {
+            setAdding(false);
+          }}
+          onSave={(question, answer) => {
+            create.mutate({ question, answer });
+          }}
+        />
+      ) : null}
+      {notice ? (
+        <Alert variant="destructive" role="alert">
+          <CircleAlert aria-hidden="true" />
+          <AlertDescription>{notice}</AlertDescription>
+        </Alert>
+      ) : null}
+      {query.isPending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading your saved answers
+        </p>
+      ) : query.isError ? (
+        <LoadError query={query}>
+          Your saved answers could not be loaded.
+        </LoadError>
+      ) : query.data.items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No saved answer yet.</p>
+      ) : (
+        <ItemGroup aria-label="Your saved answers">
+          {query.data.items.map((entry, index) => (
+            <Fragment key={entry.question_key}>
+              {index > 0 ? <ItemSeparator /> : null}
+              <Item
+                role="listitem"
                 size="sm"
-                onClick={() => void query.refetch()}
+                className="flex-col items-stretch gap-2 rounded-none border-0 px-0"
               >
-                Retry
-              </Button>
-            </AlertDescription>
-          </Alert>
-        ) : query.data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No saved answer yet.</p>
-        ) : (
-          <ItemGroup aria-label="Your saved answers">
-            {query.data.items.map((entry, index) => (
-              <Fragment key={entry.question_key}>
-                {index > 0 ? <ItemSeparator /> : null}
-                <Item
-                  role="listitem"
-                  size="sm"
-                  className="flex-col items-stretch gap-2 rounded-none border-0 px-0"
-                >
-                  <ItemTitle className="w-auto break-words">
-                    {entry.question}
-                  </ItemTitle>
-                  {editing === entry.question_key ? (
-                    <AnswerForm
-                      entry={entry}
-                      pending={save.isPending}
-                      onCancel={() => {
-                        setEditing(null);
-                      }}
-                      onSave={(answer) => {
-                        save.mutate({
-                          key: entry.question_key,
-                          answer,
-                          done: "Answer saved.",
-                        });
-                      }}
-                    />
-                  ) : (
-                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                      <ItemContent className="min-w-0 gap-0.5">
-                        <span className="text-sm break-words whitespace-pre-wrap">
-                          {answerText(entry.answer)}
-                        </span>
-                        <ItemDescription className="text-xs">
-                          {entry.used_count === 1
-                            ? "Used once"
-                            : `Used ${entry.used_count} times`}
-                        </ItemDescription>
-                      </ItemContent>
-                      <ItemActions className="shrink-0">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={`Edit the answer to ${entry.question}`}
-                          disabled={
-                            save.isPending || create.isPending || adding
-                          }
-                          onClick={() => {
-                            setEditing(entry.question_key);
-                          }}
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          aria-label={`Forget the answer to ${entry.question}`}
-                          disabled={
-                            save.isPending || create.isPending || adding
-                          }
-                          onClick={() => {
-                            setForgetting(entry);
-                          }}
-                        >
-                          Forget
-                        </Button>
-                      </ItemActions>
-                    </div>
-                  )}
-                </Item>
-              </Fragment>
-            ))}
-          </ItemGroup>
-        )}
-      </CardContent>
+                <ItemTitle className="w-auto break-words">
+                  {entry.question}
+                </ItemTitle>
+                {editing === entry.question_key ? (
+                  <AnswerForm
+                    entry={entry}
+                    pending={save.isPending}
+                    onCancel={() => {
+                      setEditing(null);
+                    }}
+                    onSave={(answer) => {
+                      save.mutate({
+                        key: entry.question_key,
+                        answer,
+                        done: "Answer saved.",
+                      });
+                    }}
+                  />
+                ) : (
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <ItemContent className="min-w-0 gap-0.5">
+                      <span className="text-sm break-words whitespace-pre-wrap">
+                        {answerText(entry.answer)}
+                      </span>
+                      <ItemDescription className="text-xs">
+                        {entry.used_count === 1
+                          ? "Used once"
+                          : `Used ${entry.used_count} times`}
+                      </ItemDescription>
+                    </ItemContent>
+                    <ItemActions className="shrink-0">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={`Edit the answer to ${entry.question}`}
+                        disabled={save.isPending || create.isPending || adding}
+                        onClick={() => {
+                          setEditing(entry.question_key);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        aria-label={`Forget the answer to ${entry.question}`}
+                        disabled={save.isPending || create.isPending || adding}
+                        onClick={() => {
+                          setForgetting(entry);
+                        }}
+                      >
+                        Forget
+                      </Button>
+                    </ItemActions>
+                  </div>
+                )}
+              </Item>
+            </Fragment>
+          ))}
+        </ItemGroup>
+      )}
       <ConfirmDialog
         ask={
           forgetting
@@ -271,7 +243,7 @@ export function AnswerBank() {
           });
         }}
       />
-    </Card>
+    </SettingsSection>
   );
 }
 
@@ -310,7 +282,7 @@ function AnswerForm({
     <form
       noValidate
       aria-label={`Edit the answer to ${entry.question}`}
-      className="flex flex-col gap-2"
+      className="flex max-w-2xl flex-col gap-2"
       onSubmit={onSubmit}
     >
       <Field className="gap-2">
@@ -331,7 +303,11 @@ function AnswerForm({
           <FieldError id={`${id}-problem`}>{problem}</FieldError>
         ) : null}
       </Field>
-      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={pending} aria-busy={pending}>
+          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
+          Save answer
+        </Button>
         <Button
           type="button"
           variant="outline"
@@ -339,10 +315,6 @@ function AnswerForm({
           onClick={onCancel}
         >
           Cancel
-        </Button>
-        <Button type="submit" disabled={pending} aria-busy={pending}>
-          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
-          Save answer
         </Button>
       </div>
     </form>
@@ -371,7 +343,7 @@ function AddAnswerForm({
     <form
       aria-label="Add a saved answer"
       noValidate
-      className="flex flex-col gap-2 rounded-md border p-4"
+      className="flex max-w-2xl flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         if (pending) return;
@@ -430,7 +402,11 @@ function AddAnswerForm({
             : "Type an answer to reuse on other forms."}
         </FieldError>
       ) : null}
-      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <div className="flex flex-wrap gap-2">
+        <Button type="submit" disabled={pending} aria-busy={pending}>
+          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
+          Save new answer
+        </Button>
         <Button
           type="button"
           variant="outline"
@@ -438,10 +414,6 @@ function AddAnswerForm({
           onClick={onCancel}
         >
           Cancel
-        </Button>
-        <Button type="submit" disabled={pending} aria-busy={pending}>
-          {pending ? <Spinner aria-hidden="true" role={undefined} /> : null}
-          Save new answer
         </Button>
       </div>
     </form>

@@ -49,6 +49,8 @@ export interface FakeAbout {
   saves: { version: number; text: string }[];
   dones: { heading: string; version: number }[];
   steps: string[];
+  /** bodies of POST /rewrite: a part written again from the profile */
+  rewrites: { heading?: string; version: number }[];
   /** Finish the running reading with these lines (and values not taken). */
   read: (lines: string[], refused?: string[]) => void;
 }
@@ -98,6 +100,7 @@ export function fakeAbout(
     saves: [],
     dones: [],
     steps: [],
+    rewrites: [],
     read: (lines, refused = []) => {
       const reading = state.about.reading;
       if (!reading) throw new Error("no reading runs");
@@ -196,9 +199,25 @@ export function fakeAbout(
       };
       return json();
     }),
-    http.post("*/api/profile/about/:step", ({ params }) => {
+    http.post("*/api/profile/about/:step", async ({ params, request }) => {
       const step = String(params.step);
       state.steps.push(step);
+      if (step === "rewrite") {
+        const body = (await request.json()) as {
+          heading?: string;
+          version: number;
+        };
+        state.rewrites.push(body);
+        state.about = {
+          ...state.about,
+          version: state.about.version + 1,
+          parts: state.about.parts.map((part) =>
+            part.key === keyOf(body.heading ?? "")
+              ? { ...part, state: "in_step" }
+              : part,
+          ),
+        };
+      }
       const reading = state.about.reading;
       if (step === "apply" && reading) {
         state.about = {

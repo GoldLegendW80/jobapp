@@ -1,18 +1,29 @@
 import { Empty, EmptyDescription, EmptyMedia } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
+import { askText } from "@/features/agents/helpers/run-browser";
 import {
+  leasesOf,
   personOwnsInput,
   type Browser,
 } from "@/features/browser/api/browser-api";
 import { useBrowser } from "@/features/browser/api/use-browser";
 import { LiveBrowser } from "@/components/shared/browser/live-browser";
 import { HandoffBanner } from "@/components/shared/browser/handoff-banner";
+import { LiveViewPlaceholder } from "@/components/shared/browser/live-views";
 
 // How often the slot reads whether the assistant holds the browser (it ends, or starts).
 const LEASE_POLL_MS = 3_000;
 
-/** The purposes of an application's fill (api run.PURPOSE and run.FULL_AUTO_PURPOSE). */
-const FILL_PURPOSES = new Set(["apply_fill", "full_auto"]);
+/**
+ * The purposes of an application's fill: api run.PURPOSE and run.FULL_AUTO_PURPOSE, and the apply
+ * agent's of One click Apply and Review first (applier.PURPOSE, applier.REVIEW_PURPOSE).
+ */
+const FILL_PURPOSES = new Set([
+  "apply_fill",
+  "full_auto",
+  "apply_agent",
+  "apply_review",
+]);
 /** The purpose of the submit lease (api submit.PURPOSE). */
 const SUBMIT_PURPOSES = new Set(["apply_submit"]);
 
@@ -24,23 +35,30 @@ const SUBMIT_PURPOSES = new Set(["apply_submit"]);
 export type LeaseOf =
   "any" | "none" | { startedBy: string } | { application: string };
 
-/** The lease of this application, the one the live view shows; null otherwise. */
+/**
+ * The lease of this application among the person's (one per window of their browser), the one
+ * the live view shows; null otherwise.
+ */
 function applicationLease(
   browser: Browser | undefined,
   of: LeaseOf,
   purposes: ReadonlySet<string>,
 ) {
-  const lease = browser?.holder === "you" ? browser.lease : null;
-  if (!lease?.automation || lease.state === "starting" || of === "none")
-    return null;
-  if (!purposes.has(lease.purpose)) return null;
-  if (of === "any") return lease;
+  if (of === "none") return null;
+  const leases = leasesOf(browser).filter(
+    (lease) =>
+      lease.automation &&
+      lease.state !== "starting" &&
+      purposes.has(lease.purpose),
+  );
+  if (of === "any") return leases[0] ?? null;
   if ("application" in of)
-    return lease.application_id === of.application ? lease : null;
+    return (
+      leases.find((lease) => lease.application_id === of.application) ?? null
+    );
   // browserd's started_at against the api's waiting_person time: right only while both share the host clock.
-  const started = Date.parse(lease.started_at);
   const by = Date.parse(of.startedBy);
-  return started <= by ? lease : null;
+  return leases.find((lease) => Date.parse(lease.started_at) <= by) ?? null;
 }
 
 const signingIn = (lease: ReturnType<typeof applicationLease>) =>
@@ -62,7 +80,9 @@ function useApplicationLease(
  * waits for the person (browser B4's LiveBrowser, apply A10a). Without this application's lease
  * it shows `idle` in words; the "before" screenshot appears below when the fill ends. `status` is
  * the sentence of the live view's status line. `stopped`: nothing runs, so no spinner. `submit`:
- * the submit lease's slot instead, watch only.
+ * the submit lease's slot instead, watch only. `label` (and `detail`): the view of a grid of
+ * views (LiveViews, the Applications page), named and with its state; a sign in hand off then
+ * stays on the application's card (FillHandoff).
  */
 export function LiveViewSlot({
   idle,
@@ -70,12 +90,16 @@ export function LiveViewSlot({
   status = "The assistant is filling the form.",
   stopped = false,
   submit = false,
+  label,
+  detail,
 }: {
   idle: string;
   leaseOf: LeaseOf;
   status?: string;
   stopped?: boolean;
   submit?: boolean;
+  label?: string;
+  detail?: string;
 }) {
   const lease = useApplicationLease(
     leaseOf,
@@ -84,28 +108,61 @@ export function LiveViewSlot({
   if (lease && submit) {
     return (
       <div data-testid="live-view-slot">
-        <LiveBrowser key={lease.id} watchOnly status={status} />
+        <LiveBrowser
+          key={lease.id}
+          slot={lease.slot ?? 0}
+          label={label}
+          detail={detail}
+          watchOnly
+          status={status}
+        />
       </div>
     );
   }
   if (lease) {
     if (signingIn(lease)) {
-      return <HandoffBanner liveOpen />;
+      return label ? (
+        <div data-testid="live-view-slot">
+          <LiveViewPlaceholder label={label} detail={detail} state="needs-you">
+            {`The assistant waits for you to sign in to ${lease.wait_host ?? "the website"}. Sign in from this application's card.`}
+          </LiveViewPlaceholder>
+        </div>
+      ) : (
+        <HandoffBanner liveOpen />
+      );
     }
     // A wait on the page (a captcha, an e-mail code, a 403 page): browserd gave the person the
     // input for it, so the view is theirs, without Take over; it is the assistant's again after.
     const person = personOwnsInput(lease);
+    const ask = askText(lease);
     return (
       <div data-testid="live-view-slot">
         <LiveBrowser
           key={`${lease.id}:${person}`}
+          slot={lease.slot ?? 0}
+          label={label}
+          detail={detail}
           person={person}
+          needsYou={person || ask !== null}
           status={
             person
               ? "You have the keyboard and the mouse. Complete this step in the live view."
-              : status
+              : (ask ?? status)
           }
         />
+      </div>
+    );
+  }
+  if (label) {
+    return (
+      <div data-testid="live-view-slot">
+        <LiveViewPlaceholder
+          label={label}
+          detail={detail}
+          state={stopped ? "ended" : "waiting"}
+        >
+          {idle}
+        </LiveViewPlaceholder>
       </div>
     );
   }

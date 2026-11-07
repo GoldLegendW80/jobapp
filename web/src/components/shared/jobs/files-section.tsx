@@ -1,6 +1,7 @@
 import {
   ChevronRight,
   Download,
+  ExternalLink,
   Eye,
   EyeOff,
   File,
@@ -8,8 +9,18 @@ import {
   FileJson,
   FileText,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
+import { Section } from "@/components/blocks/section";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -17,6 +28,11 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { describeError } from "@/lib/api";
 
 import { fileUrl, type JobFile } from "@/features/jobs/api/jobs-api";
@@ -27,10 +43,7 @@ import { prettyJson } from "@/features/jobs/helpers/text";
 const PDF_MAGIC = "%PDF-";
 
 function FileIcon({ mime }: { mime: string }) {
-  const props = {
-    "aria-hidden": true,
-    className: "size-4 shrink-0 text-muted-foreground",
-  };
+  const props = { "aria-hidden": true };
   if (mime === "application/pdf") return <FileText {...props} />;
   if (mime === "application/json") return <FileJson {...props} />;
   if (mime === "text/x-python") return <FileCode {...props} />;
@@ -47,35 +60,22 @@ const ORIGIN_LABELS: Record<string, string> = {
 export function FilesSection({
   jobId,
   files,
-  heading = "h2",
 }: {
   jobId: string;
   files: JobFile[];
-  /** The level of its title under the posting's. */
-  heading?: "h2" | "h3";
 }) {
-  const Heading = heading;
   return (
-    <section aria-labelledby="files-title" className="flex flex-col gap-3">
-      <Heading
-        id="files-title"
-        className="text-lg font-semibold tracking-tight"
-      >
-        Files
-      </Heading>
+    <Section title="Files">
       {files.length === 0 ? (
         <p className="text-sm text-muted-foreground">No files attached.</p>
       ) : (
-        <ul
-          aria-label="Files"
-          className="flex flex-col divide-y rounded-lg border"
-        >
+        <ul aria-label="Files" className="flex flex-col gap-3">
           {files.map((file) => (
             <FileRow key={file.id} jobId={jobId} file={file} />
           ))}
         </ul>
       )}
-    </section>
+    </Section>
   );
 }
 
@@ -84,54 +84,64 @@ function FileRow({ jobId, file }: { jobId: string; file: JobFile }) {
   const pdf = file.mime === "application/pdf";
   const json = file.mime === "application/json";
   const [preview, setPreview] = useState(false);
+  const origin = ORIGIN_LABELS[file.origin];
   return (
     <Collapsible
       asChild
       open={preview}
       onOpenChange={setPreview}
-      className="flex flex-col gap-2 p-3"
+      className="flex flex-col gap-2"
     >
       <li>
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <FileIcon mime={file.mime} />
-          <span className="min-w-0 font-medium break-all">{file.name}</span>
-          <span className="text-xs text-muted-foreground tabular-nums">
-            {formatSize(file.size)}
-            {ORIGIN_LABELS[file.origin]
-              ? `, ${ORIGIN_LABELS[file.origin]}`
-              : ""}
-          </span>
-          <div className="ml-auto flex gap-2">
+        <Attachment className="w-full">
+          <AttachmentMedia>
+            <FileIcon mime={file.mime} />
+          </AttachmentMedia>
+          <AttachmentContent>
+            <AttachmentTitle className="whitespace-normal break-all">
+              {file.name}
+            </AttachmentTitle>
+            <AttachmentDescription className="tabular-nums">
+              {formatSize(file.size)}
+              {origin ? `, ${origin}` : ""}
+            </AttachmentDescription>
+          </AttachmentContent>
+          <AttachmentActions className="gap-1">
             {pdf ? (
-              <CollapsibleTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  aria-label={`${preview ? "Hide" : "Show"} preview of ${file.name}`}
-                >
-                  {preview ? (
-                    <EyeOff aria-hidden="true" />
-                  ) : (
-                    <Eye aria-hidden="true" />
-                  )}
-                  {preview ? "Hide preview" : "Preview"}
-                </Button>
-              </CollapsibleTrigger>
+              <ActionTip tip={preview ? "Hide preview" : "Preview"}>
+                <CollapsibleTrigger asChild>
+                  <AttachmentAction
+                    size="icon-sm"
+                    aria-label={`${preview ? "Hide" : "Show"} preview of ${file.name}`}
+                  >
+                    {preview ? (
+                      <EyeOff aria-hidden="true" />
+                    ) : (
+                      <Eye aria-hidden="true" />
+                    )}
+                  </AttachmentAction>
+                </CollapsibleTrigger>
+              </ActionTip>
             ) : null}
-            <Button asChild variant="outline" size="sm">
-              <a
-                href={url}
-                target={pdf ? "_blank" : undefined}
-                rel="noopener noreferrer"
-                download={pdf ? undefined : file.name}
-                aria-label={`${pdf ? "Open" : "Download"} ${file.name}`}
-              >
-                <Download aria-hidden="true" />
-                {pdf ? "Open" : "Download"}
-              </a>
-            </Button>
-          </div>
-        </div>
+            <ActionTip tip={pdf ? "Open in a new tab" : "Download"}>
+              <AttachmentAction asChild size="icon-sm">
+                <a
+                  href={url}
+                  target={pdf ? "_blank" : undefined}
+                  rel="noopener noreferrer"
+                  download={pdf ? undefined : file.name}
+                  aria-label={`${pdf ? "Open" : "Download"} ${file.name}`}
+                >
+                  {pdf ? (
+                    <ExternalLink aria-hidden="true" />
+                  ) : (
+                    <Download aria-hidden="true" />
+                  )}
+                </a>
+              </AttachmentAction>
+            </ActionTip>
+          </AttachmentActions>
+        </Attachment>
         {/* Mounted only while shown: hiding it frees the PDF's blob. */}
         {pdf ? (
           <CollapsibleContent>
@@ -141,6 +151,16 @@ function FileRow({ jobId, file }: { jobId: string; file: JobFile }) {
         {json ? <JsonViewer jobId={jobId} file={file} /> : null}
       </li>
     </Collapsible>
+  );
+}
+
+/** The word of an icon action, on hover and on focus. */
+function ActionTip({ tip, children }: { tip: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent>{tip}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -230,15 +250,11 @@ function JsonViewer({ jobId, file }: { jobId: string; file: JobFile }) {
   const [open, setOpen] = useState(false);
   const content = useJobFileJson(jobId, file.id, { enabled: open });
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="rounded-md border bg-muted/30"
-    >
+    <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger asChild>
         <Button
           variant="ghost"
-          className="group h-auto w-full justify-start gap-1 rounded-md px-3 py-2 font-normal has-[>svg]:px-3 data-[state=open]:rounded-b-none"
+          className="group h-auto w-fit justify-start gap-1 px-2 py-1 font-normal has-[>svg]:px-2"
         >
           <ChevronRight
             aria-hidden="true"
@@ -247,7 +263,7 @@ function JsonViewer({ jobId, file }: { jobId: string; file: JobFile }) {
           Show {file.name}
         </Button>
       </CollapsibleTrigger>
-      <CollapsibleContent className="border-t px-3 py-2">
+      <CollapsibleContent className="mt-2 rounded-md bg-muted px-3 py-2">
         {content.isPending ? (
           <p role="status" className="text-sm text-muted-foreground">
             Loading

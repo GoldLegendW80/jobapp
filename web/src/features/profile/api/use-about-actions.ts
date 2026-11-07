@@ -13,6 +13,7 @@ import {
   rewriteAbout,
   staleAbout,
   type About,
+  type PartKind,
 } from "./about-api";
 import { profileKey } from "./profile-api";
 import { shownPart } from "../helpers/about-parts";
@@ -69,5 +70,27 @@ export function useAboutActions(flush: () => Promise<About | undefined>) {
     }
   };
 
-  return { busy, runAction, finishPart };
+  /**
+   * After the fields without a model key saved its section: the part of that kind is written
+   * again from the profile (by code, no model), when it said what the profile held before. A
+   * part with text the profile does not have keeps it, and reads as changed in the profile.
+   */
+  const syncPart = async (kind: PartKind, before: About) => {
+    const part = before.parts.find((one) => one.kind === kind);
+    const saved = await flush();
+    if (!saved || part?.state !== "in_step") {
+      await queryClient.invalidateQueries({ queryKey: aboutKey });
+      return;
+    }
+    try {
+      queryClient.setQueryData(
+        aboutKey,
+        await rewriteAbout(part.heading, saved.version),
+      );
+    } catch {
+      await queryClient.invalidateQueries({ queryKey: aboutKey });
+    }
+  };
+
+  return { busy, runAction, finishPart, syncPart };
 }

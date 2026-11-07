@@ -11,7 +11,8 @@ import {
 } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Toggle } from "@/components/ui/toggle";
+import { ButtonGroup } from "@/components/ui/button-group";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Tooltip,
   TooltipContent,
@@ -55,6 +56,7 @@ import {
 } from "@/features/jobs/helpers/map/format";
 
 const SPHERE = spherePath();
+const regions = Object.keys(REGIONS) as Region[];
 const GRATICULE = graticulePath();
 const ZOOM_STEP = 1.5;
 const PAN_STEP = 0.15;
@@ -233,38 +235,36 @@ export function WorldMap({
   return (
     <section
       aria-labelledby={`${hintId}-title`}
-      className="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
+      className="flex min-w-0 flex-col overflow-hidden rounded-xl bg-card text-card-foreground"
     >
       <h2 id={`${hintId}-title`} className="sr-only">
         World map
       </h2>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b p-2">
-        <div
-          role="group"
+      <div className="flex flex-wrap items-center justify-between gap-2 p-3">
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
           aria-label="Region"
-          className="inline-flex flex-wrap rounded-md bg-muted p-0.5 text-xs"
+          value={
+            regions.find((region) => sameView(view, regionBox(region))) ?? ""
+          }
+          onValueChange={(region) => {
+            // Picking the framed region again keeps it framed.
+            if (region) setView(regionBox(region as Region));
+          }}
+          className="max-w-full overflow-x-auto [scrollbar-width:none]"
         >
-          {(Object.keys(REGIONS) as Region[]).map((region) => {
-            const pressed = sameView(view, regionBox(region));
-            return (
-              <Toggle
-                key={region}
-                pressed={pressed}
-                onPressedChange={() => {
-                  setView(regionBox(region));
-                }}
-                className="h-auto min-w-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-transparent hover:text-foreground data-[state=on]:bg-background data-[state=on]:text-foreground data-[state=on]:shadow-sm"
-              >
-                {REGIONS[region].label}
-              </Toggle>
-            );
-          })}
-        </div>
-        <div className="flex items-center gap-1">
+          {regions.map((region) => (
+            <ToggleGroupItem key={region} value={region}>
+              {REGIONS[region].label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <ButtonGroup aria-label="Zoom">
           <Button
             variant="outline"
-            size="icon"
-            className="size-8"
+            size="icon-sm"
             aria-label="Zoom in"
             disabled={view[2] <= W / 16 + 0.01}
             onClick={() => {
@@ -275,8 +275,7 @@ export function WorldMap({
           </Button>
           <Button
             variant="outline"
-            size="icon"
-            className="size-8"
+            size="icon-sm"
             aria-label="Zoom out"
             disabled={view[2] >= W - 0.01}
             onClick={() => {
@@ -287,8 +286,7 @@ export function WorldMap({
           </Button>
           <Button
             variant="outline"
-            size="icon"
-            className="size-8"
+            size="icon-sm"
             aria-label="Show the whole world"
             disabled={sameView(view, FULL)}
             onClick={() => {
@@ -297,7 +295,7 @@ export function WorldMap({
           >
             <RotateCcw aria-hidden="true" />
           </Button>
-        </div>
+        </ButtonGroup>
       </div>
 
       <div
@@ -420,7 +418,7 @@ export function WorldMap({
       {legend.length ? (
         <ul
           aria-label="Pin colours: the status most postings of a place have"
-          className="flex flex-wrap gap-x-3 gap-y-1 border-t px-3 py-2 text-xs text-muted-foreground"
+          className="flex flex-wrap gap-x-3 gap-y-1 px-3 py-3 text-xs text-muted-foreground"
         >
           {legend.map((status: JobStatus) => (
             <li key={status} className="flex items-center gap-1.5">

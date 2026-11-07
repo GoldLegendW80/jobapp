@@ -1,5 +1,4 @@
 import { Pencil } from "lucide-react";
-import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -19,19 +18,30 @@ import {
 } from "../../api/about-api";
 import type { AboutAction } from "@/features/profile/api/use-about-actions";
 import type { SaveState } from "@/features/profile/api/use-about-autosave";
-import { partAnchor } from "@/features/profile/helpers/about-parts";
+import { moveId, partAnchor } from "@/features/profile/helpers/about-parts";
 import { ABOUT_WORDS as W } from "@/features/profile/helpers/about-words";
+import { ItemControls } from "@/components/shared/profile/section-ui";
 import { Markdown } from "../markdown";
+import { AdvancedLine } from "./advanced-line";
 import { AppliedChanges } from "./applied-changes";
 import { NotApplied } from "./not-applied";
 import { PartEditor } from "./part-editor";
 import { PartReading } from "./part-reading";
 import { ProfileChangedAlert } from "./profile-changed-alert";
 
+/** Where a fact part stands among the fact parts, and how it moves (owner, 2026-11-07). */
+export interface PartMove {
+  position: number;
+  count: number;
+  disabled: boolean;
+  onMove: (direction: "up" | "down") => void;
+}
+
 /** One part of the document: rendered, or edited in place, with what Done found under it. */
 export function AboutPartCard({
   kindAnchor,
   index,
+  move,
   about,
   part,
   shown,
@@ -45,6 +55,8 @@ export function AboutPartCard({
 }: {
   kindAnchor: string | undefined;
   index: number;
+  /** a fact part's place among the others; none for skills and answers */
+  move?: PartMove;
   about: About;
   part: Part;
   shown: AboutPart | undefined;
@@ -79,17 +91,31 @@ export function AboutPartCard({
           </CardTitle>
           <CardDescription>{W.kinds[kind]}</CardDescription>
         </div>
-        {editing ? null : (
-          <Button
-            variant="outline"
-            size="sm"
-            aria-label={`Edit ${part.heading}`}
-            onClick={onEdit}
-          >
-            <Pencil aria-hidden="true" />
-            Edit
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {move && move.count > 1 ? (
+            <ItemControls
+              id={moveId(index)}
+              index={move.position}
+              count={move.count}
+              name={part.heading}
+              disabled={move.disabled}
+              onMove={(from, to) => {
+                move.onMove(to < from ? "up" : "down");
+              }}
+            />
+          ) : null}
+          {editing ? null : (
+            <Button
+              variant="outline"
+              size="sm"
+              aria-label={`Edit ${part.heading}`}
+              onClick={onEdit}
+            >
+              <Pencil aria-hidden="true" />
+              Edit
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-3 px-0">
         {shown?.state === "elsewhere" ? (
@@ -120,15 +146,7 @@ export function AboutPartCard({
           <p className="text-sm text-muted-foreground">{W.empty}</p>
         )}
         {kind === "skills" && about.advanced > 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {W.advanced(about.advanced)}{" "}
-            <Link
-              to="/profile?tab=skills"
-              className="font-medium text-foreground underline underline-offset-4"
-            >
-              {W.classic}
-            </Link>
-          </p>
+          <AdvancedLine count={about.advanced} />
         ) : null}
         {!editing &&
         !reading &&

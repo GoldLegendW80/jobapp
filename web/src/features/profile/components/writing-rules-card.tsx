@@ -21,7 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
-import { Group } from "@/components/shared/profile/section-ui";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 
 import { failureSentence } from "@/features/documents/api/documents-api";
 import { type DocumentSettings } from "@/features/documents/api/document-settings-api";
@@ -53,7 +53,7 @@ interface Save {
 export function WritingRulesCard() {
   const query = useDocumentSettings();
   return (
-    <Group
+    <SettingsSection
       title="Writing rules"
       description="Rules the writer follows for your CVs and letters. What breaks one is corrected."
     >
@@ -68,7 +68,7 @@ export function WritingRulesCard() {
       ) : (
         <Rules saved={query.data} />
       )}
-    </Group>
+    </SettingsSection>
   );
 }
 
@@ -143,9 +143,9 @@ function Rules({ saved: first }: { saved: DocumentSettings }) {
 
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h4 id={`${id}-phrases`} className="text-sm font-medium">
+          <h3 id={`${id}-phrases`} className="text-sm font-medium">
             Banned phrases
-          </h4>
+          </h3>
           <span className="text-xs tabular-nums text-muted-foreground">
             {phrases.length} of {PHRASES_MAX}
           </span>

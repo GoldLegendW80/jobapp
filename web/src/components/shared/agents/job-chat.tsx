@@ -9,9 +9,9 @@
  * Messages are plain text (no markdown is rendered). While an answer is pending the Send button
  * is disabled (the server would answer 409); the draft can still be written. Screen readers hear
  * each new answer once and changes to the composer hint, through polite live regions, never the
- * pieces of a growing answer (its bubble is aria-busy and not live). The list follows the newest
- * text only while the reader is at its bottom (use-stick-to-bottom.ts). Nothing here is animated but the small spinners,
- * which stand still under prefers-reduced-motion.
+ * pieces of a growing answer (its bubble is aria-busy and not live). The thread (MessageScroller)
+ * follows the newest text until the reader scrolls up, and holds a question just sent in view
+ * while it is answered. Nothing here moves under prefers-reduced-motion.
  */
 import { MessagesSquare } from "lucide-react";
 import { useLocation, useSearchParams } from "react-router";
@@ -46,7 +46,7 @@ export function JobChat({ job }: { job: JobDetail }) {
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="outline" size="sm" className="shrink-0">
+        <Button variant="outline" className="shrink-0">
           <MessagesSquare aria-hidden="true" />
           Chat
         </Button>

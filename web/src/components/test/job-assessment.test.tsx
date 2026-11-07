@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { admin, fakeSession } from "@/test/auth";
-import { makeDetail, unfoldPostingMore } from "@/test/jobs";
+import { makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -171,8 +171,6 @@ function fakeApi(
 
 beforeEach(() => {
   vi.stubGlobal("EventSource", FakeEventSource);
-  // The assessment lives under "More about this posting", opened here.
-  unfoldPostingMore();
 });
 
 afterEach(() => {

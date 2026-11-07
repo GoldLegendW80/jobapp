@@ -25,7 +25,8 @@ import {
 } from "@/components/ui/form";
 import { Switch } from "@/components/ui/switch";
 import type { SearchForm } from "@/features/profile/helpers/editor-forms";
-import { Group, TextField } from "@/components/shared/profile/section-ui";
+import { TextField } from "@/components/shared/profile/section-ui";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 
 import { failureSentence } from "@/features/documents/api/documents-api";
 import { type Spend } from "@/features/documents/api/spend-api";
@@ -87,7 +88,7 @@ export function GenerationSettingsCard({ form }: { form: Form }) {
   const [advanced, setAdvanced] = useState(false);
 
   return (
-    <Group
+    <SettingsSection
       title="Documents for new postings"
       description="A CV and a cover letter written for each new posting that fits you, ready when you open it."
     >
@@ -140,7 +141,7 @@ export function GenerationSettingsCard({ form }: { form: Form }) {
           description="Protects you from a broken sweep. The threshold is what limits spend."
         />
       </AdvancedSection>
-    </Group>
+    </SettingsSection>
   );
 }
 
@@ -196,9 +197,9 @@ function SpendFigures({ query }: { query: SpendQuery }) {
       className="flex flex-col gap-2"
       data-testid="documents-spend"
     >
-      <h4 id={id} className="text-sm font-medium">
+      <h3 id={id} className="text-sm font-medium">
         Spend
-      </h4>
+      </h3>
       {nothing ? (
         <p className="text-sm text-muted-foreground">
           Nothing spent on documents yet.

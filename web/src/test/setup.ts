@@ -33,6 +33,23 @@ if (missing("ResizeObserver", globalThis)) {
     },
   });
 }
+// The Carousel (Embla) watches which slides are in view; jsdom has no IntersectionObserver.
+if (missing("IntersectionObserver", globalThis)) {
+  Object.defineProperty(globalThis, "IntersectionObserver", {
+    writable: true,
+    value: class {
+      readonly root = null;
+      readonly rootMargin = "";
+      readonly thresholds = [];
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    },
+  });
+}
 // jsdom lays nothing out and only warns on window.scrollTo, which React Router's
 // ScrollRestoration calls on every navigation: a no op (tests spy on it where it matters).
 Object.defineProperty(window, "scrollTo", {

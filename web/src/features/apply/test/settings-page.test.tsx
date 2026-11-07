@@ -185,21 +185,24 @@ async function openPage() {
   return { user, ...app };
 }
 
+// A group of settings, or one threshold of "Fit thresholds": a region named by its heading.
 const cardOf = (heading: string) =>
-  screen
-    .getByRole("heading", { name: heading })
-    .closest<HTMLElement>("[data-slot=card]") as HTMLElement;
+  screen.getByRole("region", { name: heading });
 
 describe("the Applications page", () => {
-  it("has a distinct settings title and heading", async () => {
+  it("has a distinct settings title, under the Settings heading with Applications open", async () => {
     fakeSettings();
     fakeCaps([]);
     fakeBank([]);
     await openPage();
     expect(document.title).toMatch(/^Application settings/);
     expect(
-      screen.getByRole("heading", { name: "Application settings" }),
+      screen.getByRole("heading", { level: 1, name: "Settings" }),
     ).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Applications" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("leaves the review box unticked by default, and ticking it saves review_before_send", async () => {
@@ -256,6 +259,14 @@ describe("the Applications page", () => {
     fakeCaps([]);
     fakeBank([]);
     await openPage();
+    // The three side by side, in one group.
+    const thresholds = cardOf("Fit thresholds");
+    for (const name of [
+      "Show postings from",
+      "Write documents from",
+      "Apply automatically from",
+    ])
+      expect(thresholds).toContainElement(cardOf(name));
     expect(
       within(cardOf("Show postings from")).getByText("60"),
     ).toBeInTheDocument();
@@ -549,7 +560,10 @@ describe("the Applications page", () => {
       await screen.findByRole("button", { name: /Account menu/ }),
     );
     await user.click(await screen.findByRole("menuitem", { name: "Settings" }));
-    await screen.findByRole("heading", { level: 1, name: "Search settings" });
+    await screen.findByRole("form", { name: "Search" });
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Settings" }),
+    ).toBeVisible();
     expect(app.location()).toBe("/settings/search");
     await user.click(screen.getByRole("tab", { name: "Applications" }));
     await screen.findByRole("heading", { name: "Apply automatically from" });

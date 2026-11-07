@@ -50,10 +50,11 @@ export function WizardStep({
             id="welcome-step"
             ref={heading}
             tabIndex={-1}
-            className="text-lg font-semibold tracking-tight outline-none"
+            className="flex flex-col gap-1 text-lg font-medium tracking-tight outline-none"
           >
-            <span className="text-muted-foreground">
-              Step {index + 1} of {STEP_IDS.length}:
+            <span className="text-sm font-normal tracking-normal text-muted-foreground">
+              Step {index + 1} of {STEP_IDS.length}
+              <span className="sr-only">:</span>
             </span>{" "}
             {STEP_NAMES[step]}
           </h2>

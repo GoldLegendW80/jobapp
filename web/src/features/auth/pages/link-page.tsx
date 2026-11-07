@@ -1,11 +1,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { CircleAlert, RotateCw } from "lucide-react";
+import { CircleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { useNavigate, useParams } from "react-router";
 import { toast } from "sonner";
 import { z } from "zod";
 
+import { LoadError } from "@/components/blocks/load-error";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -106,25 +107,8 @@ export function LinkPage({ mode }: { mode: Mode }) {
               <h1 className="text-xl">{COPY[mode].title}</h1>
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex flex-col gap-4">
-            <Alert variant="destructive">
-              <CircleAlert aria-hidden="true" />
-              <AlertDescription>
-                {isApiError(check.error) &&
-                (check.error.kind === "network" ||
-                  check.error.kind === "timeout")
-                  ? SERVER_UNREACHABLE
-                  : describeError(check.error)}
-              </AlertDescription>
-            </Alert>
-            <Button
-              variant="outline"
-              onClick={() => void check.refetch()}
-              disabled={check.isFetching}
-            >
-              <RotateCw aria-hidden="true" />
-              Retry
-            </Button>
+          <CardContent>
+            <LoadError query={check}>Your link could not be checked.</LoadError>
           </CardContent>
         </Card>
       </AuthLayout>

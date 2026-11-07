@@ -79,6 +79,14 @@ export const MODE_WORDS: Record<Mode, string> = {
   full_auto: WORDING.fullAuto,
 };
 
+/** What a Like does, in the mode the deck says a Like runs in (the Applications settings' words). */
+export const MODE_SENTENCES: Record<Mode, string> = {
+  review:
+    "A Like writes your CV and letter. The app fills the form and waits for your approval before it submits.",
+  full_auto:
+    "Your Like is your approval: the app fills the form, holds it so you can cancel, checks it once more, then submits it for you.",
+};
+
 /** The toast after a Like, in the mode the deck said a Like runs in. */
 export const LIKED: Record<Mode, string> = {
   review: "Liked. Your documents are being written.",

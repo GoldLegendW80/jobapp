@@ -491,11 +491,11 @@ describe("model access card", () => {
           : HttpResponse.json(saved),
     });
     const { user } = await openCard();
-    const card = screen
-      .getByRole("heading", { level: 2, name: "Model access" })
-      .closest("[data-slot=card]") as HTMLElement;
+    const card = screen.getByRole("region", { name: "Model access" });
     expect(
-      await within(card).findByText("Database unavailable."),
+      await within(card).findByText(
+        "Your credential could not be loaded. Database unavailable.",
+      ),
     ).toBeVisible();
     fail = false;
     await user.click(within(card).getByRole("button", { name: "Retry" }));

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { admin, fakeSession, member } from "@/test/auth";
+import { fakeDocuments } from "@/test/documents";
 import {
   fakeProfile,
   haraldLike,
@@ -32,21 +33,46 @@ function pushSave(state: FakeProfile, section: SectionName, data: unknown) {
   });
 }
 
+const SECTION_NAMES: Record<string, string> = {
+  identity: "Identity",
+  experience: "Experience",
+  facts: "Facts",
+  skills: "Skills",
+  answers: "Answers",
+};
+
+/** More actions, History, then the section, on the profile page. */
+async function chooseHistory(
+  user: ReturnType<typeof userEvent.setup>,
+  section: string,
+) {
+  await user.click(screen.getByRole("button", { name: "More actions" }));
+  (await screen.findByRole("menuitem", { name: "History" })).focus();
+  await user.keyboard("{ArrowRight}");
+  await user.click(
+    await screen.findByRole("menuitem", { name: SECTION_NAMES[section] }),
+  );
+}
+
+/** The History of a section, from the profile page (Settings, Search for the search). */
 async function openHistory(section = "identity", path?: string) {
   const user = userEvent.setup();
-  // The search is in Settings, Search (owner, 2026-11-05), with its History.
+  // The search is in Settings, Search (owner, 2026-11-05), with its History button.
   const settings = section === "search";
-  renderApp(
-    path ?? (settings ? "/settings/search" : `/profile?tab=${section}`),
-  );
+  fakeDocuments();
+  renderApp(path ?? (settings ? "/settings/search" : "/profile"));
   await screen.findByRole("heading", {
     level: 1,
-    name: settings ? "Search settings" : "Profile",
+    name: settings ? "Settings" : "Profile",
   });
-  if (settings) await screen.findByRole("form", { name: "Search" });
-  await user.click(
-    screen.getByRole("button", { name: `History of ${section}` }),
-  );
+  if (settings) {
+    await screen.findByRole("form", { name: "Search" });
+    await user.click(
+      screen.getByRole("button", { name: `History of ${section}` }),
+    );
+  } else {
+    await chooseHistory(user, section);
+  }
   const drawer = await screen.findByRole("dialog", {
     name: `${section.charAt(0).toUpperCase()}${section.slice(1)} history`,
   });
@@ -348,15 +374,14 @@ describe("restore", () => {
     fakeSession(admin);
     const state = twoIdentitySaves();
     const user = userEvent.setup();
-    renderApp("/profile?tab=identity");
+    fakeDocuments();
+    renderApp("/profile");
     await screen.findByRole("heading", { level: 1, name: "Profile" });
     const field = screen.getByLabelText("Headline");
     await user.clear(field);
     await user.type(field, "Typed but not saved");
     expect(screen.getByText("Unsaved changes")).toBeVisible();
-    await user.click(
-      screen.getByRole("button", { name: "History of identity" }),
-    );
+    await chooseHistory(user, "identity");
     const drawer = await screen.findByRole("dialog", {
       name: "Identity history",
     });

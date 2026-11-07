@@ -116,7 +116,7 @@ test("apply on the fake Lever form: the parse corrected, approve, submitted once
   await waitForPostingDocuments(page.request, job);
 
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply" });
+  const section = page.getByRole("region", { name: "Your application" });
   await startReviewFirst(page);
   await expect(
     section.getByRole("img", { name: /before the click/ }),
@@ -142,7 +142,7 @@ test("apply on the fake Lever form: the parse corrected, approve, submitted once
     } else if (await row.getByRole("combobox").count()) {
       await row.getByRole("combobox").selectOption({ index: 1 });
     } else {
-      await row.getByRole("button", { name: "No", exact: true }).click();
+      await row.getByRole("radio", { name: "No", exact: true }).click();
     }
     await expect(open).toHaveCount(before - 1);
   }
@@ -215,7 +215,7 @@ test("apply on the fake custom form: the submit designated and outlined, submitt
   await waitForPostingDocuments(page.request, job);
 
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply" });
+  const section = page.getByRole("region", { name: "Your application" });
   await startReviewFirst(page);
   const before = section.getByRole("img", { name: /before the click/ });
   await expect(before).toBeVisible({ timeout: 300_000 });

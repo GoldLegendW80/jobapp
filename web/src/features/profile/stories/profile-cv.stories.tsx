@@ -1,8 +1,11 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { http, HttpResponse } from "msw";
 
+import { userEvent, within } from "storybook/test";
+
 import { AppAt } from "@/design-system/app-at";
 import { fakeCvPages, profileCvs } from "@/design-system/fixtures/camille-cvs";
+import { fakeDocumentReads } from "@/design-system/fixtures/documents";
 import {
   camille,
   camilleProfile,
@@ -21,11 +24,11 @@ const meta = {
     docs: {
       description: {
         component:
-          "The person's base CVs, the ones every document for a posting is written from. Routes /profile/cv (the list, in the classic editor) and /profile/cv/:id (one CV, its pages, versions and editor).",
+          "The person's base CVs, the ones every document for a posting is written from: the list is the first section of the profile page (/profile#your-cv, where /profile/cv lands), and each CV has a page of its own below the profile (/profile/cv/:id: its name, Make default, Rename and Delete, then the CV).",
       },
     },
   },
-  render: () => <AppAt path="/profile/cv" />,
+  render: () => <AppAt path="/profile#your-cv" />,
 } satisfies Meta;
 
 export default meta;
@@ -33,6 +36,7 @@ type Story = StoryObj<typeof meta>;
 
 /** Camille, her profile and her two CVs; the page images drawn. */
 function camilleCvs(cvs = profileCvs()) {
+  fakeDocumentReads();
   fakeSession(camille);
   fakeProfile(camilleProfile());
   const documents = fakeDocuments({ cvs, consent: { accepted: true } });
@@ -114,6 +118,40 @@ export const OpenACvThatNoLongerExists: Story = {
   },
 };
 
+/** As a job seeker, I want to rename a CV from its page, so that I tell my CVs apart in the list and on a posting. */
+export const RenameMyCv: Story = {
+  render: () => <AppAt path="/profile/cv/cv-camille" />,
+  beforeEach: () => {
+    camilleCvs();
+  },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(
+      await within(canvasElement).findByRole("button", {
+        name: /^Rename /,
+      }),
+    );
+  },
+};
+
+/** As a job seeker, I want deleting a CV to ask me first and say what happens to the default, so that I never lose one by a slip. */
+export const DeleteMyCv: Story = {
+  render: () => <AppAt path="/profile/cv/cv-camille" />,
+  beforeEach: () => {
+    camilleCvs();
+  },
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(
+      await within(canvasElement).findByRole("button", {
+        name: "More actions",
+      }),
+    );
+    await userEvent.click(
+      await body.findByRole("menuitem", { name: "Delete this CV" }),
+    );
+  },
+};
+
 /** As a job seeker, I want to know when my CVs could not be loaded, so that I can try again. */
 export const CvsUnavailable: Story = {
   beforeEach: () => {
@@ -126,8 +164,30 @@ export const CvsUnavailable: Story = {
   },
 };
 
+/** As a job seeker, I want a CV's page to say when the CVs could not be loaded, so that I can try again. */
+export const CvUnavailable: Story = {
+  render: () => <AppAt path="/profile/cv/cv-camille" />,
+  beforeEach: () => {
+    camilleCvs();
+    server.use(
+      http.get("*/api/documents/base-cvs", () =>
+        HttpResponse.json({ detail: "Server error" }, { status: 500 }),
+      ),
+    );
+  },
+};
+
 /** As a job seeker, I want my CVs to read well on my phone, so that I can check one before an interview. */
 export const CheckMyCvsOnMyPhone: Story = {
+  globals: { viewport: { value: "mobile2", isRotated: false } },
+  beforeEach: () => {
+    camilleCvs();
+  },
+};
+
+/** As a job seeker, I want one CV to read well on my phone, so that I can check it before an interview. */
+export const CheckOneCvOnMyPhone: Story = {
+  render: () => <AppAt path="/profile/cv/cv-camille" />,
   globals: { viewport: { value: "mobile2", isRotated: false } },
   beforeEach: () => {
     camilleCvs();

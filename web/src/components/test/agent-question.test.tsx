@@ -77,6 +77,35 @@ describe("One click Apply's question (A19)", () => {
     ).toBeEnabled();
   });
 
+  it.each([
+    ["Verify you are human", "Open the live view to solve the check"],
+    ["Code de vérification", "Open the live view to enter the code"],
+    ["Password", "Open the live view to sign in"],
+    ["Upload a copy of your ID", "Open the live view"],
+  ])(
+    "names the live view after the step, %s, and keeps I did it, go on the one primary",
+    (label, open) => {
+      renderWithQuery(
+        <AgentQuestion
+          application={asked()}
+          question={{
+            ...FACT,
+            kind: "action",
+            label,
+            sentence: "Do it there.",
+          }}
+        />,
+      );
+      expect(screen.getByRole("button", { name: open })).toHaveAttribute(
+        "data-variant",
+        "outline",
+      );
+      expect(
+        screen.getByRole("button", { name: "I did it, go on" }),
+      ).toHaveAttribute("data-variant", "default");
+    },
+  );
+
   it("after a possible send, warns first and makes the answer a Try again", async () => {
     const sent: unknown[] = [];
     const application = {

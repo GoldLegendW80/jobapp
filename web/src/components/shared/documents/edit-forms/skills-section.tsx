@@ -7,17 +7,16 @@ import { useListMoves } from "@/features/documents/hooks/use-list-moves";
 import { MAX, listAt } from "@/features/documents/helpers/edit-content";
 import { inputId, type Form } from "@/features/documents/helpers/edit-form";
 import { EntryButtons, TextField } from "../edit-fields";
-import { FormSection } from "./form-section";
 import { TermsField } from "./terms-field";
 
-/** The CV's skills: groups of terms, each with its label. */
+/** The CV's skills: groups of terms, each with its label. Drawn where the page shows them. */
 export function SkillsSection({ form }: { form: Form }) {
   const path = ["skills"] as const;
   const groups = listAt(form.draft, path);
   const moves = useListMoves(form, path, "Group");
   const base = inputId(form, path);
   return (
-    <FormSection title="Skills">
+    <>
       {groups.map((_, index) => (
         <FieldSet key={index} className="min-w-0 gap-2 border-t pt-3">
           <FieldLegend variant="label" className="mb-0">
@@ -65,6 +64,6 @@ export function SkillsSection({ form }: { form: Form }) {
       <p aria-live="polite" className="sr-only">
         {moves.said}
       </p>
-    </FormSection>
+    </>
   );
 }

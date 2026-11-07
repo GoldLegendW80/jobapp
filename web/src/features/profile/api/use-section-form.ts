@@ -22,6 +22,7 @@ import {
   type SectionData,
   type SectionName,
 } from "./profile-api";
+import { sameData } from "../helpers/diff";
 import {
   serverFieldError,
   validationDetail,
@@ -60,7 +61,9 @@ export interface SectionForm<F extends FieldValues> {
 /**
  * One editable section: the form, its Save (PUT with the revision the form was loaded from),
  * 422 errors on the field the api names, the 409 dialog, the toast, and the dirty flag the page
- * uses for its unsaved-changes guard.
+ * uses for its unsaved-changes guard. Several forms share the profile page, and the api counts
+ * one revision for the whole profile: when the profile moves on and what this form edits
+ * (`toForm` of the section) did not change, the form takes the new revision as its base.
  */
 export function useSectionForm<S extends SectionName, F extends FieldValues>({
   section,
@@ -81,6 +84,15 @@ export function useSectionForm<S extends SectionName, F extends FieldValues>({
   });
   // The revision this form's data was read at: a save based on it never overwrites a newer one.
   const base = useRef(profile.revision);
+  const baseData = useRef(profile.sections[section]);
+  // A save of another section of the page (or of what this form leaves out) is no conflict.
+  useEffect(() => {
+    if (profile.revision <= base.current) return;
+    const mine = profile.sections[section];
+    if (!sameData(toForm(mine), toForm(baseData.current))) return;
+    base.current = profile.revision;
+    baseData.current = mine;
+  }, [profile, section, toForm]);
   const [formError, setFormError] = useState<string>();
   const [conflict, setConflict] = useState<Conflict>();
   const label = SECTION_LABELS[section];
@@ -105,6 +117,7 @@ export function useSectionForm<S extends SectionName, F extends FieldValues>({
     onSuccess: (saved) => {
       client.setQueryData(profileKey, saved);
       base.current = saved.revision;
+      baseData.current = saved.sections[section];
       form.reset(toForm(saved.sections[section]));
       toast.success(`${label} saved.`);
       onSaved?.(saved);
@@ -144,6 +157,7 @@ export function useSectionForm<S extends SectionName, F extends FieldValues>({
         : old,
     );
     base.current = current.revision;
+    baseData.current = current.sections[section];
   };
 
   const keepEditing = () => {

@@ -21,9 +21,12 @@ export function SaveSection({
   const hasProblems = Object.keys(agent.problems).length > 0;
   const savingNew = agent.saving && !agent.reverting;
   return (
-    <AgentSection id="save" title="Save">
+    <AgentSection
+      title="Save"
+      description="Each save is a new version, and the history of versions keeps every one."
+    >
       {agent.newer ? (
-        <Alert>
+        <Alert variant="warning">
           <CircleAlert aria-hidden="true" />
           <AlertDescription className="flex flex-col gap-2">
             <p>
@@ -41,7 +44,7 @@ export function SaveSection({
           </AlertDescription>
         </Alert>
       ) : null}
-      <Field className="gap-2">
+      <Field className="max-w-xl gap-2">
         <FieldLabel htmlFor="agent-note">Note, optional</FieldLabel>
         <Input
           id="agent-note"

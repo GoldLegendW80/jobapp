@@ -7,9 +7,11 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { format, setDate, startOfMonth, subMonths } from "date-fns";
 import { delay, http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { formatDate } from "@/lib/format";
 import { admin, fakeSession } from "@/test/auth";
 import {
   csvJobs,
@@ -21,6 +23,7 @@ import {
 import { phoneScreen } from "@/test/media";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { crumb } from "@/test/breadcrumb";
 
 import { PAGE_SIZE } from "../api/jobs-api";
 import { SEARCH_DEBOUNCE_MS } from "../helpers/filters";
@@ -67,16 +70,32 @@ function fakeDetails() {
   );
 }
 
-/** The sheet of the toolbar's Filters button, opened. */
+/** The sheet of the toolbar's Filters button, opened, its chart and dates loaded (they load with
+ * the sheet). */
 async function openFilters(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: /^Filters/ }));
-  return screen.findByRole("dialog", { name: "Filters" });
+  const sheet = await screen.findByRole("dialog", { name: "Filters" });
+  await within(sheet).findByRole("region", { name: "Fit distribution" });
+  await within(sheet).findByLabelText("Found from");
+  return sheet;
+}
+
+/** jsdom lays nothing out: the fit chart's box gets a size, so Recharts draws its bars. */
+function sizeCharts() {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+    function (this: HTMLElement) {
+      return this.classList.contains("recharts-responsive-container")
+        ? new DOMRect(0, 0, 320, 144)
+        : Element.prototype.getBoundingClientRect.call(this);
+    },
+  );
 }
 
 beforeEach(() => {
   fakeSession(admin);
   fakeDetails();
   scrollWindowTo(0);
+  sizeCharts();
   vi.spyOn(window, "scrollTo").mockImplementation(() => {});
 });
 
@@ -89,12 +108,12 @@ async function openJobs(path = "/jobs") {
   return app;
 }
 
-describe("KPI tiles", () => {
+describe("status filter", () => {
   it("show the count of every status in pipeline order", async () => {
     fakeJobsApi(csvJobs());
     await openJobs();
     const tiles = within(
-      screen.getByRole("region", { name: "Postings per status" }),
+      screen.getByRole("toolbar", { name: "Postings per status" }),
     ).getAllByRole("button");
     expect(tiles.map((tile) => tile.getAttribute("aria-label"))).toEqual(
       Object.entries(CSV_COUNTS).map(
@@ -130,7 +149,7 @@ describe("KPI tiles", () => {
     });
     expect(kpi("Applied")).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByText("29 postings match")).toBeInTheDocument();
-    // The tiles keep every count: they ignore the status filter.
+    // The toggles keep every count: they ignore the status filter.
     expect(kpi("Found")).toHaveAccessibleName("Found: 158");
 
     await user.click(kpi("Applied"));
@@ -140,7 +159,7 @@ describe("KPI tiles", () => {
     expect(kpi("Applied")).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("a click on another tile replaces the status filter", async () => {
+  it("a click on another status replaces the status filter", async () => {
     fakeJobsApi(csvJobs());
     const user = userEvent.setup();
     const { location } = await openJobs("/jobs?status=found&status=staged");
@@ -179,7 +198,7 @@ describe("fit histogram", () => {
     await openJobs();
     // The chart sits in the Filters sheet, beside the fit range it sets.
     const sheet = await openFilters(user);
-    const chart = within(sheet).getByRole("list", {
+    const chart = within(sheet).getByRole("group", {
       name: "Postings per fit range",
     });
     const bars = within(chart).getAllByRole("button");
@@ -189,7 +208,7 @@ describe("fit histogram", () => {
     expect(within(sheet).getByText("1 unscored")).toBeInTheDocument();
   });
 
-  it("a click on a bucket sets the fit range, a second click clears it", async () => {
+  it("a click on a bucket sets the fit range, a second click or Enter on it clears it", async () => {
     const api = fakeJobsApi(csvJobs());
     const user = userEvent.setup();
     const { location } = await openJobs();
@@ -211,6 +230,17 @@ describe("fit histogram", () => {
       expect(location()).toBe("/jobs");
     });
     expect(screen.getByLabelText("Fit from")).toHaveValue("");
+    // The bars are in the tab order, and Enter or Space on one picks it as a click does.
+    bucket().focus();
+    expect(bucket()).toHaveFocus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(location()).toBe("/jobs?fit_min=80&fit_max=89");
+    });
+    await user.keyboard(" ");
+    await waitFor(() => {
+      expect(location()).toBe("/jobs");
+    });
   });
 });
 
@@ -250,7 +280,7 @@ describe("filters and the URL", () => {
     expect(within(sheet).getByLabelText("Company")).toHaveValue("Dust");
     expect(within(sheet).getByLabelText("Sort")).toHaveValue("fit");
     expect(within(sheet).getByLabelText("Found from")).toHaveValue(
-      "2026-01-01",
+      "1 Jan 2026",
     );
     expect(within(sheet).getByLabelText("Fit from")).toHaveValue("10");
     expect(
@@ -369,24 +399,101 @@ describe("filters and the URL", () => {
     );
   });
 
-  it("sets found dates and refuses a range the wrong way round", async () => {
+  it("sets found dates typed by hand and refuses a range the wrong way round", async () => {
     fakeJobsApi(csvJobs());
+    const user = userEvent.setup();
     const { location } = await openJobs();
-    await openFilters(userEvent.setup());
-    fireEvent.change(screen.getByLabelText("Found from"), {
-      target: { value: "2026-03-01" },
-    });
+    await openFilters(user);
+    await user.type(screen.getByLabelText("Found from"), "1 Mar 2026{Enter}");
     await waitFor(() => {
       expect(location()).toBe("/jobs?found_from=2026-03-01");
     });
-    fireEvent.change(screen.getByLabelText("Found to"), {
-      target: { value: "2026-02-01" },
-    });
+    // The field shows the date as the app writes dates.
+    expect(screen.getByLabelText("Found from")).toHaveValue("1 Mar 2026");
+    await user.type(screen.getByLabelText("Found to"), "2026-02-01{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "The first date is after the second.",
     );
     expect(location()).toBe("/jobs?found_from=2026-03-01");
+    expect(screen.getByLabelText("Found to")).toHaveAttribute(
+      "aria-invalid",
+      "true",
+    );
+    await user.clear(screen.getByLabelText("Found to"));
+    await user.type(screen.getByLabelText("Found to"), "someday{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Type a date as 6 Nov 2026.",
+    );
+    await user.clear(screen.getByLabelText("Found to"));
+    await user.type(screen.getByLabelText("Found to"), "15 Mar 2026{Enter}");
+    await waitFor(() => {
+      expect(location()).toBe(
+        "/jobs?found_from=2026-03-01&found_to=2026-03-15",
+      );
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("picks the found dates on a calendar, either way round, with the keyboard too", async () => {
+    fakeJobsApi(csvJobs());
+    const user = userEvent.setup();
+    const { location } = await openJobs();
+    await openFilters(user);
+    // Last month: every day of it is in the past, so none is disabled.
+    const month = subMonths(startOfMonth(new Date()), 1);
+    const day = (n: number) => setDate(month, n);
+    const dayButton = (n: number) =>
+      screen.getByRole("button", {
+        name: new RegExp(format(day(n), "MMMM do, yyyy")),
+      });
+    const calendar = screen.getByRole("button", {
+      name: "Pick the dates on a calendar",
+    });
+    await user.click(calendar);
+    await user.click(
+      await screen.findByRole("button", { name: /previous month/i }),
+    );
+    // The later day first: the range is put the right way round.
+    await user.click(dayButton(20));
+    await waitFor(() => {
+      expect(location()).toBe(
+        `/jobs?found_from=${format(day(20), "yyyy-MM-dd")}`,
+      );
+    });
+    await user.click(dayButton(10));
+    await waitFor(() => {
+      expect(location()).toBe(
+        `/jobs?found_from=${format(day(10), "yyyy-MM-dd")}&found_to=${format(day(20), "yyyy-MM-dd")}`,
+      );
+    });
+    // The second pick closes the calendar and the fields show the range.
+    await waitFor(() => {
+      expect(screen.queryByRole("grid")).toBeNull();
+    });
+    expect(screen.getByLabelText("Found from")).toHaveValue(
+      formatDate(format(day(10), "yyyy-MM-dd")),
+    );
+    // Keyboard: the calendar opens with the focus on the range's first day, the arrows move
+    // between days, Enter picks.
+    calendar.focus();
+    await user.keyboard("{Enter}");
+    await screen.findByRole("grid");
+    await waitFor(() => {
+      expect(dayButton(10)).toHaveFocus();
+    });
+    await user.keyboard("{ArrowRight}{ArrowRight}{Enter}");
+    await waitFor(() => {
+      expect(location()).toBe(
+        `/jobs?found_from=${format(day(12), "yyyy-MM-dd")}`,
+      );
+    });
+    await user.keyboard("{ArrowDown}{Enter}");
+    await waitFor(() => {
+      expect(location()).toBe(
+        `/jobs?found_from=${format(day(12), "yyyy-MM-dd")}&found_to=${format(day(19), "yyyy-MM-dd")}`,
+      );
+    });
+  }, 15_000);
 
   it("changes the sort", async () => {
     const api = fakeJobsApi(csvJobs());
@@ -532,15 +639,15 @@ describe("list", () => {
     const user = userEvent.setup();
     renderApp("/jobs");
     const empty = await screen.findByRole("region", {
-      name: "No postings yet.",
+      name: "No postings yet",
     });
     expect(empty).toHaveTextContent(
       "Tell the app where to look and it brings postings here.",
     );
     expect(screen.queryByRole("list", { name: "Postings" })).toBeNull();
-    // Nothing to count or filter: the tiles and the toolbar are left out, and no pane is empty.
+    // Nothing to count or filter: the status filter and the toolbar are left out, and no pane is empty.
     expect(
-      screen.queryByRole("region", { name: "Postings per status" }),
+      screen.queryByRole("toolbar", { name: "Postings per status" }),
     ).toBeNull();
     expect(screen.queryByRole("search")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Filters/ })).toBeNull();
@@ -552,7 +659,12 @@ describe("list", () => {
       within(empty).getByRole("button", { name: "Find jobs" }),
     ]);
     expect(screen.queryByRole("button", { name: "Add a posting" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Past searches" })).toBeVisible();
+    // The header keeps its menu: the past searches and the automatic search.
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    expect(
+      await screen.findByRole("menuitem", { name: "Past searches" }),
+    ).toBeVisible();
+    await user.keyboard("{Escape}");
     await user.click(
       within(empty).getByRole("button", { name: "Add a posting by hand" }),
     );
@@ -561,19 +673,19 @@ describe("list", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps the tiles, the toolbar and the chart when a filter hides every posting", async () => {
+  it("keeps the status filter, the toolbar and the chart when a filter hides every posting", async () => {
     fakeJobsApi(csvJobs());
     const user = userEvent.setup();
     renderApp("/jobs?q=nothing+like+this");
     await screen.findByText("No postings match these filters");
     expect(
-      screen.getByRole("region", { name: "Postings per status" }),
+      screen.getByRole("toolbar", { name: "Postings per status" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("search", { name: "Filter postings" }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByRole("region", { name: "No postings yet." }),
+      screen.queryByRole("region", { name: "No postings yet" }),
     ).toBeNull();
     expect(
       screen.queryByRole("region", { name: "Selected posting" }),
@@ -621,11 +733,13 @@ describe("list", () => {
       within(chart).getByRole("button", {
         name: "Fit 50 to 59: 5,100 postings",
       }),
-    ).toHaveTextContent("5,100");
+    ).toBeInTheDocument();
+    // The count over the bar.
+    expect(within(chart).getByText("5,100")).toBeInTheDocument();
     expect(chart).toHaveTextContent("1,234 unscored");
   });
 
-  it("shows the tiles as unavailable, not loading, when the list cannot be loaded", async () => {
+  it("shows the counts as unavailable, not loading, when the list cannot be loaded", async () => {
     fakeJobsApi([], {
       respond: () =>
         HttpResponse.json({ detail: "database down" }, { status: 503 }),
@@ -633,12 +747,13 @@ describe("list", () => {
     renderApp("/jobs");
     await screen.findByText(/The postings could not be loaded\./);
     const tiles = within(
-      screen.getByRole("region", { name: "Postings per status" }),
+      screen.getByRole("toolbar", { name: "Postings per status" }),
     ).getAllByRole("button");
     expect(tiles).toHaveLength(9);
     for (const tile of tiles) {
       expect(tile.getAttribute("aria-label")).toMatch(/: unavailable$/);
-      expect(tile).toHaveTextContent("Unavailable");
+      expect(tile.querySelector("[data-slot=skeleton]")).toBeNull();
+      expect(tile).not.toHaveTextContent(/\d/);
     }
   });
 
@@ -763,6 +878,20 @@ describe("the selected posting beside the list", () => {
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 
+  it("shares the width between the list and the posting through a handle", async () => {
+    fakeJobsApi(csvJobs());
+    await openJobs();
+    const handle = screen.getByRole("separator", { name: "Width of the list" });
+    // The list on one side of the handle, the posting on the other.
+    const [list, posting] = Array.from(
+      handle.parentElement!.querySelectorAll(":scope > [data-panel]"),
+    );
+    expect(list).toContainElement(
+      screen.getByRole("list", { name: "Postings" }),
+    );
+    expect(posting).toContainElement(pane());
+  });
+
   it("shows the posting the URL names, so a reload or a shared link opens on it", async () => {
     fakeJobsApi(csvJobs());
     const { location } = await openJobs(`/jobs?status=found&job=${idOf(3)}`);
@@ -814,7 +943,7 @@ describe("the selected posting beside the list", () => {
     ).toBeVisible();
   });
 
-  it("a click on the title opens /jobs/:id, and its Back returns to the same view and posting", async () => {
+  it("a click on the title opens /jobs/:id, and its breadcrumb's Jobs returns to the same view and posting", async () => {
     fakeJobsApi(csvJobs());
     const user = userEvent.setup();
     const { location } = await openJobs("/jobs?status=found");
@@ -823,7 +952,7 @@ describe("the selected posting beside the list", () => {
     );
     expect(location()).toBe(`/jobs/${idOf(2)}`);
     await screen.findByRole("heading", { level: 1, name: "Engineer 2" });
-    expect(screen.getByRole("link", { name: "Back to jobs" })).toHaveAttribute(
+    expect(crumb("Jobs")).toHaveAttribute(
       "href",
       `/jobs?status=found&job=${idOf(2)}`,
     );
@@ -839,10 +968,7 @@ describe("the selected posting beside the list", () => {
     expect(full).toHaveAttribute("href", `/jobs/${idOf(2)}`);
     await user.click(full);
     expect(location()).toBe(`/jobs/${idOf(2)}`);
-    expect(screen.getByRole("link", { name: "Back to jobs" })).toHaveAttribute(
-      "href",
-      `/jobs?job=${idOf(2)}`,
-    );
+    expect(crumb("Jobs")).toHaveAttribute("href", `/jobs?job=${idOf(2)}`);
   });
 
   it("arrow keys move the selection, the pane follows, and Enter opens the posting", async () => {
@@ -943,6 +1069,7 @@ describe("on a phone", () => {
     expect(
       screen.queryByRole("region", { name: "Selected posting" }),
     ).toBeNull();
+    expect(screen.queryByRole("separator")).toBeNull();
     expect(
       dataRows().filter((item) => item.hasAttribute("aria-current")),
     ).toEqual([]);
@@ -971,7 +1098,7 @@ describe("on a phone", () => {
     await user.click(toggle);
     const sheet = await screen.findByRole("dialog", { name: "Filters" });
     expect(
-      within(sheet).getByRole("region", { name: "Fit distribution" }),
+      await within(sheet).findByRole("region", { name: "Fit distribution" }),
     ).toBeInTheDocument();
     await user.click(within(sheet).getByRole("button", { name: "Type: CDI" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "CDI" }));

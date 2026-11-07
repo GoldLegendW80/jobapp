@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { fakeAnswer, fakeApplication, leftAnswer } from "@/test/apply";
@@ -6,6 +7,66 @@ import { fakeAnswer, fakeApplication, leftAnswer } from "@/test/apply";
 import { AnswerEditor } from "@/components/shared/apply/answer-editor";
 import { statusLine } from "@/features/apply/helpers/apply-state";
 import { FieldsList } from "@/components/shared/apply/fields-list";
+
+describe("a yes or no", () => {
+  const editor = (value: unknown, onSave = vi.fn().mockResolvedValue(true)) => {
+    render(
+      <AnswerEditor
+        answer={fakeAnswer("remote", "Open to remote work", value, {
+          kind: "yes_no",
+        })}
+        saving={false}
+        onSave={onSave}
+        onDirtyChange={vi.fn()}
+        remember="on"
+      />,
+    );
+    return onSave;
+  };
+
+  it("is one choice named by the question, the saved answer checked", () => {
+    editor(true);
+    const choice = screen.getByRole("radiogroup", {
+      name: "Answer for Open to remote work",
+    });
+    expect(
+      screen.getAllByRole("radio").map((radio) => radio.textContent),
+    ).toEqual(["Yes", "No"]);
+    expect(screen.getByRole("radio", { name: "Yes" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("radio", { name: "No" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(choice).toBeInTheDocument();
+  });
+
+  it("saves the other answer at once, with the box to remember it, and never clears it", async () => {
+    const user = userEvent.setup();
+    const onSave = editor(true);
+    await user.click(screen.getByRole("radio", { name: "No" }));
+    expect(onSave).toHaveBeenCalledWith(false, true);
+    // The chosen answer clicked again stays chosen: nothing is saved.
+    await user.click(screen.getByRole("radio", { name: "Yes" }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts with neither checked when there is no answer yet, and the keyboard reaches it", async () => {
+    const user = userEvent.setup();
+    const onSave = editor(null);
+    for (const radio of screen.getAllByRole("radio"))
+      expect(radio).toHaveAttribute("aria-checked", "false");
+    await user.tab();
+    await user.tab();
+    expect(screen.getByRole("radio", { name: "Yes" })).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("radio", { name: "No" })).toHaveFocus();
+    await user.keyboard(" ");
+    expect(onSave).toHaveBeenCalledWith(false, true);
+  });
+});
 
 describe("document letter edits", () => {
   it.each([998, 999])(

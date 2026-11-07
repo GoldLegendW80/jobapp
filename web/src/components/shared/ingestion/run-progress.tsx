@@ -1,27 +1,26 @@
-import { RotateCw } from "lucide-react";
-
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/spinner";
 
-import { loadFailureSentence } from "@/features/ingestion/api/documents-api";
 import { isActive, useShownRun } from "@/features/ingestion/api/runs-api";
+import { LoadError } from "@/components/blocks/load-error";
+import { loadFailureSentence } from "@/features/ingestion/api/documents-api";
 import { RunView } from "./run-progress/run-view";
-import { RUN_HEADING_ID } from "./run-start";
+import { FLAT, RUN_HEADING_ID } from "./run-start";
 
 /**
  * Step 3, second part: the run while it works (which document, what was found, the tokens, the
  * pauses and the one action that leaves each of them) and its summary once it has ended.
+ * `flat`: inside a card already, no surface of its own.
  */
-export function RunProgress() {
+export function RunProgress({ flat = false }: { flat?: boolean } = {}) {
   const { id, run } = useShownRun();
   if (id === undefined) return null;
   return (
     <Card
       role="region"
       aria-labelledby={RUN_HEADING_ID}
-      className="gap-4 p-4 sm:p-6"
+      className={cn("gap-4", flat ? FLAT : "p-4 sm:p-6")}
     >
       <CardTitle className="text-base tracking-tight">
         <h3 id={RUN_HEADING_ID} tabIndex={-1} className="outline-none">
@@ -41,22 +40,9 @@ export function RunProgress() {
           <RunView key={run.data.id} run={run.data} />
         </>
       ) : run.isError ? (
-        <div className="flex flex-col items-start gap-3">
-          <Alert variant="destructive">
-            <AlertTitle>The run could not be loaded</AlertTitle>
-            <AlertDescription>
-              {loadFailureSentence(run.error)}
-            </AlertDescription>
-          </Alert>
-          <Button
-            variant="outline"
-            disabled={run.isFetching}
-            onClick={() => void run.refetch()}
-          >
-            <RotateCw aria-hidden="true" />
-            Retry
-          </Button>
-        </div>
+        <LoadError query={run} reason={loadFailureSentence(run.error)}>
+          The run could not be loaded.
+        </LoadError>
       ) : (
         <p
           role="status"

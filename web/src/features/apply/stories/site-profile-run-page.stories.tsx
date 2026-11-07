@@ -92,6 +92,16 @@ export const RequestNoLongerExists: Story = {
   },
 };
 
+/** As a job seeker, I want to retry when the completion of my profile could not be read, so that a server hiccup does not send me back to my Account page. */
+export const CompletionUnavailable: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeProfileRun(profileRun("ready"), () =>
+      HttpResponse.json({ detail: "Server error" }, { status: 500 }),
+    );
+  },
+};
+
 /** As a job seeker on my phone, I want to review a section field by field, so that I can approve it away from my desk. */
 export const ReviewOnAPhone: Story = {
   globals: { viewport: { value: "mobile2", isRotated: false } },

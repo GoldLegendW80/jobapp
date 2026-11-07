@@ -2,7 +2,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
+import { MemoryRouter } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { fakeDocumentReads } from "@/design-system/fixtures/documents";
 
 import {
   fakeCv,
@@ -10,6 +14,7 @@ import {
   fakeDocuments,
   fakeVersion,
 } from "@/test/documents";
+import { waitForOnFakeClock } from "@/test/clock";
 import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
@@ -31,6 +36,14 @@ import {
 /** A separator dash: an em dash, an en dash, or a hyphen between spaces. */
 const SEPARATOR = /[–—]| - /;
 
+/** The view needs a router: the chat and the template choice link to other pages. */
+const view = (ui: ReactElement) =>
+  renderWithQuery(<MemoryRouter>{ui}</MemoryRouter>);
+
+beforeEach(() => {
+  fakeDocumentReads();
+});
+
 const open = (
   status: Generation["status"],
   wait_reason: Generation["wait_reason"] = null,
@@ -50,7 +63,7 @@ describe("the document view", () => {
     });
     api.documents.set("a", fakeDocumentOf(cv, { latest: legacy }));
     api.versions.set("a", [legacy]);
-    renderWithQuery(<DocumentView documentId="a" />);
+    view(<DocumentView documentId="a" />);
 
     expect(
       await screen.findByText(/This is the PDF your command line made/),
@@ -83,7 +96,7 @@ describe("the document view", () => {
       },
     ]);
     const user = userEvent.setup();
-    renderWithQuery(<DocumentView documentId="a" />);
+    view(<DocumentView documentId="a" />);
 
     expect(
       await screen.findByRole("img", { name: "Page 1 of version 2" }),
@@ -131,12 +144,47 @@ describe("the document view", () => {
       screen.queryByRole("region", { name: /Corrected by the fact check/ }),
     ).toBeNull();
 
-    // Edit (D16), Chat (D17) and Template (D18) are offered; Compare waits for its task.
-    expect(screen.getByRole("tab", { name: "Edit" })).toBeVisible();
-    expect(screen.getByRole("tab", { name: "Chat" })).toBeVisible();
-    expect(screen.getByRole("tab", { name: "Template" })).toBeVisible();
-    expect(screen.queryByRole("tab", { name: "Compare" })).toBeNull();
     expect(document.body.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("shows the whole document on one page: its text edited in place, the chat and the templates", async () => {
+    const api = fakeDocuments();
+    const cv = fakeCv({ id: "a", name: "Main CV" });
+    api.documents.set("a", fakeDocumentOf(cv, { latest: version }));
+    api.versions.set("a", [
+      version,
+      fakeVersion({ number: 1, origin: "edited" }),
+    ]);
+    const user = userEvent.setup();
+    view(<DocumentView documentId="a" />);
+
+    // Edit (D16), Chat (D17) and Template (D18) are all on the page, with no views to switch.
+    expect(
+      await screen.findByRole("button", { name: "Edit the summary" }),
+    ).toBeVisible();
+    expect(screen.getByTestId("document-chat")).toBeVisible();
+    expect(
+      await screen.findByRole("list", { name: "Templates" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("tab")).toBeNull();
+
+    // An earlier version is read as it was written; only the draft is edited in place.
+    const history = await screen.findByRole("region", { name: "Versions" });
+    await user.click(
+      within(history).getByRole("button", { name: "Open version 1" }),
+    );
+    expect(
+      await screen.findByText(/^An earlier version, as it was written\./),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Edit the summary" }),
+    ).toBeNull();
+    await user.click(
+      within(history).getByRole("button", { name: "Open version 2" }),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Edit the summary" }),
+    ).toBeVisible();
   });
 
   it("says overflow in red, keeps the download, and names a sent version", async () => {
@@ -152,7 +200,7 @@ describe("the document view", () => {
       fakeDocumentOf(fakeCv({ id: "a" }), { latest: over }),
     );
     api.versions.set("a", [over]);
-    renderWithQuery(<DocumentView documentId="a" />);
+    view(<DocumentView documentId="a" />);
     expect(
       await screen.findByText("This is longer than one page"),
     ).toBeVisible();
@@ -166,9 +214,7 @@ describe("the document view", () => {
     const api = fakeDocuments();
     const cv = fakeCv({ id: "a", last_version_at: null });
     api.documents.set("a", fakeDocumentOf(cv));
-    renderWithQuery(
-      <DocumentView documentId="a" generation={open("running")} />,
-    );
+    view(<DocumentView documentId="a" generation={open("running")} />);
     expect(
       await screen.findByText("Your first CV is being built from your profile"),
     ).toBeVisible();
@@ -189,16 +235,14 @@ describe("the document view", () => {
       "a",
       fakeDocumentOf(fakeCv({ id: "a", last_version_at: null })),
     );
-    renderWithQuery(
-      <DocumentView documentId="a" generation={open("waiting", reason)} />,
-    );
+    view(<DocumentView documentId="a" generation={open("waiting", reason)} />);
     expect(await screen.findByText(sentence)).toBeVisible();
   });
 
   it("says a failed attempt and keeps the page that exists", async () => {
     const api = fakeDocuments();
     api.documents.set("a", fakeDocumentOf(fakeCv({ id: "a" })));
-    renderWithQuery(
+    view(
       <DocumentView
         documentId="a"
         generation={{ ...open("failed"), error: "token_limit" }}
@@ -224,7 +268,7 @@ describe("the document view", () => {
         render: { state: "rendering", revision: 2, error: null, message: null },
       }),
     );
-    renderWithQuery(<DocumentView documentId="a" />);
+    view(<DocumentView documentId="a" />);
     expect(
       await screen.findByText("A newer page is being drawn"),
     ).toBeVisible();
@@ -250,7 +294,9 @@ describe("the document view", () => {
     const client = createQueryClient();
     const ui = (generation: Generation) => (
       <QueryClientProvider client={client}>
-        <DocumentView documentId="a" generation={generation} />
+        <MemoryRouter>
+          <DocumentView documentId="a" generation={generation} />
+        </MemoryRouter>
       </QueryClientProvider>
     );
     const view = render(ui(open("running")));
@@ -280,7 +326,9 @@ describe("the document view", () => {
     const client = createQueryClient();
     const ui = (generation: Generation) => (
       <QueryClientProvider client={client}>
-        <DocumentView documentId="a" generation={generation} />
+        <MemoryRouter>
+          <DocumentView documentId="a" generation={generation} />
+        </MemoryRouter>
       </QueryClientProvider>
     );
     const view = render(ui(open("running")));
@@ -328,7 +376,7 @@ describe("the document view", () => {
         },
       }),
     );
-    renderWithQuery(<DocumentView documentId="a" />);
+    view(<DocumentView documentId="a" />);
     expect(
       await screen.findByText("The page could not be drawn"),
     ).toBeVisible();
@@ -351,13 +399,15 @@ describe("the document view", () => {
       ),
     );
     const user = userEvent.setup();
-    renderWithQuery(<DocumentView documentId="a" />);
+    view(<DocumentView documentId="a" />);
     expect(
-      await screen.findByText("The document could not be loaded"),
+      await screen.findByText(/^The document could not be loaded\./),
     ).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => {
-      expect(screen.queryByText("The document could not be loaded")).toBeNull();
+      expect(
+        screen.queryByText(/^The document could not be loaded\./),
+      ).toBeNull();
     });
     expect(
       await screen.findByRole("img", { name: /^Page 1 of version/ }),
@@ -370,7 +420,7 @@ describe("the document view", () => {
       "a",
       fakeDocumentOf(fakeCv({ id: "a", last_version_at: null })),
     );
-    renderWithQuery(<DocumentView documentId="a" />);
+    view(<DocumentView documentId="a" />);
     expect(
       await screen.findByText(
         "Nothing has been written for this document yet.",
@@ -394,13 +444,22 @@ describe("the independent capture lifecycle", () => {
       const client = createQueryClient();
       client.setQueryData(templatesKey, []);
       client.setQueryData([...versionsKey("a"), 1], [fakeVersion()]);
+      let templateReads = 0;
+      server.use(
+        http.get("*/api/document-templates", () => {
+          templateReads += 1;
+          return HttpResponse.json({ templates: [] });
+        }),
+      );
       const ui = (capture: Generation) => (
         <QueryClientProvider client={client}>
-          <DocumentView
-            documentId="a"
-            generation={open("done")}
-            capture={capture}
-          />
+          <MemoryRouter>
+            <DocumentView
+              documentId="a"
+              generation={open("done")}
+              capture={capture}
+            />
+          </MemoryRouter>
         </QueryClientProvider>
       );
       const view = render(ui(open("queued")));
@@ -422,13 +481,17 @@ describe("the independent capture lifecycle", () => {
         }),
       );
       api.versions.set("a", [fakeVersion({ number: 2 }), fakeVersion()]);
+      const templatesBefore = templateReads;
       view.rerender(ui(open(terminal)));
       expect(
         await screen.findByRole("img", { name: "Page 1 of version 2" }),
       ).toBeVisible();
       expect(reads()).toBe(2);
       if (terminal === "done") {
-        expect(client.getQueryState(templatesKey)?.isInvalidated).toBe(true);
+        // The template choice on the page reads the templates again: the captured one is new.
+        await waitForOnFakeClock(() => {
+          expect(templateReads).toBeGreaterThan(templatesBefore);
+        });
         expect(
           api.requests.filter(
             (one) =>
@@ -437,7 +500,9 @@ describe("the independent capture lifecycle", () => {
         ).toBeGreaterThanOrEqual(2);
       }
       expect(screen.queryByText("The last attempt failed")).toBeNull();
-      expect(screen.getByRole("tab", { name: "Edit" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Edit the summary" }),
+      ).toBeEnabled();
       expect(screen.getByRole("link", { name: "Download PDF" })).toBeVisible();
       await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
       expect(reads()).toBe(2);

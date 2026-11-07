@@ -1,42 +1,61 @@
-import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible";
+import { FileText } from "lucide-react";
 
-import { tokens, type Run } from "@/features/ingestion/api/runs-api";
+import { Trace, TraceIcon, TraceLine, TraceTitle } from "@/components/ui/trace";
+
+import {
+  tokens,
+  type Run,
+  type RunStep,
+} from "@/features/ingestion/api/runs-api";
 import {
   countOf,
   DELETED_DOCUMENT,
   stepKind,
   stepStatusWords,
 } from "@/features/ingestion/helpers/run-words";
-import { FoldTrigger } from "./fold-trigger";
 
-/** Every step of the run, folded: its document, what it does, what it found and cost. */
+/** How a step's line looks: at work, waiting its turn, or failed. */
+function lineStatus(step: RunStep) {
+  if (step.status === "running") return "running";
+  if (step.status === "planned") return "pending";
+  if (step.status === "failed") return "error";
+  return undefined;
+}
+
+/** Every step of the run, one line each: its document, then what it does, found and cost. */
 export function RunSteps({ run }: { run: Run }) {
   return (
-    <Collapsible className="rounded-lg bg-muted">
-      <FoldTrigger>Every step of this run</FoldTrigger>
-      <CollapsibleContent>
-        <ol className="flex flex-col gap-2 px-3 pb-3">
-          {run.steps.map((step) => (
-            <li key={step.id} className="min-w-0 break-words">
-              <span className="font-medium">
-                {step.document_name ?? DELETED_DOCUMENT}
-              </span>
-              . {stepKind(step, run.steps)}. {stepStatusWords(step)}
-              {step.status === "done" || step.status === "running"
-                ? `, ${countOf(step.items, "item", "items")}`
-                : null}
-              {step.refused > 0 ? `, ${tokens(step.refused)} refused` : null}
-              {step.tokens !== null
-                ? `, ${tokens(step.tokens)} tokens in its last attempt`
-                : null}
-              {step.cost_usd !== null
-                ? `, about ${step.cost_usd} USD for that attempt`
-                : null}
-              .{step.error ? ` ${step.error}` : null}
-            </li>
-          ))}
-        </ol>
-      </CollapsibleContent>
-    </Collapsible>
+    <Trace role="list" aria-label="Steps of this run" className="gap-3">
+      {run.steps.map((step) => (
+        <div
+          key={step.id}
+          role="listitem"
+          className="flex min-w-0 flex-col gap-1"
+        >
+          <TraceLine status={lineStatus(step)}>
+            <TraceIcon>
+              <FileText />
+            </TraceIcon>
+            <TraceTitle>
+              <bdi>{step.document_name ?? DELETED_DOCUMENT}</bdi>
+            </TraceTitle>
+          </TraceLine>
+          <p className="pl-6 text-sm break-words text-muted-foreground">
+            {stepKind(step, run.steps)}. {stepStatusWords(step)}
+            {step.status === "done" || step.status === "running"
+              ? `, ${countOf(step.items, "item", "items")}`
+              : null}
+            {step.refused > 0 ? `, ${tokens(step.refused)} refused` : null}
+            {step.tokens !== null
+              ? `, ${tokens(step.tokens)} tokens in its last attempt`
+              : null}
+            {step.cost_usd !== null
+              ? `, about ${step.cost_usd} USD for that attempt`
+              : null}
+            .{step.error ? ` ${step.error}` : null}
+          </p>
+        </div>
+      ))}
+    </Trace>
   );
 }

@@ -10,8 +10,8 @@ import { toggled } from "@/features/onboarding/helpers/steps";
 const CHOICE =
   "min-h-11 w-full items-center rounded-md border px-3 font-normal leading-snug";
 
-/** The card around a group of choices; its legend sits on the border. */
-export const CHOICE_CARD = "gap-2 rounded-md border p-4";
+/** A group of choices: its legend above the boxes, no frame of its own inside the step's card. */
+export const CHOICE_CARD = "gap-2";
 
 /** A box alone on its row: the whole row is the label, a tap target of 44 px. */
 export const ONE_BOX = "min-h-11 font-normal leading-snug";

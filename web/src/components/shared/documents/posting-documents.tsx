@@ -1,13 +1,14 @@
-import { RotateCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
+import { LoadError } from "@/components/blocks/load-error";
+import { LoadingCard } from "@/components/blocks/loading-card";
+import { Section } from "@/components/blocks/section";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Spinner } from "@/components/ui/spinner";
+import { Card, CardContent } from "@/components/ui/card";
 import { useProfile } from "@/features/profile/api/use-profile";
 import { type JobDetail } from "@/features/jobs/api/jobs-api";
-import { describeError } from "@/lib/api";
 
 import { useBaseCvList } from "@/features/documents/api/use-base-cvs";
 import {
@@ -18,7 +19,7 @@ import {
 import { useCurrentSpend } from "@/features/documents/api/use-spend";
 import { failureSentence } from "@/features/documents/api/documents-api";
 import { isOpen } from "@/features/documents/helpers/labels";
-import { PostingDocumentCard } from "./posting-document-card";
+import { PostingDocumentRow } from "./posting-document-row";
 import {
   cardState,
   documentOf,
@@ -28,21 +29,13 @@ import {
 
 /**
  * The "Documents" section of the job page (SPEC-documents.md, "Job detail page"): the posting's
- * CV and letter as two cards. The documents are read again while a generation is open or a page is
- * being drawn, and for a short while after the CV's generation closes, until the letter that follows
- * it has its own. The posting is read again when the work ends: the render that ends it may have
- * moved the posting to `cv_ready`.
+ * CV and letter as two rows of one card, and Write both now while neither is written. The
+ * documents are read again while a generation is open or a page is being drawn, and for a short
+ * while after the CV's generation closes, until the letter that follows it has its own. The
+ * posting is read again when the work ends: the render that ends it may have moved the posting
+ * to `cv_ready`.
  */
-/** The level of the section's title: h2 on its own, deeper inside a posting's sections. */
-type HeadingLevel = "h2" | "h3" | "h4";
-
-export function PostingDocumentsSection({
-  job,
-  heading: Heading = "h2",
-}: {
-  job: JobDetail;
-  heading?: HeadingLevel;
-}) {
+export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const [choice, setChoice] = useState<string>();
   // CV generations seen closing; 0 when no letter is expected or its generation is read.
   const [letterWindow, setLetterWindow] = useState(0);
@@ -101,96 +94,80 @@ export function PostingDocumentsSection({
     ),
   );
 
+  const offerBoth = documents.data !== undefined && untouched && !noExperience;
+
   return (
-    <section aria-labelledby="documents-title" className="flex flex-col gap-3">
-      <Heading
-        id="documents-title"
-        className="text-lg font-semibold tracking-tight"
-      >
-        Documents
-      </Heading>
+    <Section
+      title="Documents"
+      actions={
+        offerBoth ? (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={write.isPending}
+            onClick={() => {
+              write.mutate({
+                kinds: ["cv", "letter"],
+                ...(choice === undefined ? {} : { base_document_id: choice }),
+              });
+            }}
+          >
+            Write both now
+          </Button>
+        ) : null
+      }
+    >
       {documents.isPending ? (
-        <p
-          role="status"
-          className="flex items-center gap-2 text-sm text-muted-foreground"
-        >
-          <Spinner aria-hidden="true" role={undefined} />
-          Loading the documents
-        </p>
+        <LoadingCard>Loading the documents</LoadingCard>
       ) : documents.isError ? (
-        <Alert variant="destructive">
-          <AlertDescription className="flex flex-col gap-3">
-            <p>
-              The documents could not be loaded.{" "}
-              {describeError(documents.error)}
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-fit"
-              disabled={documents.isFetching}
-              onClick={() => void documents.refetch()}
-            >
-              <RotateCw aria-hidden="true" />
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <LoadError query={documents}>
+          The documents could not be loaded.
+        </LoadError>
       ) : (
-        <>
-          {noExperience ? (
-            <p className="text-sm font-medium" data-testid="no-experience-line">
-              Add your CV or fill your experience to get documents for each
-              posting.{" "}
-              <Link to="/profile/cv" className="underline underline-offset-4">
-                Open the CV tab
-              </Link>
-            </p>
-          ) : null}
-          <div className="grid gap-4 sm:grid-cols-2">
-            {(["cv", "letter"] as const).map((kind) => (
-              <PostingDocumentCard
-                key={kind}
-                jobId={job.id}
-                kind={kind}
-                document={documentOf(documents.data, kind)}
-                fit={job.fit}
-                threshold={threshold}
-                cvs={cvs.data?.base_cvs ?? []}
-                choice={choice}
-                onChoose={setChoice}
-                cvReady={cvReady}
-                letterWritten={letterWritten}
-              />
-            ))}
-          </div>
-          {untouched && !noExperience ? (
-            <div className="flex flex-col items-start gap-2">
-              <Button
-                size="sm"
-                disabled={write.isPending}
-                onClick={() => {
-                  write.mutate({
-                    kinds: ["cv", "letter"],
-                    ...(choice === undefined
-                      ? {}
-                      : { base_document_id: choice }),
-                  });
-                }}
+        <Card>
+          <CardContent className="flex flex-col gap-5">
+            {noExperience ? (
+              <p
+                className="text-sm font-medium"
+                data-testid="no-experience-line"
               >
-                Write both now
-              </Button>
-              {write.isError ? (
-                <Alert variant="destructive">
-                  <AlertDescription>
-                    {failureSentence(write.error)}
-                  </AlertDescription>
-                </Alert>
-              ) : null}
+                Add your CV or fill your experience to get documents for each
+                posting.{" "}
+                <Link
+                  to="/profile#your-cv"
+                  className="underline underline-offset-4"
+                >
+                  Open your CVs
+                </Link>
+              </p>
+            ) : null}
+            <div className="flex flex-col divide-y">
+              {(["cv", "letter"] as const).map((kind) => (
+                <PostingDocumentRow
+                  key={kind}
+                  jobId={job.id}
+                  kind={kind}
+                  document={documentOf(documents.data, kind)}
+                  fit={job.fit}
+                  threshold={threshold}
+                  cvs={cvs.data?.base_cvs ?? []}
+                  choice={choice}
+                  onChoose={setChoice}
+                  cvReady={cvReady}
+                  letterWritten={letterWritten}
+                />
+              ))}
             </div>
-          ) : null}
-        </>
+            {offerBoth && write.isError ? (
+              <Alert variant="destructive">
+                <AlertDescription>
+                  {failureSentence(write.error)}
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </CardContent>
+        </Card>
       )}
-    </section>
+    </Section>
   );
 }

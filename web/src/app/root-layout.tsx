@@ -1,10 +1,18 @@
-import { Suspense } from "react";
+import { lazy, Suspense } from "react";
 import { Outlet, ScrollRestoration } from "react-router";
 
 import { PageLoading } from "@/components/blocks/page-status";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "@/features/auth/components/auth-provider";
+
+// Development only (and not in tests): the production build leaves the import out entirely.
+const DevFeedback =
+  import.meta.env.DEV && import.meta.env.MODE !== "test"
+    ? lazy(() =>
+        import("./dev-feedback").then((m) => ({ default: m.DevFeedback })),
+      )
+    : null;
 
 /**
  * What every page shares: the session, one provider for every Tooltip, the toasts and the scroll
@@ -26,6 +34,11 @@ export function RootLayout() {
           }}
         />
         <ScrollRestoration getKey={(location) => location.pathname} />
+        {DevFeedback ? (
+          <Suspense fallback={null}>
+            <DevFeedback />
+          </Suspense>
+        ) : null}
       </TooltipProvider>
     </AuthProvider>
   );

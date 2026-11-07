@@ -25,14 +25,14 @@ export function PromptDiff({
       <h3 className="text-sm font-medium">{title}</h3>
       <ul
         aria-label={title}
-        className="max-h-96 overflow-auto rounded-md border font-mono text-xs"
+        className="max-h-96 overflow-auto rounded-md bg-muted py-1 font-mono text-xs"
       >
         {ops.map((op, index) => (
           <li
             key={index}
             data-kind={op.kind}
             className={cn(
-              "flex gap-2 px-2 whitespace-pre-wrap [overflow-wrap:anywhere]",
+              "flex gap-2 px-3 whitespace-pre-wrap [overflow-wrap:anywhere]",
               op.kind === "added" && "bg-success/10 text-foreground",
               op.kind === "removed" && "bg-destructive/10 text-foreground",
             )}

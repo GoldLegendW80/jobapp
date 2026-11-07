@@ -18,11 +18,12 @@ export function FoldedJson({
   text?: boolean;
 }) {
   return (
-    <Collapsible className="rounded-md border text-sm">
+    <Collapsible className="flex min-w-0 flex-col gap-1 text-sm">
       <CollapsibleTrigger asChild>
         <Button
           variant="ghost"
-          className="group/fold h-auto w-full justify-start gap-1.5 rounded-md px-3 py-2 text-left font-normal whitespace-normal text-muted-foreground has-[>svg]:px-3"
+          size="sm"
+          className="group/fold -ml-2 w-fit gap-1.5 font-normal text-muted-foreground"
         >
           <ChevronRight
             aria-hidden="true"
@@ -32,7 +33,7 @@ export function FoldedJson({
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <pre className="max-h-96 overflow-auto border-t bg-muted p-3 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <pre className="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs whitespace-pre-wrap [overflow-wrap:anywhere]">
           {text ? String(value) : JSON.stringify(value, null, 2)}
         </pre>
       </CollapsibleContent>

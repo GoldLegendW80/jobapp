@@ -1,46 +1,25 @@
-import {
-  ArrowLeft,
-  ArrowRight,
-  CircleAlert,
-  Heart,
-  Undo2,
-  X,
-} from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Link } from "react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { AdvancedSection } from "@/components/blocks/advanced-section";
-import { PageHeader } from "@/components/blocks/page-header";
+import { LoadError } from "@/components/blocks/load-error";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
-import { Kbd } from "@/components/ui/kbd";
-import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
-import { describeError } from "@/lib/api";
 import { useTitle } from "@/hooks/use-title";
-import { useJobCount } from "@/features/jobs/api/use-jobs";
-import { useProfile } from "@/features/profile/api/use-profile";
-import {
-  DECK_NO_SKILLS_HINT,
-  WORDING,
-  deckEmpty,
-  deckNoSkills,
-} from "@/lib/wording";
+import { WORDING } from "@/lib/wording";
 
 import { NO_FILTERS, type DeckFilters } from "../api/opportunities-api";
-import { MODE_WORDS, SWIPE_TEXT } from "../helpers/deck/card-text";
-import { DeckFilterRow } from "../components/deck/filter-row";
-import { PostingSheet } from "../components/deck/posting-sheet";
-import { SwipeCard } from "../components/deck/swipe-card";
 import { useDeck, type Swipe } from "../api/deck/use-deck";
+import { MODE_SENTENCES, SWIPE_TEXT } from "../helpers/deck/card-text";
+import { DeckBackdrop } from "../components/deck/deck-backdrop";
+import { DeckControls } from "../components/deck/deck-controls";
+import { DeckEmpty } from "../components/deck/deck-empty";
+import { DeckRail } from "../components/deck/deck-rail";
+import { DeckScene } from "../components/deck/deck-scene";
+import { DeckStack, type Toward } from "../components/deck/deck-stack";
+import { DeckTopBar } from "../components/deck/deck-top-bar";
+import { PostingSheet } from "../components/deck/posting-sheet";
+import { SwipeHint } from "../components/deck/swipe-hint";
+import { useDeckSignals } from "../hooks/deck/use-deck-signals";
 import { useFinePointer } from "../hooks/deck/use-fine-pointer";
 import { useReducedMotion } from "../hooks/deck/use-reduced-motion";
 
@@ -54,14 +33,30 @@ function ignoredTarget(target: EventTarget | null): boolean {
   );
 }
 
+/** Set once the person has swiped: the first visit's hint does not come back. */
+const HINT_KEY = "discover:swipe-hint";
+/** How long the hint stays on a visit when the person does not swipe. */
+const HINT_MS = 9000;
+
+function hintSeen(): boolean {
+  try {
+    return window.localStorage.getItem(HINT_KEY) === "1";
+  } catch {
+    return true;
+  }
+}
+
 /**
- * /discover, the swipe deck (SPEC-opportunities.md, "The swipe deck"): one card at a time, Like
- * and Pass by drag, by the buttons or by the arrow keys (left Pass, right Like, U undoes the
- * last swipe), Undo last until the next swipe, the mode a Like runs in, the filter
- * row under Advanced and the empty state naming the person's threshold. Phone width first: the
- * buttons sit under the card, within a thumb's reach, each named under it. Without a card, Pass
- * and Like are gone and Undo last stays only while there is a swipe to undo; the keys are offered
- * only to a precise pointer.
+ * /discover, the swipe deck (SPEC-opportunities.md, "The swipe deck"), the product's bright
+ * moment: edge to edge under the header, one posting at a time on a stack of cards, best fit
+ * first. Like and Pass by a drag (the card follows the finger, tilts, shows its stamp, flies off
+ * past the threshold or springs back), by the buttons or by the arrow keys (left Pass, right
+ * Like, U undoes the last swipe); Undo last brings the card back the way it left. The mode a Like
+ * runs in stays in sight above the deck. A Rive heart bursts on an accepted Like (an X on a
+ * Pass), a hint shows the gesture on the first visit, and the empty deck celebrates; all of it
+ * loads after the deck works, and is left out with reduced motion. The side rail (under the deck
+ * on a phone) says what a Like does, the keys and the filters under Advanced. Without a card,
+ * Pass and Like are gone and Undo last stays only while there is a swipe to undo.
  */
 export function DeckPage() {
   useTitle(WORDING.discover);
@@ -70,24 +65,68 @@ export function DeckPage() {
   const motion = !useReducedMotion();
   // The keys are offered where a keyboard is likely: a mouse or a trackpad, not a touch screen.
   const finePointer = useFinePointer();
-  const passId = useId();
-  const likeId = useId();
+  const signals = useDeckSignals();
   const [moreOpen, setMoreOpen] = useState(false);
   const { top, busy, refusal, last } = deck;
+  const likeRefused = refusal?.kind === "like";
   // Once the person swiped or undid, a new card on top takes the focus and is announced.
   const [moved, setMoved] = useState(false);
+  // The card on its way off (a swipe under way, kept after it left so it finishes its flight),
+  // and the card an undo brings back, from the side it left by.
+  const [fling, setFling] = useState<Toward | null>(null);
+  const [returning, setReturning] = useState<Toward | null>(null);
+  const [hint, setHint] = useState(() => !hintSeen());
+
   const swipe = (kind: Swipe) => {
     setMoved(true);
+    if (top && !busy && !(kind === "like" && likeRefused)) {
+      const card = top;
+      setFling((now) => (now?.id === card.id ? now : { id: card.id, kind }));
+      setHint(false);
+      try {
+        window.localStorage.setItem(HINT_KEY, "1");
+      } catch {
+        // Storage blocked: the hint only shows again on the next visit.
+      }
+    }
     deck.swipe(kind);
   };
   const undo = () => {
+    if (last && !busy) {
+      setFling(null);
+      setReturning({ id: last.card.id, kind: last.kind });
+    }
     setMoved(true);
     deck.undo();
   };
   const changeFilters = (next: DeckFilters) => {
     setMoved(false);
+    setFling(null);
+    setReturning(null);
     setFilters(next);
   };
+
+  // A swipe answered with the card still on top (refused, or the network failed): it comes back.
+  const [answered, setAnswered] = useState({ busy, top: top?.id });
+  if (answered.busy !== busy || answered.top !== top?.id) {
+    setAnswered({ busy, top: top?.id });
+    if (fling && !busy && top?.id === fling.id) setFling(null);
+  }
+
+  // An accepted Like or Pass bursts over the deck.
+  useEffect(() => {
+    if (last) signals.burst(last.kind);
+  }, [last, signals]);
+
+  useEffect(() => {
+    if (!hint) return;
+    const id = window.setTimeout(() => {
+      setHint(false);
+    }, HINT_MS);
+    return () => {
+      window.clearTimeout(id);
+    };
+  }, [hint]);
 
   // The boards of the cards read ("greenhouse" of "greenhouse:acme", the api matches its every
   // company), plus the one chosen, so a chosen source stays in the list.
@@ -126,272 +165,159 @@ export function DeckPage() {
     };
   }, []);
 
-  const likeRefused = refusal?.kind === "like";
+  const filtered =
+    filters.types.length > 0 ||
+    filters.remote !== null ||
+    filters.source !== null;
+  const done = last
+    ? `${last.kind === "like" ? "Liked" : "Passed"} ${last.card.title}. `
+    : "";
+  const announcement = !moved
+    ? ""
+    : top
+      ? `${done}Now showing ${top.title} at ${top.company}.`
+      : `${done}No more postings to show.`;
 
   return (
-    <div className="mx-auto flex w-full max-w-md flex-col gap-5">
-      <PageHeader
-        className="items-center"
-        title={WORDING.discover}
-        actions={
-          <Badge variant="outline" asChild>
-            <Link
-              to="/settings/applications"
-              aria-label={`A Like runs in ${MODE_WORDS[deck.mode]}. Change it in the Applications settings`}
-              data-testid="deck-mode"
-              className="px-3 py-1 text-muted-foreground"
+    // The shell pads its main area (app-shell.tsx); the stage cancels it to reach the edges.
+    <div className="-mx-4 -my-6 sm:-mx-6 sm:-my-10 lg:-mx-8">
+      <div className="relative isolate overflow-hidden">
+        <DeckBackdrop signals={signals} motion={motion} />
+        <div className="mx-auto grid w-full max-w-360 gap-x-10 px-4 sm:px-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:px-8">
+          <div className="flex min-h-[calc(100dvh-4rem-var(--bottom-bar,0px))] min-w-0 flex-col gap-4 py-4 sm:gap-6 sm:py-6 lg:py-8">
+            <DeckTopBar mode={deck.mode} left={top ? deck.left : undefined} />
+            <p
+              className="sr-only"
+              aria-live="polite"
+              data-testid="deck-announce"
             >
-              {`${WORDING.like}: ${MODE_WORDS[deck.mode]}`}
-            </Link>
-          </Badge>
-        }
-      />
-
-      <AdvancedSection pageKey="discover">
-        <DeckFilterRow
-          filters={filters}
-          sources={sources}
-          onChange={changeFilters}
-        />
-      </AdvancedSection>
-
-      {deck.query.isPending ? (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner aria-hidden="true" role={undefined} />
-          Loading your deck
-        </p>
-      ) : deck.query.isError && !top ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription className="flex flex-col items-start gap-2">
-            {describeError(deck.query.error)}
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                void deck.query.refetch();
-              }}
-            >
-              {WORDING.tryAgain}
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : top ? (
-        <section aria-label={WORDING.deck} className="flex flex-col gap-4">
-          <p className="text-sm text-muted-foreground" aria-live="polite">
-            {deck.left === 1 ? "1 posting left" : `${deck.left} postings left`}
-          </p>
-          <p className="sr-only" aria-live="polite" data-testid="deck-announce">
-            {moved ? `Now showing ${top.title} at ${top.company}.` : ""}
-          </p>
-          <SwipeCard
-            key={top.id}
-            card={top}
-            motion={motion}
-            disabled={busy}
-            focusTitle={moved}
-            onSwipe={swipe}
-            onMore={() => {
-              setMoreOpen(true);
-            }}
-          />
-          {refusal ? (
-            <Alert role="alert">
-              <AlertDescription>
-                {refusal.detail}
-                {likeRefused ? ` ${SWIPE_TEXT.passOffered}` : ""}
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          <PostingSheet card={top} open={moreOpen} onOpenChange={setMoreOpen} />
-        </section>
-      ) : deck.rulesUnreadable ? (
-        <Alert role="status">
-          <AlertDescription>
-            Your roles to never apply for could not be read, so the deck shows
-            nothing until they are fixed in Search options.
-          </AlertDescription>
-        </Alert>
-      ) : deck.query.isFetchingNextPage ? (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Spinner aria-hidden="true" role={undefined} />
-          Loading more postings
-        </p>
-      ) : (
-        <DeckEmpty
-          threshold={deck.minFit ?? 70}
-          filtered={
-            filters.types.length > 0 ||
-            filters.remote !== null ||
-            filters.source !== null
-          }
-        />
-      )}
-
-      {top || last ? (
-        <div
-          data-testid="deck-controls"
-          className="flex items-start justify-center gap-4"
-        >
-          {top ? (
-            <div className="flex flex-col items-center gap-1.5">
-              <Button
-                id={passId}
-                size="lg"
-                variant="outline"
-                className="size-16 rounded-full"
-                aria-label={WORDING.pass}
-                aria-keyshortcuts="ArrowLeft"
-                disabled={busy}
-                onClick={() => {
+              {announcement}
+            </p>
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center">
+              {deck.query.isPending ? (
+                <div
+                  role="status"
+                  className="relative flex h-[min(34rem,62dvh)] w-full max-w-[26rem] items-center justify-center"
+                >
+                  <span className="sr-only">Loading your deck</span>
+                  <Skeleton
+                    aria-hidden="true"
+                    className="absolute inset-x-0 top-0 bottom-8 rounded-3xl"
+                  />
+                  <DeckScene
+                    scene="Loading"
+                    motion={motion}
+                    className="h-48 w-60"
+                  />
+                </div>
+              ) : deck.query.isError && !top ? (
+                <div className="w-full max-w-md">
+                  <LoadError query={deck.query}>
+                    Your deck could not be loaded.
+                  </LoadError>
+                </div>
+              ) : top ? (
+                <section
+                  aria-label={WORDING.deck}
+                  className="flex w-full max-w-[26rem] flex-1 flex-col gap-3"
+                >
+                  <DeckStack
+                    cards={deck.cards}
+                    motion={motion}
+                    busy={busy}
+                    fling={fling}
+                    returning={returning}
+                    focusTitle={moved}
+                    signals={signals}
+                    onSwipe={swipe}
+                    onMore={() => {
+                      setMoreOpen(true);
+                    }}
+                    className="max-h-[40rem] min-h-[26rem] w-full flex-1 sm:min-h-[32rem]"
+                  >
+                    <DeckScene
+                      scene="Reaction"
+                      motion={motion}
+                      signals={signals}
+                      className="absolute inset-x-0 top-0 bottom-8 z-40"
+                    />
+                    {hint && motion && !busy ? (
+                      <SwipeHint
+                        motion={motion}
+                        keys={finePointer}
+                        className="absolute inset-x-0 bottom-24 z-40 mx-auto w-fit"
+                      />
+                    ) : null}
+                  </DeckStack>
+                  {refusal ? (
+                    <Alert role="alert" className="bg-card/90 backdrop-blur-sm">
+                      <AlertDescription>
+                        {refusal.detail}
+                        {likeRefused ? ` ${SWIPE_TEXT.passOffered}` : ""}
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  <PostingSheet
+                    card={top}
+                    open={moreOpen}
+                    onOpenChange={setMoreOpen}
+                  />
+                </section>
+              ) : deck.rulesUnreadable ? (
+                <Alert role="status" className="max-w-md">
+                  <AlertDescription>
+                    Your roles to never apply for could not be read, so the deck
+                    shows nothing until they are fixed in Search options.
+                  </AlertDescription>
+                </Alert>
+              ) : deck.query.isFetchingNextPage ? (
+                <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Spinner aria-hidden="true" role={undefined} />
+                  Loading more postings
+                </p>
+              ) : (
+                <div className="w-full max-w-lg">
+                  <DeckEmpty
+                    threshold={deck.minFit ?? 70}
+                    filtered={filtered}
+                    motion={motion}
+                  />
+                </div>
+              )}
+            </div>
+            {top || last ? (
+              <DeckControls
+                hasCard={Boolean(top)}
+                canUndo={Boolean(last)}
+                busy={busy}
+                likeRefused={likeRefused}
+                onPass={() => {
                   swipe("pass");
                 }}
-              >
-                <X aria-hidden="true" className="size-7" />
-              </Button>
-              <Label
-                htmlFor={passId}
-                className="cursor-pointer leading-5 text-muted-foreground"
-              >
-                {WORDING.pass}
-              </Label>
-            </div>
-          ) : null}
-          <div className="flex h-16 items-center">
-            <Button
-              size="lg"
-              variant="ghost"
-              className="min-h-11"
-              aria-keyshortcuts="U"
-              disabled={!last || busy}
-              onClick={undo}
-            >
-              <Undo2 aria-hidden="true" />
-              {WORDING.undoLast}
-            </Button>
-          </div>
-          {top ? (
-            <div className="flex flex-col items-center gap-1.5">
-              <Button
-                id={likeId}
-                size="lg"
-                className="size-16 rounded-full"
-                aria-label={WORDING.like}
-                aria-keyshortcuts="ArrowRight"
-                disabled={busy || likeRefused}
-                onClick={() => {
+                onLike={() => {
                   swipe("like");
                 }}
-              >
-                {busy ? (
-                  <Spinner
-                    aria-hidden="true"
-                    role={undefined}
-                    className="size-7"
-                  />
-                ) : (
-                  <Heart aria-hidden="true" className="size-7" />
-                )}
-              </Button>
-              <Label
-                htmlFor={likeId}
-                className="cursor-pointer leading-5 text-muted-foreground"
-              >
-                {WORDING.like}
-              </Label>
-            </div>
-          ) : null}
+                onUndo={undo}
+              />
+            ) : null}
+            {top && deck.mode === "full_auto" ? (
+              // Beside the deck the rail says it; stacked, the words stay under Like.
+              <p className="mx-auto max-w-sm text-center text-sm text-muted-foreground lg:hidden">
+                {MODE_SENTENCES.full_auto}
+              </p>
+            ) : null}
+          </div>
+          <aside className="flex min-w-0 flex-col gap-6 pb-10 lg:py-8">
+            <DeckRail
+              mode={deck.mode}
+              keys={Boolean(top) && finePointer}
+              filters={filters}
+              sources={sources}
+              onFiltersChange={changeFilters}
+            />
+          </aside>
         </div>
-      ) : null}
-      {top && finePointer ? (
-        <p
-          data-testid="deck-keys"
-          className="text-center text-xs text-muted-foreground"
-        >
-          Keys:{" "}
-          <Kbd>
-            <ArrowLeft aria-hidden="true" />
-            <span className="sr-only">left arrow</span>
-          </Kbd>{" "}
-          to pass,{" "}
-          <Kbd>
-            <ArrowRight aria-hidden="true" />
-            <span className="sr-only">right arrow</span>
-          </Kbd>{" "}
-          to like, <Kbd>U</Kbd> to undo the last one.
-        </p>
-      ) : null}
+      </div>
     </div>
-  );
-}
-
-/**
- * The empty deck, said as its cause: no posting at all (the list of websites is the way in), a
- * profile without any skill (every fit is near 0, under the threshold), or postings under the
- * threshold. With a filter on, the threshold line stays, since the cause may be the filter. Each
- * cause has the action that fixes it; while the counts load, the threshold line shows.
- */
-function DeckEmpty({
-  threshold,
-  filtered,
-}: {
-  threshold: number;
-  filtered: boolean;
-}) {
-  const postings = useJobCount({ enabled: !filtered });
-  const profile = useProfile({ enabled: !filtered });
-  const noPostings = !filtered && postings.data === 0;
-  const noSkills =
-    !filtered &&
-    !noPostings &&
-    profile.data !== undefined &&
-    profile.data.sections.skills.have.every(
-      (category) => category.terms.length === 0,
-    );
-  const [title, hint, actions] = noPostings
-    ? [
-        WORDING.deckNoPostings,
-        WORDING.deckNoPostingsHint,
-        <Button key="find" asChild size="sm">
-          <Link to="/jobs?find=1">{WORDING.findJobs}</Link>
-        </Button>,
-      ]
-    : noSkills
-      ? [
-          deckNoSkills(threshold),
-          DECK_NO_SKILLS_HINT,
-          <>
-            <Button asChild size="sm">
-              <Link to="/profile?tab=skills">{WORDING.addSkills}</Link>
-            </Button>
-            <Button asChild size="sm" variant="outline">
-              <Link to="/settings/search">{WORDING.searchOptions}</Link>
-            </Button>
-          </>,
-        ]
-      : [
-          deckEmpty(threshold),
-          WORDING.deckEmptyHint,
-          <>
-            <Button asChild size="sm">
-              <Link to="/jobs?find=1">{WORDING.findNewPostings}</Link>
-            </Button>
-            <Button asChild size="sm" variant="outline">
-              <Link to="/settings/search">{WORDING.searchOptions}</Link>
-            </Button>
-          </>,
-        ];
-  return (
-    <section aria-label={WORDING.deck}>
-      <Empty className="gap-4 rounded-xl bg-card p-6 md:p-6">
-        <EmptyHeader className="gap-2">
-          <EmptyTitle className="text-base tracking-normal">{title}</EmptyTitle>
-          <EmptyDescription>{hint}</EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent className="flex-row flex-wrap justify-center gap-2">
-          {actions}
-        </EmptyContent>
-      </Empty>
-    </section>
   );
 }

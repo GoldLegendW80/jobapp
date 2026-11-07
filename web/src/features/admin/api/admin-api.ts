@@ -96,6 +96,8 @@ export const adminUserSchema = z.object({
   created_at: z.string(),
   last_login_at: z.string().nullable(),
   sessions: z.number().int().nonnegative(),
+  // Browsers at once (owner, 2026-11-07): the slots of the browser this person's work may use.
+  browsers: z.number().int().positive(),
 });
 export type AdminUser = z.infer<typeof adminUserSchema>;
 
@@ -105,10 +107,13 @@ export const userPageSchema = z.object({
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
   active_admins: z.number().int().nonnegative(),
+  // The server's BROWSER_SLOTS: the most browsers at once anyone may have.
+  browsers_max: z.number().int().positive(),
 });
 export type UserPage = z.infer<typeof userPageSchema>;
 
-export type UserChange = { is_active: boolean } | { role: Role };
+export type UserChange =
+  { is_active: boolean } | { role: Role } | { browsers: number };
 
 export const USERS_PAGE_SIZE = 50;
 export const usersKey = ["admin", "users"] as const;

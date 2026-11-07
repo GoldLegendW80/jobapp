@@ -11,7 +11,6 @@ import {
   cliLink,
   makeShots,
   newContext,
-  openPostingMore,
   root,
   setPassword,
   signIn,
@@ -261,7 +260,7 @@ function importJobs(email: string): string {
 
 const kpi = (page: Page, label: string) =>
   page
-    .getByRole("region", { name: "Postings per status" })
+    .getByRole("toolbar", { name: "Postings per status" })
     .getByRole("button", { name: new RegExp(`^${label}: `) });
 const summary = (page: Page) =>
   page.getByRole("main").getByRole("status").first();
@@ -324,7 +323,7 @@ test("a new account starts empty, then holds the 433 rows with the CSV counts", 
   await page.getByRole("button", { name: /^Filters/ }).click();
   const sheet = page.getByRole("dialog", { name: "Filters" });
   const bars = sheet
-    .getByRole("list", { name: "Postings per fit range" })
+    .getByRole("group", { name: "Postings per fit range" })
     .getByRole("button");
   await expect(bars).toHaveCount(10);
   let histogram = 0;
@@ -490,8 +489,6 @@ test("a detail with its posting, files, PDF preview and history; back keeps the 
   await expect(
     page.getByTestId("posting-text").locator("p").first(),
   ).toBeVisible();
-  // The files and the history are folded under "More about this posting".
-  await openPostingMore(page);
   const files = page.getByRole("list", { name: "Files" });
   await expect(files).toContainText("cv.pdf");
   await expect(
@@ -522,7 +519,10 @@ test("a detail with its posting, files, PDF preview and history; back keeps the 
     ).toContainText("{");
   }
 
-  await page.getByRole("link", { name: "Back to jobs" }).click();
+  await page
+    .getByRole("navigation", { name: "Breadcrumb" })
+    .getByRole("link", { name: "Jobs", exact: true })
+    .click();
   // The same view, and the posting it opened selected beside the list.
   const query = new URLSearchParams({
     status: "applied",

@@ -106,7 +106,7 @@ describe("a Like refused because the posting was passed", () => {
     await waitFor(() => {
       expect(result.current.top?.id).toBe(two.id);
     });
-    expect(info).toHaveBeenCalledWith(sentence);
+    expect(info).toHaveBeenCalledWith(sentence, { position: "bottom-right" });
     expect(result.current.refusal).toBeNull();
     expect(result.current.last).toBeNull();
     expect(deck.calls).not.toContain(`DELETE pass ${one.id}`);

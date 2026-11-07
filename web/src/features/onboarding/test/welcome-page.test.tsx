@@ -750,7 +750,7 @@ describe("the wizard", () => {
     });
     // the page asked for never rendered before the move
     expect(
-      screen.queryByRole("heading", { level: 1, name: "Application queue" }),
+      screen.queryByRole("heading", { level: 1, name: "Applications" }),
     ).toBeNull();
     await user.click(
       await screen.findByRole("button", { name: "Skip this step" }),
@@ -971,7 +971,7 @@ describe("the wizard", () => {
     expect(calls.complete).toBe(1);
   });
 
-  it("shows only the bar and the heading below sm, every name in one box from sm up", async () => {
+  it("shows only the bar and the heading on a narrow page, every name in the side rail on a wide one", async () => {
     fakeSession(member);
     fakeProfile(null);
     fakeOnboarding({ ...withRoles, passed: ["profile", "looking"] });
@@ -984,9 +984,10 @@ describe("the wizard", () => {
     expect(bar).toHaveAttribute("aria-valuenow", "3");
     expect(bar).toHaveAttribute("aria-valuemin", "1");
     expect(bar).toHaveAttribute("aria-valuemax", "8");
-    // The names are display none below sm (Tailwind's hidden) and a row from sm up.
+    // The names are display none on a narrow page (Tailwind's hidden) and a column in the side
+    // rail once the body is wide enough for one.
     const names = screen.getByTestId("welcome-step-names");
-    expect(names).toHaveClass("hidden", "sm:flex");
+    expect(names).toHaveClass("hidden", "@4xl:flex");
     const labels = within(names)
       .getAllByRole("listitem")
       .map((item) => item.firstElementChild as HTMLElement);
@@ -994,12 +995,12 @@ describe("the wizard", () => {
     for (const label of labels)
       expect(label).toHaveClass(
         "inline-flex",
-        "min-h-6",
+        "min-h-8",
         "items-center",
         "leading-5",
         "whitespace-nowrap",
       );
-    // The current one is marked; the steps passed open, from sm up.
+    // The current one is marked; the steps passed open.
     const current = within(names).getByText("Where");
     expect(current).toHaveAttribute("aria-current", "step");
     expect(current.tagName).toBe("SPAN");

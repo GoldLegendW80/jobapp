@@ -1,4 +1,10 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  createEvent,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
@@ -10,9 +16,9 @@ import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-import { LIKED, SWIPE_TEXT } from "../helpers/deck/card-text";
+import { LIKED, MODE_SENTENCES, SWIPE_TEXT } from "../helpers/deck/card-text";
 import { fakeDeck, makeCard, refused } from "@/test/deck";
-import { SWIPE_THRESHOLD } from "../components/deck/swipe-card";
+import { FLICK_MIN_DISTANCE, SWIPE_THRESHOLD } from "../helpers/deck/gesture";
 
 const NEVER =
   "This role matches one of your roles to never apply for, so it is never applied to.";
@@ -139,6 +145,12 @@ describe("the card", () => {
       const badge = screen.getByTestId("deck-mode");
       expect(badge).toHaveTextContent(new RegExp(`^${said}$`));
       expect(badge).toHaveAttribute("href", "/settings/applications");
+      // Beside the deck, what a Like does in that mode, and the way to change it.
+      const rail = screen.getByRole("region", { name: "After a Like" });
+      expect(rail).toHaveTextContent(MODE_SENTENCES[mode]);
+      expect(
+        within(rail).getByRole("link", { name: "Change the mode" }),
+      ).toHaveAttribute("href", "/settings/applications");
     },
   );
 
@@ -384,7 +396,7 @@ describe("keyboard", () => {
       expect(heading).toHaveFocus();
     });
     expect(announce).toHaveTextContent(
-      "Now showing Example Role 2 at Example Robotics 2.",
+      "Passed Example Role 1. Now showing Example Role 2 at Example Robotics 2.",
     );
   });
 
@@ -397,14 +409,30 @@ describe("keyboard", () => {
   });
 });
 
-describe("drag", () => {
-  const drag = (to: number) => {
-    const target = screen.getByTestId("deck-card");
-    fireEvent.pointerDown(target, { pointerId: 1, button: 0, clientX: 200 });
-    fireEvent.pointerMove(target, { pointerId: 1, clientX: 200 + to });
-    fireEvent.pointerUp(target, { pointerId: 1, clientX: 200 + to });
-  };
+type PointerKind = "pointerDown" | "pointerMove" | "pointerUp";
 
+/** A pointer event on the card at `x`, stamped `t` milliseconds, as a browser sends it. */
+function point(kind: PointerKind, x: number, t: number) {
+  const target = screen.getByTestId("deck-card");
+  const event = createEvent[kind](target, {
+    pointerId: 1,
+    button: 0,
+    clientX: x,
+    clientY: 300,
+  });
+  Object.defineProperty(event, "timeStamp", { value: t });
+  fireEvent(target, event);
+}
+
+/** A slow drag of `to` pixels: pressed, moved over 300 ms, held still, released. */
+function drag(to: number) {
+  point("pointerDown", 200, 1000);
+  point("pointerMove", 200 + to / 2, 1150);
+  point("pointerMove", 200 + to, 1300);
+  point("pointerUp", 200 + to, 1400);
+}
+
+describe("drag", () => {
   it("past the threshold to the right is a Like, to the left a Pass", async () => {
     const { deck } = await open();
     drag(SWIPE_THRESHOLD + 10);
@@ -424,6 +452,73 @@ describe("drag", () => {
     expect(deck.calls.some((c) => c.startsWith("POST"))).toBe(false);
   });
 
+  it("a fast flick under the threshold is a swipe, a slow one is not", async () => {
+    const { deck } = await open();
+    point("pointerDown", 200, 1000);
+    point("pointerMove", 220, 1020);
+    point("pointerMove", 250, 1040);
+    point("pointerUp", 200 + FLICK_MIN_DISTANCE + 28, 1050);
+    await onTop("Example Role 2");
+    expect(deck.calls).toContain(`POST like ${makeCard(1).id}`);
+  });
+
+  it("a flick too short to mean anything springs back", async () => {
+    const { deck } = await open();
+    point("pointerDown", 200, 1000);
+    point("pointerMove", 190, 1010);
+    point("pointerUp", 200 - (FLICK_MIN_DISTANCE - 10), 1030);
+    expect(screen.getByTestId("deck-card")).toHaveAttribute("data-dx", "0");
+    expect(deck.calls.some((c) => c.startsWith("POST"))).toBe(false);
+  });
+
+  it("past the threshold but thrown back toward the middle springs back", async () => {
+    const { deck } = await open();
+    point("pointerDown", 200, 1000);
+    point("pointerMove", 350, 1300);
+    point("pointerMove", 310, 1340);
+    point("pointerUp", 200 + SWIPE_THRESHOLD + 4, 1350);
+    expect(screen.getByTestId("deck-card")).toHaveAttribute("data-dx", "0");
+    expect(deck.calls.some((c) => c.startsWith("POST"))).toBe(false);
+  });
+
+  it("shows the stamp of the side it goes, stronger with the distance", async () => {
+    await open();
+    const card = screen.getByTestId("deck-card");
+    const stamp = (side: string) =>
+      Number(
+        card.querySelector<HTMLElement>(`[data-stamp="${side}"]`)?.style
+          .opacity,
+      );
+    point("pointerDown", 200, 1000);
+    point("pointerMove", 200 + SWIPE_THRESHOLD / 2, 1100);
+    const half = stamp("like");
+    expect(half).toBeGreaterThan(0);
+    expect(half).toBeLessThan(1);
+    expect(stamp("pass")).toBe(0);
+    point("pointerMove", 200 + SWIPE_THRESHOLD, 1200);
+    expect(stamp("like")).toBe(1);
+    point("pointerMove", 200 - SWIPE_THRESHOLD, 1300);
+    expect(stamp("like")).toBe(0);
+    expect(stamp("pass")).toBe(1);
+    expect(card.getAttribute("data-dx")).toBe(String(-SWIPE_THRESHOLD));
+  });
+
+  it("a tap on the card opens the whole posting", async () => {
+    await open();
+    server.use(
+      http.get("*/api/jobs/:id", () =>
+        HttpResponse.json(
+          makeDetail({ posting_text: "We build example robots." }),
+        ),
+      ),
+    );
+    point("pointerDown", 200, 1000);
+    point("pointerUp", 202, 1080);
+    expect(await screen.findByTestId("deck-posting-text")).toHaveTextContent(
+      "We build example robots.",
+    );
+  });
+
   it("does not move the card with reduced motion: buttons only", async () => {
     reducedMotion(true);
     const { deck } = await open();
@@ -433,6 +528,45 @@ describe("drag", () => {
     expect(deck.calls.some((c) => c.startsWith("POST"))).toBe(false);
     await userEvent.click(likeButton());
     await onTop("Example Role 2");
+  });
+
+  it("draws the next cards behind the top one, out of reach, and only the top one with reduced motion", async () => {
+    await open();
+    const behind = screen.getAllByTestId("deck-card-behind");
+    expect(behind).toHaveLength(2);
+    for (const card of behind) {
+      expect(card).toHaveAttribute("aria-hidden", "true");
+      expect(card).toHaveAttribute("inert");
+    }
+    expect(screen.getAllByRole("article")).toHaveLength(1);
+  });
+
+  it("keeps a single card with reduced motion", async () => {
+    reducedMotion(true);
+    await open();
+    expect(screen.queryAllByTestId("deck-card-behind")).toHaveLength(0);
+  });
+});
+
+describe("the first visit", () => {
+  it("shows how to swipe until the first swipe, then never again", async () => {
+    const first = await open();
+    expect(screen.getByTestId("deck-hint")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    await userEvent.click(passButton());
+    await onTop("Example Role 2");
+    expect(screen.queryByTestId("deck-hint")).toBeNull();
+    first.app.unmount();
+    await open();
+    expect(screen.queryByTestId("deck-hint")).toBeNull();
+  });
+
+  it("shows no hint with reduced motion, where the card is not dragged", async () => {
+    reducedMotion(true);
+    await open();
+    expect(screen.queryByTestId("deck-hint")).toBeNull();
   });
 });
 

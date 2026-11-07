@@ -7,6 +7,9 @@ import { ABOUT_WORDS as W } from "./about-words";
 /** The id of a part's card, which the contents list links to. */
 export const partAnchor = (index: number) => `about-part-${index}`;
 
+/** The id of a fact part's move buttons (`<id>-up`, `<id>-down`), which focus follows. */
+export const moveId = (index: number) => `${partAnchor(index)}-move`;
+
 /** The api's state of the part with this heading, when the saved document has it. */
 export function shownPart(
   about: About,

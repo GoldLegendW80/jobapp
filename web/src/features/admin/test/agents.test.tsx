@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { admin, fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { crumb } from "@/test/breadcrumb";
 
 import {
   changesOf,
@@ -266,6 +267,12 @@ function fakeAgents(
   return state;
 }
 
+/** What the Identity section says the runs use: a version, or the code's definition. */
+function runsUse() {
+  const identity = screen.getByRole("region", { name: "Identity" });
+  return within(identity).getByText("Runs use").nextElementSibling;
+}
+
 describe("the list", () => {
   it("shows every agent with its module, model, version and last run", async () => {
     fakeSession(admin);
@@ -283,10 +290,13 @@ describe("the list", () => {
     expect(within(row).getByText("Private")).toBeInTheDocument();
     expect(within(row).getByText("The code's")).toBeInTheDocument();
     expect(within(row).getByText("Never")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Agents" })).toHaveAttribute(
-      "aria-current",
-      "page",
+    expect(screen.getByRole("tab", { name: "Agents" })).toHaveAttribute(
+      "aria-selected",
+      "true",
     );
+    expect(
+      screen.getByRole("heading", { name: "Admin", level: 1 }),
+    ).toBeInTheDocument();
     expect(document.title).toBe("Agents · jobapp");
     // Phone width: each cell carries its label for the stacked layout.
     expect(container.querySelector('[data-label="Model"]')).not.toBeNull();
@@ -446,7 +456,7 @@ describe("the list", () => {
     fakeAgents(makePage(), undefined, []);
     renderApp("/admin/agents");
     expect(
-      await screen.findByText("No agent is registered here."),
+      await screen.findByText("No agent is registered"),
     ).toBeInTheDocument();
     expect(screen.queryByRole("table")).toBeNull();
   });
@@ -468,11 +478,13 @@ describe("an agent's page", () => {
     fakeAgents();
     const { container } = renderApp("/admin/agents/browser_discovery");
     expect(
-      await screen.findByRole("heading", {
-        name: "browser_discovery",
-        level: 1,
-      }),
+      await screen.findByRole("heading", { name: "Identity", level: 2 }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "browser_discovery", level: 1 }),
+    ).toBeInTheDocument();
+    expect(crumb("Agents")).toHaveAttribute("href", "/admin/agents");
+    expect(crumb("Admin")).toHaveAttribute("href", "/admin/users");
     for (const title of [
       "Identity",
       "Parameters it takes",
@@ -496,9 +508,7 @@ describe("an agent's page", () => {
       '"permission_mode": "dontAsk"',
     );
     expect(screen.getByText(/Not described yet/)).toBeInTheDocument();
-    expect(
-      screen.getByText("Runs use the code's definition"),
-    ).toBeInTheDocument();
+    expect(runsUse()).toHaveTextContent("The code's definition");
     const runs = screen.getByRole("table", {
       name: "Recent runs, newest first",
     });
@@ -653,8 +663,11 @@ describe("an agent's page", () => {
     fakeAgents();
     renderApp("/admin/agents/nobody");
     expect(
-      await screen.findByText("No agent has this name."),
+      await screen.findByText("No agent has this name"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "See all agents" }),
+    ).toHaveAttribute("href", "/admin/agents");
   });
 });
 
@@ -732,7 +745,7 @@ describe("editing", () => {
         "Version 1 saved. The next run of browser_discovery uses it.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Runs use version 1")).toBeInTheDocument();
+    expect(runsUse()).toHaveTextContent("Version 1");
     expect(
       screen.getByRole("button", { name: "Save as a new version" }),
     ).toBeDisabled();
@@ -815,7 +828,8 @@ describe("editing", () => {
     );
     const user = userEvent.setup();
     renderApp("/admin/agents/browser_discovery");
-    expect(await screen.findByText("Runs use version 2")).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Identity" });
+    expect(runsUse()).toHaveTextContent("Version 2");
     expect(screen.getByText(/an account that is gone/)).toBeInTheDocument();
     await user.click(
       screen.getByRole("button", { name: "Revert to the code's version" }),

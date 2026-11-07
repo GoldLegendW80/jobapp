@@ -5,26 +5,50 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 
-import type { SkillsForm } from "@/features/profile/helpers/editor-forms";
+import type { Skills } from "@/features/profile/api/profile-api";
+import {
+  inWords,
+  toSkillsForm,
+  type SkillsForm,
+} from "@/features/profile/helpers/editor-forms";
 import {
   describeMatch,
   matchPosting,
 } from "@/features/profile/helpers/posting-matches";
 import { Group } from "@/components/shared/profile/section-ui";
 
-/** A pasted posting matched against the categories and requirements being edited, saved or not. */
-export function TryIt({ form }: { form: UseFormReturn<SkillsForm> }) {
+/**
+ * A pasted posting matched against every category and requirement: the ones in words as stored
+ * (`stored`, About you's) and the regular expressions being edited, saved or not.
+ */
+export function TryIt({
+  form,
+  stored,
+}: {
+  form: UseFormReturn<SkillsForm>;
+  stored: Skills;
+}) {
   const [text, setText] = useState("");
-  const values = useWatch({ control: form.control });
+  const values = useWatch({ control: form.control }) as Partial<SkillsForm>;
+  const words = useMemo(() => toSkillsForm(inWords(stored)), [stored]);
   const sections = useMemo(
-    () => matchPosting(values as Partial<SkillsForm>, text),
-    [text, values],
+    () =>
+      matchPosting(
+        {
+          have: [...words.have, ...(values.have ?? [])],
+          adjacent: [...words.adjacent, ...(values.adjacent ?? [])],
+          none: [...words.none, ...(values.none ?? [])],
+          gates: [...words.gates, ...(values.gates ?? [])],
+        },
+        text,
+      ),
+    [text, values, words],
   );
 
   return (
     <Group
-      title="Try it"
-      description="Paste a job posting to see which categories and requirements match, with the rules search uses: whole words, any case, an optional plural. Uses the terms on this page, saved or not."
+      title="Try a posting"
+      description="Paste a job posting to see which categories and requirements match, with the rules search uses: whole words, any case, an optional plural. Uses your skills in About you and the expressions above, saved or not."
     >
       <Field className="gap-2">
         <FieldLabel htmlFor="skills-try-it">Posting text</FieldLabel>

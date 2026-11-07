@@ -16,11 +16,12 @@ import { SECTION_LABELS } from "@/features/profile/helpers/labels";
 import { HistoryBody } from "./history/history-body";
 
 /**
- * The History button of a tab and its drawer: the section's saves, newest first, 20 at a time;
- * choosing one compares it with the current version, and "Restore this version" saves its data
- * as a new revision (PUT with the page's revision, so a save made elsewhere meanwhile is a 409,
- * never overwritten silently). With unsaved changes in the tab, restoring asks first.
- * `onRestored` lets the page reload the tab's form from the new current version.
+ * The History of a section, a drawer with its own button (Settings, Search) or opened from a menu
+ * (the profile page): the section's saves, newest first, 20 at a time; choosing one compares it
+ * with the current version, and "Restore this version" saves its data as a new revision (PUT
+ * with the page's revision, so a save made elsewhere meanwhile is a 409, never overwritten
+ * silently). With unsaved changes in the section's form, restoring asks first. `onRestored` lets
+ * the page reload that form from the new current version.
  */
 export function HistoryDrawer({
   section,
@@ -34,7 +35,7 @@ export function HistoryDrawer({
   profile: Profile;
   dirty: boolean;
   onRestored: () => void;
-  /** Opened from elsewhere (the one page profile's More menu): no button of its own. */
+  /** Opened from elsewhere (the profile page's More actions): no button of its own. */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {

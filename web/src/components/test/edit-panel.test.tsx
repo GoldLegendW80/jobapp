@@ -10,8 +10,9 @@ import {
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { fakeDocumentReads } from "@/design-system/fixtures/documents";
 import { waitForOnFakeClock } from "@/test/clock";
 import { fakeVersion } from "@/test/documents";
 import { fakeProfile } from "@/test/profile";
@@ -214,6 +215,18 @@ function fake(start: DocumentOut, versions: VersionSummary[] = []) {
         ],
       }),
     ),
+    http.get("*/api/documents/:id/versions/:number", ({ params }) => {
+      const number = Number(params.number);
+      const summary = state.versions.find((one) => one.number === number);
+      if (!summary)
+        return HttpResponse.json({ detail: "Not found." }, { status: 404 });
+      return HttpResponse.json({
+        ...summary,
+        content: state.contents.get(number) ?? {},
+        corrections: [],
+        unprintable: [],
+      });
+    }),
     http.get("*/api/documents/:id/versions", () =>
       HttpResponse.json(state.versions),
     ),
@@ -284,17 +297,31 @@ function fake(start: DocumentOut, versions: VersionSummary[] = []) {
   return state;
 }
 
-async function openEdit(user: UserEvent) {
+/** The page of the document, whose texts are edited where they are read. */
+async function openEdit() {
   renderWithQuery(
     <MemoryRouter>
       <DocumentView documentId="doc-1" />
     </MemoryRouter>,
   );
-  await user.click(await screen.findByRole("tab", { name: "Edit" }));
   return screen.findByTestId("edit-panel");
 }
 
+/** A part of the page in its fields: "the summary" is the button "Edit the summary". */
+async function openBlock(user: UserEvent, what: string) {
+  await user.click(await screen.findByRole("button", { name: `Edit ${what}` }));
+}
+
+/** The block each single field of these tests is edited in. */
+const BLOCK: Record<string, string> = {
+  Headline: "the headline",
+  Summary: "the summary",
+};
+
 async function retype(user: UserEvent, label: string, value: string) {
+  const block = BLOCK[label];
+  if (block !== undefined && screen.queryByLabelText(label) === null)
+    await openBlock(user, block);
   const field = await screen.findByLabelText(label);
   await user.clear(field);
   await user.type(field, value);
@@ -305,12 +332,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("the Edit view", () => {
+beforeEach(() => {
+  fakeDocumentReads();
+});
+
+describe("the document edited where it is read", () => {
   it("shows the fixed facts read only, counts against the template, and saves a second after typing stops", async () => {
     const api = fake(doc());
     api.renderAfterSave = "queued";
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
 
     const facts = await screen.findByRole("region", {
       name: "From your profile, printed as they are",
@@ -324,11 +355,14 @@ describe("the Edit view", () => {
     expect(
       within(facts).getByRole("link", { name: "your employers and schools" }),
     ).toHaveAttribute("href", "/profile?tab=experience");
+    // The page prints the employer's title and dates from the profile, and its bullets.
+    const sheet = screen.getByTestId("document-sheet");
+    expect(sheet).toHaveTextContent("Platform engineer, Example Corp");
+    expect(sheet).toHaveTextContent("Ran the build farm");
+    await openBlock(user, "the experience");
     expect(
       await screen.findByRole("group", { name: "Example Corp" }),
     ).toHaveTextContent("Platform engineer, March 2021 to today");
-    const summary = screen.getByLabelText("Summary");
-    expect(summary).toHaveAccessibleDescription("26 of about 330 characters");
     // The first employer's bullets have the main counter, the others the shorter one.
     expect(
       screen.getByLabelText("Bullet 1, Example Corp"),
@@ -336,6 +370,12 @@ describe("the Edit view", () => {
     expect(
       screen.getByLabelText("Bullet 1, Sample Labs"),
     ).toHaveAccessibleDescription("21 of about 100 characters");
+    // Another part of the page opened puts the experience back as the page shows it.
+    await openBlock(user, "the summary");
+    expect(screen.queryByLabelText("Bullet 1, Example Corp")).toBeNull();
+    const summary = screen.getByLabelText("Summary");
+    expect(summary).toHaveFocus();
+    expect(summary).toHaveAccessibleDescription("26 of about 330 characters");
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     fireEvent.change(summary, {
@@ -370,7 +410,7 @@ describe("the Edit view", () => {
       release = resolve;
     });
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
     await retype(user, "Headline", "Site reliability engineer");
     await waitFor(() => {
       expect(api.saves).toHaveLength(1);
@@ -399,7 +439,7 @@ describe("the Edit view", () => {
   it("shows both texts when another tab saved first, and either can win", async () => {
     const api = fake(doc());
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
     api.document = {
       ...api.document,
       draft: { ...CV, summary: "Saved in the other tab." },
@@ -443,25 +483,39 @@ describe("the Edit view", () => {
     expect(api.document.draft.summary).toBe("The other tab again.");
   });
 
-  it("keeps what was typed when the view closes during a stale save, and asks on return", async () => {
-    const api = fake(doc());
+  it("keeps what was typed when the draft closes during a stale save, and asks on return", async () => {
+    const api = fake(doc(), [
+      fakeVersion({ number: 2 }),
+      fakeVersion({ number: 1 }),
+    ]);
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
+    const history = await screen.findByRole("region", { name: "Versions" });
+    const earlier = await within(history).findByRole("button", {
+      name: "Open version 1",
+    });
     api.document = {
       ...api.document,
       draft: { ...CV, summary: "Saved in the other tab." },
       draft_revision: 4,
     };
+    await openBlock(user, "the summary");
     const summary = await screen.findByLabelText("Summary");
     await user.clear(summary);
     await user.type(summary, "Typed before leaving.");
-    await user.click(screen.getByRole("tab", { name: "See" }));
+    // An earlier version opened from the history puts the draft away, read only.
+    await user.click(earlier);
+    expect(
+      await screen.findByText(/^An earlier version, as it was written\./),
+    ).toBeVisible();
     await waitFor(() => {
       expect(api.saves).toHaveLength(1);
     });
     expect(api.saves[0]?.body.summary).toBe("Typed before leaving.");
 
-    await user.click(screen.getByRole("tab", { name: "Edit" }));
+    await user.click(
+      within(history).getByRole("button", { name: "Open version 2" }),
+    );
     const dialog = await screen.findByRole("alertdialog", {
       name: "This document changed in another tab",
     });
@@ -485,25 +539,26 @@ describe("the Edit view", () => {
       </MemoryRouter>
     );
     const { client, unmount } = renderWithQuery(view);
-    await user.click(await screen.findByRole("tab", { name: "Edit" }));
+    await screen.findByTestId("edit-panel");
     api.document = {
       ...api.document,
       draft: { ...CV, summary: "Saved in the other tab." },
       draft_revision: 4,
     };
+    await openBlock(user, "the summary");
     const summary = await screen.findByLabelText("Summary");
     await user.clear(summary);
     await user.type(summary, "Typed before signing out.");
-    await user.click(screen.getByRole("tab", { name: "See" }));
+    // Leaving the page sends what waits, and keeps it for the next visit.
+    unmount();
     await waitFor(() => {
       expect(api.saves).toHaveLength(1);
     });
-    unmount();
     // What signing out does to the cache (resetSession in auth-provider.tsx).
     client.removeQueries({ predicate: (query) => query.queryKey[0] !== "me" });
 
     render(<QueryClientProvider client={client}>{view}</QueryClientProvider>);
-    await user.click(await screen.findByRole("tab", { name: "Edit" }));
+    await openBlock(user, "the summary");
     expect(await screen.findByLabelText("Summary")).toHaveValue(
       "Saved in the other tab.",
     );
@@ -529,7 +584,7 @@ describe("the Edit view", () => {
           ];
     };
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
     await retype(user, "Summary", "Led 40 engineers.");
 
     const notes = await screen.findByRole("list", { name: "Notes on Summary" });
@@ -557,7 +612,14 @@ describe("the Edit view", () => {
       }),
     );
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
+    // Closed, the page says it under the experience; open, the employer's entry says it.
+    expect(
+      await screen.findByText(
+        "gone-corp is no longer in your profile: no title or dates print above its bullets.",
+      ),
+    ).toBeVisible();
+    await openBlock(user, "the experience");
     const entry = await screen.findByRole("group", { name: "gone-corp" });
     expect(
       await within(entry).findByText(
@@ -607,7 +669,7 @@ describe("the Edit view", () => {
       }),
     );
     const user = userEvent.setup();
-    const panel = await openEdit(user);
+    const panel = await openEdit();
     expect(
       within(panel).getByText(
         "Left out of the imported file: employer 2, bullet 1, too long.",
@@ -623,6 +685,7 @@ describe("the Edit view", () => {
         "3 more parts of the imported file were left out.",
       ),
     ).toBeVisible();
+    await openBlock(user, "the experience");
     const entry = await screen.findByRole("group", {
       name: "harbor-sample-works",
     });
@@ -637,7 +700,8 @@ describe("the Edit view", () => {
   it("reorders bullets with the keyboard, keeping the focus on what moved", async () => {
     const api = fake(doc());
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
+    await openBlock(user, "the experience");
     const entry = await screen.findByRole("group", { name: "Example Corp" });
     within(entry).getByLabelText("Bullet 2, Example Corp").focus();
     await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
@@ -685,7 +749,8 @@ describe("the Edit view", () => {
       }),
     );
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
+    await openBlock(user, "the paragraphs");
     const paragraph = await screen.findByLabelText("Paragraph 1");
     expect(paragraph).toHaveAccessibleDescription("16 of about 900 characters");
     paragraph.focus();
@@ -740,11 +805,12 @@ describe("the Edit view", () => {
       );
     });
 
-    await user.click(screen.getByRole("tab", { name: "Edit" }));
+    // The draft on the page takes the restored text.
+    await openBlock(user, "the summary");
     expect(await screen.findByLabelText("Summary")).toHaveValue(
       "The summary that was sent.",
     );
-    await user.click(screen.getByRole("tab", { name: "See" }));
+    await user.keyboard("{Escape}");
     await user.click(
       await screen.findByRole("button", { name: "Approve version 2" }),
     );
@@ -766,10 +832,10 @@ describe("the Edit view", () => {
     });
     const api = fake(doc({ latest: approved }), [approved]);
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
     expect(
       await screen.findByText(
-        "Version 2 is approved. What you change here makes a new version, which you approve in See once its page is drawn.",
+        "Version 2 is approved. What you change here makes a new version, which you approve under Versions once its page is drawn.",
       ),
     ).toBeVisible();
     await retype(user, "Headline", "Staff platform engineer");
@@ -782,7 +848,7 @@ describe("the Edit view", () => {
   it("switches the language of the page to French", async () => {
     const api = fake(doc());
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
     await user.selectOptions(
       screen.getByLabelText("Language of the page"),
       "fr",
@@ -813,7 +879,7 @@ describe("the Edit view", () => {
       }),
     );
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
     const facts = await screen.findByRole("region", {
       name: "Facts of this base CV",
     });
@@ -843,6 +909,7 @@ describe("the Edit view", () => {
       languages: [],
     });
     // An employer only the base CV states can be given bullets.
+    await openBlock(user, "the experience");
     expect(
       within(
         screen.getByLabelText("Add an employer of your profile"),
@@ -913,7 +980,7 @@ describe("the Edit view", () => {
       const api = fake(doc(shape));
       api.refuse = [{ path, code, message: "refused" }];
       const user = userEvent.setup();
-      const panel = await openEdit(user);
+      const panel = await openEdit();
       await retype(user, "Headline", "Staff platform engineer");
       expect(await screen.findByText("Not saved")).toBeVisible();
       expect(screen.getByText(said)).toBeVisible();
@@ -930,7 +997,7 @@ describe("the Edit view", () => {
       { path: "experience", code: "duplicate_employer", message: "refused" },
     ];
     const user = userEvent.setup();
-    await openEdit(user);
+    await openEdit();
     await retype(user, "Headline", "Staff platform engineer");
     expect(await screen.findByText("Not saved")).toBeVisible();
     expect(
@@ -954,13 +1021,25 @@ describe("the Edit view", () => {
       const start = doc(shape);
       fake(start);
       const user = userEvent.setup();
-      const panel = await openEdit(user);
+      const panel = await openEdit();
       const target = await screen.findByLabelText(/^What this .* is for/);
       const prefix = target.id.slice(0, -"target".length);
-      const drawn = [...panel.querySelectorAll("input, textarea")].map((one) =>
-        one.id.slice(prefix.length).replace(/-/g, "."),
-      );
-      expect(new Set(drawn)).toEqual(
+      const drawn = new Set<string>();
+      const collect = () => {
+        for (const one of panel.querySelectorAll("input, textarea"))
+          drawn.add(one.id.slice(prefix.length).replace(/-/g, "."));
+      };
+      collect();
+      // Each part of the page draws its inputs where it is read, one part at a time.
+      const parts = within(screen.getByTestId("document-sheet"))
+        .getAllByRole("button", { name: /^Edit / })
+        .map((one) => one.getAttribute("aria-label") ?? "");
+      for (const name of parts) {
+        await user.click(screen.getByRole("button", { name }));
+        collect();
+        await user.keyboard("{Escape}");
+      }
+      expect(drawn).toEqual(
         fieldKeys(
           withDefaults(start),
           start.kind === "letter",
@@ -991,12 +1070,13 @@ describe("the Edit view", () => {
       </MemoryRouter>
     );
     const { client, rerender } = renderWithQuery(view("doc-1"));
-    await user.click(await screen.findByRole("tab", { name: "Edit" }));
+    await openBlock(user, "the headline");
     expect(await screen.findByLabelText("Headline")).toHaveValue(
       "Platform engineer",
     );
     client.setQueryData(documentKey("doc-2"), other);
     rerender(view("doc-2"));
+    await openBlock(user, "the headline");
     expect(screen.getByLabelText("Headline")).toHaveValue("Data engineer");
     await retype(user, "Summary", "Typed in the second document.");
     await waitFor(() => {

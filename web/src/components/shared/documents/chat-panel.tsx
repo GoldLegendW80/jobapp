@@ -1,10 +1,11 @@
 /**
- * The Chat view of a document (documents D17): the document's conversation and a box to ask for a
- * change. A message starts a generation of the chat writer, a private run whose text is never
- * streamed, so the panel polls the generation (`getGeneration`) until it ends, then reads the
+ * The chat of a document (documents D17): the document's conversation and a box to ask for a
+ * change. The document view shows it in its side rail, or in a sheet on a phone
+ * (document-view/chat-section.tsx). A message starts a generation of the chat writer, a private
+ * run whose text is never streamed, so the panel polls the generation (`getGeneration`) until it ends, then reads the
  * conversation, the document and its versions again: the answer the app wrote names what changed,
- * what the fact check corrected and the version number. Bubbles and the list that follows the
- * newest message are the agents chat's (`useStickToBottom`); text is plain, never markdown.
+ * what the fact check corrected and the version number. The thread, its turns and the prompt are
+ * the posting's chat's own (shared/agents/chat); text is plain, never markdown.
  *
  * Nothing is sent before the consent of the current text and a model credential: the panel says
  * which is missing and the composer waits. One message at a time: while one is answered, or while
@@ -12,28 +13,17 @@
  * answer being written (`cancelGeneration`): the document stays as it was. A message with no
  * character drawn (only blanks or zero width characters) is not sent, as the api refuses it.
  */
-import { SendHorizontal } from "lucide-react";
-import {
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 
+import { ChatEmptyState } from "@/components/shared/agents/chat/chat-empty-state";
+import { ChatPrompt } from "@/components/shared/agents/chat/chat-prompt";
+import { ChatThread } from "@/components/shared/agents/chat/chat-thread";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
-import { Kbd } from "@/components/ui/kbd";
-import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
-import { useStickToBottom } from "@/features/agents/hooks/use-stick-to-bottom";
-import { cn } from "@/lib/utils";
 
 import { drawn } from "@/features/documents/helpers/chat-text";
+import { ChatMessages } from "./chat-panel/chat-messages";
 import { ConsentDialog } from "./consent-dialog";
 import type { PanelProps } from "./document-view";
 import { failureSentence } from "@/features/documents/api/documents-api";
@@ -51,8 +41,6 @@ import {
 } from "@/features/documents/api/use-consent";
 import { isOpen } from "@/features/documents/helpers/labels";
 
-export const available = true;
-
 /** The api's DOCUMENTS_CHAT_MAX_CHARS. */
 export const CHAT_MAX_CHARS = 2000;
 
@@ -61,9 +49,6 @@ const EXAMPLES = [
   "Use the sidebar template",
   "Put my most relevant experience first",
 ];
-
-const BUBBLE =
-  "max-w-[85%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap";
 
 /** The generation of the newest message of the person while no answer names it. */
 function pendingGeneration(messages: Message[]): string | null {
@@ -76,45 +61,8 @@ function pendingGeneration(messages: Message[]): string | null {
   return answered ? null : last.generation_id;
 }
 
-/** The hint of the composer when a message can be sent: its keys, as keys. */
-const KEYS = (
-  <>
-    <Kbd>Enter</Kbd> sends, <Kbd>Shift</Kbd> and <Kbd>Enter</Kbd> adds a line.
-  </>
-);
-
-function MessageItem({ message }: { message: Message }) {
-  const mine = message.role === "user";
-  return (
-    <li
-      data-testid="document-chat-message"
-      data-role={message.role}
-      className={cn("flex flex-col gap-1", mine ? "items-end" : "items-start")}
-    >
-      <span className="sr-only">{mine ? "You:" : "Assistant:"}</span>
-      <div
-        className={
-          mine
-            ? cn(BUBBLE, "rounded-br-sm bg-primary text-primary-foreground")
-            : cn(BUBBLE, "rounded-bl-sm bg-muted")
-        }
-      >
-        {message.text}
-      </div>
-      {message.version_number !== null && !mine ? (
-        <span className="text-xs text-muted-foreground">
-          Version {message.version_number}
-        </span>
-      ) : null}
-    </li>
-  );
-}
-
 export function ChatPanel({ document, generation }: PanelProps) {
-  const ids = { composer: useId(), hint: useId() };
   const composer = useRef<HTMLTextAreaElement>(null);
-  const list = useRef<HTMLDivElement>(null);
-  const { follow } = useStickToBottom(list);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [consenting, setConsenting] = useState(false);
@@ -147,10 +95,6 @@ export function ChatPanel({ document, generation }: PanelProps) {
     seen.current = answerCount;
   }, [answerCount, lastAnswer, messages.isSuccess]);
 
-  useLayoutEffect(() => {
-    follow();
-  }, [follow, shown.length, pending]);
-
   const agree = useAcceptConsent({
     onAccepted: () => {
       setConsenting(false);
@@ -163,7 +107,6 @@ export function ChatPanel({ document, generation }: PanelProps) {
     },
     onSent: () => {
       setDraft("");
-      follow(true);
     },
     onError: (failure) => {
       setError(failureSentence(failure));
@@ -194,112 +137,57 @@ export function ChatPanel({ document, generation }: PanelProps) {
     !busy &&
     drawn(text);
 
-  const submit = (event?: FormEvent) => {
-    event?.preventDefault();
-    if (canSend) send.mutate(text);
-  };
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (
-      event.key === "Enter" &&
-      !event.shiftKey &&
-      !event.nativeEvent.isComposing
-    ) {
-      event.preventDefault();
-      submit();
-    }
-  };
-
   const hint = writing
     ? "This document is being written. You can ask for a change once it is done."
     : busy
       ? "One message at a time: you can send the next one once this one is answered."
-      : KEYS;
+      : undefined;
 
   return (
     <div className="flex flex-col gap-3" data-testid="document-chat">
       <p className="sr-only" role="status" aria-live="polite">
         {announcement}
       </p>
-      <div
-        ref={list}
-        data-testid="document-chat-scroll"
-        className="max-h-[60vh] min-h-40 overflow-y-auto rounded-md border p-4"
+      <ChatThread
+        fit
+        scrollTestId="document-chat-scroll"
+        loading={messages.isPending}
+        error={messages.isError ? failureSentence(messages.error) : undefined}
+        empty={
+          shown.length === 0 ? (
+            <ChatEmptyState
+              testId="document-chat-empty"
+              description="The assistant changes what you ask and nothing else; the fact check removes any claim your profile does not state."
+              examples={EXAMPLES}
+              examplesLabel="Examples"
+              onPick={(example) => {
+                setDraft(example);
+                composer.current?.focus();
+              }}
+            />
+          ) : null
+        }
       >
-        {messages.isPending ? (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner aria-hidden="true" role={undefined} />
-            Loading the conversation
-          </p>
-        ) : messages.isError ? (
-          <p className="text-sm text-destructive">
-            The conversation could not be loaded.{" "}
-            {failureSentence(messages.error)}
-          </p>
-        ) : shown.length === 0 ? (
-          <div
-            className="flex flex-col gap-3"
-            data-testid="document-chat-empty"
-          >
-            <p className="text-sm text-muted-foreground">
-              Ask for a change to this document. The assistant changes what you
-              ask and nothing else; the fact check removes any claim your
-              profile does not state, and each change is a new version you can
-              restore.
-            </p>
-            <ul aria-label="Examples" className="flex flex-col gap-2">
-              {EXAMPLES.map((example) => (
-                <li key={example}>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-auto w-full justify-start py-2 text-left whitespace-normal"
-                    onClick={() => {
-                      setDraft(example);
-                      composer.current?.focus();
-                    }}
-                  >
-                    {example}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : (
-          <ol aria-label="Messages" className="flex flex-col gap-4">
-            {shown.map((message) => (
-              <MessageItem key={message.id} message={message} />
-            ))}
-            {pending !== null ? (
-              <li
-                className="flex items-center gap-2 text-sm text-muted-foreground"
-                data-testid="document-chat-writing"
-              >
-                <Spinner
-                  aria-hidden="true"
-                  role={undefined}
-                  className="motion-reduce:animate-none"
-                />
-                {followed.data?.status === "queued"
-                  ? "Waiting for a free assistant"
-                  : "Changing your document"}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="ml-auto"
-                  disabled={stop.isPending}
-                  onClick={() => {
-                    stop.mutate(pending);
-                  }}
-                >
-                  Stop
-                </Button>
-              </li>
-            ) : null}
-          </ol>
-        )}
-      </div>
+        {messages.isSuccess ? (
+          <ChatMessages
+            messages={shown}
+            pending={
+              pending === null
+                ? null
+                : {
+                    label:
+                      followed.data?.status === "queued"
+                        ? "Waiting for a free assistant"
+                        : "Changing your document",
+                    stopping: stop.isPending,
+                    onStop: () => {
+                      stop.mutate(pending);
+                    },
+                  }
+            }
+          />
+        ) : null}
+      </ChatThread>
 
       {noConsent ? (
         <Alert>
@@ -334,53 +222,21 @@ export function ChatPanel({ document, generation }: PanelProps) {
         </Alert>
       ) : null}
 
-      <form onSubmit={submit} aria-label="Send a message">
-        <Field className="gap-2">
-          <FieldLabel htmlFor={ids.composer} className="sr-only">
-            Message
-          </FieldLabel>
-          <div className="flex items-end gap-2">
-            <Textarea
-              id={ids.composer}
-              ref={composer}
-              value={draft}
-              maxLength={CHAT_MAX_CHARS}
-              rows={2}
-              placeholder="Ask for a change"
-              className="max-h-40 min-h-11 resize-none"
-              aria-describedby={ids.hint}
-              disabled={noConsent || noCredential}
-              onChange={(event) => {
-                setDraft(event.target.value);
-              }}
-              onKeyDown={onKeyDown}
-            />
-            <Button
-              type="submit"
-              size="icon"
-              className="size-11 shrink-0"
-              disabled={!canSend}
-              aria-busy={send.isPending}
-            >
-              {send.isPending ? (
-                <Spinner aria-hidden="true" role={undefined} />
-              ) : (
-                <SendHorizontal aria-hidden="true" />
-              )}
-              <span className="sr-only">Send</span>
-            </Button>
-          </div>
-          <FieldDescription
-            id={ids.hint}
-            className="flex justify-between gap-2 text-xs"
-          >
-            <span>{hint}</span>
-            <span>
-              {draft.length} of {CHAT_MAX_CHARS}
-            </span>
-          </FieldDescription>
-        </Field>
-      </form>
+      <ChatPrompt
+        textareaRef={composer}
+        value={draft}
+        max={CHAT_MAX_CHARS}
+        showCount
+        hint={hint}
+        placeholder="Ask for a change"
+        disabled={noConsent || noCredential}
+        canSend={canSend}
+        sending={send.isPending}
+        onChange={setDraft}
+        onSubmit={() => {
+          if (canSend) send.mutate(text);
+        }}
+      />
 
       {consent.data !== undefined ? (
         <ConsentDialog

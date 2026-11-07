@@ -140,35 +140,6 @@ export const Sides: Story = {
   ),
 };
 
-/** From the bottom, as search options open on a phone. */
-export const FromBottom: Story = {
-  render: () => (
-    <Sheet defaultOpen>
-      <SheetTrigger asChild>
-        <Button variant="outline">Search options</Button>
-      </SheetTrigger>
-      <SheetContent side="bottom">
-        <SheetHeader>
-          <SheetTitle>Search options</SheetTitle>
-          <SheetDescription>
-            Data engineering roles in Lyon, Paris or remote, from 50,000 EUR a
-            year.
-          </SheetDescription>
-        </SheetHeader>
-        <SheetFooter className="flex-row">
-          <Button className="flex-1">Find new postings</Button>
-          <SheetClose asChild>
-            <Button variant="outline" className="flex-1">
-              Close
-            </Button>
-          </SheetClose>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
-  ),
-  parameters: OPEN_FOR_REVIEW,
-};
-
 /** Long content scrolls between a fixed header and footer, so Apply stays in reach. */
 export const LongContent: Story = {
   render: () => <PostingSheet defaultOpen long />,

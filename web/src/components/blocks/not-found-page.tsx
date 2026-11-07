@@ -1,35 +1,26 @@
+import { SearchX } from "lucide-react";
 import { Link } from "react-router";
 
+import { EmptyState } from "@/components/blocks/empty-state";
+import { Page } from "@/components/blocks/page";
 import { Button } from "@/components/ui/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import { useTitle } from "@/hooks/use-title";
 
+/** Any address the app does not know, and a page the person may not see: the same answer. */
 export function NotFoundPage() {
   useTitle("Page not found");
   return (
-    <section aria-labelledby="not-found-title" className="mx-auto max-w-md">
-      <Empty className="gap-4 px-0 py-16 md:px-0 md:py-16">
-        <EmptyHeader className="max-w-md gap-4">
-          <p className="text-sm font-medium text-muted-foreground">404</p>
-          <EmptyTitle className="text-2xl font-semibold">
-            <h1 id="not-found-title">Page not found</h1>
-          </EmptyTitle>
-          <EmptyDescription className="text-base/normal">
-            This page does not exist, or you do not have access to it.
-          </EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          <Button asChild variant="outline">
+    <Page>
+      <EmptyState
+        icon={SearchX}
+        title={<h1 className="text-xl tracking-tight">Page not found</h1>}
+        description="This page does not exist, or you do not have access to it."
+        actions={
+          <Button asChild>
             <Link to="/">Go to the home page</Link>
           </Button>
-        </EmptyContent>
-      </Empty>
-    </section>
+        }
+      />
+    </Page>
   );
 }

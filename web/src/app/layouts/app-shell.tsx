@@ -43,7 +43,7 @@ export function AppShell() {
         Skip to content
       </a>
       <header className="sticky top-0 z-40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-        <div className="mx-auto flex h-16 max-w-6xl items-center gap-4 px-4 sm:grid sm:grid-cols-[1fr_auto_1fr]">
+        <div className="mx-auto flex h-16 max-w-360 items-center gap-4 px-4 sm:grid sm:px-6 lg:px-8 sm:grid-cols-[1fr_auto_1fr]">
           <Brand to="/jobs" />
           {phone ? null : (
             <PillNav label="Main">
@@ -68,14 +68,18 @@ export function AppShell() {
       {/* Right after the header in the page's order, as the header's navigation is on a wide
           screen: the skip link passes it, and Tab reaches it before the page. */}
       {phone ? <BottomNav /> : null}
-      <main id="main" tabIndex={-1} className="flex-1 px-4 py-6 sm:py-10">
+      <main
+        id="main"
+        tabIndex={-1}
+        className="flex-1 px-4 py-6 sm:px-6 sm:py-10 lg:px-8"
+      >
         {/* The header and the navigation stay while a page's code loads. */}
         <Suspense fallback={<PageLoading />}>
           <Outlet />
         </Suspense>
       </main>
       <footer>
-        <div className="mx-auto flex h-10 max-w-6xl items-center justify-between gap-4 px-4">
+        <div className="mx-auto flex h-10 max-w-360 items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <Link
             to="/privacy"
             className="rounded-md text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"

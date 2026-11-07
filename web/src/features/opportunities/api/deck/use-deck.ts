@@ -19,6 +19,7 @@ import {
   getApplication,
 } from "@/features/apply/api/apply-api";
 import { likePosting, queueKey } from "@/features/apply/api/queue-api";
+import { PHONE_QUERY } from "@/hooks/use-media-query";
 import { describeError } from "@/lib/api";
 
 import {
@@ -56,6 +57,17 @@ export const CANCELLABLE: ReadonlySet<string> = new Set([
   "held",
   "refused_by_site",
 ]);
+
+/**
+ * Where the deck's toasts show: clear of Pass, Undo last and Like at the foot of the screen
+ * (above them on a phone, beside the deck wider).
+ */
+function clear(): { position: "top-center" | "bottom-right" } {
+  const phone =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(PHONE_QUERY).matches;
+  return { position: phone ? "top-center" : "bottom-right" };
+}
 
 /** The code of apply's 409 for a Like on a posting the person passed (api/app/apply/likes.py). */
 export const PASSED = "passed";
@@ -195,6 +207,7 @@ export function useDeck(filters: DeckFilters) {
   const offerUndo = (message: string, swiped: LastSwipe) => {
     dismissUndo();
     undoToastRef.current = toast.success(message, {
+      ...clear(),
       duration: UNDO_TOAST_MS,
       action: {
         label: "Undo",
@@ -239,13 +252,13 @@ export function useDeck(filters: DeckFilters) {
         if (isGone(error)) {
           remove(card);
           setRefusal(null);
-          toast(SWIPE_TEXT.gone);
+          toast(SWIPE_TEXT.gone, clear());
         } else if (kind === "like" && refused?.code === PASSED) {
           // A Pass reached the server while its answer was lost: the posting is skipped, so the
           // card goes and the person is told; only the undo of that Pass brings it back.
           remove(card);
           setRefusal(null);
-          toast.message(refused.detail);
+          toast.message(refused.detail, clear());
         } else if (refused) {
           setRefusal({
             cardId: card.id,
@@ -254,7 +267,7 @@ export function useDeck(filters: DeckFilters) {
             code: refused.code,
           });
         } else {
-          toast.error(describeError(error));
+          toast.error(describeError(error), clear());
         }
       }
     });
@@ -274,7 +287,7 @@ export function useDeck(filters: DeckFilters) {
           if (application.state !== "cancelled") {
             if (!CANCELLABLE.has(application.state)) {
               markLast(null);
-              toast.error(SWIPE_TEXT.tooLate);
+              toast.error(SWIPE_TEXT.tooLate, clear());
               return;
             }
             await cancelApplication(swiped.applicationId);
@@ -287,16 +300,16 @@ export function useDeck(filters: DeckFilters) {
         markLast(null);
         setRefusal(null);
         putBack(swiped.card);
-        toast(SWIPE_TEXT.undone);
+        toast(SWIPE_TEXT.undone, clear());
       } catch (error) {
         const refused = refusedOf(error);
         // A refusal or a vanished posting is final; a lost connection leaves the undo to retry.
         if (refused || isGone(error)) markLast(null);
         if (refused?.code === "not_cancellable")
-          toast.error(SWIPE_TEXT.tooLate);
-        else if (refused) toast.error(refused.detail);
-        else if (isGone(error)) toast.error(SWIPE_TEXT.gone);
-        else toast.error(describeError(error));
+          toast.error(SWIPE_TEXT.tooLate, clear());
+        else if (refused) toast.error(refused.detail, clear());
+        else if (isGone(error)) toast.error(SWIPE_TEXT.gone, clear());
+        else toast.error(describeError(error), clear());
       }
     });
   }

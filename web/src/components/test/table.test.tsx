@@ -132,9 +132,15 @@ describe("Table", () => {
 
 // Every table of the app goes through this component (owner, 2026-11-05: "verify that you use
 // the same component array than all over the app"): no source file but this one draws table
-// markup itself. Tests may, to build fixtures.
+// markup itself. Tests may, to build fixtures. The Calendar's day grid is a table by nature
+// (react-day-picker's month, role="grid"): shadcn's own component, not data drawn by hand.
 const sources = import.meta.glob<string>(
-  ["/src/**/*.tsx", "!/src/**/*.test.tsx", "!/src/components/ui/table.tsx"],
+  [
+    "/src/**/*.tsx",
+    "!/src/**/*.test.tsx",
+    "!/src/components/ui/table.tsx",
+    "!/src/components/ui/calendar.tsx",
+  ],
   { eager: true, query: "?raw", import: "default" },
 );
 const TABLE_TAGS = new Set([

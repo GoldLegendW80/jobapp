@@ -4,19 +4,17 @@ import { haraldLike } from "@/test/profile";
 
 import { EMPTY } from "../api/profile-api";
 import {
-  factBytes,
-  factsSchema,
-  formatBytes,
-  fromFactsForm,
   fromSearchForm,
   fromSkillsForm,
+  inWords,
   searchSchema,
-  sizeText,
   skillsSchema,
-  toFactsForm,
+  toAdvancedForm,
   toSearchForm,
   toSkillsForm,
-  utf8Bytes,
+  toWordsForm,
+  withAdvanced,
+  withWords,
 } from "../helpers/editor-forms";
 
 const issues = (result: {
@@ -27,7 +25,6 @@ const issues = (result: {
 describe("round trips", () => {
   it("gives back exactly what the api stored, for each editor", () => {
     const data = haraldLike();
-    expect(fromFactsForm(toFactsForm(data.facts))).toEqual(data.facts);
     expect(fromSkillsForm(toSkillsForm(data.skills))).toEqual(data.skills);
     expect(fromSearchForm(toSearchForm(data.search))).toEqual(data.search);
   });
@@ -47,19 +44,13 @@ describe("round trips", () => {
   });
 
   it("handles empty sections", () => {
-    expect(fromFactsForm(toFactsForm(EMPTY.facts))).toEqual(EMPTY.facts);
     expect(fromSkillsForm(toSkillsForm(EMPTY.skills))).toEqual(EMPTY.skills);
     expect(fromSearchForm(toSearchForm(EMPTY.search))).toEqual(EMPTY.search);
     expect(toSkillsForm(EMPTY.skills).years_experience).toBe("");
     expect(toSearchForm(EMPTY.search).remote_stance).toBe("");
   });
 
-  it("cleans what it sends: trims, unifies newlines, NFC, drops duplicate terms", () => {
-    expect(
-      fromFactsForm({
-        blocks: [{ title: "  Café ", body: "\r\n line one\r\nline two \r\n" }],
-      }),
-    ).toEqual({ blocks: [{ title: "Café", body: "line one\nline two" }] });
+  it("cleans what it sends: trims, drops duplicate terms", () => {
     const search = toSearchForm(haraldLike().search);
     search.location.terms = [" Paris ", "paris", "Lyon", ""];
     search.contract_types = ["VIE", "CDI"];
@@ -86,55 +77,70 @@ describe("round trips", () => {
   });
 });
 
-describe("facts schema", () => {
-  it("counts UTF-8 bytes of the cleaned titles and bodies, as the api", () => {
-    expect(utf8Bytes("é")).toBe(2);
-    expect(utf8Bytes("😀")).toBe(4);
-    expect(factBytes([{ title: " a ", body: "\r\nbé\r\n" }])).toBe(1 + 3);
-    expect(factBytes([])).toBe(0);
+describe("advanced matching", () => {
+  const skills = () => {
+    const data = haraldLike().skills;
+    return {
+      ...data,
+      none: [
+        ...data.none,
+        { name: "java", advanced_regex: true, terms: ["\\bjava\\b"] },
+      ],
+    };
+  };
+
+  it("holds only the regular expressions, without the years", () => {
+    const form = toAdvancedForm(skills());
+    expect(form.years_experience).toBe("");
+    expect(form.have.map((one) => one.name)).toEqual(["llm"]);
+    expect(form.adjacent).toEqual([]);
+    expect(form.none.map((one) => one.name)).toEqual(["java"]);
+    expect(form.gates).toEqual([]);
   });
 
-  it("accepts exactly 200,000 bytes and refuses one more", () => {
-    const at = { blocks: [{ title: "T", body: "x".repeat(199_999) }] };
-    expect(factsSchema.safeParse(at).success).toBe(true);
-    const over = { blocks: [{ title: "T", body: "x".repeat(200_000) }] };
-    expect(issues(factsSchema.safeParse(over))).toEqual([
-      [
-        "blocks",
-        "The fact base is 200,001 bytes, at most 200,000 allowed. Shorten or remove a block.",
-      ],
-    ]);
-  });
-
-  it("refuses duplicate titles ignoring case and accents composition, and control characters", () => {
-    const result = factsSchema.safeParse({
-      blocks: [
-        { title: "Café", body: "a" },
-        { title: "CAFÉ", body: "b\u0007" },
-      ],
+  it("saves the expressions first, then the words and the years as stored now", () => {
+    const stored = skills();
+    const now = { ...stored, years_experience: 7 };
+    const edited = fromSkillsForm(toAdvancedForm(stored));
+    edited.have[0]!.terms.push("\\bgpt\\b");
+    const sent = withAdvanced(now, edited);
+    expect(sent.years_experience).toBe(7);
+    expect(sent.have.map((one) => one.name)).toEqual(["llm", "agents"]);
+    expect(sent.have[0]!.terms).toContain("\\bgpt\\b");
+    expect(sent.none.map((one) => one.name)).toEqual(["java", "rust"]);
+    expect(sent.gates).toEqual(stored.gates);
+    // Unchanged, the round trip gives the same lists, the expressions moved first.
+    expect(
+      withAdvanced(stored, fromSkillsForm(toAdvancedForm(stored))),
+    ).toEqual({
+      ...stored,
+      have: [stored.have[1], stored.have[0]],
+      none: [stored.none[1], stored.none[0]],
     });
-    expect(issues(result)).toEqual([
-      ["blocks.1.body", "Remove the control characters."],
-      ["blocks.1.title", "Another block already has this title."],
-    ]);
   });
 
-  it("allows tabs and newlines in a body, not in a title", () => {
-    expect(
-      factsSchema.safeParse({ blocks: [{ title: "a", body: "x\ty\nz" }] })
-        .success,
-    ).toBe(true);
-    expect(
-      issues(factsSchema.safeParse({ blocks: [{ title: "a\tb", body: "x" }] })),
-    ).toEqual([["blocks.0.title", "Remove the control characters."]]);
+  it("gives the fields of About you the years and the skills in words, and saves them after the expressions", () => {
+    const stored = skills();
+    const form = toWordsForm(stored);
+    expect(form.years_experience).toBe("3.5");
+    expect(form.have.map((one) => one.name)).toEqual(["agents"]);
+    expect(form.none.map((one) => one.name)).toEqual(["rust"]);
+    const edited = fromSkillsForm(form);
+    edited.years_experience = 4;
+    edited.adjacent = [];
+    const sent = withWords(stored, edited);
+    expect(sent.years_experience).toBe(4);
+    expect(sent.have.map((one) => one.name)).toEqual(["llm", "agents"]);
+    expect(sent.adjacent).toEqual([]);
+    expect(sent.none.map((one) => one.name)).toEqual(["java", "rust"]);
+    expect(sent.gates).toEqual(stored.gates);
   });
 
-  it("formats sizes", () => {
-    expect(formatBytes(0)).toBe("0 bytes");
-    expect(formatBytes(999)).toBe("999 bytes");
-    expect(formatBytes(12_345)).toBe("12.3 KB");
-    expect(sizeText(12_345, 200_000)).toBe("12.3 KB of 200 KB");
-    expect(sizeText(198_000, 200_000)).toBe("198,000 of 200,000 bytes");
+  it("names the skills in words alone", () => {
+    const words = inWords(skills());
+    expect(words.have.map((one) => one.name)).toEqual(["agents"]);
+    expect(words.none.map((one) => one.name)).toEqual(["rust"]);
+    expect(words.years_experience).toBe(3.5);
   });
 });
 

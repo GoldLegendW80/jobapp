@@ -24,7 +24,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Everything the search, the documents and the forms read about the person, on one page: Ready for, the CVs, experience and education, About you (Markdown) and contact. Route /profile; `?tab=` opens the classic editor.",
+          "Everything the search, the documents and the forms read about the person, on one page: the CVs, experience and education, About you (Markdown, with the skills and answers as fields while no model key is saved, and fact parts that move up and down beside the size of the fact base), Advanced matching and contact in the main column, the person and what the profile is Ready for in the side rail. Route /profile; the old addresses `?tab=` and /profile/cv land on the section that holds what they showed.",
       },
     },
   },
@@ -195,7 +195,9 @@ export const LookBackAtPastSaves: Story = {
   },
   play: async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
-    await userEvent.click(await body.findByRole("button", { name: "More" }));
+    await userEvent.click(
+      await body.findByRole("button", { name: "More actions" }),
+    );
     const history = await body.findByRole("menuitem", { name: "History" });
     history.focus();
     await userEvent.keyboard("{ArrowRight}");
@@ -216,40 +218,127 @@ export const CheckMyProfileOnMyPhone: Story = {
   },
 };
 
-/** As a job seeker used to the tabs, I want to write my facts in the classic editor, so that I keep the way I worked before. */
-export const WriteMyFactsInTheClassicEditor: Story = {
-  render: () => <AppAt path="/profile?tab=facts" />,
+/** Camille's account with two categories and a requirement written as regular expressions. */
+function camilleWithExpressions() {
+  fakeSession(camille);
+  const profile = camilleProfile();
+  profile.skills.have.push({
+    name: "orchestration",
+    advanced_regex: true,
+    terms: ["\\bairflow\\b", "\\bdagster\\b", "\\bprefect\\b"],
+  });
+  profile.skills.none.push({
+    name: "mainframe",
+    advanced_regex: true,
+    terms: ["\\bcobol\\b", "\\bz/os\\b"],
+  });
+  profile.skills.gates.push({
+    name: "clearance",
+    advanced_regex: true,
+    terms: ["\\bsecurity clearance\\b"],
+    penalty: 30,
+  });
+  fakeProfile(profile);
+  fakeDocuments({ cvs: profileCvs() });
+  fakeAbout({ text: CAMILLE_ABOUT, key: "api_key" });
+}
+
+/** As a job seeker who writes regular expressions, I want to keep them beside my skills and try a posting against all of them, so that I see which postings they catch before I save. */
+export const MatchPostingsWithRegularExpressions: Story = {
+  beforeEach: () => {
+    camilleWithExpressions();
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await userEvent.type(
+      await page.findByRole("textbox", { name: "Posting text" }),
+      "Senior data engineer: Airflow and dbt on BigQuery, Kafka a plus. React is not needed.",
+    );
+    const matching =
+      canvasElement.ownerDocument.getElementById("advanced-matching");
+    matching?.scrollIntoView({ block: "start" });
+    canvasElement.ownerDocument.defaultView?.scrollBy(0, -96);
+  },
+};
+
+/** The story opens on About you, clear of the app's sticky header. */
+function showAbout({ canvasElement }: { canvasElement: HTMLElement }) {
+  canvasElement.ownerDocument
+    .getElementById("about-you")
+    ?.scrollIntoView({ block: "start" });
+  canvasElement.ownerDocument.defaultView?.scrollBy(0, -96);
+}
+
+/** As a job seeker without a model key, I want to change my skills and answers in plain fields, so that the app scores postings and fills forms without a model. */
+export const EditMySkillsAndAnswersWithoutAModelKey: Story = {
+  beforeEach: () => {
+    fakeSession(camille);
+    fakeProfile(camilleProfile());
+    fakeDocuments({ cvs: profileCvs() });
+    fakeAbout({ text: CAMILLE_ABOUT, key: null });
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const skills = await page.findByRole("form", { name: "Skills" });
+    await userEvent.click(
+      within(skills).getByRole("button", { name: /^What I have,/ }),
+    );
+    await userEvent.click(
+      within(page.getByRole("form", { name: "Answers" })).getByRole("button", {
+        name: /^Work setup and consents,/,
+      }),
+    );
+    showAbout({ canvasElement });
+  },
+};
+
+/** As a job seeker, I want to put my fact blocks in the order my CVs should use them, so that the most telling one comes first. */
+export const ReorderMyFactBlocks: Story = {
   beforeEach: () => {
     camilleAccount();
   },
   play: async ({ canvasElement }) => {
     await userEvent.click(
       await within(canvasElement).findByRole("button", {
-        name: "Projects, block 2",
+        name: "Move Projects up",
       }),
     );
+    showAbout({ canvasElement });
   },
 };
 
-/** As a job seeker used to the tabs, I want to sort my skills into what I have, what is close and what I do not do, so that postings are scored the way I would score them. */
-export const SortMySkillsInTheClassicEditor: Story = {
+/** As a job seeker with a long fact base, I want to see how close it is to its limit, so that I shorten it before a save is refused. */
+export const SeeMyFactBaseNearItsLimit: Story = {
+  beforeEach: () => {
+    fakeSession(camille);
+    const profile = camilleProfile();
+    profile.facts.blocks.push({
+      title: "Publications",
+      body: "- A talk on streaming joins at an invented meetup.\n".repeat(3700),
+    });
+    fakeProfile(profile);
+    fakeDocuments({ cvs: profileCvs() });
+    fakeAbout({ text: CAMILLE_ABOUT, key: "api_key" });
+    server.use(
+      http.get("*/api/profile/about", () =>
+        HttpResponse.json({
+          ...aboutOf(CAMILLE_ABOUT, { key: "api_key" }),
+          missing_blocks: ["Publications"],
+        }),
+      ),
+    );
+  },
+  play: async ({ canvasElement }) => {
+    await within(canvasElement).findByRole("meter", {
+      name: "Fact base size",
+    });
+    showAbout({ canvasElement });
+  },
+};
+
+/** As a job seeker with an old bookmark of the Skills tab, I want it to open my skills on the profile page, so that my links keep working. */
+export const OpenAnOldLinkToMySkills: Story = {
   render: () => <AppAt path="/profile?tab=skills" />,
-  beforeEach: () => {
-    camilleAccount();
-  },
-};
-
-/** As a job seeker used to the tabs, I want my answers to the usual form questions in one place, so that every application form is filled the same way. */
-export const KeepMyAnswersInTheClassicEditor: Story = {
-  render: () => <AppAt path="/profile?tab=answers" />,
-  beforeEach: () => {
-    camilleAccount();
-  },
-};
-
-/** As a job seeker used to the tabs, I want to edit my identity and languages in the classic editor, so that every document shows them right. */
-export const EditMyIdentityInTheClassicEditor: Story = {
-  render: () => <AppAt path="/profile?tab=identity" />,
   beforeEach: () => {
     camilleAccount();
   },

@@ -55,7 +55,8 @@ async function show(path = "/profile/cv", count = 1) {
   });
   const user = userEvent.setup();
   const app = renderApp(path);
-  await screen.findByText("Uploaded");
+  // The first visit of a file to the CV page also compiles it (a lazy chunk of its own).
+  await screen.findByText("Uploaded", {}, { timeout: 10_000 });
   return { api, posts, user, ...app };
 }
 
@@ -144,6 +145,8 @@ describe("consent for an existing waiting capture", () => {
       ).toBe(true);
       expect(action()).toHaveFocus();
     },
+    // The first visit compiles the page it opens (see show), on top of the journey itself.
+    15_000,
   );
 
   it.each(["Not now", "Escape", "Close"])(

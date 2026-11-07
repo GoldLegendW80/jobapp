@@ -4,21 +4,19 @@ import { ApiError } from "@/lib/api";
 import { haraldLike } from "@/test/profile";
 
 import { serverFieldError, validationDetail } from "../helpers/errors";
-import {
-  toFactsForm,
-  toSearchForm,
-  toSkillsForm,
-} from "../helpers/editor-forms";
-import {
-  toAnswersForm,
-  toExperienceForm,
-  toIdentityForm,
-} from "../helpers/forms";
+import { toSearchForm, toSkillsForm } from "../helpers/editor-forms";
+import { toExperienceForm, toIdentityForm } from "../helpers/forms";
 
 const identity = toIdentityForm(haraldLike().identity);
 const experience = toExperienceForm(haraldLike().experience);
-const answers = toAnswersForm(haraldLike().answers);
-const facts = toFactsForm(haraldLike().facts);
+// Lists of objects and of plain strings, as a form holds them.
+const answers = {
+  work_authorization: haraldLike().answers.work_authorization.map((one) => ({
+    ...one,
+  })),
+  leave_blank: haraldLike().answers.leave_blank.map((value) => ({ value })),
+};
+const facts = { blocks: haraldLike().facts.blocks.map((one) => ({ ...one })) };
 const skills = toSkillsForm(haraldLike().skills);
 const search = toSearchForm(haraldLike().search);
 

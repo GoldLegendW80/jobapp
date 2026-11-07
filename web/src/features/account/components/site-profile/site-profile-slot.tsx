@@ -20,14 +20,13 @@ export function SiteProfileSlot({ initialUrl = "" }: { initialUrl?: string }) {
   });
   return (
     <form
-      className="space-y-3 border-t pt-4"
+      className="flex max-w-2xl flex-col gap-3"
       onSubmit={(event) => {
         event.preventDefault();
         start.mutate();
       }}
       aria-label="Complete my profile on this site"
     >
-      <p className="text-sm font-medium">Complete my profile on this site</p>
       <p className="text-sm text-muted-foreground">
         Use facts from your profile to complete a candidate profile. You review
         each section before saving. Existing values are kept until you choose
@@ -53,7 +52,11 @@ export function SiteProfileSlot({ initialUrl = "" }: { initialUrl?: string }) {
           </FieldError>
         )}
       </Field>
-      <Button type="submit" disabled={start.isPending || !url.trim()}>
+      <Button
+        type="submit"
+        className="w-fit"
+        disabled={start.isPending || !url.trim()}
+      >
         {start.isPending
           ? "Starting to complete your profile on this site"
           : "Complete my profile on this site"}

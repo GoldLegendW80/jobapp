@@ -10,7 +10,7 @@ export function QueueCardDocuments({ item }: { item: QueueItem }) {
   const documents = Object.entries(item.documents);
   return (
     <section aria-label="Documents" className="flex flex-col gap-1">
-      <h4 className="text-sm font-semibold">Documents</h4>
+      <h4 className="text-sm font-medium">Documents</h4>
       {item.documents_review ? (
         <p className="text-sm font-medium text-warning">
           Review these documents before approval.

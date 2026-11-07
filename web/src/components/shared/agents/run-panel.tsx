@@ -5,14 +5,15 @@
  * (it reconnects by itself after a network loss and picks up exactly where it stopped).
  * The answer appears while it is written (issue #33): the last item of the timeline grows with
  * the text, then the stored step takes its place, same title, same markup, in one render.
- * Reusable: the /runs pages show it today, job detail embeds it from A3 on.
+ * Embedded where a run is a part of a page (the posting check, a reading); /runs/:id lays the
+ * same parts out as a page of its own.
  */
-import { CircleAlert, Square } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { CircleAlert } from "lucide-react";
+import { useRef } from "react";
 
+import { LoadError } from "@/components/blocks/load-error";
 import { LoadingCard } from "@/components/blocks/loading-card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardAction,
@@ -21,13 +22,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Spinner } from "@/components/ui/spinner";
-import { describeError } from "@/lib/api";
 import { agentWord } from "@/lib/wording";
 
-import { useCancelRun } from "@/features/agents/api/use-cancel-run";
 import { useNow } from "@/features/agents/hooks/use-now";
+import { useReturnFocus } from "@/features/agents/hooks/use-return-focus";
 import { useRunStream } from "@/features/agents/api/use-run-stream";
+import { CancelRunButton } from "./run/cancel-run-button";
 import { ConnectionState } from "./run/connection-state";
 import { RunMetrics } from "./run/run-metrics";
 import { RunStatusBadge } from "./run/run-status-badge";
@@ -48,35 +48,24 @@ export function RunPanel({
   const active = status === "queued" || status === "running";
   const now = useNow(active);
   const titleRef = useRef<HTMLSpanElement>(null);
-  const cancelFocused = useRef(false);
-  const cancel = useCancelRun(runId);
-
-  // The Cancel button goes away when the run ends: if it had the focus, give it to the title
-  // (which now says the run's status) instead of letting it fall back to the page.
-  useEffect(() => {
-    if (active || !cancelFocused.current) return;
-    cancelFocused.current = false;
-    const lost =
-      document.activeElement === null ||
-      document.activeElement === document.body;
-    if (lost) titleRef.current?.focus();
-  }, [active]);
+  // The Cancel button goes away when the run ends: its focus goes to the title, which now
+  // says the run's status.
+  const cancelFocus = useReturnFocus(active, titleRef);
 
   if (detail.isPending) {
     return <LoadingCard>Loading the run</LoadingCard>;
   }
   // Only when there is nothing to show: a failed refresh keeps the panel and its timeline.
-  if (gone || !run) {
+  if (gone) {
     return (
       <Alert variant="destructive">
         <CircleAlert aria-hidden="true" />
-        <AlertDescription>
-          {gone
-            ? "This run no longer exists."
-            : `The run could not be loaded. ${describeError(detail.error)}`}
-        </AlertDescription>
+        <AlertDescription>This run no longer exists.</AlertDescription>
       </Alert>
     );
+  }
+  if (!run) {
+    return <LoadError query={detail}>The run could not be loaded.</LoadError>;
   }
   const shownStatus = status ?? run.status;
   const stopping = run.cancel_requested && active;
@@ -104,28 +93,12 @@ export function RunPanel({
         </CardDescription>
         {active && cancellable ? (
           <CardAction>
-            <Button
-              variant="outline"
+            <CancelRunButton
+              runId={runId}
+              stopping={stopping}
               size="sm"
-              onClick={() => {
-                cancel.mutate();
-              }}
-              onFocus={() => {
-                cancelFocused.current = true;
-              }}
-              onBlur={() => {
-                cancelFocused.current = false;
-              }}
-              disabled={cancel.isPending || stopping}
-              aria-busy={cancel.isPending}
-            >
-              {cancel.isPending || stopping ? (
-                <Spinner aria-hidden="true" role={undefined} />
-              ) : (
-                <Square aria-hidden="true" />
-              )}
-              {stopping ? "Stopping" : "Cancel"}
-            </Button>
+              {...cancelFocus}
+            />
           </CardAction>
         ) : null}
       </CardHeader>

@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { http, HttpResponse } from "msw";
+import { delay, http, HttpResponse } from "msw";
 import { userEvent, within } from "storybook/test";
 
 import { AppAt } from "@/design-system/app-at";
@@ -12,6 +12,18 @@ import { server } from "@/test/server";
 
 import { fakeDeck, refused } from "@/test/deck";
 
+/** The first visit's swipe hint, as the page remembers it (deck-page.tsx). */
+const HINT_KEY = "discover:swipe-hint";
+
+function hintSeen(seen: boolean) {
+  try {
+    if (seen) window.localStorage.setItem(HINT_KEY, "1");
+    else window.localStorage.removeItem(HINT_KEY);
+  } catch {
+    // Storage blocked: the hint shows, which only adds it to the picture.
+  }
+}
+
 const meta = {
   title: "Pages/Discover/Discover",
   parameters: {
@@ -20,9 +32,13 @@ const meta = {
     docs: {
       description: {
         component:
-          "The swipe deck: one posting at a time, Like or Pass by drag, by the buttons or by the arrow keys, and Undo last. A Like starts the CV, the letter and the application in the mode the person chose (Review first by default). Route /discover.",
+          "The swipe deck, edge to edge under the header: one posting at a time on a stack of cards, best fit first. Like or Pass by a drag (the card tilts, shows its stamp, flies off past the threshold or springs back), by the buttons or by the arrow keys, and Undo last brings the card back the way it left. The mode a Like runs in stays in sight above the deck. Rive scenes play over it: a heart on a Like, an X on a Pass, the first visit's hint, the loading cards, the celebration of a finished deck. Route /discover.",
       },
     },
+  },
+  // Every story but the first visit's starts with the hint already seen.
+  beforeEach: () => {
+    hintSeen(true);
   },
   render: () => <AppAt path="/discover" />,
 } satisfies Meta;
@@ -42,6 +58,27 @@ export const LikeOrPassAPosting: Story = {
   beforeEach: () => {
     withPostingsAndSkills();
     fakeDeck(DECK);
+  },
+};
+
+/** As a new user, I want the deck to show me how to swipe on my first visit, so that I know the card can be dragged. */
+export const LearnToSwipeOnTheFirstVisit: Story = {
+  beforeEach: () => {
+    hintSeen(false);
+    withPostingsAndSkills();
+    fakeDeck(DECK);
+  },
+};
+
+/** As a job seeker, I want a Like to answer me at once, so that I feel it was taken. */
+export const LikeAndSeeTheHeart: Story = {
+  beforeEach: () => {
+    withPostingsAndSkills();
+    fakeDeck(DECK);
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await userEvent.click(await page.findByRole("button", { name: "Like" }));
   },
 };
 
@@ -104,6 +141,26 @@ export const LikeInFullAuto: Story = {
   },
 };
 
+/** As a job seeker, I want to see that my deck is on its way, so that I wait instead of thinking it is empty. The deck answers after 12 seconds. */
+export const WaitForTheDeck: Story = {
+  beforeEach: () => {
+    withPostingsAndSkills();
+    server.use(
+      http.get("*/api/postings/deck", async () => {
+        await delay(12_000);
+        return HttpResponse.json({
+          cards: DECK,
+          next_cursor: null,
+          left: DECK.length,
+          mode: "review",
+          min_fit: 70,
+          rules_unreadable: false,
+        });
+      }),
+    );
+  },
+};
+
 /** As a job seeker who went through every card, I want to know that the rest is under my threshold, so that I can look for more or lower it. */
 export const DeckDoneForToday: Story = {
   beforeEach: () => {
@@ -118,6 +175,16 @@ export const NoPostingsYet: Story = {
     fakeSession(member);
     fakeJobsApi([]);
     fakeProfile();
+    fakeDeck([]);
+  },
+};
+
+/** As a job seeker without skills in my profile, I want to know why nothing reaches my threshold, so that I add them. */
+export const AddSkillsWhenEveryFitIsLow: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeJobsApi(POSTINGS);
+    fakeProfile({});
     fakeDeck([]);
   },
 };

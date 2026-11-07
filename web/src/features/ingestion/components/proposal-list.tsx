@@ -1,9 +1,7 @@
-import { RotateCw } from "lucide-react";
-
-import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { LoadError } from "@/components/blocks/load-error";
+import { loadFailureSentence } from "@/features/ingestion/api/documents-api";
 
-import { failureSentence } from "../api/documents-api";
 import { useFinishedRunId, useProposals } from "../api/use-proposals";
 import { LoadedReview } from "./proposals/loaded-review";
 
@@ -40,19 +38,8 @@ export function ProposalList({ runId }: { runId?: string } = {}) {
       </p>
     );
   return (
-    <div className="flex flex-col items-start gap-3">
-      <p role="alert" className="text-sm text-destructive">
-        The proposals could not be loaded. {failureSentence(query.error)}
-      </p>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={query.isFetching}
-        onClick={() => void query.refetch()}
-      >
-        <RotateCw aria-hidden="true" />
-        Retry
-      </Button>
-    </div>
+    <LoadError query={query} reason={loadFailureSentence(query.error)}>
+      The proposals could not be loaded.
+    </LoadError>
   );
 }

@@ -1,4 +1,4 @@
-/** The version history of a document, as the See view reads it. */
+/** The version history of a document, as the document view reads it. */
 import {
   correctionSchema,
   type Correction,
@@ -23,4 +23,13 @@ export function correctionsOf(version: Version | undefined): Correction[] {
     const parsed = correctionSchema.safeParse(one);
     return parsed.success ? [parsed.data] : [];
   });
+}
+
+/** "Version 2, the latest", or for a document with no version yet, what it is. */
+export function versionTitle(
+  version: VersionSummary | undefined,
+  isLatest: boolean,
+): string {
+  if (version === undefined) return "First draft";
+  return `Version ${String(version.number)}${isLatest ? ", the latest" : ""}`;
 }

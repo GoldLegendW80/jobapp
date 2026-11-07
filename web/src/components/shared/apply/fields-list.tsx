@@ -20,8 +20,8 @@ import {
 } from "@/features/apply/helpers/apply-state";
 
 /**
- * The fields of the filled form: label, value and where the value came from. A field the app left
- * is the person's to answer: it sits in an amber frame with the words "You answer" and its input
+ * The fields of the filled form, one row each between hairlines: label, value and where the value
+ * came from. A field the app left is the person's to answer: it sits in an amber frame with the words "You answer" and its input
  * open, and a banner above the list names how many there are, so none can be missed. Any other
  * answer can be corrected with Edit. A field the api takes no value for (a file, a list of
  * choices, a skipped widget) has no input: it keeps the frame and the banner line, and is
@@ -62,7 +62,7 @@ export function FieldsList({
     onDirtyChange(dirty.size);
   }, [dirty, onDirtyChange]);
   return (
-    <div className="flex flex-col gap-3">
+    <div className="@container flex flex-col gap-3">
       {left.length > 0 ? (
         <Alert variant="warning">
           <TriangleAlert aria-hidden="true" />
@@ -90,7 +90,11 @@ export function FieldsList({
           </AlertDescription>
         </Alert>
       ) : null}
-      <ul aria-label="Fields filled" className="flex flex-col gap-2">
+      {/* One grid for every row (subgrid), so labels, values and sources line up. */}
+      <ul
+        aria-label="Fields filled"
+        className="flex flex-col divide-y @lg:grid @lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] @lg:gap-x-4"
+      >
         {answers.map((answer) => (
           <FieldRow
             key={answer.field_key}
@@ -148,8 +152,8 @@ function FieldRow({
     <li
       data-left={open ? "true" : undefined}
       className={cn(
-        "flex min-w-0 flex-col gap-1 rounded-md border p-3 text-sm sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_auto] sm:items-start sm:gap-4",
-        open && "border-2 border-warning bg-warning-muted",
+        "flex min-w-0 flex-col gap-1 py-3 text-sm @lg:col-span-3 @lg:grid @lg:grid-cols-subgrid @lg:items-start @lg:gap-y-1",
+        open && "my-1 rounded-md border-2 border-warning bg-warning-muted px-3",
       )}
     >
       <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
@@ -159,7 +163,7 @@ function FieldRow({
         ) : null}
       </span>
       {reason ? (
-        <p className="text-foreground sm:col-span-3">{reason}</p>
+        <p className="text-foreground @lg:col-span-3">{reason}</p>
       ) : null}
       {typing ? (
         <AnswerEditor
@@ -213,7 +217,7 @@ function FieldRow({
       {remembered ? (
         <p
           role="status"
-          className="text-xs text-muted-foreground sm:col-span-3"
+          className="text-xs text-muted-foreground @lg:col-span-3"
         >
           {remembered}
         </p>
@@ -224,7 +228,7 @@ function FieldRow({
             You answer
           </Badge>
         ) : (
-          <Badge variant="secondary" className="w-fit">
+          <Badge variant="outline" className="w-fit">
             {sourceLabel(answer.source === "left" ? "person" : answer.source)}
           </Badge>
         )}

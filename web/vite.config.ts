@@ -31,11 +31,22 @@ export default defineConfig({
             },
             {
               name: "ui",
-              test: /node_modules[\\/](radix-ui|@radix-ui|@floating-ui|lucide-react|sonner)[\\/]/,
+              test: /node_modules[\\/](radix-ui|@radix-ui|@floating-ui|lucide-react|sonner|clsx)[\\/]/,
             },
             {
               name: "forms",
               test: /node_modules[\\/](zod|react-hook-form|@hookform)[\\/]/,
+            },
+            // Discover's animations only: loaded with its lazy scene, never by another page.
+            { name: "rive", test: /node_modules[\\/]@rive-app[\\/]/ },
+            // The jobs filters' chart and calendar only: loaded when the Filters sheet opens.
+            {
+              name: "charts",
+              test: /node_modules[\\/](recharts|victory-vendor|d3-[a-z-]+|internmap|decimal\.js-light|es-toolkit|eventemitter3|immer|reselect|redux|redux-thunk|@reduxjs|react-redux)[\\/]/,
+            },
+            {
+              name: "calendar",
+              test: /node_modules[\\/](react-day-picker|date-fns|@date-fns)[\\/]/,
             },
             { name: "vendor", test: /node_modules[\\/]/ },
           ],

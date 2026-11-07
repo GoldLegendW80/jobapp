@@ -45,6 +45,51 @@ const SHADCN_ONLY = [
       ":matches(Literal[value=/\\banimate-pulse\\b/], TemplateElement[value.raw=/\\banimate-pulse\\b/])",
     message: "Use Skeleton from @/components/ui for a placeholder that pulses.",
   },
+  {
+    selector:
+      "JSXAttribute[name.name='type'][value.value=/^(date|datetime-local|month|week)$/]",
+    message:
+      "Use Calendar in a Popover from @/components/ui to pick a date: the same on every browser.",
+  },
+  {
+    // The look of a pressed state chosen by hand; a pressed Button whose look stays (a pin on
+    // the map, a template's thumbnail) is not this.
+    selector:
+      "JSXOpeningElement[name.name='Button']:has(> JSXAttribute[name.name='aria-pressed']) > JSXAttribute[name.name='variant'] > JSXExpressionContainer > ConditionalExpression",
+    message:
+      "A Button pressed by hand is a Toggle, or a ToggleGroup for a set of choices: use them from @/components/ui.",
+  },
+  {
+    selector:
+      ":matches(AssignmentExpression[left.property.name='scrollTop'][right.property.name='scrollHeight'], ImportDeclaration[source.value=/stick-to-bottom/], JSXAttribute[name.name='role'][value.value='log'])",
+    message:
+      "A conversation or a log that follows its newest line is MessageScroller (autoScroll): use it from @/components/ui.",
+  },
+  {
+    selector:
+      ":matches(Literal[value=/\\brounded-b[lr]-sm\\b/], TemplateElement[value.raw=/\\brounded-b[lr]-sm\\b/])",
+    message:
+      "A message with a tail is Bubble, in a Message: use them from @/components/ui.",
+  },
+  {
+    selector:
+      "JSXOpeningElement[name.name='SheetContent'] > JSXAttribute[name.name='side'][value.value='bottom']",
+    message:
+      "A panel that rises from the bottom is Drawer (it is dragged down to close): use it from @/components/ui.",
+  },
+  {
+    // Padding on one side of a field makes room for something drawn over it.
+    selector:
+      "JSXOpeningElement[name.name=/^(Input|Textarea)$/] > JSXAttribute[name.name='className'][value.value=/(^|\\s)p[lrse]-/]",
+    message:
+      "A button or an icon in a field is an InputGroupAddon of an InputGroup: use them from @/components/ui.",
+  },
+  {
+    selector:
+      "JSXAttribute[name.name='style'] Property[key.name=/^(width|height)$/] > TemplateLiteral > TemplateElement[tail=true][value.raw=/^%/]",
+    message:
+      "A bar measured in percent is Progress, or a Chart for several of them: use them from @/components/ui.",
+  },
 ];
 
 /**

@@ -132,11 +132,12 @@ beforeEach(() => {
   server.use(
     http.get("*/api/admin/users", () =>
       HttpResponse.json({
-        items: [{ ...admin, is_active: true, sessions: 1 }],
+        items: [{ ...admin, is_active: true, sessions: 1, browsers: 2 }],
         total: 1,
         limit: 50,
         offset: 0,
         active_admins: 1,
+        browsers_max: 2,
       }),
     ),
   );
@@ -173,6 +174,31 @@ describe("access", () => {
   });
 });
 
+describe("the admin frame", () => {
+  it("opens Agents from its tab, at its own address, under the same header", async () => {
+    fakeSession(admin);
+    fakeInvites([]);
+    server.use(
+      http.get("*/api/admin/agents", () =>
+        HttpResponse.json({ items: [], categories: [] }),
+      ),
+    );
+    const user = userEvent.setup();
+    const { location } = renderApp("/admin/users");
+    await user.click(await screen.findByRole("tab", { name: "Agents" }));
+    await waitFor(() => {
+      expect(location()).toBe("/admin/agents");
+    });
+    expect(
+      await screen.findByRole("tab", { name: "Agents", selected: true }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Admin", level: 1 }),
+    ).toBeInTheDocument();
+    expect(document.title).toBe("Agents · jobapp");
+  });
+});
+
 describe("invites list", () => {
   it("shows loading, then the empty state", async () => {
     fakeSession(admin);
@@ -186,8 +212,12 @@ describe("invites list", () => {
     expect(await screen.findByText("Loading invites")).toBeInTheDocument();
     expect(await screen.findByText("No invites yet")).toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { name: "Users", level: 1 }),
+      screen.getByRole("heading", { name: "Admin", level: 1 }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Users" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     expect(document.title).toBe("Users · jobapp");
     noDashes(container.textContent);
   });
@@ -284,7 +314,7 @@ describe("invites list", () => {
     fakeInvites([], { list: () => HttpResponse.error() });
     renderApp("/admin/users");
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The server could not be reached.",
+      "The invites could not be loaded. The app cannot reach the server.",
     );
   });
 

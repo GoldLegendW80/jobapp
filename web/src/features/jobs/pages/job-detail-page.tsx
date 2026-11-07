@@ -1,8 +1,7 @@
-import { ArrowLeft } from "lucide-react";
-import { Link, useLocation, useParams } from "react-router";
+import { useLocation, useParams } from "react-router";
 
-import { Button } from "@/components/ui/button";
 import { NotFoundPage } from "@/components/blocks/not-found-page";
+import { Page } from "@/components/blocks/page";
 import { isApiError } from "@/lib/api";
 import { useTitle } from "@/hooks/use-title";
 
@@ -19,7 +18,10 @@ function useBackTo(): string {
     : "/jobs";
 }
 
-/** /jobs/:id: everything about one posting; status, notes, fit and details are editable. */
+/**
+ * /jobs/:id: everything about one posting, the posting in the main column and what the person
+ * acts with (the application, the documents, status and fit) in the side rail.
+ */
 export function JobDetailPage() {
   const { id = "" } = useParams();
   const backTo = useBackTo();
@@ -30,14 +32,8 @@ export function JobDetailPage() {
     return <NotFoundPage />;
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6">
-      <Button asChild variant="ghost" size="sm" className="w-fit">
-        <Link to={backTo}>
-          <ArrowLeft aria-hidden="true" />
-          Back to jobs
-        </Link>
-      </Button>
-      <JobPosting id={id} />
-    </div>
+    <Page>
+      <JobPosting id={id} trail={[{ to: backTo, label: "Jobs" }]} />
+    </Page>
   );
 }

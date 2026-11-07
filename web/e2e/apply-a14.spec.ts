@@ -82,7 +82,7 @@ test("review confirms a posting recipient and sends exactly the fixed PDFs throu
     expect(written.status()).toBe(202);
     await waitForPostingDocuments(page.request, job);
     await page.goto(`/jobs/${job}`);
-    const section = page.getByRole("region", { name: "Apply", exact: true });
+    const section = page.getByRole("region", { name: "Your application" });
     await startReviewFirst(page);
     await expect(
       section.getByRole("button", { name: "Approve and submit" }),

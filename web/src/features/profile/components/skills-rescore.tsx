@@ -1,5 +1,5 @@
 /**
- * The two lines beside "Save skills" (product audit, chapter 2, owner answer 4 of 2026-11-05:
+ * The two lines beside the save of Advanced matching (product audit, chapter 2, owner answer 4 of 2026-11-05:
  * "Postings are rescored by themselves after a skills change, with the possible document cost
  * said before saving"). While the draft differs from the saved skills, `SkillsCostLine` asks the
  * api what saving it would start (`POST /api/documents/spend/skills`, the documents module's own
@@ -16,6 +16,7 @@ import { useSkillsSpend } from "@/features/documents/api/use-spend";
 import { estimateSentence } from "@/features/documents/helpers/labels";
 import { useRescoreStatus } from "@/features/jobs/api/use-rescore-status";
 
+import type { Skills } from "../api/profile-api";
 import { fromSkillsForm, type SkillsForm } from "../helpers/editor-forms";
 
 /** How long typing rests before the draft is counted. */
@@ -41,14 +42,15 @@ function useSettled<T>(value: T, ms: number): T {
 export function SkillsCostLine({
   control,
   dirty,
+  toSkills = fromSkillsForm,
 }: {
   control: Control<SkillsForm>;
   dirty: boolean;
+  /** the skills section the form's values would save */
+  toSkills?: (values: SkillsForm) => Skills;
 }) {
   const values = useWatch({ control });
-  const draft = dirty
-    ? JSON.stringify(fromSkillsForm(values as SkillsForm))
-    : null;
+  const draft = dirty ? JSON.stringify(toSkills(values as SkillsForm)) : null;
   const settled = useSettled(draft, DRAFT_SETTLE_MS);
   const asked = dirty && settled !== null ? settled : null;
   const query = useSkillsSpend(asked);

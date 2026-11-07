@@ -1,10 +1,11 @@
 /**
- * Form values, zod schemas and conversions of the three editable sections (identity, experience,
- * answers). The schemas mirror the api's models (api/app/profile/schemas.py) so most mistakes are
- * caught before a save: lengths, required fields, dates written YYYY or YYYY-MM between 1900 and
- * 2100 (period.ts), end not certainly before start, unique employer keys, languages and countries,
- * full http(s) addresses, emails and phone numbers. The api stays the judge: its 422 lands on the
- * field it names (errors.ts).
+ * Form values, zod schemas and conversions of the identity, experience and answers forms (the
+ * answers are a form of About you without a model key, owner 2026-11-07). The schemas mirror the
+ * api's models (api/app/profile/schemas.py) so most mistakes are caught before a save: lengths,
+ * required fields, dates written YYYY or YYYY-MM between 1900 and 2100 (period.ts), end not
+ * certainly before start, unique employer keys, languages and countries, full http(s) addresses,
+ * emails and phone numbers. The api stays the judge: its 422 lands on the field it names
+ * (errors.ts).
  *
  * In a form every text is a string ("" for a value the api stores as null); `to*Form` and
  * `from*Form` convert, trimming and turning "" back into null.

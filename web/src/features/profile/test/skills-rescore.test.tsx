@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
+import { fakeDocuments } from "@/test/documents";
 import { fakeProfile, haraldLike } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
@@ -41,30 +42,45 @@ function spend(overrides: Record<string, unknown> = {}) {
 async function openSkills() {
   fakeSession(admin);
   const state = fakeProfile(haraldLike());
+  fakeDocuments();
   const user = userEvent.setup();
-  renderApp("/profile?tab=skills");
-  await screen.findByRole("form", { name: "Skills" });
+  renderApp("/profile");
+  await screen.findByRole("form", { name: "Advanced matching" });
   return { user, state };
 }
 
-async function changeYears(user: ReturnType<typeof userEvent.setup>) {
-  const years = screen.getByLabelText("Years of experience");
-  await user.clear(years);
-  await user.type(years, "6");
+/** A term added to the regular expressions of "llm", in Advanced matching. */
+async function addTerm(user: ReturnType<typeof userEvent.setup>, term: string) {
+  await user.type(screen.getByLabelText("New term for llm"), `${term}{enter}`);
 }
+
+const save = () =>
+  screen.getByRole("button", { name: "Save advanced matching" });
 
 describe("the cost of a skills change, before the save", () => {
   it("says how many postings get their documents and the estimate, from the draft", async () => {
     const asked = spend();
     const { user } = await openSkills();
-    await changeYears(user);
+    await addTerm(user, "\\bclaude\\b");
     const line = await screen.findByTestId("skills-cost-line", {}, WAIT);
     expect(line).toHaveTextContent(
       "This change brings 3 postings to a fit of 70 or more: their CV and letter are written automatically, about 30,000 to 60,000 tokens, about USD 0.40 to USD 0.80.",
     );
-    // The draft as typed, never saved, asked once the typing rested: the last one is the field.
+    // The draft as typed, never saved, asked once the typing rested: the whole skills section,
+    // the expressions first and the categories in words as stored.
     await waitFor(() => {
-      expect(asked.at(-1)).toMatchObject({ skills: { years_experience: 6 } });
+      expect(asked.at(-1)).toMatchObject({
+        skills: {
+          years_experience: 3.5,
+          have: [
+            {
+              name: "llm",
+              terms: ["\\bllm(?:s)?\\b", "\\bgenai\\b", "\\bclaude\\b"],
+            },
+            { name: "agents", terms: ["agent", "langgraph"] },
+          ],
+        },
+      });
     }, WAIT);
     expect(asked.length).toBeLessThanOrEqual(2); // not one per key
     expect(line.textContent).not.toMatch(/ [-–—] /);
@@ -77,7 +93,7 @@ describe("the cost of a skills change, before the save", () => {
       newly_estimate: { tokens: { low: 10000, high: 20000 }, cost: null },
     });
     const { user } = await openSkills();
-    await changeYears(user);
+    await addTerm(user, "\\bclaude\\b");
     expect(
       await screen.findByTestId("skills-cost-line", {}, WAIT),
     ).toHaveTextContent(
@@ -91,7 +107,7 @@ describe("the cost of a skills change, before the save", () => {
   ])("says nothing when %s", async (_, overrides) => {
     const asked = spend(overrides);
     const { user } = await openSkills();
-    await changeYears(user);
+    await addTerm(user, "\\bclaude\\b");
     await waitFor(() => {
       expect(asked).toHaveLength(1);
     }, WAIT);
@@ -144,8 +160,8 @@ describe("the rescore after the save", () => {
       },
     ]);
     const { user, state } = await openSkills();
-    await changeYears(user);
-    await user.click(screen.getByRole("button", { name: "Save skills" }));
+    await addTerm(user, "\\bclaude\\b");
+    await user.click(save());
     expect(state.saves).toHaveLength(1);
     expect(await screen.findByText("Rescoring your postings")).toBeVisible();
     const line = await screen.findByText(
@@ -163,8 +179,8 @@ describe("the rescore after the save", () => {
     spend({ newly: 0 });
     status([{ wanted_revision: 5, done_revision: 5 }]);
     const { user } = await openSkills();
-    await changeYears(user);
-    await user.click(screen.getByRole("button", { name: "Save skills" }));
+    await addTerm(user, "\\bclaude\\b");
+    await user.click(save());
     await screen.findByText("Skills saved.");
     expect(screen.queryByTestId("rescore-line")).not.toBeInTheDocument();
   });
@@ -173,8 +189,8 @@ describe("the rescore after the save", () => {
     spend({ newly: 0 });
     status([{ wanted_revision: 7, done_revision: 7, outcome: null }]);
     const { user } = await openSkills();
-    await changeYears(user);
-    await user.click(screen.getByRole("button", { name: "Save skills" }));
+    await addTerm(user, "\\bclaude\\b");
+    await user.click(save());
     await screen.findByTestId("rescore-line", {}, WAIT);
     status([
       {
@@ -191,9 +207,8 @@ describe("the rescore after the save", () => {
         },
       },
     ]);
-    await user.clear(screen.getByLabelText("Years of experience"));
-    await user.type(screen.getByLabelText("Years of experience"), "2");
-    await user.click(screen.getByRole("button", { name: "Save skills" }));
+    await addTerm(user, "\\bgpt\\b");
+    await user.click(save());
     expect(
       await screen.findByText(
         "Your postings were not rescored. Use Rescore all postings in Jobs.",

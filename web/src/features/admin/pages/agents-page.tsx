@@ -1,18 +1,14 @@
+import { Bot } from "lucide-react";
 import { Fragment } from "react";
-import { Bot, CircleAlert, RotateCw } from "lucide-react";
 import { Link } from "react-router";
 
-import { PageHeader } from "@/components/blocks/page-header";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { EmptyState } from "@/components/blocks/empty-state";
+import { LoadError } from "@/components/blocks/load-error";
+import { LoadingCard } from "@/components/blocks/loading-card";
+import { Section } from "@/components/blocks/section";
+import { AdminFrame } from "@/components/shared/admin/admin-frame";
+import { Moment } from "@/components/shared/admin/moment";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  Empty,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty";
 import {
   Table,
   TableBody,
@@ -24,12 +20,8 @@ import {
 } from "@/components/ui/table";
 import { useTitle } from "@/hooks/use-title";
 
-import { AdminTabs } from "@/components/shared/admin/admin-tabs";
 import { type AgentList, type AgentSummary } from "../api/agents-api";
 import { useAdminAgents } from "../api/use-admin-agents";
-import { message } from "../helpers/errors";
-import { LoadingCard } from "@/components/blocks/loading-card";
-import { Moment } from "@/components/shared/admin/moment";
 
 /**
  * Admin, Agents: every agent of the app, what it runs on and when it last ran, grouped by
@@ -40,34 +32,15 @@ export function AdminAgentsPage() {
   const agents = useAdminAgents();
   const now = new Date();
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-6">
-      <AdminTabs />
-      <PageHeader
-        title="Agents"
-        description="Every agent of the app, as the code defines it and with what you saved. Open one to see everything that makes it, and to change its prompt, model, limits or tools for its next runs."
-      />
+    <AdminFrame>
       {agents.isPending ? (
         <LoadingCard>Loading agents</LoadingCard>
       ) : agents.isError && !agents.data ? (
-        <Alert variant="destructive">
-          <CircleAlert aria-hidden="true" />
-          <AlertDescription className="flex flex-col items-start gap-3">
-            <p>The agents could not be loaded. {message(agents.error)}</p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void agents.refetch()}
-              disabled={agents.isFetching}
-            >
-              <RotateCw aria-hidden="true" />
-              Retry
-            </Button>
-          </AlertDescription>
-        </Alert>
+        <LoadError query={agents}>The agents could not be loaded.</LoadError>
       ) : (
         <AgentGroups list={agents.data} now={now} />
       )}
-    </div>
+    </AdminFrame>
   );
 }
 
@@ -106,59 +79,45 @@ function AgentGroups({ list, now }: { list: AgentList; now: Date }) {
   const groups = groupAgents(list);
   if (!groups.length)
     return (
-      <Card className="py-0">
-        <Empty className="flex-none gap-2 px-4 py-10 md:px-4 md:py-10">
-          <EmptyHeader className="max-w-none">
-            <EmptyMedia className="mb-0 text-muted-foreground">
-              <Bot aria-hidden="true" className="size-6" />
-            </EmptyMedia>
-            <EmptyTitle className="text-base tracking-normal">
-              No agent is registered here.
-            </EmptyTitle>
-          </EmptyHeader>
-        </Empty>
-      </Card>
+      <EmptyState
+        icon={Bot}
+        title="No agent is registered"
+        description="The agents the code defines appear here, with their model, version and last run."
+      />
     );
   return (
-    <div className="flex flex-col gap-8">
+    <>
       {groups.map((group) => (
-        <section
+        <Section
           key={group.key}
-          aria-labelledby={`agents-${group.key}-title`}
-          className="flex flex-col gap-4"
-        >
-          <div className="flex flex-col gap-1">
-            <h2
-              id={`agents-${group.key}-title`}
-              className="text-lg font-semibold tracking-tight"
-            >
+          title={
+            <>
               {group.title}{" "}
               <span className="font-normal text-muted-foreground tabular-nums">
                 ({group.agents.length})
               </span>
-            </h2>
-            <p className="text-sm text-muted-foreground">{group.sentence}</p>
-          </div>
+            </>
+          }
+          description={group.sentence}
+        >
           <AgentsTable title={group.title} items={group.agents} now={now} />
-        </section>
+        </Section>
       ))}
-    </div>
+    </>
   );
 }
 
 /**
- * The column widths shared by the six tables of the list, so their columns line up from one
- * section to the next (`lg:table-fixed`); Agent takes what is left and its descriptions wrap
- * inside it. Model, Version and Last run stay on one line. From 1024px up only: between 640px
- * and 1024px the fixed widths would leave the Agent column almost nothing, so the table lays
- * itself out there.
+ * The column widths shared by the tables of the list, so their columns line up from one section
+ * to the next (`lg:table-fixed`); Agent takes what is left and its descriptions wrap inside it.
+ * Model and Last run stay on one line. From 1024px up only: below, the table lays itself out.
  */
 const COLUMNS = [
   { label: "Agent", className: "" },
-  { label: "Module", className: "lg:w-56" },
-  { label: "Model", className: "lg:w-44 lg:whitespace-nowrap" },
-  { label: "Version", className: "lg:w-32 lg:whitespace-nowrap" },
-  { label: "Last run", className: "lg:w-36 lg:whitespace-nowrap" },
+  { label: "Module", className: "lg:w-52 xl:w-64" },
+  { label: "Model", className: "lg:w-40 xl:w-48 lg:whitespace-nowrap" },
+  { label: "Version", className: "lg:w-44 xl:w-56 lg:whitespace-nowrap" },
+  { label: "Last run", className: "lg:w-32 xl:w-40 lg:whitespace-nowrap" },
 ];
 
 function AgentsTable({
@@ -186,16 +145,13 @@ function AgentsTable({
         {items.map((agent) => (
           <TableRow key={agent.name} className="align-top">
             <TableHead className="font-normal">
-              <Link
-                to={`/admin/agents/${encodeURIComponent(agent.name)}`}
-                className="font-medium text-primary underline-offset-4 hover:underline [overflow-wrap:anywhere]"
-              >
-                {agent.name}
-              </Link>
-              <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
-                {agent.description}
-              </p>
-              <span className="mt-1 flex flex-wrap gap-1">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <Link
+                  to={`/admin/agents/${encodeURIComponent(agent.name)}`}
+                  className="font-medium underline-offset-4 hover:underline [overflow-wrap:anywhere]"
+                >
+                  {agent.name}
+                </Link>
                 {agent.test_only ? (
                   <Badge variant="outline">Test only</Badge>
                 ) : null}
@@ -206,41 +162,40 @@ function AgentsTable({
                   <Badge variant="outline">Private</Badge>
                 ) : null}
               </span>
+              <p className="mt-0.5 max-w-prose text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                {agent.description}
+              </p>
             </TableHead>
             <TableCell label="Module">
-              <code className="text-xs max-sm:break-words">
+              <span className="font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {agent.module.split(".").map((part, index) => (
                   <Fragment key={index}>
-                    {index > 0 && (
+                    {index > 0 ? (
                       <>
                         .<wbr />
                       </>
-                    )}
+                    ) : null}
                     {part}
                   </Fragment>
                 ))}
-              </code>
+              </span>
             </TableCell>
             <TableCell label="Model" className="lg:whitespace-nowrap">
               {agent.model}
             </TableCell>
             <TableCell label="Version" className="lg:whitespace-nowrap">
-              {agent.overridden && agent.version !== null
-                ? `Version ${String(agent.version)}`
-                : "The code's"}
-              {agent.code_changed.length ? (
-                <span className="mt-1 flex">
-                  {/* Wraps on a phone's card line instead of widening it. */}
-                  <Badge
-                    variant="outline"
-                    className="w-auto shrink justify-start rounded-md text-left whitespace-normal"
-                  >
+              <span className="flex flex-col gap-0.5">
+                {agent.overridden && agent.version !== null
+                  ? `Version ${String(agent.version)}`
+                  : "The code's"}
+                {agent.code_changed.length ? (
+                  <span className="text-xs whitespace-normal text-muted-foreground">
                     {agent.code_changed.includes("system_prompt")
                       ? "The code's prompt changed since it was saved"
                       : "The code changed since it was saved"}
-                  </Badge>
-                </span>
-              ) : null}
+                  </span>
+                ) : null}
+              </span>
             </TableCell>
             <TableCell label="Last run" className="lg:whitespace-nowrap">
               {agent.last_run_at ? (

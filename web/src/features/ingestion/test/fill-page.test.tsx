@@ -11,6 +11,7 @@ import { fakeRuns } from "@/test/ingestion-runs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
+import { crumb } from "@/test/breadcrumb";
 
 import { ProposalList } from "../components/proposal-list";
 import { PROMPT_READY } from "../components/step-prompt";
@@ -183,9 +184,7 @@ describe("/profile/fill", () => {
     const user = userEvent.setup();
     fakeProfile();
     const app = await open();
-    await user.click(
-      screen.getByRole("link", { name: "Back to your profile" }),
-    );
+    await user.click(crumb("Profile"));
     await screen.findByRole("heading", { level: 1, name: "Profile" });
     expect(app.location()).toBe("/profile");
   });
@@ -198,8 +197,10 @@ describe("/profile/fill", () => {
     fakePrompt();
     const app = renderApp("/profile");
     await user.click(
-      // Under Your CV on the one page profile.
-      await screen.findByRole("link", { name: "Add other documents" }),
+      // In the header of the one page profile.
+      await screen.findByRole("link", {
+        name: "Fill my profile with an agent",
+      }),
     );
     await screen.findByRole("heading", {
       level: 1,
@@ -233,12 +234,15 @@ describe("the steps built by later tasks", () => {
 
   it("the review step lays out the start, the progress and the proposals", async () => {
     await open("/profile/fill?step=review");
-    // No run yet and nothing proposed: only the start takes room.
+    // No run yet and nothing proposed: only the start takes room, the proposals' column is empty.
     expect(
       await screen.findByRole("heading", { level: 3, name: "Start reading" }),
     ).toBeVisible();
-    const panel = document.querySelector('[data-step="review"] > div');
-    expect(panel?.childElementCount).toBe(1);
+    const step = document.querySelector('[data-step="review"]');
+    expect(step?.querySelector("aside")?.childElementCount).toBe(1);
+    expect(
+      step?.querySelector("aside")?.previousElementSibling,
+    ).toBeEmptyDOMElement();
     // The list reads the last finished run, so it needs a query client.
     const withClient = (ui: ReactElement) =>
       render(

@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 import type { Answer } from "@/features/apply/api/apply-api";
 import { editorKind, valueText } from "@/features/apply/helpers/apply-state";
@@ -14,7 +15,7 @@ import { editorKind, valueText } from "@/features/apply/helpers/apply-state";
 const MAX_CHARS = 5000;
 
 /**
- * Type or correct one answer: two buttons for a yes or no, the field's own choices as a select,
+ * Type or correct one answer: Yes and No as one choice, the field's own choices as a select,
  * a text box otherwise. A yes or no and a choice save at once; text saves with its button, and
  * says so while it is unsaved so that the page can keep Approve waiting for it.
  *
@@ -72,23 +73,24 @@ export function AnswerEditor({
     return (
       <div className="flex flex-col gap-2">
         {box}
-        <div role="group" aria-label={name} className="flex gap-2">
-          {([true, false] as const).map((choice) => (
-            <Button
-              key={String(choice)}
-              type="button"
-              size="sm"
-              variant={answer.value === choice ? "default" : "outline"}
-              aria-pressed={answer.value === choice}
-              disabled={saving}
-              onClick={() => {
-                void onSave(choice, keep);
-              }}
-            >
-              {choice ? "Yes" : "No"}
-            </Button>
-          ))}
-        </div>
+        <ToggleGroup
+          type="single"
+          variant="outline"
+          size="sm"
+          aria-label={name}
+          value={
+            answer.value === true ? "yes" : answer.value === false ? "no" : ""
+          }
+          disabled={saving}
+          onValueChange={(value) => {
+            // Clicking the chosen answer again would clear it: an answer stays chosen.
+            if (value === "yes" || value === "no")
+              void onSave(value === "yes", keep);
+          }}
+        >
+          <ToggleGroupItem value="yes">Yes</ToggleGroupItem>
+          <ToggleGroupItem value="no">No</ToggleGroupItem>
+        </ToggleGroup>
       </div>
     );
   }

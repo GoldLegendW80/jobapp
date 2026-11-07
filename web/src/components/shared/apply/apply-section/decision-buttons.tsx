@@ -28,7 +28,7 @@ export function DecisionButtons({
       {phase === "unknown" ? (
         <>
           <Button
-            className="w-full sm:w-fit"
+            className="w-full @sm:w-fit"
             disabled={busy}
             onClick={() => {
               onAsk("submitted");
@@ -39,7 +39,7 @@ export function DecisionButtons({
           {questionAfterSend ? null : (
             <Button
               variant="outline"
-              className="w-full sm:w-fit"
+              className="w-full @sm:w-fit"
               disabled={busy}
               onClick={() => {
                 onAsk(retryKind);
@@ -52,7 +52,7 @@ export function DecisionButtons({
       ) : null}
       {phase === "refused" ? (
         <Button
-          className="w-full sm:w-fit"
+          className="w-full @sm:w-fit"
           disabled={busy}
           onClick={() => {
             onAsk("retry");
@@ -64,7 +64,7 @@ export function DecisionButtons({
       {cancellable ? (
         <Button
           variant="outline"
-          className="w-full sm:w-fit"
+          className="w-full @sm:w-fit"
           disabled={busy}
           onClick={() => {
             onAsk("cancel");

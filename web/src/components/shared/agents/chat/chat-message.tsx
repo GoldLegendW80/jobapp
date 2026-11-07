@@ -1,10 +1,8 @@
 import { CircleAlert } from "lucide-react";
 
-import { cn } from "@/lib/utils";
-
 import type { ChatMessage as Message } from "@/features/agents/api/chat-api";
 import { unanswered } from "@/features/agents/helpers/chat-messages";
-import { ChatBubble } from "./chat-bubble";
+import { ChatTurn } from "./chat-turn";
 
 /** A stored message: the reader's on the right, the agent's on the left, and why a message of
  * the reader got no answer. */
@@ -15,30 +13,28 @@ export function ChatMessage({
   message: Message;
   messages: Message[];
 }) {
-  const mine = message.role === "user";
   const failed = unanswered(message, messages);
   return (
-    <li
+    <ChatTurn
+      from={message.role === "user" ? "user" : "agent"}
       data-testid="chat-message"
       data-role={message.role}
-      className={cn("flex flex-col gap-1", mine ? "items-end" : "items-start")}
+      footer={
+        failed ? (
+          <span className="inline-flex items-center gap-1 text-destructive">
+            <CircleAlert aria-hidden="true" className="size-3.5" />
+            No answer:{" "}
+            {message.error ??
+              (message.run_status === "cancelled"
+                ? "the answer was stopped."
+                : "the agent failed.")}
+          </span>
+        ) : null
+      }
     >
-      <span className="sr-only">{mine ? "You:" : "Agent:"}</span>
-      <ChatBubble from={mine ? "user" : "agent"}>
-        {message.text || (
-          <span className="text-muted-foreground">The agent gave no text.</span>
-        )}
-      </ChatBubble>
-      {failed ? (
-        <p className="inline-flex items-center gap-1 text-xs text-destructive">
-          <CircleAlert aria-hidden="true" className="size-3.5" />
-          No answer:{" "}
-          {message.error ??
-            (message.run_status === "cancelled"
-              ? "the answer was stopped."
-              : "the agent failed.")}
-        </p>
-      ) : null}
-    </li>
+      {message.text || (
+        <span className="text-muted-foreground">The agent gave no text.</span>
+      )}
+    </ChatTurn>
   );
 }

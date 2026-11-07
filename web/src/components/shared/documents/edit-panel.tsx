@@ -1,7 +1,8 @@
 import { Check, RotateCw } from "lucide-react";
-import { useId, useMemo } from "react";
+import { useId, useMemo, type ReactNode } from "react";
 import { toast } from "sonner";
 
+import { Section } from "@/components/blocks/section";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -38,63 +39,56 @@ import {
 import {
   differences,
   fieldKeys,
-  listAt,
+  MAX,
   notesByField,
   withDefaults,
   type Draft,
-  type EmployerFact,
 } from "@/features/documents/helpers/edit-content";
 import type { Form } from "@/features/documents/helpers/edit-form";
-import { CvForm } from "./edit-forms/cv-form";
-import { LetterForm } from "./edit-forms/letter-form";
+import {
+  pageFacts,
+  profilePhoto,
+} from "@/features/documents/helpers/page-facts";
+import { draftStep } from "@/features/documents/helpers/template-choice";
+import { DocumentSheet } from "./document-sheet";
+import { TextField } from "./edit-fields";
+import { FixedList } from "./edit-forms/fixed-list";
+import { FormSection } from "./edit-forms/form-section";
 import { ProfileFacts } from "./edit-forms/profile-facts";
+import { FIXED_LISTS } from "@/features/documents/helpers/fixed-facts";
 import { fieldLabel, isOpen } from "@/features/documents/helpers/labels";
-
-/** The Edit view: the structured form of the draft, saved by itself (SPEC-documents.md, "Pages"). */
-export const available = true;
 
 const LANGUAGE_NAMES: Record<Language, string> = {
   en: "English",
   fr: "French",
 };
 
-const text = (value: unknown): string =>
-  typeof value === "string" ? value : "";
-
-/** The profile's employers, then those only the base CV's `fixed` block states (profile_view). */
-function employersOf(
-  profile: {
-    key: string;
-    organisation: string;
-    title: string;
-    start: string;
-    end: string | null;
-  }[],
-  fixed: unknown[],
-): Map<string, EmployerFact> {
-  const out = new Map<string, EmployerFact>();
-  for (const one of profile) out.set(one.key, { ...one });
-  for (const raw of fixed) {
-    const one = (raw ?? {}) as Record<string, unknown>;
-    const key = text(one.key);
-    if (key === "" || out.has(key)) continue;
-    out.set(key, {
-      key,
-      organisation: text(one.organisation) || key,
-      title: text(one.title),
-      start: text(one.start) || null,
-      end: text(one.end) || null,
-    });
-  }
-  return out;
+/** What the section of the page says above it: the version it is, and its marks. */
+export interface PageHeading {
+  title: string;
+  meta?: ReactNode;
+  /** The overflow note, above the page. */
+  fit?: ReactNode;
+  /** Right under the page: what the fact check corrected in it. */
+  below?: ReactNode;
 }
 
-export function EditPanel(props: PanelProps) {
+/**
+ * The draft of a document as its page, edited where it is read (SPEC-documents.md, "Pages"):
+ * a click on a text of the page puts its field in its place (in-place.tsx), and every change is
+ * saved by itself. Under it, what is not printed (what the document is for, the notes) and where
+ * the printed facts come from.
+ */
+export function EditPanel(props: PanelProps & { heading: PageHeading }) {
   // The saver is bound to one document: another document gets a form of its own.
   return <EditForm key={props.document.id} {...props} />;
 }
 
-function EditForm({ document, generation }: PanelProps) {
+function EditForm({
+  document,
+  generation,
+  heading,
+}: PanelProps & { heading: PageHeading }) {
   const id = useId();
   const { draft, status, saved, round, saver } = useAutosave(document);
   const profile = useProfile();
@@ -125,93 +119,144 @@ function EditForm({ document, generation }: PanelProps) {
     limits:
       templates.data?.find((one) => one.slug === document.template_slug)
         ?.soft_limits?.[letter ? "letter" : "cv"] ?? undefined,
+    round,
   };
-  const fixed =
-    document.scope === "base"
-      ? listAt(draft, ["fixed", "employers"])
-      : listAt(base.data?.draft ?? {}, ["fixed", "employers"]);
   const known =
     profile.isSuccess && (baseId === null || letter || base.isSuccess);
-  const employers = employersOf(
-    profile.data?.sections.experience.employers ?? [],
-    fixed,
+  const facts = pageFacts(
+    profile.data?.sections,
+    document.scope === "base" ? draft : (base.data?.draft ?? {}),
   );
   const approved = versions.data?.find((one) => one.approved_at !== null);
   const general = notes.get("") ?? [];
+  const noun = letter ? "letter" : "CV";
 
   return (
-    <div className="flex flex-col gap-4" data-testid="edit-panel">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <SaveLine
-          status={status}
-          shown={fieldKeys(draft, letter, document.scope === "base")}
-          document={document}
-          saver={saver}
-        />
-        <Field className="gap-1.5 sm:w-48">
-          <FieldLabel htmlFor={`${id}-language`}>
-            Language of the page
-          </FieldLabel>
-          <NativeSelect
-            id={`${id}-language`}
-            value={document.language}
-            disabled={language.isPending}
-            onChange={(event) => {
-              language.mutate(event.target.value as Language);
-            }}
-          >
-            {LANGUAGES.map((one) => (
-              <option key={one} value={one}>
-                {LANGUAGE_NAMES[one]}
-              </option>
-            ))}
-          </NativeSelect>
-        </Field>
-      </div>
-      {document.language === "fr" ? (
-        <p className="text-sm text-muted-foreground">
-          The headings and the date print in French; your text prints as you
-          write it.
-        </p>
-      ) : null}
-      {isOpen(generation) ? (
-        <p className="text-sm text-muted-foreground">
-          The writer is working on this document. If it saves a new draft while
-          you type, you choose which text to keep.
-        </p>
-      ) : null}
-      {approved === undefined ? null : (
-        <p className="text-sm text-muted-foreground">
-          Version {approved.number} is approved. What you change here makes a
-          new version, which you approve in See once its page is drawn.
-        </p>
-      )}
-      {general.length === 0 ? null : (
-        <ul className="text-sm text-warning">
-          {general.map((note, index) => (
-            <li key={index}>{note.sentence}</li>
-          ))}
-        </ul>
-      )}
-      <ProfileFacts profile={profile.data} letter={letter} />
-      <div
-        key={round}
-        className="flex flex-col gap-4"
-        onBlur={() => {
-          saver.flush();
-        }}
+    <div
+      className="flex flex-col gap-8"
+      data-testid="edit-panel"
+      onBlur={() => {
+        saver.flush();
+      }}
+    >
+      <Section
+        title={heading.title}
+        description={heading.meta}
+        actions={
+          <Field className="gap-1.5 sm:w-48">
+            <FieldLabel htmlFor={`${id}-language`}>
+              Language of the page
+            </FieldLabel>
+            <NativeSelect
+              id={`${id}-language`}
+              value={document.language}
+              disabled={language.isPending}
+              onChange={(event) => {
+                language.mutate(event.target.value as Language);
+              }}
+            >
+              {LANGUAGES.map((one) => (
+                <option key={one} value={one}>
+                  {LANGUAGE_NAMES[one]}
+                </option>
+              ))}
+            </NativeSelect>
+          </Field>
+        }
       >
-        {letter ? (
-          <LetterForm form={form} />
-        ) : (
-          <CvForm
+        <div className="flex flex-col gap-4">
+          {heading.fit}
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <SaveLine
+              status={status}
+              shown={fieldKeys(draft, letter, document.scope === "base")}
+              document={document}
+              saver={saver}
+            />
+            {status.state === "failed" ? null : (
+              <p className="text-sm text-muted-foreground">
+                Click a text of the page to change it.
+              </p>
+            )}
+          </div>
+          {document.language === "fr" ? (
+            <p className="text-sm text-muted-foreground">
+              The headings and the date print in French; your text prints as you
+              write it.
+            </p>
+          ) : null}
+          {isOpen(generation) ? (
+            <p className="text-sm text-muted-foreground">
+              The writer is working on this document. If it saves a new draft
+              while you type, you choose which text to keep.
+            </p>
+          ) : null}
+          {approved === undefined ? null : (
+            <p className="text-sm text-muted-foreground">
+              Version {approved.number} is approved. What you change here makes
+              a new version, which you approve under Versions once its page is
+              drawn.
+            </p>
+          )}
+          {general.length === 0 ? null : (
+            <ul className="text-sm text-warning">
+              {general.map((note, index) => (
+                <li key={index}>{note.sentence}</li>
+              ))}
+            </ul>
+          )}
+          <DocumentSheet
+            kind={document.kind}
+            language={document.language}
+            template={document.template_slug}
+            step={draftStep(versions.data, document.template_slug)}
+            photo={profilePhoto(profile.data)}
+            content={draft}
+            facts={facts}
             form={form}
-            base={document.scope === "base"}
-            employers={employers}
             known={known}
           />
-        )}
-      </div>
+        </div>
+      </Section>
+      {heading.below}
+      <Section
+        title="Not printed"
+        description={
+          letter
+            ? "What this letter is for stays here; your name and contact lines print from your profile."
+            : "What this CV is for and your notes stay here; your name, contact lines, employers, schools and languages print from your profile."
+        }
+      >
+        <FormSection title="For you">
+          <TextField
+            form={form}
+            path={["target"]}
+            label={`What this ${noun} is for (not printed)`}
+            max={MAX.line}
+          />
+          {letter ? null : (
+            <TextField
+              form={form}
+              path={["notes"]}
+              label="Notes (not printed)"
+              max={MAX.notes}
+              multiline
+            />
+          )}
+        </FormSection>
+        <ProfileFacts profile={profile.data?.sections} letter={letter} />
+        {document.scope === "base" && !letter ? (
+          <FormSection title="Facts of this base CV">
+            <p className="text-sm text-muted-foreground">
+              Used only where your profile is still empty: your profile always
+              comes first.
+            </p>
+            {FIXED_LISTS.map((list) => (
+              <FixedList key={list.name} form={form} list={list} />
+            ))}
+          </FormSection>
+        ) : null}
+      </Section>
       <Conflict status={status} draft={draft} saver={saver} />
     </div>
   );

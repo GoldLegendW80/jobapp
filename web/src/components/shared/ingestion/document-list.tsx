@@ -8,10 +8,18 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { EmptyState } from "@/components/blocks/empty-state";
+import {
+  Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
+  AttachmentMedia,
+  AttachmentTitle,
+} from "@/components/ui/attachment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { Empty, EmptyDescription } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import {
   Tooltip,
@@ -36,6 +44,14 @@ import {
   type StatusTone,
 } from "@/features/ingestion/helpers/labels";
 
+/** How a document's chip shows its state: read, being read, waiting or failed. */
+const ATTACHMENT_STATE = {
+  done: "done",
+  working: "processing",
+  waiting: "idle",
+  failed: "error",
+} as const satisfies Record<StatusTone, string>;
+
 const TONES: Record<StatusTone, string> = {
   done: "border-success/30 bg-success/15 text-success",
   working: "border-border bg-muted text-foreground",
@@ -50,20 +66,24 @@ const TONES: Record<StatusTone, string> = {
  */
 export function DocumentList({
   documents,
+  flat = false,
   onPreview,
   onDelete,
 }: {
   documents: IngestionDocument[];
+  /** Inside a card already: the empty state draws no box of its own. */
+  flat?: boolean;
   onPreview: (document: IngestionDocument) => void;
   onDelete: (document: IngestionDocument) => void;
 }) {
   if (documents.length === 0)
     return (
-      <Empty className="border px-4 py-6 md:px-4 md:py-6">
-        <EmptyDescription>
-          No document yet. Add a file or paste a text above.
-        </EmptyDescription>
-      </Empty>
+      <EmptyState
+        icon={FileText}
+        title="No document yet"
+        description="Add a file or paste a text."
+        flat={flat}
+      />
     );
   return (
     <ul aria-label="Your documents" className="flex flex-col gap-2">
@@ -88,12 +108,7 @@ function KindIcon({ document }: { document: IngestionDocument }) {
         : document.source === "pasted"
           ? ClipboardList
           : FileText;
-  return (
-    <Icon
-      aria-hidden="true"
-      className="mt-0.5 size-5 shrink-0 text-muted-foreground"
-    />
-  );
+  return <Icon aria-hidden="true" />;
 }
 
 function DocumentRow({
@@ -107,84 +122,86 @@ function DocumentRow({
 }) {
   const status = statusView(document);
   const pages = pagesLabel(document);
+  // Under the file's line: why it waits or failed, what was not read, a possible secret.
+  const notes = [status.detail, document.note, pages].filter(Boolean);
   return (
     <li data-status={document.status}>
-      <Card className="gap-2 px-4 py-3 sm:px-5 sm:py-4">
-        <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+      <Attachment state={ATTACHMENT_STATE[status.tone]} className="w-full">
+        <AttachmentMedia>
           <KindIcon document={document} />
-          <div className="min-w-0 flex-1 basis-40">
-            <p className="font-medium break-words">
-              <bdi>{document.name}</bdi>
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {kindLabel(document)}, {sizeLabel(document.size)}, added{" "}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <time dateTime={document.created_at}>
-                    {relativeTime(document.created_at)}
-                  </time>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {absoluteTime(document.created_at)}
-                </TooltipContent>
-              </Tooltip>
-            </p>
-          </div>
-          <Badge variant="outline" className={TONES[status.tone]}>
+        </AttachmentMedia>
+        {/* basis-40: on a narrow screen the state and the actions go under the name. */}
+        <AttachmentContent className="basis-40">
+          <AttachmentTitle>
+            <bdi>{document.name}</bdi>
+          </AttachmentTitle>
+          <AttachmentDescription>
+            {kindLabel(document)}, {sizeLabel(document.size)}, added{" "}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <time dateTime={document.created_at}>
+                  {relativeTime(document.created_at)}
+                </time>
+              </TooltipTrigger>
+              <TooltipContent>
+                {absoluteTime(document.created_at)}
+              </TooltipContent>
+            </Tooltip>
+          </AttachmentDescription>
+        </AttachmentContent>
+        <AttachmentActions className="ml-auto gap-1">
+          <Badge variant="outline" className={cn("mr-1", TONES[status.tone])}>
             {status.tone === "working" ? (
               <Spinner aria-hidden="true" role={undefined} />
             ) : null}
             {status.label}
           </Badge>
-        </div>
-        {status.detail ? (
-          <p
-            className={cn(
-              "text-sm text-muted-foreground",
-              status.tone === "failed" && "text-destructive",
-            )}
-          >
-            {status.detail}
-          </p>
-        ) : null}
-        {document.note ? (
-          <p className="text-sm text-muted-foreground">{document.note}</p>
-        ) : null}
-        {pages ? (
-          <p className="text-sm text-muted-foreground">{pages}</p>
-        ) : null}
-        {needsConfirmation(document) ? (
-          <SecretWarning document={document} onDelete={onDelete} />
-        ) : null}
-        <div className="flex flex-wrap gap-2">
           {hasText(document) ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              aria-label={`Preview ${document.name}`}
-              onClick={() => {
-                onPreview(document);
-              }}
-            >
-              <Eye aria-hidden="true" />
-              Preview
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <AttachmentAction
+                  size="icon-sm"
+                  aria-label={`Preview ${document.name}`}
+                  onClick={() => {
+                    onPreview(document);
+                  }}
+                >
+                  <Eye aria-hidden="true" />
+                </AttachmentAction>
+              </TooltipTrigger>
+              <TooltipContent>Preview</TooltipContent>
+            </Tooltip>
           ) : null}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            aria-label={`Delete ${document.name}`}
-            onClick={() => {
-              onDelete(document);
-            }}
-          >
-            <Trash2 aria-hidden="true" />
-            Delete
-          </Button>
-        </div>
-      </Card>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <AttachmentAction
+                size="icon-sm"
+                aria-label={`Delete ${document.name}`}
+                onClick={() => {
+                  onDelete(document);
+                }}
+              >
+                <Trash2 aria-hidden="true" />
+              </AttachmentAction>
+            </TooltipTrigger>
+            <TooltipContent>Delete</TooltipContent>
+          </Tooltip>
+        </AttachmentActions>
+        {notes.length > 0 || needsConfirmation(document) ? (
+          <div className="flex basis-full flex-col gap-2 text-sm text-muted-foreground sm:pl-12">
+            {status.detail ? (
+              <p className={cn(status.tone === "failed" && "text-destructive")}>
+                {status.detail}
+              </p>
+            ) : null}
+            {document.note ? <p>{document.note}</p> : null}
+            {pages ? <p>{pages}</p> : null}
+            {needsConfirmation(document) ? (
+              <SecretWarning document={document} onDelete={onDelete} />
+            ) : null}
+          </div>
+        ) : null}
+      </Attachment>
     </li>
   );
 }
@@ -242,7 +259,7 @@ function SecretWarning({
         </Button>
         <Button
           type="button"
-          variant="ghost"
+          variant="outline"
           size="sm"
           onClick={() => {
             onDelete(document);

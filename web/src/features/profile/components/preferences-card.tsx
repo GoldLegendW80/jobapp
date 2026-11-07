@@ -26,9 +26,9 @@ import {
 import {
   ConflictDialog,
   FormErrorAlert,
-  Group,
   SaveBar,
 } from "@/components/shared/profile/section-ui";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
 import { useSectionForm } from "../api/use-section-form";
 
 const LANGUAGE_LABELS: Record<(typeof DOCUMENTS_LANGUAGES)[number], string> = {
@@ -92,11 +92,11 @@ export function PreferencesCard({
         <form
           noValidate
           aria-label="Preferences"
-          className="flex flex-col gap-4"
+          className="flex flex-col gap-8"
           onSubmit={(event) => void onSubmit(event)}
         >
           <FormErrorAlert message={formError} />
-          <Group
+          <SettingsSection
             title="Preferences"
             description="How the CV and cover letter written for each posting read."
           >
@@ -141,7 +141,7 @@ export function PreferencesCard({
                 </FormItem>
               )}
             />
-          </Group>
+          </SettingsSection>
           <SaveBar
             label="Preferences"
             saving={saving}

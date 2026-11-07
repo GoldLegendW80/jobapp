@@ -2,7 +2,9 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { fakeDocumentReads } from "@/design-system/fixtures/documents";
 
 import { createQueryClient } from "@/lib/query";
 import {
@@ -59,7 +61,7 @@ async function openTemplates(documentId: string) {
       <RouterProvider router={router} />
     </QueryClientProvider>,
   );
-  await user.click(await screen.findByRole("tab", { name: "Template" }));
+  // The template choice is a section of the page: nothing to open first.
   const strip = await screen.findByRole("list", { name: "Templates" });
   return { user, router, strip, client };
 }
@@ -67,7 +69,11 @@ async function openTemplates(documentId: string) {
 const writes = (api: ReturnType<typeof fakeDocuments>) =>
   api.requests.filter((one) => one.method !== "GET");
 
-describe("the Template view", () => {
+beforeEach(() => {
+  fakeDocumentReads();
+});
+
+describe("the template choice of a document", () => {
   it("shows the person's own first, every template's thumbnail, and the current one marked", async () => {
     setup(POSTING_CV);
     const { strip } = await openTemplates("p");
@@ -125,6 +131,26 @@ describe("the Template view", () => {
     expect(writes(api).some((one) => one.path.includes("/b"))).toBe(false);
   });
 
+  it("redraws the page edited above in the template chosen", async () => {
+    setup(POSTING_CV);
+    const { user, strip } = await openTemplates("p");
+    const sheet = await screen.findByTestId("document-sheet");
+    expect(
+      sheet.querySelector('[data-template-sheet="classic"]'),
+    ).not.toBeNull();
+    await user.click(within(strip).getByRole("button", { name: /^Sidebar/ }));
+    await waitFor(() => {
+      expect(
+        screen
+          .getByTestId("document-sheet")
+          .querySelector('[data-template-sheet="sidebar"]'),
+      ).not.toBeNull();
+    });
+    expect(
+      screen.getByRole("button", { name: "Edit the summary" }),
+    ).toBeVisible();
+  });
+
   it("names the letter of the thumbnails for a letter", async () => {
     setup(LETTER);
     const { strip } = await openTemplates("l");
@@ -180,9 +206,9 @@ describe("the Template view", () => {
     const note = await screen.findByTestId("overflow-note", undefined, {
       timeout: 4000,
     });
-    expect(note).toHaveTextContent("Longer than one page");
+    expect(note).toHaveTextContent("This is longer than one page");
     expect(note).toHaveTextContent(
-      "With this template the CV does not fit one page.",
+      "Make it fit asks the writer for a shorter version",
     );
     await user.click(within(note).getByRole("button", { name: "Make it fit" }));
     await waitFor(() => {
@@ -193,7 +219,7 @@ describe("the Template view", () => {
     });
     expect(
       await screen.findByText(
-        "A shorter version is being written. It shows in See when it is ready.",
+        "A shorter version is being written. It shows here when it is ready.",
       ),
     ).toBeVisible();
     expect(document.body.textContent).not.toMatch(SEPARATOR);
@@ -222,7 +248,7 @@ describe("the Template view", () => {
       await openTemplates(doc.id);
       const note = screen.getByTestId("overflow-note");
       expect(note).toHaveTextContent(
-        "Shorten the longest fields in Edit, or choose a more compact template.",
+        "Shorten the longest texts of the page, or choose a more compact template.",
       );
       expect(within(note).queryByRole("button")).toBeNull();
     },
@@ -287,9 +313,12 @@ describe("the Template view", () => {
       templates: [fakeTemplate("classic"), fakeTemplate("compact")],
     });
     const { user, strip } = await openTemplates("p");
-    within(strip)
-      .getByRole("button", { name: /^Classic/ })
-      .focus();
+    // See all heads the section; the strip follows it.
+    screen.getByRole("link", { name: "See all" }).focus();
+    await user.tab();
+    expect(
+      within(strip).getByRole("button", { name: /^Classic/ }),
+    ).toHaveFocus();
     await user.tab();
     expect(
       within(strip).getByRole("button", { name: /^Compact/ }),
@@ -298,8 +327,6 @@ describe("the Template view", () => {
     await waitFor(() => {
       expect(writes(api)).toHaveLength(1);
     });
-    await user.tab();
-    expect(screen.getByRole("link", { name: "See all" })).toHaveFocus();
   });
 
   it("names every bundled template it is given, the list being the api's", async () => {

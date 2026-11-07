@@ -18,21 +18,27 @@ import {
 } from "@/components/shared/profile/section-ui";
 import { TermChips } from "@/components/shared/profile/term-chips";
 
-/** One requirement the person does not meet (a gate): its name, terms and the points it takes off. */
+/**
+ * One requirement the person does not meet (a gate): its name, terms and the points it takes
+ * off. `where` names it for screen readers; without `regexSwitch` its terms are words only.
+ */
 export function RequirementFields({
   form,
   index,
   count,
+  where,
+  regexSwitch,
   onMove,
   onRemove,
 }: {
   form: UseFormReturn<SkillsForm>;
   index: number;
   count: number;
+  where: string;
+  regexSwitch: boolean;
   onMove: (from: number, to: number) => void;
   onRemove: (index: number) => void;
 }) {
-  const n = index + 1;
   const name = useWatch({ control: form.control, name: `gates.${index}.name` });
   return (
     <div className="flex flex-col gap-3">
@@ -41,14 +47,14 @@ export function RequirementFields({
           control={form.control}
           name={`gates.${index}.name`}
           label="Name"
-          srSuffix={`of requirement ${n}`}
+          srSuffix={`of ${where}`}
           autoComplete="off"
           className="min-w-0 flex-1"
         />
         <ItemControls
           index={index}
           count={count}
-          name={`requirement ${n}`}
+          name={where}
           onMove={onMove}
           onRemove={onRemove}
         />
@@ -56,9 +62,10 @@ export function RequirementFields({
       <TermChips
         form={form}
         name={`gates.${index}`}
-        label={name.trim() || `requirement ${n}`}
+        label={name.trim() || where}
         title="Terms"
         compact
+        regexSwitch={regexSwitch}
       />
       <FormField
         control={form.control}
@@ -69,7 +76,7 @@ export function RequirementFields({
               <FormLabel>
                 <LabelText
                   label={WORDING.pointsTakenOff}
-                  srSuffix={`of requirement ${n}`}
+                  srSuffix={`of ${where}`}
                 />
               </FormLabel>
               <output className="text-sm tabular-nums text-muted-foreground">
@@ -82,7 +89,7 @@ export function RequirementFields({
                 max={100}
                 step={5}
                 name={field.name}
-                aria-label={`${WORDING.pointsTakenOff} of requirement ${String(n)}`}
+                aria-label={`${WORDING.pointsTakenOff} of ${where}`}
                 value={[field.value]}
                 onBlur={field.onBlur}
                 onValueChange={([value]) => {

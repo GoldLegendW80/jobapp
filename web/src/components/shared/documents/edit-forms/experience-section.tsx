@@ -23,9 +23,8 @@ import {
   type Form,
 } from "@/features/documents/helpers/edit-form";
 import { EntryButtons, ListField } from "../edit-fields";
-import { FormSection } from "./form-section";
 
-/** The CV's experience: one entry per employer of the profile, whose bullets the person writes. */
+/** The CV's experience: one entry per employer of the profile, whose bullets the person writes. Drawn where the page shows it. */
 export function ExperienceSection({
   form,
   employers,
@@ -52,7 +51,7 @@ export function ExperienceSection({
   const base = inputId(form, path);
   const selectId = `${base}-choice`;
   return (
-    <FormSection title="Experience">
+    <>
       <p className="text-sm text-muted-foreground">
         Each employer&apos;s name, title and dates come from your profile; you
         write the bullets.
@@ -62,7 +61,10 @@ export function ExperienceSection({
         const fact = employers.get(key);
         const name = fact?.organisation ?? key;
         return (
-          <FieldSet key={index} className="min-w-0 gap-2 border-t pt-3">
+          <FieldSet
+            key={index}
+            className="min-w-0 gap-2 border-t pt-3 first-of-type:border-t-0 first-of-type:pt-0"
+          >
             <FieldLegend variant="label" className="mb-0">
               {name}
             </FieldLegend>
@@ -155,6 +157,6 @@ export function ExperienceSection({
       <p aria-live="polite" className="sr-only">
         {moves.said}
       </p>
-    </FormSection>
+    </>
   );
 }

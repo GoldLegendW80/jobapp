@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession, member } from "@/test/auth";
+import { fakeDocuments } from "@/test/documents";
 import { fakeProfile, haraldLike, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
@@ -14,15 +15,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function openPage(path = "/profile?tab=identity") {
+async function openPage(path = "/profile") {
   const user = userEvent.setup();
+  fakeDocuments();
   renderApp(path);
   await screen.findByRole("heading", { level: 1, name: "Profile" });
   return user;
 }
 
+/** More actions of the profile page, which holds Export profile and Import profile. */
 async function openMenu(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(screen.getByRole("button", { name: "Export or import" }));
+  await user.click(screen.getByRole("button", { name: "More actions" }));
   return screen.findByRole("menu");
 }
 
@@ -145,7 +148,7 @@ const exportFile = (
     { type: "application/json" },
   );
 
-async function openImport(path = "/profile?tab=identity") {
+async function openImport(path = "/profile") {
   const user = await openPage(path);
   await user.click(
     within(await openMenu(user)).getByRole("menuitem", {
@@ -250,7 +253,7 @@ describe("import dialog: a valid file", () => {
     // The base revision is the page's, never the one in the file.
     expect(state.imports[0]!.base_revision).toBe(6);
     expect(state.revision).toBe(12);
-    // The open tab shows the imported data.
+    // The page's forms show the imported data.
     expect(screen.getByLabelText("Headline")).toHaveValue("Imported headline");
   });
 
@@ -277,7 +280,7 @@ describe("import dialog: a valid file", () => {
     expect(summary).toHaveTextContent("Photo: the file has oneReplaced");
   });
 
-  it("warns that unsaved changes of the open tab will be lost", async () => {
+  it("warns that the unsaved changes of a form will be lost", async () => {
     fakeSession(admin);
     fakeProfile();
     const user = await openPage();

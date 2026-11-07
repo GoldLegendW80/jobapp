@@ -12,6 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { LaterHandoffBanner } from "@/components/shared/browser/later-handoff-banner";
+import { cn } from "@/lib/utils";
 
 import type { QueueItem } from "../api/queue-api";
 import { useQueueCardActions } from "../api/use-queue-card-actions";
@@ -43,8 +44,9 @@ const CANCEL = {
 
 /**
  * One application of the review queue (SPEC-apply.md, "Frontend", `/applications`): the posting,
- * where the application stands, why it came back, the documents with their check, what is left,
- * the form before the click, and the answers to read and correct. Approve goes through the same
+ * where the application stands, why it came back, then on wide screens the documents with their
+ * check, what is left and the form before the click on one side, and the answers to read and
+ * correct on the other, then its actions, the primary first. Approve goes through the same
  * gate route and confirmation as the posting's Apply section, with the hash of the form shown
  * here; Reject asks first and can also skip the posting. A Full auto item in its hold shows the
  * countdown with Cancel (`offset`: the server's clock minus the page's), and a rehearsal asks
@@ -86,10 +88,12 @@ export function QueueCard({
   });
   const reason = reasonLine(item.reason);
   const left = leftLine(item);
+  // The answers, and a rehearsal's question about them, take the wide column beside the facts.
+  const aside = withAnswers || rehearsal;
 
   return (
     <article ref={article} aria-labelledby={titleId}>
-      <Card className="gap-4">
+      <Card className="gap-5">
         <CardHeader className="gap-1">
           <CardTitle>
             <h3
@@ -109,8 +113,8 @@ export function QueueCard({
           <CardDescription>{item.company}</CardDescription>
         </CardHeader>
 
-        <CardContent className="flex flex-col gap-3">
-          <p className="text-sm">{statusLine(item)}</p>
+        <CardContent className="@container flex flex-col gap-4">
+          <p className="text-sm">{statusLine(item, agentList)}</p>
           {item.state === "filling" && item.mode !== "manual" ? (
             <FillHandoff />
           ) : null}
@@ -144,50 +148,62 @@ export function QueueCard({
             </Alert>
           ) : null}
 
-          <QueueCardDocuments item={item} />
-
-          {left && !signingIn ? (
-            <p className="text-sm font-medium">{left}</p>
-          ) : null}
-
-          {isHeld(item) && item.hold_until ? (
-            <HeldCountdown
-              applicationId={item.id}
-              until={item.hold_until}
-              offset={offset}
-            />
-          ) : null}
-          {rehearsal ? (
-            <RehearsalQuestion
-              applicationId={item.id}
-              onLeave={act.markLeaving}
-            />
-          ) : null}
-
-          {item.shot_id ? (
-            <div className="sm:max-w-sm">
-              <ShotView
-                applicationId={item.id}
-                shotId={item.shot_id}
-                caption="The form before the click"
-              />
+          <div
+            className={cn(
+              "grid gap-6",
+              aside && "@3xl:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]",
+            )}
+          >
+            <div
+              className={cn(
+                "flex min-w-0 flex-col gap-4",
+                !aside && "max-w-sm",
+              )}
+            >
+              <QueueCardDocuments item={item} />
+              {left && !signingIn ? (
+                <p className="text-sm font-medium">{left}</p>
+              ) : null}
+              {isHeld(item) && item.hold_until ? (
+                <HeldCountdown
+                  applicationId={item.id}
+                  until={item.hold_until}
+                  offset={offset}
+                />
+              ) : null}
+              {item.shot_id ? (
+                <ShotView
+                  applicationId={item.id}
+                  shotId={item.shot_id}
+                  caption="The form before the click"
+                />
+              ) : null}
             </div>
-          ) : null}
-
-          {withAnswers ? (
-            <QueueCardAnswers
-              applicationId={item.id}
-              open={answers.open}
-              onOpenChange={answers.setOpen}
-              approval={approval}
-              loadError={approvalQuery.error}
-              onRetry={() => void approvalQuery.refetch()}
-              editable={reviewable}
-              saving={act.save.isPending}
-              onSave={act.saveOne}
-              onDirtyChange={answers.setUnsaved}
-            />
-          ) : null}
+            {aside ? (
+              <div className="flex min-w-0 flex-col gap-4">
+                {rehearsal ? (
+                  <RehearsalQuestion
+                    applicationId={item.id}
+                    onLeave={act.markLeaving}
+                  />
+                ) : null}
+                {withAnswers ? (
+                  <QueueCardAnswers
+                    applicationId={item.id}
+                    open={answers.open}
+                    onOpenChange={answers.setOpen}
+                    approval={approval}
+                    loadError={approvalQuery.error}
+                    onRetry={() => void approvalQuery.refetch()}
+                    editable={reviewable}
+                    saving={act.save.isPending}
+                    onSave={act.saveOne}
+                    onDirtyChange={answers.setUnsaved}
+                  />
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         </CardContent>
 
         <CardFooter className="flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-start">

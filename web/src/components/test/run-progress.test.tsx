@@ -481,13 +481,16 @@ describe("the run on the page", () => {
     expect(fold).toHaveAttribute("aria-expanded", "false");
     await user.click(fold);
     expect(fold).toHaveAttribute("aria-expanded", "true");
-    const steps = fold.closest("[data-slot=collapsible]") as HTMLElement;
+    const steps = screen.getByRole("list", { name: "Steps of this run" });
+    expect(fold.closest("[data-slot=accordion-item]")).toContainElement(steps);
     const [first, second] = within(steps).getAllByRole("listitem");
+    expect(within(first!).getByText("dossier.txt")).toBeVisible();
     expect(first).toHaveTextContent(
-      "dossier.txt. Reading its text. Read, 3 items, 3,760 tokens in its last attempt, about 0.0123 USD for that attempt.",
+      "Reading its text. Read, 3 items, 3,760 tokens in its last attempt, about 0.0123 USD for that attempt.",
     );
+    expect(within(second!).getByText("cv.txt")).toBeVisible();
     expect(second).toHaveTextContent(
-      "cv.txt. Reading its text. Already read in an earlier run, reused.",
+      "Reading its text. Already read in an earlier run, reused.",
     );
     expect(second).not.toHaveTextContent("USD");
   });

@@ -67,16 +67,17 @@ export function useForgetLogins(
 }
 
 /**
- * The calls of one live view, `viewer`: the one use ticket of its screen, and taking the keyboard
- * and the mouse from the assistant or giving them back, each answered with who holds them now.
+ * The calls of one live view, `viewer`, of the browser's window `slot`: the one use ticket of its
+ * screen, and taking the keyboard and the mouse from the assistant or giving them back, each
+ * answered with who holds them now.
  */
-export function useLiveView(viewer: string) {
+export function useLiveView(viewer: string, slot = 0) {
   return useMemo(
     () => ({
-      ticket: () => liveTicket(viewer),
-      takeOver: () => takeOver(viewer),
-      giveBack: () => giveBack(viewer),
+      ticket: () => liveTicket(viewer, slot),
+      takeOver: () => takeOver(viewer, slot),
+      giveBack: () => giveBack(viewer, slot),
     }),
-    [viewer],
+    [viewer, slot],
   );
 }
