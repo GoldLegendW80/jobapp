@@ -53,7 +53,7 @@ async def main() -> None:
     killed = await chromium.reap_strays()
     if killed:
         log.warning("killed %d process(es) left under a profile uid", killed)
-    display = await chromium.start_display()
+    display = await chromium.start_display(c.screen(cfg.slots))
 
     from playwright.async_api import async_playwright
 
@@ -66,15 +66,19 @@ async def main() -> None:
         browser = kind(request, lease_id, playwright, cfg)
 
         async def crashed() -> None:
-            await manager.release(lease_id, "browser_crashed")
+            if not await manager.release_browser(browser, "browser_crashed"):
+                await manager.release(lease_id, "browser_crashed")
 
         async def ended(reason: str) -> None:
-            await manager.release(lease_id, reason)
+            if not await manager.release_browser(browser, reason):
+                await manager.release(lease_id, reason)
 
         def event(item: dict) -> None:
-            lease = manager.current()
-            if lease and lease.lease_id == lease_id:
-                lease.events.append(item)
+            # The running browser's event goes to each slot it serves; another's to its lease.
+            serves = manager.held() if manager.browser is browser else [manager.get(lease_id)]
+            for lease in serves:
+                if lease is not None:
+                    lease.events.append(item)
             log.info("lease event %s", item)
 
         browser.on_crash, browser.on_end, browser.on_event = crashed, ended, event

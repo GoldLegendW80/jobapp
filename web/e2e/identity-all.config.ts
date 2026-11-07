@@ -11,13 +11,13 @@ import { defineConfig, devices } from "@playwright/test";
  *   account   rename, wrong current password, password change signs the other browser out
  *   model-access  Model access card: format error, save, subscription token, remove (the API
  *             key checks only with E2E_MODEL_STUB=1, so this run never calls Anthropic)
- *   profile   a made up profile through the CLI, every tab
- *   profile-editors  Facts, Skills and Search editors, no boards shown nor held
- *   profile-history  empty to 100% in the browser, History diff and restore, export, import
+ *   profile   a made up profile through the CLI, every section of the profile page
+ *   profile-editors  a fact part, Advanced matching and Search, no boards shown nor held
+ *   profile-history  empty to 100%, History diff and restore, export, import
  *   profile-dates  a year alone as a date: typed, saved, reloaded, made a month, exported, imported
  *   admin-agents  Admin, Agents: the website search agent, its prompt edited, saved, reverted
  *   profile-titles  the place of the profile and the job title ideas, one click each (fake stream)
- *   profile-about  the one page profile, About you edited in place, Done, Apply, Undo (fake stream)
+ *   profile-about  the profile page, About you edited in place, Done, Apply, Undo (fake stream)
  *   throttle  five wrong passwords, then 429 with a countdown (last: it locks its admin)
  *
  * Each spec deletes its own failed sign in attempts in its afterAll (stack.ts clearAttempts, which

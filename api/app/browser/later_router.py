@@ -142,8 +142,8 @@ async def _end(
     redis = await pool(store)
     try:
         view = await store.current(user_id)
-        lease = view.lease
-        if lease is None or lease.lease_id != binding["lease"]:
+        lease = view.find(binding["lease"])
+        if lease is None:
             raise HTTPException(409, "The sign in session ended. Open it again to continue.")
         if binding.get("kind") == "handoff":
             await store.client.handoff(lease.lease_id, action)

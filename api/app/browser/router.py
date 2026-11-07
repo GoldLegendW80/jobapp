@@ -51,7 +51,7 @@ from app.browser.leases import (
     lease_max_table,
 )
 from app.identity import deps
-from app.identity.models import User
+from app.identity.models import User, browsers_of
 from app.identity.schemas import ErrorOut
 
 UNAVAILABLE = "The browser is not available right now."
@@ -127,6 +127,10 @@ class LeaseOut(BaseModel):
     max_s: int
     # The application a submit lease sends: its job page shows that application's lease only.
     application_id: str | None
+    # Two browsers at once (2026-11-06): the window of the person's browser this lease uses (the
+    # live ticket, Take over and Give back name it), and the sweep's website it searches.
+    slot: int
+    source_id: str | None
 
 
 class QueueOut(BaseModel):
@@ -139,6 +143,11 @@ class BrowserOut(BaseModel):
     available: bool
     profile: ProfileOut
     lease: LeaseOut | None
+    # Every window of the person's browser now, one lease of theirs per slot, each naming what
+    # it serves (`source_id`, `application_id`); `lease` is the lowest slot's.
+    slots: list[LeaseOut]
+    # The person's own browsers at once (the admin's setting, 2026-11-07), read only here.
+    browsers: int
     holder: Literal["you", "other"] | None
     queue: list[QueueOut]
 
@@ -182,6 +191,8 @@ def _lease_out(lease: Lease, now: float) -> LeaseOut:
         active_s=int(lease.active_s(now)),
         max_s=lease.max_s,
         application_id=lease.application_id,
+        slot=lease.slot,
+        source_id=lease.source_id,
     )
 
 
@@ -216,8 +227,17 @@ async def get_browser(request: Request, user: CurrentUser, store: Store) -> Brow
         size_bytes=found.size_bytes if found else 0,
         last_used_at=found.last_used_at if found else None,
     )
+    browsers = browsers_of(user, request.app.state.settings.browser_slots)
     if view is None:
-        return BrowserOut(available=False, profile=profile, lease=None, holder=None, queue=[])
+        return BrowserOut(
+            available=False,
+            profile=profile,
+            lease=None,
+            slots=[],
+            browsers=browsers,
+            holder=None,
+            queue=[],
+        )
     now = store.clock()
     holder: Literal["you", "other"] | None = (
         "you" if view.lease is not None else "other" if view.held_by_other else None
@@ -226,6 +246,8 @@ async def get_browser(request: Request, user: CurrentUser, store: Store) -> Brow
         available=store.client.configured and await _answers(store),
         profile=profile,
         lease=_lease_out(view.lease, now) if view.lease is not None else None,
+        slots=[_lease_out(lease, now) for lease in view.leases],
+        browsers=browsers,
         holder=holder,
         queue=[_queue_out(place) for place in view.waiting],
     )

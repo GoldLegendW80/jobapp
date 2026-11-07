@@ -13,7 +13,7 @@ function InputGroup({ className, ...props }: React.ComponentProps<"div">) {
       role="group"
       className={cn(
         "group/input-group relative flex w-full items-center rounded-md border border-input shadow-xs transition-[color,box-shadow] outline-none dark:bg-input/30",
-        "h-9 min-w-0 has-[>textarea]:h-auto",
+        "h-10 min-w-0 has-[>textarea]:h-auto",
 
         // Variants based on alignment.
         "has-[>[data-align=inline-start]]:[&>input]:pl-2",
@@ -126,12 +126,15 @@ function InputGroupText({ className, ...props }: React.ComponentProps<"span">) {
   );
 }
 
-function InputGroupInput({
-  className,
-  ...props
-}: React.ComponentProps<"input">) {
+// forwardRef, as Input and Textarea: on React 18 a plain function component drops `ref`, and
+// react-hook-form (FormControl) and the chat's composer need the node.
+const InputGroupInput = React.forwardRef<
+  HTMLInputElement,
+  React.ComponentProps<"input">
+>(function InputGroupInput({ className, ...props }, ref) {
   return (
     <Input
+      ref={ref}
       data-slot="input-group-control"
       className={cn(
         "flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent",
@@ -140,14 +143,15 @@ function InputGroupInput({
       {...props}
     />
   );
-}
+});
 
-function InputGroupTextarea({
-  className,
-  ...props
-}: React.ComponentProps<"textarea">) {
+const InputGroupTextarea = React.forwardRef<
+  HTMLTextAreaElement,
+  React.ComponentProps<"textarea">
+>(function InputGroupTextarea({ className, ...props }, ref) {
   return (
     <Textarea
+      ref={ref}
       data-slot="input-group-control"
       className={cn(
         "flex-1 resize-none rounded-none border-0 bg-transparent py-3 shadow-none focus-visible:ring-0 dark:bg-transparent",
@@ -156,7 +160,7 @@ function InputGroupTextarea({
       {...props}
     />
   );
-}
+});
 
 export {
   InputGroup,

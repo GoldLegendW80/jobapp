@@ -4,7 +4,7 @@ in engine/dashboard.html) and the aggregation behind GET /api/jobs/places.
 `places.json` next to this module is a byte-for-byte copy of engine/places.json: a list of cities
 and a list of countries, each with a display name, coordinates and the aliases matched against
 the location text. It is Harald's own data (no third-party licence). The land outlines the map
-draws (Natural Earth 110m, public domain) are a frontend asset, web/src/features/jobs/map/.
+draws (Natural Earth 110m, public domain) are a frontend asset, web/src/features/jobs/lib/map/.
 
 Matching rules, identical to the engine's (a parity test runs the engine's own JavaScript on every
 real location):

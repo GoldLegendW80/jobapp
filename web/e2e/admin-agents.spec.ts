@@ -60,10 +60,7 @@ test.afterAll(async () => {
 
 async function openAgent(target: Page, shoot = false) {
   await target.goto("/admin/users");
-  await target
-    .getByRole("navigation", { name: "Admin" })
-    .getByRole("link", { name: "Agents" })
-    .click();
+  await target.getByRole("tab", { name: "Agents" }).click();
   await expect(target).toHaveURL(/\/admin\/agents$/);
   // The list is grouped by category (agents A8): the website search is in Finding jobs.
   const table = target.getByRole("table", { name: "Finding jobs, by name" });

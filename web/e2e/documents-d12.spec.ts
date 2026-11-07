@@ -175,12 +175,11 @@ test("both cards are written with one click and show a one page preview", async 
   await expect
     .poll(() => jobStatus(page.request, high), { timeout: 30_000 })
     .toBe("cv_ready");
-  await expect(page.locator("[data-status]")).toHaveAttribute(
-    "data-status",
-    "cv_ready",
-    { timeout: 30_000 },
-  );
-  await expect(page.locator("[data-status]")).toHaveText("CV ready");
+  const status = page.getByTestId("posting-badges").locator("[data-status]");
+  await expect(status).toHaveAttribute("data-status", "cv_ready", {
+    timeout: 30_000,
+  });
+  await expect(status).toHaveText("CV ready");
   keep(EVIDENCE, "cards.png", await page.screenshot({ fullPage: true }));
 });
 

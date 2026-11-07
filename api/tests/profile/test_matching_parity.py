@@ -1,5 +1,5 @@
 """The shared parity fixture (fixtures/matching_parity.json) holds what the Python matcher and regex
-checks decide on a set of strings; web/src/features/profile/matching.test.ts runs the same file
+checks decide on a set of strings; web/src/features/profile/lib/matching.test.ts runs the same file
 against the TypeScript port of the Skills "Try it" box and the client regex check. This side
 proves the fixture still says what the server does, so the browser test cannot drift from it."""
 

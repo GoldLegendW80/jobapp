@@ -142,9 +142,7 @@ test("Account starts a signed-in profile review, selected Replace and a user edi
     const part = run.sections[0]!;
     const name = part.fields.find((field) => field.label === "Full name")!;
     const edited = String(name.value).toUpperCase();
-    const card = page.locator(
-      `[aria-labelledby="profile-section-${part.section}"]`,
-    );
+    const card = page.getByRole("region", { name: part.label, exact: true });
     await card
       .getByRole("textbox", { name: "Edit Full name", exact: true })
       .fill(edited);
@@ -201,9 +199,10 @@ test("Account starts a signed-in profile review, selected Replace and a user edi
       { headers: CSRF, data: { values_hash: part.values_hash } },
     );
     expect(again.status()).toBe(409);
-    const second = page.locator(
-      `[aria-labelledby="profile-section-${run.sections[1]!.section}"]`,
-    );
+    const second = page.getByRole("region", {
+      name: run.sections[1]!.label,
+      exact: true,
+    });
     await second
       .getByRole("button", { name: "Skip section", exact: true })
       .click();
@@ -324,7 +323,10 @@ test("Workday-style pages reopen for Save readback and LinkedIn needs the person
       "experience",
       "education",
     ]);
-    const card = page.locator('[aria-labelledby="profile-section-experience"]');
+    const card = page.getByRole("region", {
+      name: current.sections[0]!.label,
+      exact: true,
+    });
     await card
       .getByRole("button", { name: "Approve section", exact: true })
       .click();

@@ -11,7 +11,7 @@ from pydantic import ValidationError
 from app.apply import signin
 from app.apply.models import Mode, State
 from app.browser.later_router import Reference, router
-from app.browser.leases import Lease
+from app.browser.leases import Lease, View
 from app.browser.router import get_leases
 from app.identity import deps
 from tests.apply.conftest import AT
@@ -41,7 +41,7 @@ class Store:
 
     async def current(self, user):
         lease = self.lease if self.lease and self.lease.user_id == user else None
-        return SimpleNamespace(lease=lease)
+        return View(lease=lease, held_by_other=False, waiting=())
 
     async def acquire(self, user, purpose, automation, *, address):
         self.opened.append((user, purpose, automation, address))
@@ -106,6 +106,46 @@ def test_later_done_ends_the_person_session_and_queues_exactly_one_review_fill(l
     assert application(db, later.ref).mode is Mode.review
     assert len(later.queued) == 1
     assert later.queued[0][0:2] == ("apply_fill", str(later.ref))
+
+
+def _asked(db, ref, kind: str, state: State = State.needs_person) -> None:
+    """The apply agent's question with nobody watching (A19): the run ended, the item waits."""
+    from app.apply import applier
+
+    item = application(db, ref)
+    item.state, item.mode = state, Mode.direct
+    item.needs = applier.QUESTION if state is State.needs_person else None
+    item.submitted_at = AT if state is State.submit_unknown else None
+    label = {"action": "Verification code", "fact": "Years of Rust"}[kind]
+    applier._ask(db, item, {"label": label, "kind": kind, "host": "jobs.example.org"})
+    db.commit()
+
+
+@pytest.mark.parametrize("state", [State.needs_person, State.submit_unknown])
+def test_an_action_the_agent_asked_for_opens_the_site_s_own_session(later, db, person_a, state):
+    """A code, a check or a password the apply agent asked for is the person's on the site
+    (SPEC-apply, "the site's own session for an action"), also after a control that may have
+    sent the form; their own "I did it, go on" still answers the question."""
+    _asked(db, later.ref, "action", state)
+    assert later.client.post("/api/browser/handoff/later", json=later.body).status_code == 201
+    assert later.store.opened == [
+        (str(person_a.user_id), "signin", False, application(db, later.ref).form_url)
+    ]
+    done = later.client.post("/api/browser/handoff/later/done", json=later.body)
+    assert done.status_code == 204
+    assert later.store.released == [(str(person_a.user_id), "later-lease", "signed_in")]
+    db.expire_all()
+    assert application(db, later.ref).state is state  # waits for the person's answer
+    assert later.queued == []
+
+
+def test_a_fact_question_or_another_person_opens_no_session(later, db, person_b):
+    _asked(db, later.ref, "fact")
+    assert later.client.post("/api/browser/handoff/later", json=later.body).status_code == 404
+    _asked(db, later.ref, "action")
+    later.app.dependency_overrides[deps.current_user] = lambda: SimpleNamespace(id=person_b.user_id)
+    assert later.client.post("/api/browser/handoff/later", json=later.body).status_code == 404
+    assert later.store.opened == []
 
 
 def test_cancel_keeps_the_application_waiting(later, db):

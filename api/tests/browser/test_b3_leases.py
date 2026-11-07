@@ -574,23 +574,31 @@ def test_a_submit_lease_names_the_application_of_the_call_that_started_it(world:
     async def go() -> None:
         store = world.store
         assert (await store.acquire(B, "takeover", False)).lease is not None
-        # A's two approvals wait behind B: one place in the queue, whichever job asks.
-        assert (await store.acquire(A, "apply_submit", True, application_id=x)).waiting
+        # A's two approvals wait behind B, each in a place of its own (two browsers at once,
+        # 2026-11-06: an application's lease is its own, never another job's).
+        first = await store.acquire(A, "apply_submit", True, application_id=x)
+        second = await store.acquire(A, "apply_submit", True, application_id=y)
+        assert first.waiting is not None
+        assert second.waiting is not None
+        assert (first.waiting.position, second.waiting.position) == (1, 2)
         assert await store.release(B)
-        started = await store.acquire(A, "apply_submit", True, application_id=y)
+        assert (await store.acquire(A, "apply_submit", True, application_id=y)).waiting
+        started = await store.acquire(A, "apply_submit", True, application_id=x)
         assert started.lease is not None
         assert started.token is not None
-        assert started.lease.application_id == y
-        # Another job finds it held: that lease, no token, and the name stays the starter's.
+        assert started.lease.application_id == x
+        # Its own job again finds it held: that lease, no token.
         again = await store.acquire(A, "apply_submit", True, application_id=x)
         assert again.lease is not None
-        assert (again.lease.application_id, again.token) == (y, None)
+        assert (again.lease.lease_id, again.token) == (started.lease.lease_id, None)
+        # The other application waits while browserd has one slot.
+        assert (await store.acquire(A, "apply_submit", True, application_id=y)).waiting
         mine = (await store.current(A)).lease
         assert mine is not None
-        assert mine.application_id == y
+        assert mine.application_id == x
         theirs = await store.current(B)
         assert (theirs.lease, theirs.held_by_other) == (None, True)
-        assert y not in repr(theirs)
+        assert x not in repr(theirs)
         await world.flush()  # Redis lost its keys: browserd's lease comes back without a name
         back = (await store.current(A)).lease
         assert back is not None
@@ -887,7 +895,7 @@ def test_the_client_sends_the_secret_and_reads_end_and_current() -> None:
     with pytest.raises(BrowserError):
         asyncio.run(answering(500).end(A))
     odd = asyncio.run(answering(200, b'{"lease": 3, "last_end": "x"}').current())
-    assert odd == {"lease": None, "last_end": None}
+    assert odd == {"lease": None, "leases": [], "slots": 1, "last_end": None}
     with pytest.raises(ValueError, match="nope"):
         BrowserError("nope")
     started = asyncio.run(answering(201, b'{"lease_id": "l", "lease_token": "t0k"}').start(**START))

@@ -33,6 +33,10 @@ CONTROL_PORT = 9300
 PROXY_PORT = 3128
 DISPLAY = ":1"
 SCREEN = "1440x900x24"
+# Two browsers at once (owner, 2026-11-06): BROWSER_SLOTS windows of one person's Chromium, side
+# by side on one display as wide as the slots, each slot's live view clipped to its own region.
+SLOT_W, SLOT_H = 1440, 900
+SLOTS_MAX = 2  # the owner chose two (2026-11-06); a third does not fit the 2048m container
 PROFILES = "/profiles"
 # browserd's record of which profile each uid belongs to (chromium.bind_uid), root's, 0700.
 UIDS = "/profiles/.uids"
@@ -47,6 +51,16 @@ CDP_ANSWER_S = 10  # no CDP answer in 10 s: the lease ends `browser_crashed`
 START_S = 30  # Chromium up to a usable CDP (B1: 0.44 to 0.85 s, 20 s and more on a stale lock)
 CLOSE_S = 5  # Browser.close to exit (B1: 0.32 s), then the process group is killed
 NAVIGATION_S = 30  # the tools' default navigation timeout, a failure result past it
+
+
+def screen(slots: int) -> str:
+    """Xvfb's screen for that many slots: one 1440 by 900 region per slot, left to right."""
+    return f"{SLOT_W * slots}x{SLOT_H}x24"
+
+
+def clip(slot: int) -> str:
+    """x11vnc's -clip of a slot's region of the display."""
+    return f"{SLOT_W}x{SLOT_H}+{SLOT_W * slot}+0"
 
 
 def _int(name: str, default: int, low: int, high: int) -> int:
@@ -81,6 +95,8 @@ class Config:
     # refused at start under APP_ENV=production (review of PR #294, issue #230).
     proxy_allow: frozenset[str] = frozenset()
     linkedin_stub_base_url: str = ""  # exact test origin and /linkedin prefix, never production
+    # One browser unless BROWSER_SLOTS says more (compose.yml sets 2): the tests' default.
+    slots: int = 1
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -100,4 +116,5 @@ class Config:
             mem_guard_pct=_int("BROWSER_MEM_GUARD_PCT", 90, 10, 99),
             proxy_allow=names,
             linkedin_stub_base_url=linkedin_stub,
+            slots=_int("BROWSER_SLOTS", 2, 1, SLOTS_MAX),
         )

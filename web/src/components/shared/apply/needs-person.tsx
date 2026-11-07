@@ -1,0 +1,148 @@
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import type { JobDetail } from "@/features/jobs/api/jobs-api";
+import { useCloseJob } from "@/features/jobs/api/use-close-job";
+import { describeError } from "@/lib/api";
+import { LaterHandoffBanner } from "@/components/shared/browser/later-handoff-banner";
+
+import { AgentQuestion } from "./agent-question";
+import type {
+  Application,
+  ApplicationEvent,
+  Question,
+} from "@/features/apply/api/apply-api";
+import { LiveViewSlot } from "./live-view-slot";
+import { useNeedsCount } from "@/features/apply/api/use-queue";
+import {
+  needOf,
+  ON_PAGE,
+  waitOf,
+} from "@/features/apply/helpers/needs-person-state";
+
+/**
+ * "Needs you" (SPEC-apply.md, "Failures and retries"; apply A10a): what an application waits for
+ * the person for, on the job page, with the live view for a step on the page; the proposal to
+ * mark a closed posting closed; and the app shell's dot, the count of the person's applications
+ * that need them. No dashes as separators.
+ */
+
+/** On the job page: what the application needs from the person, or the closed posting's proposal. */
+export function NeedsPerson({
+  application,
+  job,
+  events,
+  question,
+}: {
+  application: Application | null;
+  job: JobDetail;
+  // The application's events; undefined while they load.
+  events?: readonly ApplicationEvent[];
+  // One click Apply's open question (A19); undefined while it loads.
+  question?: Question | null;
+}) {
+  if (application?.state === "posting_closed") {
+    return <ClosedProposal job={job} />;
+  }
+  if (application?.state !== "needs_person") return null;
+  const need = needOf(application);
+  return (
+    <div className="flex flex-col gap-3" data-testid="needs-person">
+      <Alert>
+        <AlertTitle>{need.title}</AlertTitle>
+        <AlertDescription>{need.what}</AlertDescription>
+      </Alert>
+      {application.needs === "signin" ? (
+        <LaterHandoffBanner
+          module="application"
+          refId={application.id}
+          address={application.form_url}
+          heading={false}
+        />
+      ) : null}
+      {ON_PAGE.has(application.needs ?? "") ? (
+        <OnPageSlot application={application} events={events} />
+      ) : null}
+      {application.needs === "agent_question" && question ? (
+        <AgentQuestion application={application} question={question} />
+      ) : null}
+    </div>
+  );
+}
+
+const WAITS =
+  "The assistant waits for you. Complete this step in the live view.";
+
+/** The live view while the run waits for the person on the page, and words once it stopped. */
+function OnPageSlot({
+  application,
+  events,
+}: {
+  application: Application;
+  events?: readonly ApplicationEvent[];
+}) {
+  if (events === undefined) {
+    return <LiveViewSlot idle={WAITS} leaseOf="none" />;
+  }
+  const wait = waitOf(events);
+  if (wait === null || wait.over) {
+    return (
+      <LiveViewSlot
+        idle="The assistant stopped waiting, so there is no live view. The application waits here for you."
+        leaseOf="none"
+        stopped
+      />
+    );
+  }
+  return (
+    <LiveViewSlot
+      idle={WAITS}
+      leaseOf={{ application: application.id }}
+      status={WAITS}
+    />
+  );
+}
+
+function ClosedProposal({ job }: { job: JobDetail }) {
+  const close = useCloseJob(job);
+  if (job.status === "closed") return null;
+  return (
+    <Alert>
+      <AlertTitle>This posting no longer takes applications</AlertTitle>
+      <AlertDescription className="flex flex-col gap-2">
+        <span>Move it to Closed so it leaves your list of open postings?</span>
+        <Button
+          className="w-full sm:w-fit"
+          variant="outline"
+          disabled={close.isPending}
+          onClick={() => {
+            close.mutate();
+          }}
+        >
+          Mark it closed
+        </Button>
+        {close.isError ? (
+          <span role="alert">{describeError(close.error)}</span>
+        ) : null}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+/** The app shell's dot: shown while at least one of the person's applications needs them. */
+export function NeedsYouDot() {
+  const query = useNeedsCount();
+  const count = query.data ?? 0;
+  if (count <= 0) return null;
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        data-testid="needs-you-dot"
+        className="ml-1 inline-block size-2 rounded-full bg-destructive"
+      />
+      <span className="sr-only">
+        , {count} {count === 1 ? "needs" : "need"} you
+      </span>
+    </>
+  );
+}

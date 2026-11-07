@@ -1,6 +1,7 @@
 """The apply run (SPEC-apply, "The flow of one application", steps 2 and 3): the job
 `apply_fill(application_id)` of the `jobapp:apply` queue fills one application's form and stops
-before any decision. One job at a time (the queue's concurrency is 1, the browser is one).
+before any decision. One job per slot of the person's browser (the queue's concurrency is
+BROWSER_SLOTS, two browsers at once, owner 2026-11-06), each on a lease naming its application.
 
 `fill` goes in this order, and each step that refuses ends the job before anything later is spent:
 
@@ -116,6 +117,7 @@ from app.documents.models import (
     PanelStatus,
     Scope,
 )
+from app.identity.models import User
 from app.jobs import service as jobs_service
 from app.jobs import sweep
 from app.jobs.models import Job, JobStatus
@@ -1731,6 +1733,7 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
             True,
             hosts=_hosts(adapter, plan.form_url),
             submit_selectors=SUBMIT_SELECTORS,
+            application_id=str(application_id),
         )
     except (BrowserError, StoreUnavailableError) as exc:
         code = exc.code if isinstance(exc, BrowserError) else "store_unavailable"
@@ -1833,14 +1836,19 @@ async def fill(services: Services, application_id: uuid.UUID) -> str:
 
 
 def due(
-    db: Session, now: datetime | None = None, delays: Sequence[int] | None = None
+    db: Session,
+    now: datetime | None = None,
+    delays: Sequence[int] | None = None,
+    slots: int = 1,
 ) -> list[uuid.UUID]:
-    """The applications a fill should be asked for: `queued`, not Apply myself, at most one per
-    person, and none for a person whose fill runs (`filling`), so one person's backlog never
-    keeps another's out of the one-at-a-time queue: each tick queues the next of every person
-    in turn. A person's next is their oldest application ready to fill; those waiting for their
-    documents come after, the one asked longest ago first (each ask touches `updated_at`), so a
-    document finished for a later one is not stuck behind an earlier one still being written.
+    """The applications a fill should be asked for: `queued`, not Apply myself, at most `slots`
+    per person (BROWSER_SLOTS, two browsers at once), or the person's own browsers at once when
+    an admin set fewer (2026-11-07), less the person's fills that run (`filling`), so one
+    person's backlog never keeps another's out of the queue: each tick queues the next of every
+    person in turn. A person's next is their oldest application ready
+    to fill; those waiting for their documents come after, the one asked longest ago first (each
+    ask touches `updated_at`), so a document finished for a later one is not stuck behind an
+    earlier one still being written.
     Oldest person's turn first, the limit after the ranking. A retry (A10a) is asked for once its
     time came by `now` (None: the database's clock), and meanwhile the person's next goes."""
     waits = sa.case((Application.needs.like("documents:%"), 1), else_=0)
@@ -1852,13 +1860,25 @@ def due(
             Application.id,
         ),
     )
-    filling = sa.select(Application.user_id).where(Application.state == State.filling)
+    filling = (
+        sa.select(Application.user_id, sa.func.count().label("fills"))
+        .where(Application.state == State.filling)
+        .group_by(Application.user_id)
+        .subquery()
+    )
     ranked = (
-        sa.select(Application.id, Application.created_at, rank.label("rank"))
+        sa.select(
+            Application.id,
+            Application.created_at,
+            rank.label("rank"),
+            sa.func.coalesce(filling.c.fills, 0).label("fills"),
+            sa.func.least(sa.func.coalesce(User.browsers_at_once, slots), slots).label("slots"),
+        )
+        .outerjoin(filling, filling.c.user_id == Application.user_id)
+        .join(User, User.id == Application.user_id)
         .where(
             Application.state == State.queued,
             Application.mode != Mode.manual,
-            Application.user_id.not_in(filling),
             ~failures.retry_waiting(now, failures.retry_delays() if delays is None else delays),
         )
         .subquery()
@@ -1866,7 +1886,7 @@ def due(
     return list(
         db.execute(
             sa.select(ranked.c.id)
-            .where(ranked.c.rank == 1)
+            .where(ranked.c.rank + ranked.c.fills <= ranked.c.slots)
             .order_by(ranked.c.created_at, ranked.c.id)
             .limit(DUE_LIMIT)
         ).scalars()

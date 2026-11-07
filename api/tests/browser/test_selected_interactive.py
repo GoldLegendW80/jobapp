@@ -147,6 +147,7 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
     )
     [entry] = entries
     assert entry["source_id"] == sweep._source_id("llm_browser", BASE)
+    assert leases.sources == [entry["source_id"]]  # its lease names the website it searches
     assert entry["mode"] == "llm_browser"
     assert (entry["found"], entry["postings"], entry["error"], entry["outcome"]) == (
         1,

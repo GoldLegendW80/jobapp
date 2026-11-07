@@ -124,7 +124,7 @@ def test_the_tick_writes_ended_manual_sessions_before_it_queues(
         assert (fill, ids) == (given, ended)
         return len(ids)
 
-    def due(db, *args):
+    def due(db, *args, **kwargs):
         order.append("due")
         return []
 

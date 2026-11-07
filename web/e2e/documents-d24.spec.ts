@@ -22,7 +22,7 @@ import { clearAttempts, newContext, root, watchErrors } from "./stack";
  * an invented profile and a made up model credential (the stack's Anthropic stub accepts it),
  * the worker on the fake model backend and the real parser and renderer. An invented CV, a PDF
  * written by ./ingestion-pdf.ts from api/tests/documents/fixtures/upload_morgan.txt, is dropped
- * on the upload panel of the CV tab and goes through ingestion's upload; once its text is read
+ * on Upload your CV of the profile page and goes through ingestion's upload; once its text is read
  * the consent is asked, then the conversion runs on the default recorded stream
  * `documents_base_upload_valid` (the page names no script; the api test
  * test_the_journeys_person_converts_the_journeys_cv_on_the_default_stream plays the same stream
@@ -94,7 +94,7 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("an invented CV dropped on the CV tab is read, then the consent is asked", async () => {
+test("an invented CV dropped on the profile page is read, then the consent is asked", async () => {
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
@@ -102,12 +102,11 @@ test("an invented CV dropped on the CV tab is read, then the consent is asked", 
   });
   expect(saved.status()).toBe(200);
 
-  await page.goto("/profile?tab=identity");
-  await page.getByRole("tab", { name: "CV" }).click();
-  await expect(page).toHaveURL(/\/profile\/cv$/);
+  await page.goto("/profile#your-cv");
   const panel = page.getByTestId("upload-panel");
+  // The section around the panel names it.
   await expect(
-    panel.getByRole("heading", { name: "Upload your CV" }),
+    page.getByRole("heading", { level: 2, name: "Upload your CV" }),
   ).toBeVisible();
 
   // Dropped as ingestion-g1.spec.ts drops a file: the events a browser fires for a drag.

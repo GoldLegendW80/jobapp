@@ -1,69 +1,148 @@
 @import "tailwindcss";
 @import "tw-animate-css";
+@import "@fontsource-variable/instrument-sans";
+/* Storybook runs Vite from another root, where automatic detection misses this folder. */
+@source "./";
 
-/* Dark mode follows the operating system: the `dark:` variant is the media query. */
-@custom-variant dark (@media (prefers-color-scheme: dark));
-
-:root {
-  color-scheme: light;
-  --radius: 0.625rem;
-  --background: oklch(0.985 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --success: oklch(0.527 0.154 150.069);
-  --success-foreground: oklch(0.985 0 0);
-  --warning: oklch(0.555 0.163 48.998);
-  --warning-muted: oklch(0.987 0.022 95.277);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --background: oklch(0.141 0.005 285.823);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.21 0.006 285.885);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.21 0.006 285.885);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.92 0.004 286.32);
-    --primary-foreground: oklch(0.21 0.006 285.885);
-    --secondary: oklch(0.274 0.006 286.033);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.274 0.006 286.033);
-    --muted-foreground: oklch(0.705 0.015 286.067);
-    --accent: oklch(0.274 0.006 286.033);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 10%);
-    --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.552 0.016 285.938);
-    --success: oklch(0.723 0.219 149.579);
-    --success-foreground: oklch(0.141 0.005 285.823);
-    --warning: oklch(0.828 0.189 84.429);
-    --warning-muted: oklch(0.279 0.077 45.635 / 45%);
+/*
+ * The jobapp design system: tokens below, documented in Storybook (pnpm storybook, Foundations).
+ * A calm grey canvas, white cards, near-black for the action, one orange for what matters.
+ * Dark mode follows the operating system unless <html data-theme> pins a theme (Storybook's toolbar).
+ */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(
+      :root:not([data-theme="light"]),
+      :root:not([data-theme="light"]) *
+    ) {
+      @slot;
+    }
   }
 }
 
+/* data-preview="hover focus active" pins a state, so Storybook shows states side by side. */
+@custom-variant hover {
+  @media (hover: hover) {
+    &:hover {
+      @slot;
+    }
+  }
+  &[data-preview~="hover"] {
+    @slot;
+  }
+}
+@custom-variant focus-visible (&:focus-visible, &[data-preview~="focus"]);
+@custom-variant active (&:active, &[data-preview~="active"]);
+
+:root {
+  color-scheme: light;
+  --radius: 1rem;
+
+  /* Canvas and cards */
+  --background: oklch(0.965 0 0);
+  --foreground: oklch(0.22 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0 0);
+
+  /* Near-black is the action: the primary button, the active tab */
+  --primary: oklch(0.22 0 0);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.945 0 0);
+  --secondary-foreground: oklch(0.22 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.5 0 0);
+  --accent: oklch(0.95 0 0);
+  --accent-foreground: oklch(0.22 0 0);
+  --border: oklch(0.925 0 0);
+  --input: oklch(0.66 0 0);
+
+  /* Orange, spent on what matters: the featured figure, charts, progress, counts that wait */
+  --brand: oklch(0.585 0.19 35);
+  --brand-foreground: oklch(1 0 0);
+  /* Neutral, so a focused field never reads as an invalid (red) one */
+  --ring: oklch(0.45 0 0);
+
+  /* Meaning: each reads at 4.5:1 as text on the canvas, on a card, and on its own 10% tint over either */
+  --destructive: oklch(0.52 0.2 25);
+  --destructive-foreground: oklch(1 0 0);
+  --success: oklch(0.49 0.13 152);
+  --success-foreground: oklch(1 0 0);
+  --warning: oklch(0.5 0.12 65);
+  --warning-foreground: oklch(1 0 0);
+  --warning-muted: oklch(0.97 0.035 85);
+  --info: oklch(0.5 0.14 255);
+  --info-foreground: oklch(1 0 0);
+
+  /* A soft orange mark: matched skills, cited quotes, selected text, a CV that is ready */
+  --highlight: oklch(0.93 0.05 45);
+  --highlight-foreground: oklch(0.22 0 0);
+
+  --shadow-ink: oklch(0 0 0 / 0.08);
+}
+
+:root {
+  @variant dark {
+    color-scheme: dark;
+    --background: oklch(0.17 0 0);
+    --foreground: oklch(0.96 0 0);
+    --card: oklch(0.215 0 0);
+    --card-foreground: oklch(0.96 0 0);
+    --popover: oklch(0.24 0 0);
+    --popover-foreground: oklch(0.96 0 0);
+    --primary: oklch(0.96 0 0);
+    --primary-foreground: oklch(0.17 0 0);
+    --secondary: oklch(0.27 0 0);
+    --secondary-foreground: oklch(0.96 0 0);
+    --muted: oklch(0.25 0 0);
+    --muted-foreground: oklch(0.72 0 0);
+    --accent: oklch(0.28 0 0);
+    --accent-foreground: oklch(0.96 0 0);
+    --border: oklch(0.29 0 0);
+    --input: oklch(0.5 0 0);
+    --brand: oklch(0.7 0.18 40);
+    --brand-foreground: oklch(0.17 0 0);
+    --ring: oklch(0.72 0 0);
+    --destructive: oklch(0.7 0.18 25);
+    --destructive-foreground: oklch(0.17 0 0);
+    --success: oklch(0.75 0.15 152);
+    --success-foreground: oklch(0.17 0 0);
+    --warning: oklch(0.82 0.14 80);
+    --warning-foreground: oklch(0.17 0 0);
+    --warning-muted: oklch(0.32 0.06 70 / 50%);
+    --info: oklch(0.75 0.12 255);
+    --info-foreground: oklch(0.17 0 0);
+    --highlight: oklch(0.36 0.08 45);
+    --highlight-foreground: oklch(0.96 0 0);
+    --shadow-ink: oklch(0 0 0 / 0.5);
+  }
+}
+
+@theme {
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+
+  /* Depth: cards are white on the grey canvas, without border or shadow; only what floats casts one. */
+  --shadow-xs: 0 0 #0000;
+  --shadow-sm: 0 1px 2px var(--shadow-ink);
+  --shadow-md: 0 6px 16px -4px var(--shadow-ink), 0 1px 2px var(--shadow-ink);
+  --shadow-lg: 0 20px 48px -12px var(--shadow-ink), 0 2px 6px var(--shadow-ink);
+
+  /* Motion: feedback under 150 ms, overlays under 250 ms, one strong ease-out. */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --default-transition-duration: 120ms;
+  --default-transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 8px);
+  --radius-md: calc(var(--radius) - 4px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -79,13 +158,21 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-warning-muted: var(--warning-muted);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-highlight: var(--highlight);
+  --color-highlight-foreground: var(--highlight-foreground);
 }
 
 @layer base {
@@ -93,7 +180,25 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background font-sans text-foreground antialiased;
+  }
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+  ::selection {
+    background-color: var(--highlight);
+    color: var(--highlight-foreground);
+  }
+  /* A soft mark that wraps line by line. */
+  mark {
+    background-color: var(--highlight);
+    color: var(--highlight-foreground);
+    border-radius: 0.3em;
+    padding-inline: 0.15em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
   }
 }
 
@@ -113,4 +218,47 @@
   .delayed-appear {
     animation-duration: 1ms;
   }
+}
+
+/* Work in progress (a run step, a file uploading): the text breathes. A pulse of opacity, never
+   gradient text; still under reduced motion. */
+@keyframes shimmer {
+  50% {
+    opacity: 0.5;
+  }
+}
+@utility shimmer {
+  animation: shimmer 1.6s ease-in-out infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+@utility shimmer-none {
+  animation: none;
+}
+
+/* A scroller's edge fades where more content waits (the chat's bottom, a strip's sides). */
+@utility scroll-fade-b {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5rem), transparent);
+}
+@utility scroll-fade-x {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 1rem,
+    #000 calc(100% - 1rem),
+    transparent
+  );
+}
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+}
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+@utility scrollbar-gutter-stable {
+  scrollbar-gutter: stable;
 }

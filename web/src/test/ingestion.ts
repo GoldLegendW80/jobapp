@@ -10,8 +10,8 @@ import { http, HttpResponse } from "msw";
 import type {
   IngestionDocument,
   Limits,
-} from "@/features/ingestion/documents-api";
-import type { Prompt } from "@/features/ingestion/prompt-api";
+} from "@/features/ingestion/api/documents-api";
+import type { Prompt } from "@/features/ingestion/api/prompt-api";
 
 import { server } from "./server";
 

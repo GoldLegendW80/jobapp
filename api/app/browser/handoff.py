@@ -32,7 +32,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from app.browser.client import BrowserError, ended_of
+from app.browser.client import BrowserError, ended_of, held_in
 from app.browser.leases import HOST_MAX, MAX_GRACE_S, StoreUnavailableError
 from app.browser.tools import LeaseTools
 
@@ -125,8 +125,8 @@ async def _left_now(tools: LeaseTools) -> int | None:
         found = await tools.client.current()
     except BrowserError:
         return None
-    lease = found.get("lease")
-    if not isinstance(lease, dict) or lease.get("lease_id") != tools.lease_id:
+    lease = held_in(found, tools.lease_id)
+    if lease is None:
         return None
     return _seconds(lease.get("wait_left_s"))
 
@@ -147,8 +147,8 @@ async def _poll(
         except BrowserError:
             found = None  # browserd restarting: asked again, within the deadline
         if found is not None:
-            lease = found["lease"]
-            if lease is None or lease.get("lease_id") != lease_id:
+            lease = held_in(found, lease_id)
+            if lease is None:
                 last = found["last_end"]
                 mine = last is not None and last.get("lease_id") == lease_id
                 reason = ended_of(last).reason if mine else "ended"

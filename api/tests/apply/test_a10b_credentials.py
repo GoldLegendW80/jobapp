@@ -41,6 +41,7 @@ from app.apply.models import (
 )
 from app.browser.handoff import Outcome
 from app.browser.later_router import router as later_router
+from app.browser.leases import View
 from app.browser.router import get_leases
 from app.identity import deps
 from tests.apply.a4_support import FakeForm, Spec
@@ -770,8 +771,8 @@ class Bound:
     async def delete(self, key: str) -> None:
         self.redis.delete(key)
 
-    async def current(self, user: str) -> SimpleNamespace:
-        return SimpleNamespace(lease=self.lease)
+    async def current(self, user: str) -> View:
+        return View(lease=self.lease, held_by_other=False, waiting=())
 
     async def _handoff(self, lease_id: str, action: str) -> dict[str, Any]:
         return {"restarted": action == "done"}

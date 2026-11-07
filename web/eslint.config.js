@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+
 import js from "@eslint/js";
 import reactHooks from "eslint-plugin-react-hooks";
 import reactRefresh from "eslint-plugin-react-refresh";
@@ -43,10 +45,191 @@ const SHADCN_ONLY = [
       ":matches(Literal[value=/\\banimate-pulse\\b/], TemplateElement[value.raw=/\\banimate-pulse\\b/])",
     message: "Use Skeleton from @/components/ui for a placeholder that pulses.",
   },
+  {
+    selector:
+      "JSXAttribute[name.name='type'][value.value=/^(date|datetime-local|month|week)$/]",
+    message:
+      "Use Calendar in a Popover from @/components/ui to pick a date: the same on every browser.",
+  },
+  {
+    // The look of a pressed state chosen by hand; a pressed Button whose look stays (a pin on
+    // the map, a template's thumbnail) is not this.
+    selector:
+      "JSXOpeningElement[name.name='Button']:has(> JSXAttribute[name.name='aria-pressed']) > JSXAttribute[name.name='variant'] > JSXExpressionContainer > ConditionalExpression",
+    message:
+      "A Button pressed by hand is a Toggle, or a ToggleGroup for a set of choices: use them from @/components/ui.",
+  },
+  {
+    selector:
+      ":matches(AssignmentExpression[left.property.name='scrollTop'][right.property.name='scrollHeight'], ImportDeclaration[source.value=/stick-to-bottom/], JSXAttribute[name.name='role'][value.value='log'])",
+    message:
+      "A conversation or a log that follows its newest line is MessageScroller (autoScroll): use it from @/components/ui.",
+  },
+  {
+    selector:
+      ":matches(Literal[value=/\\brounded-b[lr]-sm\\b/], TemplateElement[value.raw=/\\brounded-b[lr]-sm\\b/])",
+    message:
+      "A message with a tail is Bubble, in a Message: use them from @/components/ui.",
+  },
+  {
+    selector:
+      "JSXOpeningElement[name.name='SheetContent'] > JSXAttribute[name.name='side'][value.value='bottom']",
+    message:
+      "A panel that rises from the bottom is Drawer (it is dragged down to close): use it from @/components/ui.",
+  },
+  {
+    // Padding on one side of a field makes room for something drawn over it.
+    selector:
+      "JSXOpeningElement[name.name=/^(Input|Textarea)$/] > JSXAttribute[name.name='className'][value.value=/(^|\\s)p[lrse]-/]",
+    message:
+      "A button or an icon in a field is an InputGroupAddon of an InputGroup: use them from @/components/ui.",
+  },
+  {
+    selector:
+      "JSXAttribute[name.name='style'] Property[key.name=/^(width|height)$/] > TemplateLiteral > TemplateElement[tail=true][value.raw=/^%/]",
+    message:
+      "A bar measured in percent is Progress, or a Chart for several of them: use them from @/components/ui.",
+  },
+];
+
+/**
+ * The layers of web/ARCHITECTURE.md, as import bans per folder. ESLint keeps one
+ * no-restricted-imports per file (a later block replaces an earlier one), so each folder gets all
+ * its bans in one block. Tests and stories may reach any layer to build fixtures.
+ */
+const FEATURES = readdirSync(new URL("./src/features", import.meta.url));
+const NOT_APP = ["@/app/**", "@/design-system/**"];
+// All fetching lives in a feature's api/ folder: no other folder fetches or touches the cache.
+const FETCHING = {
+  name: "@tanstack/react-query",
+  importNames: [
+    "useQuery",
+    "useQueries",
+    "useInfiniteQuery",
+    "useSuspenseQuery",
+    "useMutation",
+    "useQueryClient",
+  ],
+  message:
+    "Data is fetched in a feature's api/ folder: call a hook from there (web/ARCHITECTURE.md).",
+};
+const banned = ({ files, groups, fetching = true }) => ({
+  files,
+  ignores: ["src/**/*.test.{ts,tsx}", "src/**/*.stories.tsx"],
+  rules: {
+    "no-restricted-imports": [
+      "error",
+      {
+        paths: fetching ? [FETCHING] : [],
+        patterns: groups.map(([group, message]) => ({ group, message })),
+      },
+    ],
+  },
+});
+const LAYERS = [
+  banned({
+    files: ["src/lib/**", "src/hooks/**"],
+    groups: [
+      [
+        ["@/components/**", "@/features/**", ...NOT_APP],
+        "lib/ and hooks/ are the bottom layer: they import no component, feature or app file.",
+      ],
+    ],
+  }),
+  banned({
+    files: ["src/components/ui/**", "src/components/blocks/**"],
+    groups: [
+      [
+        ["@/components/shared/**", "@/features/**", ...NOT_APP],
+        "A generic component knows no feature: pass what it needs as props.",
+      ],
+    ],
+  }),
+  banned({
+    files: ["src/features/*/api/**"],
+    fetching: false,
+    groups: [
+      [
+        [
+          "@/components/**",
+          "@/features/*/components/**",
+          "@/features/*/pages/**",
+          ...NOT_APP,
+        ],
+        "api/ holds requests and the hooks that fetch: it renders nothing, so it imports no component or page.",
+      ],
+    ],
+  }),
+  banned({
+    files: ["src/features/*/helpers/**", "src/features/*/hooks/**"],
+    groups: [
+      [
+        [
+          "@/components/**",
+          "@/features/*/components/**",
+          "@/features/*/pages/**",
+          ...NOT_APP,
+        ],
+        "api/, helpers/ and hooks/ hold data and logic: they render nothing, so they import no component or page.",
+      ],
+    ],
+  }),
+  banned({
+    files: ["src/components/shared/**"],
+    groups: [
+      [
+        ["@/features/*/components/**", "@/features/*/pages/**", ...NOT_APP],
+        "A shared component serves several pages: it imports no page and no component of a single page.",
+      ],
+    ],
+  }),
+  ...FEATURES.flatMap((feature) => [
+    banned({
+      files: [`src/features/${feature}/components/**`],
+      groups: [
+        [
+          [
+            "@/features/*/components/**",
+            `!@/features/${feature}/components/**`,
+          ],
+          "A component of one page lives in that page's feature. Used by two pages or more, it belongs in components/shared/.",
+        ],
+        [
+          ["@/features/*/pages/**", ...NOT_APP],
+          "A component imports no page and no app file.",
+        ],
+      ],
+    }),
+    banned({
+      files: [`src/features/${feature}/pages/**`],
+      groups: [
+        [
+          [
+            "@/features/*/components/**",
+            `!@/features/${feature}/components/**`,
+          ],
+          "A page composes its own feature's components and the shared ones (components/shared/).",
+        ],
+        [
+          ["@/features/*/pages/**", ...NOT_APP],
+          "A page imports no other page and no app file.",
+        ],
+      ],
+    }),
+  ]),
 ];
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage", "playwright-report", "test-results"] },
+  {
+    ignores: [
+      "dist",
+      "coverage",
+      "playwright-report",
+      "test-results",
+      "storybook-static",
+      ".storybook/public",
+    ],
+  },
   {
     files: ["**/*.{ts,tsx}"],
     extends: [js.configs.recommended, ...tseslint.configs.strictTypeChecked],
@@ -87,6 +270,17 @@ export default tseslint.config(
     rules: { "no-restricted-syntax": ["error", ...SHADCN_ONLY] },
   },
   {
+    // Story files and their helpers export meta, story objects and helpers, not only components.
+    // The route table is configuration: a change to it reloads the page.
+    files: [
+      "src/**/*.stories.tsx",
+      "src/design-system/**",
+      ".storybook/**",
+      "src/app/routes.tsx",
+    ],
+    rules: { "react-refresh/only-export-components": "off" },
+  },
+  {
     files: ["src/**/*.test.{ts,tsx}", "src/test/**", "e2e/**", "*.config.ts"],
     languageOptions: { globals: { ...globals.node } },
     rules: {
@@ -94,6 +288,7 @@ export default tseslint.config(
       "@typescript-eslint/no-non-null-assertion": "off",
     },
   },
+  ...LAYERS,
   {
     files: ["**/*.js"],
     extends: [js.configs.recommended],

@@ -1,0 +1,155 @@
+import { screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import { fakeApplication } from "@/test/apply";
+import { fakeQueue } from "@/test/apply-queue";
+import { fakeSession, member } from "@/test/auth";
+import { fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
+import { renderApp } from "@/test/render";
+import { server } from "@/test/server";
+
+const SAME_ROLE =
+  "An application to the same role at this company is already under way.";
+
+/** POST /api/postings/{id}/like: 201, or 409 with the api's sentence for the ids in `refuse`. */
+function fakeLikes(refuse: ReadonlySet<string> = new Set()) {
+  const liked: string[] = [];
+  server.use(
+    http.post("*/api/postings/:id/like", ({ params }) => {
+      const id = String(params.id);
+      liked.push(id);
+      if (refuse.has(id)) {
+        return HttpResponse.json(
+          { detail: SAME_ROLE, code: "same_role_live", application_id: null },
+          { status: 409 },
+        );
+      }
+      return HttpResponse.json(
+        {
+          application: fakeApplication("queued", { posting_id: id }),
+          documents: ["cv", "letter"],
+        },
+        { status: 201 },
+      );
+    }),
+  );
+  return liked;
+}
+
+const bar = () => screen.getByRole("region", { name: "Bulk actions" });
+
+async function openJobs(count: number) {
+  const rows = Array.from({ length: count }, (_, i) => makeJob(i + 1));
+  fakeJobsApi(rows);
+  const app = renderApp("/jobs");
+  const list = await screen.findByRole("list", { name: "Postings" });
+  await within(list).findAllByRole("listitem");
+  const boxes = within(list)
+    .getAllByRole("checkbox")
+    .filter((box) => / at /.test(box.getAttribute("aria-label") ?? ""));
+  return { rows, app, boxes };
+}
+
+beforeEach(() => {
+  // The detail pane beside the list shows a posting of makeJob.
+  server.use(
+    http.get("*/api/jobs/:id", ({ params }) => {
+      const n = /^00000000-0000-4000-9000-(\d{12})$/.exec(String(params.id));
+      return n
+        ? HttpResponse.json(makeDetail(makeJob(Number(n[1]))))
+        : undefined;
+    }),
+  );
+  fakeSession(member);
+  vi.spyOn(window, "scrollTo").mockImplementation(() => {});
+});
+
+describe("Like on the jobs list", () => {
+  it("likes each selected posting, says where the applications are, and clears the selection", async () => {
+    fakeQueue([]);
+    const liked = fakeLikes();
+    const user = userEvent.setup();
+    const { rows, app, boxes } = await openJobs(3);
+    await user.click(boxes[0]!);
+    await user.click(boxes[2]!);
+
+    await user.click(within(bar()).getByRole("button", { name: "Like" }));
+    await screen.findByText(
+      "2 postings liked. The assistant fills each form, then waits for your approval in Applications.",
+    );
+    expect(liked).toEqual([rows[0]!.id, rows[2]!.id]);
+    expect(screen.queryByRole("region", { name: "Bulk actions" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Open Applications" }));
+    await waitFor(() => {
+      expect(app.location()).toBe("/applications");
+    });
+  });
+
+  it("shows the api's sentence for a refused Like, and the others still go", async () => {
+    fakeQueue([]);
+    const { rows, boxes } = await openJobs(3);
+    const liked = fakeLikes(new Set([rows[1]!.id]));
+    const user = userEvent.setup();
+    for (const box of boxes) await user.click(box);
+
+    await user.click(within(bar()).getByRole("button", { name: "Like" }));
+    await screen.findByText(`1 posting not liked: ${SAME_ROLE}`);
+    await screen.findAllByText(/^2 postings liked\./);
+    expect(liked).toHaveLength(3);
+  });
+
+  it("likes every selected posting in one click", async () => {
+    fakeQueue([]);
+    const liked = fakeLikes();
+    const user = userEvent.setup();
+    const { rows } = await openJobs(12);
+    await user.click(
+      screen.getByRole("checkbox", {
+        name: "Select every posting in this view",
+      }),
+    );
+
+    const like = await within(bar()).findByRole("button", { name: "Like" });
+    await user.click(like);
+    await screen.findByText("12 postings liked.", { exact: false });
+    expect(liked).toEqual(rows.map((row) => row.id));
+  });
+  it.each([
+    [
+      false,
+      "1 posting liked. In Full auto, your Like is your approval: the app fills each form and submits it after the hold when every check passes; the rest waits for you in Applications.",
+    ],
+    [
+      true,
+      '1 posting liked. Full auto rehearses first: the app fills the form, submits nothing, and asks you "Does this look right?" in Applications.',
+    ],
+  ])(
+    "says what a Like does in Full auto (rehearsal %s)",
+    async (dryRun, said) => {
+      fakeQueue([]);
+      server.use(
+        http.post("*/api/postings/:id/like", ({ params }) =>
+          HttpResponse.json(
+            {
+              application: fakeApplication("queued", {
+                posting_id: String(params.id),
+                mode: "full_auto",
+                dry_run: dryRun,
+              }),
+              documents: [],
+            },
+            { status: 201 },
+          ),
+        ),
+      );
+      const user = userEvent.setup();
+      const { boxes } = await openJobs(1);
+      await user.click(boxes[0]!);
+      await user.click(within(bar()).getByRole("button", { name: "Like" }));
+      await screen.findByText(said);
+    },
+  );
+});

@@ -5,12 +5,12 @@
  */
 import { http, HttpResponse } from "msw";
 
+import type { BaseCv } from "@/features/documents/api/base-cvs-api";
 import type {
-  BaseCv,
-  Consent,
   DocumentOut,
   VersionSummary,
-} from "@/features/documents/documents-api";
+} from "@/features/documents/api/documents-api";
+import type { Consent } from "@/features/documents/api/consent-api";
 
 import { server } from "./server";
 

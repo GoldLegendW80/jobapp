@@ -1395,7 +1395,9 @@ async def apply(services: Services, application_id: uuid.UUID) -> str:
 
     try:
         purpose = REVIEW_PURPOSE if brief.review else PURPOSE
-        acquired = await fill.leases.acquire(user, purpose, True)
+        acquired = await fill.leases.acquire(
+            user, purpose, True, application_id=str(application_id)
+        )
     except (BrowserError, StoreUnavailableError) as exc:
         await wait("browser_unavailable", code=getattr(exc, "code", "store_unavailable"))
         return "lease_unavailable"

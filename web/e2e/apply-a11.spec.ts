@@ -83,7 +83,7 @@ async function postingOn(variant: "" | "slow", role: string): Promise<string> {
 /** Apply with the review box ticked, wait for the fill, answer what it left; the Apply section. */
 async function fillForApproval(job: string) {
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply" });
+  const section = page.getByRole("region", { name: "Your application" });
   await startReviewFirst(page);
   await expect(
     section.getByRole("img", { name: /before the click/ }),
@@ -106,7 +106,7 @@ async function fillForApproval(job: string) {
     } else if (await choices.count()) {
       await choices.selectOption({ index: 1 });
     } else {
-      await row.getByRole("button", { name: "No", exact: true }).click();
+      await row.getByRole("radio", { name: "No", exact: true }).click();
     }
     await expect(open).toHaveCount(before - 1);
   }
@@ -167,9 +167,11 @@ test("the person adds a cap of 1 for the company on the Applications page", asyn
   await page.goto("/account");
   await page.getByRole("button", { name: /Account menu/ }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
+  await expect(page).toHaveURL(/\/settings\/search$/);
+  await page.getByRole("tab", { name: "Applications" }).click();
   await expect(page).toHaveURL(/\/settings\/applications$/);
   await expect(
-    page.getByRole("heading", { name: "Application settings", level: 1 }),
+    page.getByRole("heading", { name: "Settings", level: 1 }),
   ).toBeVisible();
   await expect(
     page.getByRole("radio", { name: "Full auto" }),

@@ -1,0 +1,474 @@
+/**
+ * What the Apply section shows for each state of an application (SPEC-apply.md, "States"), as pure
+ * functions: the phase that picks the panel, the status line, how often to read again, the
+ * sentences for what stopped a run. The api's own sentences (a refusal, a gate answer) are shown
+ * as they come; these are only the ones the page writes itself. No dashes as separators.
+ */
+import type {
+  Answer,
+  Application,
+  ApplicationEvent,
+  Approval,
+  ApprovalDocument,
+} from "../api/apply-api";
+
+export const APPLY_POLL_MS = 1500;
+
+export type Phase =
+  | "idle"
+  | "waiting"
+  | "filling"
+  | "needs"
+  | "review"
+  | "submitting"
+  | "submitted"
+  | "unknown"
+  | "refused"
+  | "other";
+
+const PHASES: Record<string, Phase> = {
+  queued: "waiting",
+  filling: "filling",
+  needs_person: "needs",
+  ready: "review",
+  approved: "submitting",
+  held: "submitting",
+  submitting: "submitting",
+  submitted: "submitted",
+  submit_unknown: "unknown",
+  refused_by_site: "refused",
+  cancelled: "idle",
+  failed: "idle",
+  blocked: "idle",
+  posting_closed: "idle",
+  rehearsed: "idle",
+};
+
+/** A state this page does not know is never treated as a state where something can be clicked. */
+export function phaseOf(application: Application | null | undefined): Phase {
+  if (!application) return "idle";
+  // Full auto's decision and one click Apply's (mode `direct`) are the app's: nothing to approve,
+  // the page follows it. A direct item the app hands to the person comes back as `review`.
+  if (application.state === "ready" && decidedByApp(application))
+    return "submitting";
+  return PHASES[application.state] ?? "other";
+}
+
+/** An application the app sends by itself once filled: Full auto, or one click Apply (`direct`). */
+export const decidedByApp = (application: Application) =>
+  application.mode === "full_auto" || application.mode === "direct";
+
+/** The phases in which the app works and the page reads again by itself. */
+const BUSY: ReadonlySet<Phase> = new Set(["waiting", "filling", "submitting"]);
+
+export function pollInterval(
+  application: Application | null | undefined,
+): number | false {
+  return BUSY.has(phaseOf(application)) ? APPLY_POLL_MS : false;
+}
+
+/** The phases that have a form behind them to read: the fields, the documents, the screenshots. */
+const WITH_FORM: ReadonlySet<Phase> = new Set([
+  "needs",
+  "review",
+  "submitting",
+  "submitted",
+  "unknown",
+  "refused",
+]);
+
+export const hasForm = (application: Application | null | undefined) =>
+  WITH_FORM.has(phaseOf(application));
+
+/** The run report is shown once the application reached the site or ended. */
+const WITH_REPORT: ReadonlySet<Phase> = new Set([
+  "submitted",
+  "unknown",
+  "refused",
+]);
+
+export const hasReport = (application: Application | null | undefined) =>
+  WITH_REPORT.has(phaseOf(application));
+
+const NEEDS: Record<string, string> = {
+  captcha: "The site asks for a captcha, so the assistant stopped.",
+  signin: "The site asks you to sign in, so the assistant stopped.",
+  email_code: "The site sent a code by e-mail that only you can read.",
+  required_left: "A required question is left for you to answer.",
+  payment_requested: "The site asks for a payment, so the assistant stopped.",
+  no_adapter: "The assistant does not know this form yet.",
+  submit_not_designated:
+    "The assistant could not identify the form's Submit button.",
+  submit_not_highlighted:
+    "The assistant could not show the Submit button for your review.",
+};
+
+const FAILURES: Record<string, string> = {
+  documents_rendering:
+    "your CV or letter was still being prepared after an hour",
+  interrupted: "it was interrupted",
+  internal_error: "something went wrong on our side",
+  form_changed: "the form changed while it was being filled",
+};
+
+const BLOCKED_BY_RULE =
+  "The last attempt was blocked by a rule. Nothing was sent.";
+
+/** An application that ended before its form for want of documents (apply/run.py, `prepare`). */
+const BLOCKED: Record<string, string> = {
+  documents_not_written:
+    "Your CV or letter could not be written, so nothing was sent. The posting's documents say why: write them again there, then apply.",
+  no_documents:
+    "This posting had no CV to send, so nothing was sent. Write one with the posting's documents, then apply.",
+};
+
+/**
+ * What a queued application waits for: the api names it in `needs` while it waits. Apply on a
+ * posting without documents asks them first (owner, 2026-11-05: "Apply with no documents writes
+ * them and then sends"); nothing is written before the documents consent and a credential.
+ */
+function waitingLine(needs: string | null, mode?: string): string {
+  if (needs === "documents:consent") {
+    return "Waiting for your CV and letter to be written. Confirm what is sent to the writer in Your CVs, on your profile, first: nothing is written before.";
+  }
+  if (needs === "documents:credential") {
+    return "Waiting for your CV and letter to be written. Add a model credential in your account first.";
+  }
+  if (needs?.startsWith("documents:")) {
+    return mode === "direct"
+      ? "Writing your CV and letter, then sending. The form is filled and sent once they are ready."
+      : "Waiting for your CV and letter to be written. The form is filled once they are ready.";
+  }
+  if (needs === "retry") {
+    return "The last attempt did not finish, so the assistant tries again later by itself. Nothing was sent.";
+  }
+  if (needs === "browser_signin") {
+    return "Waiting for you to finish signing in to a site in your browser. The form is filled after that.";
+  }
+  return "Waiting for a browser. Starting in a few seconds, and it can take up to a minute.";
+}
+
+/** Apply myself: the person fills and sends the form, the app only records it (A9). */
+const MANUAL_LINES: Record<string, string> = {
+  queued: "Opening your browser on the form. It can take up to a minute.",
+  filling:
+    "The form is open in your browser below. You fill it and click its Submit button yourself.",
+  cancelled:
+    "You closed the last session without recording it as sent. Nothing was submitted by the app.",
+};
+
+/**
+ * One click Apply (mode `direct`, issue #738): the assistant fills the form, the app checks it
+ * and sends it, with no Approve step. The other states read as for Review first.
+ */
+const DIRECT_LINES: Record<string, string> = {
+  filling:
+    "The assistant is filling the form. It sends it by itself once it is filled.",
+  ready: "Checking the form before sending it.",
+  approved: "Sending the form.",
+  submitting: "Sending the form.",
+  submitted: "Sent. Below is what the assistant sent.",
+};
+
+/**
+ * The status line under the section's title. `reviewAgent`: Review first filled by the apply
+ * agent, whose one approval is Confirm and send (A20), so its line says confirm, not approve.
+ */
+export function statusLine(
+  application: Application | null | undefined,
+  reviewAgent = false,
+) {
+  if (!application) return "No application yet.";
+  if (
+    application.mode === "manual" &&
+    application.state === "queued" &&
+    application.needs === "session_ended"
+  )
+    return "Your browser closed before the app saw the site's confirmation. Nothing is recorded as sent yet.";
+  if (application.mode === "manual" && application.state in MANUAL_LINES)
+    return MANUAL_LINES[application.state];
+  if (application.mode === "direct" && application.state in DIRECT_LINES)
+    return DIRECT_LINES[application.state];
+  switch (application.state) {
+    case "queued":
+      return waitingLine(application.needs, application.mode);
+    case "filling":
+      return "Filling the form. You can leave this page: the fill goes on, and you will find the result here.";
+    case "needs_person": {
+      const line = `${NEEDS[application.needs ?? ""] ?? "The form needs you before it can go on."} Nothing was sent.`;
+      return application.mode === "direct"
+        ? `${line} When you are done, the assistant goes on and sends it by itself.`
+        : line;
+    }
+    case "ready":
+      if (application.mode === "full_auto")
+        return "Full auto: filled. The app checks it now, then holds it so you can cancel.";
+      return reviewAgent
+        ? "Filled and waiting for you to confirm. Nothing is sent until you click Confirm and send."
+        : "Filled and waiting for your approval. Nothing is sent until you approve.";
+    case "approved":
+    case "submitting":
+      return "Approved. The form is filled again with exactly the answers you approved, then submitted.";
+    case "held":
+      return "Full auto: your Like approved it. It is held so you can cancel, then checked once more and submitted.";
+    case "submitted":
+      return "Applied. The form was submitted.";
+    case "submit_unknown":
+      return "We could not confirm this application. Look for a confirmation mail or on the site.";
+    case "refused_by_site":
+      return "The site showed errors after the click, so it did not accept the application. Check the screenshot, then try again.";
+    case "cancelled":
+      return "The last application was cancelled. Nothing was sent.";
+    case "failed": {
+      const why = FAILURES[application.error_code ?? ""];
+      return `The last attempt failed${why ? `: ${why}` : ""}. Nothing was sent.`;
+    }
+    case "blocked":
+      return BLOCKED[application.error_code ?? ""] ?? BLOCKED_BY_RULE;
+    case "posting_closed":
+      return "The site says this posting is closed. Nothing was sent.";
+    case "rehearsed":
+      return "A rehearsal ran: the form was filled and checked. Nothing was sent.";
+    default:
+      return "This application is in a state this page does not know. Nothing more can be done here.";
+  }
+}
+
+// --- why a filled form waits for the person -----------------------------------------------------
+
+/**
+ * Why a form the app would have sent by itself (one click Apply, Full auto) waits for the person:
+ * the api hands it to review (`mode` review, state `ready`) with the reason in `error_code`. The
+ * api's sentences (api/app/apply direct.py, full_auto.py, model_check.py, caps.py, gate.py), said
+ * for the job page. A code this page does not know is said in words, never shown raw.
+ */
+const REVIEW_REASONS: Record<string, string> = {
+  email_review:
+    "This posting asks for an application by e-mail, and the app never sends mail by itself, so it waits for you.",
+  review_only_site:
+    "The app does not send this site's form by itself yet, so you check it and send it.",
+  company_site_unverified:
+    "The LinkedIn posting links to a site the app cannot match to its company, so it waits for you.",
+  agent_designated:
+    "The app chose the submit button of this form itself, so you check it first.",
+  agent_text:
+    "The app wrote a free text answer on this form, so you check it first.",
+  model_check_flagged:
+    "The check of the app's free text answers found claims to look at, so you check them first.",
+  model_check_failed:
+    "The app could not finish checking its free text answers, so you check them first.",
+  model_check_not_run:
+    "The app's free text answers were not checked against your profile, so you check them first.",
+  fields_left: "Some questions of this form were left, so it waits for you.",
+  captcha_seen:
+    "A captcha showed up while filling this form, so it waits for you.",
+  never_apply_text:
+    "The posting's text mentions a term your rules exclude, so it waits for you.",
+  paused_by_you:
+    "You paused automatic applications, so it waits for you. Turn them back on in Settings, Applications.",
+  safety_ceiling:
+    "Today's safety ceiling of submissions is reached, so it waits for you.",
+  company_cap:
+    "You set a limit of applications for this company and it is reached, so it waits for you.",
+  company_cap_role:
+    "You chose to wait before applying again to this role at this company, so it waits for you.",
+  authorisation_expired:
+    "The approval to send it expired, so you check it and send it.",
+  authorisation_used:
+    "The approval to send it was already used once, so you check it and send it.",
+  submit_disabled:
+    "Submissions are switched off on this server for now, so it waits for you.",
+  paused:
+    "Submissions are paused by the administrator for now, so it waits for you.",
+  documents_changed:
+    "A newer version of your documents was written after this form was filled, so it waits for you.",
+  documents_review:
+    "Your documents need a look before they are sent, so it waits for you.",
+  linkedin_off: "LinkedIn is off for you, so it waits for you.",
+  linkedin_paused:
+    "LinkedIn is paused for a week after a security check, so it waits for you.",
+  linkedin_daily:
+    "LinkedIn's limit of applications in 24 hours is reached, so it waits for you.",
+  below_min_fit:
+    "This posting's fit is below your threshold for Full auto, so it waits for you.",
+  unsupported_source:
+    "Full auto does not apply on this site yet, so it waits for you.",
+  full_auto_off:
+    "Full auto was turned off after this Like, so it waits for you.",
+  full_auto_company:
+    "Full auto already applied to this company recently, so it waits for you.",
+  form_changed: "The form changed since it was filled, so it waits for you.",
+};
+
+export const OTHER_REVIEW_REASON =
+  "The app stopped before sending it, so you check it and send it.";
+
+/** The sentence of why a filled form waits for the person's approval, or null when none applies. */
+export function reviewReason(
+  application: Application | null | undefined,
+): string | null {
+  if (
+    !application ||
+    application.state !== "ready" ||
+    application.mode !== "review" ||
+    !application.error_code
+  )
+    return null;
+  const known = Object.hasOwn(REVIEW_REASONS, application.error_code)
+    ? REVIEW_REASONS[application.error_code]
+    : undefined;
+  return known ?? OTHER_REVIEW_REASON;
+}
+
+// --- the fields ---------------------------------------------------------------------------------
+
+const SOURCES: Record<string, string> = {
+  identity: "Your details",
+  document: "Your documents",
+  answers: "Your answers",
+  bank: "Saved answer",
+  agent: "Assistant",
+  person: "You",
+  left: "You answer",
+};
+
+export const sourceLabel = (source: string) => SOURCES[source] ?? source;
+
+/** A value as the person reads it. */
+export function valueText(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (Array.isArray(value))
+    return value.map(valueText).filter(Boolean).join(", ");
+  if (typeof value === "object")
+    return reportText(value) ?? JSON.stringify(value);
+  if (typeof value === "string") return value;
+  return typeof value === "number" ? String(value) : "";
+}
+
+/** One click Apply's report (A19): what the assistant did, then the confirmation's address. */
+function reportText(value: object): string | null {
+  const report = value as { summary?: unknown; confirmation_url?: unknown };
+  if (typeof report.summary !== "string") return null;
+  const page =
+    typeof report.confirmation_url === "string" && report.confirmation_url
+      ? ` Confirmation page: ${report.confirmation_url}`
+      : "";
+  return `${report.summary}${page}`.trim();
+}
+
+/** Left for the person and still empty. A value the person typed ends the leaving. */
+export const isOpenField = (answer: Answer) =>
+  answer.you_answer && valueText(answer.value) === "";
+
+export const leftFields = (answers: readonly Answer[]) =>
+  answers.filter(isOpenField);
+
+/** What the row says after the answer went to Saved answers, or did not. */
+export const REMEMBERED = {
+  saved:
+    "Saved for next forms: the next form with this question is filled with it.",
+  kept: "Your saved answers already hold an answer to this question: it was kept.",
+};
+
+/** The kinds the api takes no value for: a file and a list of choices (`set_answer` of A6). */
+const NOT_TYPED_KINDS = new Set(["file", "multi", "designated"]);
+
+/**
+ * Whether the person can type this answer here. It mirrors the api's refusal: a skipped widget
+ * (`skipped:` key), a file and a list of choices answer 422 `unknown_field` or `wrong_type`, so
+ * no input is offered for them and they never block Approve; they are answered on the site.
+ */
+export const isEditable = (answer: Answer) =>
+  !answer.field_key.startsWith("skipped:") &&
+  !answer.field_key.startsWith("designated:") &&
+  !NOT_TYPED_KINDS.has(answer.kind);
+
+/** Left, required, still empty and answerable here: the form cannot go without it, so Approve waits. */
+export const blockingFields = (answers: readonly Answer[]) =>
+  leftFields(answers).filter((answer) => answer.required && isEditable(answer));
+
+const YES_NO_KINDS = new Set(["yes_no", "boolean", "checkbox"]);
+
+/** The control an answer is typed with. */
+export function editorKind(
+  answer: Answer,
+): "yes_no" | "select" | "long" | "text" {
+  if (YES_NO_KINDS.has(answer.kind) || typeof answer.value === "boolean") {
+    return "yes_no";
+  }
+  if ((answer.options ?? []).length > 0) return "select";
+  if (answer.kind === "textarea" || valueText(answer.value).length > 80) {
+    return "long";
+  }
+  return "text";
+}
+
+// --- the documents ------------------------------------------------------------------------------
+
+const DOCUMENT_NAMES: Record<string, string> = { cv: "CV", letter: "letter" };
+
+export function documentLine(kind: string, one: ApprovalDocument): string {
+  const name = DOCUMENT_NAMES[kind] ?? kind;
+  const version =
+    typeof one.number === "number" ? ` version ${one.number}` : "";
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)}${version}`;
+}
+
+export function documentsSentence(approval: Approval): string {
+  const lines = Object.entries(approval.documents).map(([kind, one]) =>
+    documentLine(kind, one),
+  );
+  return lines.length > 0 ? lines.join(" and ") : "No document";
+}
+
+// --- the run report -----------------------------------------------------------------------------
+
+const EVENTS: Record<string, string> = {
+  created: "Application started",
+  waiting: "Waiting for the documents",
+  lease: "Browser ready",
+  filled: "Form filled",
+  saved_answer_used: "Saved answer reused",
+  decision: "Your approval checked",
+  click: "Submit clicked",
+  cancelled: "Cancelled",
+  rehearsed: "Rehearsal done",
+  refused: "Refused",
+  retry: "Back to your approval",
+  person_confirmed: "You confirmed it was submitted",
+  kill_switch: "Submissions switched off, nothing sent",
+  submit_stopped: "Submit stopped before the click",
+  screenshot_failed: "A screenshot could not be taken",
+  ended: "Run ended",
+};
+
+export function eventLine(event: ApplicationEvent): string {
+  if (event.kind === "screenshot") {
+    return event.data.kind === "after"
+      ? "Screenshot after the click"
+      : "Screenshot before the click";
+  }
+  const known = EVENTS[event.kind];
+  if (known) return known;
+  const words = event.kind.replace(/_/g, " ").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** From the start to the submission, or to the last change, as "1 min 12 s". */
+export function durationText(application: Application): string | null {
+  const start = Date.parse(application.created_at);
+  const end = Date.parse(application.submitted_at ?? application.updated_at);
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
+  const seconds = Math.round((end - start) / 1000);
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ${seconds % 60} s`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+/** The newest screenshot of a kind (the api lists them oldest first). */
+export function lastShot(approval: Approval | undefined, kind: string) {
+  const shots = (approval?.screenshots ?? []).filter((s) => s.kind === kind);
+  return shots[shots.length - 1];
+}

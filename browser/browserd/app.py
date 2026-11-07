@@ -1,12 +1,16 @@
 """browserd's HTTP server on :9300 (network `browsing`, reached by the api and the worker) and the
 control API of SPEC-browser:
 
-  POST   /leases          {user_id, profile_id, uid, purpose, automation, languages, timezone}
-                          201 {lease_id, lease_token, ...} once Chromium answers on CDP;
+  POST   /leases          {user_id, profile_id, uid, purpose, automation, languages, timezone,
+                          browsers (the person's own slots at most, 2026-11-07)}
+                          201 {lease_id, slot, lease_token, ...} once Chromium answers on CDP,
+                          or at once in a free slot of the same person's browser (BROWSER_SLOTS);
                           409 {error: busy, holder_purpose} while another lease runs
   DELETE /leases/{id}     200 {lease_id, reason, size_bytes}, Chromium closed cleanly and the
                           profile measured (B7); 404 when it is not the current lease
-  GET    /leases/current  {lease: {...} | null, last_end: {lease_id, reason} | null}
+  GET    /leases/current  {lease: {...} | null, leases: [{...}], slots, last_end: {lease_id,
+                          reason} | null}; `lease` is the lowest slot's, `leases` every slot's,
+                          `slots` BROWSER_SLOTS (2026-11-06)
   GET    /healthz         {ok, display, lease}
   POST   /leases/{id}/tools/{name}, PUT /leases/{id}/files/{name}   the tool API (B5,
                           browserd/tools/routes.py); POST /leases also answers the gate's
@@ -91,6 +95,8 @@ async def current_lease(svc: Service, _: HttpRequest, __: re.Match[str]) -> tupl
     now = svc.manager.clock()
     return 200, {
         "lease": lease.public(now) if lease else None,
+        "leases": [held.public(now) for held in svc.manager.held()],
+        "slots": svc.manager.config.slots,
         "last_end": svc.manager.last_end,
     }
 

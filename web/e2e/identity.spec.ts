@@ -284,7 +284,9 @@ test("sign out lands on /login and the back button shows nothing protected", asy
   await signIn(page, EMAIL, PASSWORD);
   await expect(menuButton(page)).toBeVisible();
   await page.getByRole("link", { name: "Admin" }).click();
-  await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Admin", level: 1 }),
+  ).toBeVisible();
   await signOut(page);
   // History: /login was replaced by /jobs on sign in (/ redirects there), then /admin/users by
   // /login on sign out. Back reaches /jobs, which must not render: it sends to sign in again.
@@ -313,10 +315,14 @@ test("sign in with a mixed case email, reload keeps the session, deep link as ad
   await expect(page).toHaveURL(/\/login\?next=\/admin\/users$/);
   await signIn(page, mixed, PASSWORD);
   // Back to the page asked for.
-  await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Admin", level: 1 }),
+  ).toBeVisible();
   await expect(page).toHaveURL(/\/admin\/users$/);
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Admin", level: 1 }),
+  ).toBeVisible();
   await expect(menuButton(page)).toBeVisible();
   await page.goto("/");
   await expect(menuButton(page)).toBeVisible();

@@ -148,7 +148,7 @@ test("later Workday captcha: the person solves it in the live view; earlier answ
   const before = (await stub.submissions()).length;
   const job = await posting(reason);
   await page.goto(`/jobs/${job}`);
-  const section = page.getByRole("region", { name: "Apply", exact: true });
+  const section = page.getByRole("region", { name: "Your application" });
   await startReviewFirst(page);
   await expect
     .poll(async () => (await application(job))?.needs, { timeout: 180_000 })

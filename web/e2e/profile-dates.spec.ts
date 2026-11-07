@@ -26,10 +26,11 @@ async function shots(page: Page, name: string, fullPage = true) {
 /**
  * Profile P7 against the real stack through Caddy, no mocks, one fresh account and only made up
  * data: a year alone is a valid date. The journey adds an employer with years only and a school
- * with a start year and no end, saves, reloads and reads the same four characters back, turns
- * one year into a month from the keyboard at 375 px, sees that one change in the History drawer,
- * meets the two refusals (a form that is neither, an end certainly before the start), exports
- * the profile, changes it, imports the export back and finds the year alone again.
+ * with a start year and no end on the profile page, saves, reloads and reads the same four
+ * characters back, turns one year into a month from the keyboard at 375 px, sees that one change
+ * in the History drawer of More actions, meets the two refusals (a form that is neither, an end
+ * certainly before the start), exports the profile, changes it, imports the export back and finds
+ * the year alone again.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8097 docker compose -p jobapp-p7 -f compose.yml -f compose.mac.yml up -d --build --wait
@@ -51,8 +52,24 @@ const PASSWORD = `dates journey ${run} passphrase`;
 const field = (page: Page, label: string) =>
   page.getByLabel(label, { exact: true });
 
-const tab = (page: Page, name: string) =>
-  page.getByRole("tab", { name: new RegExp(`^${name}, \\d+% complete$`) });
+/** The completeness of one section, as the api computes it. */
+async function percent(page: Page, section: string) {
+  const answer = await page.request.get("/api/profile");
+  const body = (await answer.json()) as {
+    completeness: { sections: Record<string, { percent: number }> };
+  };
+  return body.completeness.sections[section]?.percent;
+}
+
+/** Opens one item of the profile page's More actions, `submenu` first when it is in one. */
+async function more(page: Page, item: string, submenu?: string) {
+  await page.getByRole("button", { name: "More actions" }).click();
+  if (submenu) {
+    await page.getByRole("menuitem", { name: submenu }).focus();
+    await page.keyboard.press("ArrowRight");
+  }
+  await page.getByRole("menuitem", { name: item, exact: true }).click();
+}
 
 /** Click Save and wait for the answer of that save itself, not for a toast of an earlier one. */
 async function save(page: Page) {
@@ -105,11 +122,8 @@ test.afterAll(async () => {
 test("an employer and a school with years only are saved and read back as entered", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile?tab=experience");
-  await expect(tab(page, "Experience")).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  await page.goto("/profile#experience");
+  await expect(page.getByRole("form", { name: "Experience" })).toBeVisible();
 
   await page.getByRole("button", { name: "Add employer" }).click();
   await field(page, "Organisation of employer 1").fill("Northwind Labs");
@@ -134,12 +148,10 @@ test("an employer and a school with years only are saved and read back as entere
   await shots(page, "experience-years-typed");
 
   await save(page);
-  await expect(tab(page, "Experience")).toHaveAccessibleName(
-    "Experience, 100% complete",
-  );
+  expect(await percent(page, "experience")).toBe(100);
 
   // After a reload: the four characters that were typed, no month made up for them.
-  await page.goto("/profile?tab=experience");
+  await page.goto("/profile");
   await expect(field(page, "Start of employer 1")).toHaveValue("2021");
   await expect(field(page, "End of employer 1")).toHaveValue("2023");
   await expect(field(page, "Start of school 1")).toHaveValue("2019");
@@ -188,7 +200,7 @@ test("at 375 px, from the keyboard: the two refusals, then a year becomes a mont
   await retype(page, "End of employer 1", "2023");
   await save(page);
 
-  await page.goto("/profile?tab=experience");
+  await page.goto("/profile");
   await expect(field(page, "Start of employer 1")).toHaveValue("2021-03");
   await expect(field(page, "End of employer 1")).toHaveValue("2023");
   await expect(field(page, "Start of school 1")).toHaveValue("2019");
@@ -197,7 +209,7 @@ test("at 375 px, from the keyboard: the two refusals, then a year becomes a mont
 });
 
 test("the History drawer shows the year made a month as a change of that field", async () => {
-  await page.getByRole("button", { name: "History of experience" }).click();
+  await more(page, "Experience", "History");
   const drawer = page.getByRole("dialog", { name: "Experience history" });
   await expect(drawer).toBeVisible();
   const versions = drawer.getByRole("navigation", {
@@ -228,9 +240,8 @@ test("the History drawer shows the year made a month as a change of that field",
 });
 
 test("export, change, import the export back: the year alone comes back as written", async () => {
-  await page.getByRole("button", { name: "Export or import" }).click();
   const download = page.waitForEvent("download");
-  await page.getByRole("menuitem", { name: "Export profile" }).click();
+  await more(page, "Export profile");
   const file = await download;
   exported = path.join(work, file.suggestedFilename());
   await file.saveAs(exported);
@@ -256,8 +267,7 @@ test("export, change, import the export back: the year alone comes back as writt
   await field(page, "End of school 1").fill("2021");
   await save(page);
 
-  await page.getByRole("button", { name: "Export or import" }).click();
-  await page.getByRole("menuitem", { name: "Import profile" }).click();
+  await more(page, "Import profile");
   const dialog = page.getByRole("dialog", { name: "Import profile" });
   await dialog.getByLabel("Profile file").setInputFiles(exported);
   const summary = dialog.getByRole("region", {
@@ -270,7 +280,7 @@ test("export, change, import the export back: the year alone comes back as writt
   await expect(page.getByText("Profile imported.")).toBeVisible();
   await expect(dialog).toBeHidden();
 
-  await page.goto("/profile?tab=experience");
+  await page.goto("/profile");
   await expect(field(page, "Start of employer 1")).toHaveValue("2021-03");
   await expect(field(page, "End of employer 1")).toHaveValue("2023");
   await expect(field(page, "Start of school 1")).toHaveValue("2019");

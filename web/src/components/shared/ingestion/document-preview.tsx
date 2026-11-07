@@ -1,0 +1,231 @@
+import { RotateCw } from "lucide-react";
+import { useState } from "react";
+
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Spinner } from "@/components/ui/spinner";
+
+import {
+  documentImageUrl,
+  failureSentence,
+  type IngestionDocument,
+  type PageImage,
+} from "@/features/ingestion/api/documents-api";
+import { useDocumentText } from "@/features/ingestion/api/use-documents";
+
+const number = new Intl.NumberFormat("en");
+/** The pages of a PDF are joined by a form feed in the stored text. */
+const PAGE_BREAK = "\f";
+
+/**
+ * The text kept from a document, as an agent will read it, 20,000 characters at a time. Open
+ * while `document` is set. Nothing of the text stays in the page's memory once it is closed.
+ */
+export function DocumentPreview({
+  document,
+  onClose,
+}: {
+  document: IngestionDocument | undefined;
+  onClose: () => void;
+}) {
+  // The last document shown stays while the dialog closes.
+  const [shown, setShown] = useState(document);
+  if (document && document !== shown) setShown(document);
+  return (
+    <Dialog
+      open={document !== undefined}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-2xl">
+        {shown ? <Preview key={shown.id} document={shown} /> : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function Preview({ document }: { document: IngestionDocument }) {
+  const query = useDocumentText(document.id);
+  const pages = query.data?.pages ?? [];
+  const text = pages.map((page) => page.text).join("");
+  const total = pages[0]?.total ?? 0;
+  const shown = pages.reduce((sum, page) => sum + page.text.length, 0);
+  // Every page of the text carries the whole list of images: the first one is enough.
+  const images = pages[0]?.images ?? [];
+
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle className="pr-6 break-words">
+          <bdi>{document.name}</bdi>
+        </DialogTitle>
+        <DialogDescription>
+          The text kept from this document, as an agent will read it.
+        </DialogDescription>
+      </DialogHeader>
+      {query.isPending ? (
+        <p
+          role="status"
+          className="flex items-center gap-2 text-sm text-muted-foreground"
+        >
+          <Spinner aria-hidden="true" role={undefined} />
+          Loading the text
+        </p>
+      ) : query.isError && pages.length === 0 ? (
+        <div className="flex flex-col items-start gap-3">
+          <p role="alert" className="text-sm text-destructive">
+            The text could not be loaded. {failureSentence(query.error)}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={query.isFetching}
+            onClick={() => void query.refetch()}
+          >
+            <RotateCw aria-hidden="true" />
+            Retry
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div
+            role="region"
+            aria-label="Text of the document"
+            tabIndex={0}
+            className="max-h-[55vh] overflow-y-auto rounded-md border bg-muted/40 p-3 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            <PreviewText
+              documentId={document.id}
+              text={text}
+              images={images}
+              waiting={document.status !== "done"}
+            />
+          </div>
+          <DialogFooter className="items-center sm:justify-between">
+            <p className="text-xs text-muted-foreground tabular-nums">
+              {query.hasNextPage
+                ? `The first ${number.format(shown)} of ${number.format(total)} characters`
+                : `${number.format(total)} ${total === 1 ? "character" : "characters"}`}
+            </p>
+            {query.hasNextPage ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={query.isFetchingNextPage}
+                aria-busy={query.isFetchingNextPage}
+                onClick={() => void query.fetchNextPage()}
+              >
+                {query.isFetchingNextPage ? (
+                  <Spinner aria-hidden="true" role={undefined} />
+                ) : null}
+                Show more
+              </Button>
+            ) : null}
+          </DialogFooter>
+          {query.isFetchNextPageError ? (
+            <p role="alert" className="text-sm text-destructive">
+              The rest could not be loaded. {failureSentence(query.error)}
+            </p>
+          ) : null}
+        </>
+      )}
+    </>
+  );
+}
+
+const TEXT =
+  "font-sans text-sm leading-relaxed break-words whitespace-pre-wrap";
+
+const WAITING_PAGE =
+  "This page is an image. The agent will read it at the next run.";
+
+/** One stored page image, as the agent will see it. */
+function PageImageView({
+  documentId,
+  image,
+}: {
+  documentId: string;
+  image: PageImage;
+}) {
+  return (
+    <img
+      src={documentImageUrl(documentId, image.position)}
+      alt={`Page ${String(image.position + 1)}, kept as an image`}
+      width={image.width}
+      height={image.height}
+      loading="lazy"
+      decoding="async"
+      className="h-auto w-full rounded-sm border bg-background"
+    />
+  );
+}
+
+function PreviewText({
+  documentId,
+  text,
+  images,
+  waiting,
+}: {
+  documentId: string;
+  text: string;
+  images: PageImage[];
+  waiting: boolean;
+}) {
+  const byPage = new Map(images.map((image) => [image.position, image]));
+  const parts = text.split(PAGE_BREAK);
+  if (parts.length === 1) {
+    // An uploaded image, or a PDF of one scanned page: the image is the document.
+    const only = byPage.get(0);
+    if (text === "" && only)
+      return (
+        <div className="flex flex-col gap-2">
+          <p className="text-sm text-muted-foreground">{WAITING_PAGE}</p>
+          <PageImageView documentId={documentId} image={only} />
+        </div>
+      );
+    if (text === "")
+      return (
+        <p className="text-sm text-muted-foreground">
+          There is no text in this document.
+        </p>
+      );
+    return <pre className={TEXT}>{text}</pre>;
+  }
+  return (
+    <ol className="flex flex-col gap-4">
+      {parts.map((part, index) => (
+        // Pages have no identity but their place in the document.
+        <li key={index} className="flex flex-col gap-1">
+          <p className="text-xs font-medium text-muted-foreground">
+            Page {index + 1}
+          </p>
+          {part === "" ? (
+            <>
+              <p className="text-sm text-muted-foreground">
+                {waiting && byPage.has(index)
+                  ? WAITING_PAGE
+                  : "This page holds no text."}
+              </p>
+              {byPage.has(index) ? (
+                <PageImageView
+                  documentId={documentId}
+                  image={byPage.get(index) as PageImage}
+                />
+              ) : null}
+            </>
+          ) : (
+            <pre className={TEXT}>{part}</pre>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+}

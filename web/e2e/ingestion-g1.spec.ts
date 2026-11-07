@@ -385,7 +385,9 @@ test("a new user follows Fill my profile with an agent from the profile", async 
     .getByRole("navigation", { name: "Main" })
     .getByRole("link", { name: "Profile" })
     .click();
-  await page.getByRole("link", { name: "Add other documents" }).click();
+  await page
+    .getByRole("link", { name: "Fill my profile with an agent" })
+    .click();
   await expect(page).toHaveURL(/\/profile\/fill$/);
   await expect(
     page.getByRole("heading", {
@@ -421,7 +423,7 @@ test("a new user follows Fill my profile with an agent from the profile", async 
     ),
   ).toBeVisible();
   await expect(
-    page.getByText("No document yet. Add a file or paste a text above."),
+    page.getByText("No document yet", { exact: true }),
   ).toBeVisible();
   await expect(
     page
@@ -765,7 +767,7 @@ test("a second user sees nothing and cannot reach the first user's documents", a
     secondCookie = await sessionCookie(other);
     await otherPage.goto("/profile/fill?step=documents");
     await expect(
-      otherPage.getByText("No document yet. Add a file or paste a text above."),
+      otherPage.getByText("No document yet", { exact: true }),
     ).toBeVisible();
     expect(await listed(other)).toEqual([]);
 

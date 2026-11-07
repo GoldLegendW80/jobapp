@@ -26,6 +26,14 @@ still busy, also when the caller went away: a new lease is refused 409 and the p
 removed until that work is done, and a start or swap revoked meanwhile never installs its
 Chromium. An end that fails is done all the same: Chromium's end reaps every process of the
 profile's uid even then, and every start reaps again first (chromium.py, B7).
+
+Two browsers at once (owner, 2026-11-06; BROWSER_SLOTS, default 1 here, 2 in compose.yml): while
+one person's agent leases (SLOT_PURPOSES) hold the browser, another of that person's agent leases
+joins the same Chromium in a free slot, its own lease with its own id, token, clocks, tools and
+live view, and the grant names its slot (`Request.slot`). Nobody else joins; a person's own
+session never shares the browser; no lease joins while the browser starts, ends, is handed to
+the person (B12) or holds a lease that is not an agent's. A slot's end closes its window
+(Browser.end_slot) and the Chromium ends with the last slot.
 """
 
 import asyncio
@@ -39,10 +47,10 @@ import secrets
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol, TypeVar
 
-from browserd.config import PURPOSES, UID_MAX, UID_MIN, Config
+from browserd.config import PURPOSES, SLOTS_MAX, UID_MAX, UID_MIN, Config
 from browserd.tools import policy
 
 T = TypeVar("T")
@@ -56,6 +64,8 @@ TIMEZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
 USER_ID = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 PERSON_PURPOSES = ("takeover", "signin")
 MANUAL_PURPOSE = "apply_manual"
+# The purposes whose leases may share the browser in slots: an agent's, never a person's own.
+SLOT_PURPOSES = tuple(p for p in PURPOSES if p not in (*PERSON_PURPOSES, MANUAL_PURPOSE))
 
 
 class LeaseError(Exception):
@@ -94,6 +104,11 @@ class Request:
     submit_selectors: tuple[str, ...] = ()
     # B7: where a person's own session opens, http or https only (signin.check_address).
     address: str | None = None
+    # The slot browserd granted (never read from the caller's body): its window and its view.
+    slot: int = 0
+    # The person's own browsers at once (the admin's setting, 2026-11-07): no lease of theirs
+    # joins past it, BROWSER_SLOTS the ceiling; SLOTS_MAX when the caller does not say.
+    browsers: int = SLOTS_MAX
 
     @classmethod
     def parse(cls, body: Any) -> "Request":
@@ -127,6 +142,9 @@ class Request:
             selectors = policy.parse_selectors(body.get("submit_selectors"))
         except ValueError as exc:
             raise LeaseError(400, f"bad_{exc}") from None
+        browsers = body.get("browsers", SLOTS_MAX)
+        if type(browsers) is not int or not 1 <= browsers <= SLOTS_MAX:
+            raise LeaseError(400, "bad_browsers")
         automation = bool(body.get("automation", True)) and purpose not in PERSON_PURPOSES
         address = body.get("address")
         if address is not None:
@@ -146,6 +164,7 @@ class Request:
             hosts=hosts,
             submit_selectors=selectors,
             address=address,
+            browsers=browsers,
         )
 
 
@@ -226,6 +245,7 @@ class Lease:
         """The lease as GET /leases/current answers it to the api (never the token)."""
         return {
             "lease_id": self.lease_id,
+            "slot": self.request.slot,
             "user_id": self.request.user_id,
             "profile_id": self.request.profile_id,
             "purpose": self.request.purpose,
@@ -262,7 +282,8 @@ class _Record:
 
 
 class Manager:
-    """Holds at most one lease. `start` brings a Browser up for a request (chromium.start in the
+    """Holds the leases of the one browser: one, or up to `config.slots` agent leases of one
+    person (the slots). `start` brings a Browser up for the first lease (chromium.start in the
     service, a fake in the tests); `tick` is called every second by the service's loop."""
 
     def __init__(
@@ -274,7 +295,7 @@ class Manager:
     ) -> None:
         self.config, self._start, self.clock = config, start, clock
         self._measure = measure  # B7: the profile's size at a lease end (chromium.measure_profile)
-        self.lease: Lease | None = None
+        self._held: dict[str, Lease] = {}
         self.browser: Browser | None = None
         self.starting: Request | None = None
         self.ending: Request | None = None
@@ -282,8 +303,24 @@ class Manager:
         self.last_end: dict[str, Any] | None = None
         self._lock = asyncio.Lock()
         self._swap = asyncio.Lock()  # B12: one Chromium closes wholly before another starts
-        self._calls: set[asyncio.Task[Any]] = set()
+        self._calls: dict[str, set[asyncio.Task[Any]]] = {}
         self._records: dict[str, _Record] = {}
+
+    @property
+    def lease(self) -> Lease | None:
+        """The lease of the lowest slot held: the only one while the browser has one."""
+        held = self.held()
+        return held[0] if held else None
+
+    def held(self) -> list[Lease]:
+        return sorted(self._held.values(), key=lambda lease: lease.request.slot)
+
+    def get(self, lease_id: str | None) -> Lease | None:
+        """That lease while it holds a slot, else None."""
+        return self._held.get(lease_id) if lease_id else None
+
+    def lease_of(self, request: Request) -> Lease | None:
+        return next((lease for lease in self._held.values() if lease.request is request), None)
 
     def holder_purpose(self) -> str | None:
         for request in (self.lease.request if self.lease else None, self.starting, self.ending):
@@ -293,10 +330,43 @@ class Manager:
 
     def uses(self, profile_id: str) -> bool:
         """A lease of that profile runs, starts or ends."""
-        held = (self.lease.request if self.lease else None, self.starting, self.ending)
+        held = (*(lease.request for lease in self._held.values()), self.starting, self.ending)
         return any(r is not None and r.profile_id == profile_id for r in held) or any(
             not r.terminal and r.request.profile_id == profile_id for r in self._records.values()
         )
+
+    def _free_slot(self, request: Request) -> int | None:
+        """The slot a new lease of `request` joins, or None: it must start a browser or wait."""
+        held = list(self._held.values())
+        most = min(self.config.slots, request.browsers, *(lease.request.browsers for lease in held))
+        if (
+            most < 2
+            or not held
+            or len(held) >= most
+            or self.browser is None
+            or self.starting is not None
+            or self.ending is not None
+            or not request.automation
+            or request.purpose not in SLOT_PURPOSES
+            or request.profile_id in self.removing
+        ):
+            return None
+        for lease in held:
+            mine = lease.request
+            record = self._records.get(lease.lease_id)
+            if (
+                (mine.user_id, mine.profile_id, mine.uid)
+                != (request.user_id, request.profile_id, request.uid)
+                or not mine.automation
+                or mine.purpose not in SLOT_PURPOSES
+                or lease.person_input  # B12: its Chromium has no debugging port now
+                or record is None
+                or record.revoked
+                or record.task is not None  # a swap under way
+            ):
+                return None
+        taken = {lease.request.slot for lease in held}
+        return next(slot for slot in range(self.config.slots) if slot not in taken)
 
     def _own(self, record: _Record, work: Awaitable[T]) -> asyncio.Task[T]:
         task = asyncio.ensure_future(work)
@@ -310,7 +380,7 @@ class Manager:
             record.task = None
             if self.starting is record.request:
                 self.starting = None
-            if record.revoked and self.lease is not None and self.lease.lease_id == record.lease_id:
+            if record.revoked and record.lease_id in self._held:
                 self._own(record, self.release(record.lease_id, "browser_failed"))
 
         task.add_done_callback(done)
@@ -320,7 +390,7 @@ class Manager:
         record.revoked = True  # Before yielding, including when the factory ignores cancel.
         if record.task is not None and not record.task.done():
             record.task.cancel()
-        elif self.lease is not None and self.lease.lease_id == record.lease_id:
+        elif record.lease_id in self._held:
             self._own(record, self.release(record.lease_id, "browser_failed"))
 
     async def _close(self, record: _Record, *, crash: bool = False) -> None:
@@ -333,25 +403,49 @@ class Manager:
             # An end that raises has still reaped the uid, and every start reaps it again (B7).
             record.browser = None
 
+    def _make_lease(self, record: _Record) -> tuple[Lease, str]:
+        now, token = self.clock(), secrets.token_urlsafe(32)
+        lease = Lease(
+            request=record.request,
+            max_s=self.config.lease_max_s[record.request.purpose],
+            idle_s=self.config.idle_s,
+            started=now,
+            lease_id=record.lease_id,
+            token_hash=_hash(token),
+            active_since=now,
+            last_input=now,
+        )
+        self._held[lease.lease_id] = lease
+        return lease, token
+
+    def _record(self, request: Request) -> _Record:
+        while len(self._records) >= 32:
+            oldest = next((key for key, r in self._records.items() if r.terminal), None)
+            if oldest is None:
+                raise LeaseError(409, "busy", holder_purpose=request.purpose)
+            del self._records[oldest]
+        record = _Record(request, str(uuid.uuid4()))
+        self._records[record.lease_id] = record
+        return record
+
     async def acquire(self, request: Request) -> tuple[Lease, str]:
         # A second lease is refused with the holder's purpose, never its id or its person.
         holder = self.holder_purpose()
-        if holder:
+        if holder and self._free_slot(request) is None:
             raise LeaseError(409, "busy", holder_purpose=holder)
         async with self._lock:
             holder = self.holder_purpose()
-            if holder:
+            slot = self._free_slot(request) if holder else None
+            if holder and slot is None:
                 raise LeaseError(409, "busy", holder_purpose=holder)
             if request.profile_id in self.removing:
                 raise LeaseError(409, "profile_removing")
-            while len(self._records) >= 32:
-                oldest = next((key for key, r in self._records.items() if r.terminal), None)
-                if oldest is None:
-                    raise LeaseError(409, "busy", holder_purpose=request.purpose)
-                del self._records[oldest]
-            record = _Record(request, str(uuid.uuid4()))
-            self._records[record.lease_id] = record
-            self.starting = request
+            if slot is not None:
+                # Another window of the person's running Chromium: nothing starts here, the
+                # tools open the slot's window on its first call (chromium.Chromium.home).
+                return self._make_lease(self._record(replace(request, slot=slot)))
+            record = self._record(replace(request, slot=0))
+            self.starting = record.request
             task = self._own(record, self._initial(record))
         try:
             return await asyncio.shield(task)
@@ -373,19 +467,8 @@ class Manager:
                 async with self._lock:
                     if record.revoked:
                         raise asyncio.CancelledError
-                    now, token = self.clock(), secrets.token_urlsafe(32)
-                    lease = Lease(
-                        request=record.request,
-                        max_s=self.config.lease_max_s[record.request.purpose],
-                        idle_s=self.config.idle_s,
-                        started=now,
-                        lease_id=record.lease_id,
-                        token_hash=_hash(token),
-                        active_since=now,
-                        last_input=now,
-                    )
-                    self.lease, self.browser = lease, record.browser
-                    return lease, token
+                    self.browser = record.browser
+                    return self._make_lease(record)
             except BaseException:
                 record.revoked = True
                 with contextlib.suppress(Exception):
@@ -396,8 +479,8 @@ class Manager:
         return self.lease
 
     def check_token(self, lease_id: str, token: str) -> Lease:
-        lease = self.lease
-        if lease is None or lease.lease_id != lease_id or self._records[lease_id].revoked:
+        lease = self._held.get(lease_id)
+        if lease is None or self._records[lease_id].revoked:
             raise LeaseError(404, "no_such_lease")
         if not hmac.compare_digest(lease.token_hash, _hash(token)):
             raise LeaseError(403, "bad_lease_token")
@@ -429,25 +512,41 @@ class Manager:
         if touch:
             lease.touch(self.clock())
         task = asyncio.ensure_future(work())
-        self._calls.add(task)
+        calls = self._calls.setdefault(lease_id, set())
+        calls.add(task)
         try:
             return await task
         except asyncio.CancelledError:
-            if task.cancelled() and self.lease is not lease:
-                raise LeaseEnded((self.last_end or {}).get("reason", "ended")) from None
+            if task.cancelled() and self._held.get(lease_id) is not lease:
+                reason = "ended"
+                if self.last_end and self.last_end.get("lease_id") == lease_id:
+                    reason = self.last_end.get("reason", "ended")
+                raise LeaseEnded(reason) from None
             raise
         finally:
-            self._calls.discard(task)
-            if touch and self.lease is lease:
+            calls.discard(task)
+            if not calls and self._calls.get(lease_id) is calls:
+                del self._calls[lease_id]
+            if touch and self._held.get(lease_id) is lease:
                 lease.touch(self.clock())
 
+    def _cancel_calls(self, lease_id: str) -> None:
+        for task in list(self._calls.pop(lease_id, ())):
+            task.cancel()
+
     async def release(self, lease_id: str | None, reason: str) -> bool:
-        """Ends the lease (all of them when lease_id is None): calls cancelled, Chromium closed
-        cleanly (profile flushed), or killed when it no longer answers; then, but at a shutdown,
-        the profile trimmed and measured: `last_end` carries its size (B7)."""
-        lease = self.lease
-        if lease is None or (lease_id is not None and lease.lease_id != lease_id):
-            if lease is None:
+        """Ends the lease (all of them when lease_id is None): calls cancelled, its slot's window
+        closed while another slot holds the browser, else Chromium closed cleanly (profile
+        flushed), or killed when it no longer answers; then, but at a shutdown, the profile
+        trimmed and measured: `last_end` carries its size (B7)."""
+        if lease_id is None and len(self._held) > 1:
+            ended = False
+            for lease in self.held()[1:]:
+                ended = await self.release(lease.lease_id, reason) or ended
+            return await self.release(None, reason) or ended
+        lease = self._held.get(lease_id) if lease_id is not None else self.lease
+        if lease is None:
+            if not self._held:
                 for record in self._records.values():
                     if (
                         record.task is not None
@@ -457,13 +556,18 @@ class Manager:
                         record.revoked = True
                         record.task.cancel()
             return False
+        if len(self._held) > 1 and reason != "browser_crashed":
+            return await self._end_slot(lease, reason)
+        for other in self.held():  # a crash of the shared Chromium ends every slot with it
+            if other is not lease:
+                self._drop_slot(other)
         record = self._records[lease.lease_id]
         record.revoked = True
-        self.lease, self.ending = None, lease.request
+        del self._held[lease.lease_id]
+        self.ending = lease.request
         end = self.last_end = {"lease_id": lease.lease_id, "reason": reason}
         try:
-            for task in list(self._calls):
-                task.cancel()
+            self._cancel_calls(lease.lease_id)
             for kept in lease.scratch.values():  # the tools' state: documents dropped now (B5)
                 drop = getattr(kept, "end", None)
                 if callable(drop):
@@ -484,17 +588,61 @@ class Manager:
             self.ending = None
         return True
 
+    def _drop_slot(self, lease: Lease) -> None:
+        """A slot's lease leaves the browser: its calls and its tools' state go; the Chromium,
+        if this lease's record holds it, goes to the lowest slot left."""
+        record = self._records[lease.lease_id]
+        record.revoked = True
+        del self._held[lease.lease_id]
+        if record.browser is not None and self._held:
+            heir = self._records[self.held()[0].lease_id]
+            heir.browser, record.browser = record.browser, None
+        self._cancel_calls(lease.lease_id)
+        for kept in lease.scratch.values():
+            drop = getattr(kept, "end", None)
+            if callable(drop):
+                drop()
+
+    async def _end_slot(self, lease: Lease, reason: str) -> bool:
+        """One slot ends while another holds the browser: its window closes (Browser.end_slot,
+        its cookies kept in the profile first), the Chromium stays for the others."""
+        self._drop_slot(lease)
+        self.last_end = {"lease_id": lease.lease_id, "reason": reason}
+        end_slot = getattr(self.browser, "end_slot", None)
+        if callable(end_slot):
+            try:
+                await end_slot(lease.lease_id)
+            except Exception as exc:
+                log.warning("lease %s: slot end failed: %s", lease.lease_id, type(exc).__name__)
+        return True
+
+    async def release_browser(self, browser: Browser, reason: str) -> bool:
+        """That Chromium crashed or closed by itself: every lease it serves ends. One that no
+        longer serves a lease (swapped, or ended) changes nothing."""
+        if browser is None or self.browser is not browser:
+            return False
+        return await self.release(None, reason)
+
     async def swap(self, lease: Lease, request: Request) -> bool:
         """The sign in hand off (B12, browserd/handoff.py): the lease's Chromium is closed
         wholly (profile written, its process group gone), then `request` starts another for the
         same lease, with or without a debugging port. `release` takes the same lock, so two never
-        run at once. False when the lease ended meanwhile (the new one, if any, closed again).
+        run at once. False when the lease ended meanwhile (the new one, if any, closed again),
+        or shares the browser with another slot (handoff.request never asks then).
         Whatever fails on the way (a stop, a start) ends the lease `browser_failed`: a lease
         never stays with no Chromium, and none starts beside one that may still run."""
         record = self._records.get(lease.lease_id)
-        if record is None or record.revoked or self.lease is not lease or record.task is not None:
+        if (
+            record is None
+            or record.revoked
+            or self._held.get(lease.lease_id) is not lease
+            or len(self._held) > 1
+            or record.task is not None
+        ):
             return False
-        task = self._own(record, self._replace(lease, request, record))
+        task = self._own(
+            record, self._replace(lease, replace(request, slot=lease.request.slot), record)
+        )
         try:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
@@ -505,7 +653,7 @@ class Manager:
         swapped = False
         try:
             async with self._swap:
-                if self.lease is not lease or record.revoked:
+                if self._held.get(lease.lease_id) is not lease or record.revoked:
                     return False
                 old, self.browser = self.browser, None
                 if old is not None:
@@ -515,12 +663,12 @@ class Manager:
                         with contextlib.suppress(Exception):
                             await old.kill()
                         raise
-                if self.lease is not lease or record.revoked:
+                if self._held.get(lease.lease_id) is not lease or record.revoked:
                     return False
                 new = await self._start(request, lease.lease_id)
                 record.browser = new
                 async with self._lock:
-                    if self.lease is lease and not record.revoked:
+                    if self._held.get(lease.lease_id) is lease and not record.revoked:
                         self.browser, swapped = new, True
                         return True
                 await self._close(record)
@@ -533,10 +681,11 @@ class Manager:
                 await self.release(lease.lease_id, "browser_failed")
 
     async def tick(self) -> str | None:
-        lease = self.lease
-        if lease is None:
-            return None
-        reason = lease.expired(self.clock())
-        if reason:
-            await self.release(lease.lease_id, reason)
-        return reason
+        """Ends every lease whose time is up; the last reason, or None."""
+        ended = None
+        for lease in self.held():
+            reason = lease.expired(self.clock())
+            if reason and self._held.get(lease.lease_id) is lease:
+                await self.release(lease.lease_id, reason)
+                ended = reason
+        return ended

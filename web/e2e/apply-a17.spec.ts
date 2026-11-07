@@ -107,7 +107,7 @@ test("A approves one fake submission; B and a signed-out person cannot read its 
     await waitForPostingDocuments(page.request, posting);
 
     await page.goto(`/jobs/${posting}`);
-    const section = page.getByRole("region", { name: "Apply", exact: true });
+    const section = page.getByRole("region", { name: "Your application" });
     await startReviewFirst(page);
     await expect(
       section.getByRole("img", { name: /before the click/ }),
@@ -126,7 +126,7 @@ test("A approves one fake submission; B and a signed-out person cannot read its 
       } else if (await row.getByRole("combobox").count()) {
         await row.getByRole("combobox").selectOption({ index: 1 });
       } else {
-        await row.getByRole("button", { name: "No", exact: true }).click();
+        await row.getByRole("radio", { name: "No", exact: true }).click();
       }
       await expect(open).toHaveCount(count - 1);
     }

@@ -1235,7 +1235,7 @@ DocumentsLanguage = Literal["auto", "en", "fr"]
 DocumentsTone = Literal["plain", "formal", "warm"]
 
 
-# The steps of the first login wizard (web/src/features/onboarding/steps.ts), in order.
+# The steps of the first login wizard (web/src/features/onboarding/lib/steps.ts), in order.
 WizardStep = Literal["profile", "looking", "where", "work", "pay", "apply", "summary"]
 WIZARD_STEPS: tuple[str, ...] = get_args(WizardStep)
 

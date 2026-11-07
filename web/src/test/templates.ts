@@ -5,7 +5,8 @@
  */
 import { http, HttpResponse } from "msw";
 
-import type { DocumentOut, Template } from "@/features/documents/documents-api";
+import type { DocumentOut } from "@/features/documents/api/documents-api";
+import type { Template } from "@/features/documents/api/templates-api";
 
 import type { FakeDocuments } from "./documents";
 import { server } from "./server";

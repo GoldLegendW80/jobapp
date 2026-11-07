@@ -69,6 +69,15 @@ def ensure(sessions: sessionmaker[Session], user_id: uuid.UUID) -> ProfileRef:
     raise AssertionError("unreachable")  # pragma: no cover
 
 
+def browsers(sessions: sessionmaker[Session], user_id: uuid.UUID) -> int | None:
+    """The person's own browsers at once as an admin set it (identity, owner 2026-11-07), None
+    when unset: the server's BROWSER_SLOTS."""
+    from app.identity.models import User
+
+    with sessions() as db:
+        return db.scalar(sa.select(User.browsers_at_once).where(User.id == user_id))
+
+
 def _read(db: Session, user_id: uuid.UUID) -> ProfileRef | None:
     row = db.execute(
         sa.select(BrowserProfile.profile_id, BrowserProfile.uid).where(

@@ -8,7 +8,7 @@ import { defineConfig, devices } from "@playwright/test";
  *
  *   apply-a1   the test browser opens each fake form, fills it by hand code, submits, and the
  *              submission is listed (task A1)
- *   apply-a3   the Answers tab of the profile (task A3)
+ *   apply-a3   the answers of task A3 read back in the Answers part of About you
  *   apply-a7   the Apply section of a posting: apply, review, approve, applied (task A7)
  *   apply-a17  one approved fake submission, with foreign-user and signed-out private reads
  *

@@ -590,10 +590,11 @@ class Runner:
         stop = await linkedin_guest.run(self, plan, stats, progress, deadline)
         await self.websites(plan, stats, progress, deadline, stop)
 
-    async def _give_back(self, user: str, held: str | None) -> None:
+    async def _give_back(self, user: str, held: str | None, key: str | None = None) -> None:
+        """A website that did not get its lease leaves the queue (its own place, with `key`)."""
         if held is None:
             with contextlib.suppress(StoreUnavailableError):
-                await self.leases.cancel(user, ["sweep"])
+                await self.leases.cancel(user, ["sweep"], key=key)
 
 
 def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = None) -> Runner:

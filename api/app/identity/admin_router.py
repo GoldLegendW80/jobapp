@@ -1,5 +1,6 @@
 """/api/admin: what only an admin may do. Invites (I4): list, create, revoke. Users (I5): list,
-disable or enable, promote or demote, never leaving the app without an active admin.
+disable or enable, promote or demote, never leaving the app without an active admin, and set
+each person's browsers at once (owner, 2026-11-07).
 
 Every route runs `require_admin` (router dependency), which answers 404 to a member, so a
 member learns nothing about which admin routes exist; without a session the app-wide
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.identity import deps, service
-from app.identity.models import Invite, InviteKind, Role, User
+from app.identity.models import Invite, InviteKind, Role, User, browsers_of
 from app.identity.schemas import (
     INVITES_PAGE_DEFAULT,
     INVITES_PAGE_MAX,
@@ -151,7 +152,12 @@ def revoke_invite(invite_id: str, request: Request, db: Db) -> Response:
 # --- users -------------------------------------------------------------------------------------
 
 
-def _user_out(user: User, sessions: int) -> AdminUserOut:
+def _ceiling(request: Request) -> int:
+    """The server's BROWSER_SLOTS, the most browsers at once anyone may have."""
+    return int(request.app.state.settings.browser_slots)
+
+
+def _user_out(user: User, sessions: int, ceiling: int) -> AdminUserOut:
     return AdminUserOut(
         id=user.id,
         email=user.email,
@@ -161,6 +167,7 @@ def _user_out(user: User, sessions: int) -> AdminUserOut:
         created_at=user.created_at,
         last_login_at=user.last_login_at,
         sessions=sessions,
+        browsers=browsers_of(user, ceiling),
     )
 
 
@@ -174,11 +181,12 @@ def list_users(
     """Every account sorted by name, with its signed in sessions and the count of active admins."""
     listing = service.list_users(db, limit=limit, offset=offset, now=deps.clock(request))
     return AdminUserPage(
-        items=[_user_out(user, sessions) for user, sessions in listing.rows],
+        items=[_user_out(user, sessions, _ceiling(request)) for user, sessions in listing.rows],
         total=listing.total,
         limit=limit,
         offset=offset,
         active_admins=listing.active_admins,
+        browsers_max=_ceiling(request),
     )
 
 
@@ -194,15 +202,24 @@ def list_users(
 def update_user(
     user_id: str, body: AdminUserPatch, request: Request, db: Db, admin: Admin
 ) -> AdminUserOut:
-    """Disable or enable an account and change its role. Disabling ends its sessions at once.
-    The last active admin can be neither disabled nor demoted (409). Setting a value it already
-    has is a 200 that changes nothing. An unknown id, or one that is not a UUID, is a 404."""
+    """Disable or enable an account, change its role and its browsers at once (owner,
+    2026-11-07: 1 up to the server's BROWSER_SLOTS, else 422; the browser's lease store reads it
+    at the person's next lease). Disabling ends its sessions at once. The last active admin can
+    be neither disabled nor demoted (409). Setting a value it already has is a 200 that changes
+    nothing. An unknown id, or one that is not a UUID, is a 404."""
+    if body.browsers is not None and body.browsers > _ceiling(request):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"Browsers at once is 1 to {_ceiling(request)}.",
+        )
     try:
         parsed = UUID(user_id)
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=USER_NOT_FOUND) from None
     try:
-        user = service.update_user(db, admin.id, parsed, is_active=body.is_active, role=body.role)
+        user = service.update_user(
+            db, admin.id, parsed, is_active=body.is_active, role=body.role, browsers=body.browsers
+        )
     except service.NotAnAdminError:
         db.rollback()  # demoted or disabled meanwhile: from now on a member, so the member 404
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found") from None
@@ -214,4 +231,4 @@ def update_user(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from None
     sessions = service.count_live_sessions(db, user.id, deps.clock(request))
     db.commit()
-    return _user_out(user, sessions)
+    return _user_out(user, sessions, _ceiling(request))

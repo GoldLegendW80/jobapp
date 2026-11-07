@@ -32,8 +32,8 @@ async def cancel_bound(store, user_id: uuid.UUID, run_id: uuid.UUID) -> bool:
     if lease_id is None and later_owned:
         lease_id = binding.get("lease")
     view = await store.current(str(user_id))
-    lease = view.lease
-    if lease is None or lease_id is None or lease.lease_id != lease_id:
+    lease = view.find(lease_id)
+    if lease is None:
         return False
     if lease.state == "waiting_person":
         await store.client.handoff(lease.lease_id, "cancel")

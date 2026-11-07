@@ -1,0 +1,237 @@
+<Rive version="1" kind="fragment">
+    <Artboard defaultStateMachineId="5:3" styleId="5:2" width="240" height="200" x="780" y="500" name="Loading" id="5:1">
+        <LayoutComponentStyle name="Loading style" id="5:2"/>
+        <StateMachine name="Loading" id="5:3">
+            <StateMachineLayer name="Play">
+                <AnyState x="200" y="-120"/>
+                <ExitState x="400" y="-120"/>
+                <EntryState x="0" y="0">
+                    <StateTransition stateToId="5:8"/>
+                </EntryState>
+                <AnimationState animationId="5:7" id="5:8" x="200" y="0"/>
+            </StateMachineLayer>
+        </StateMachine>
+        <Node name="Middle card" id="5:5" x="120" y="174">
+            <Shape name="Title line">
+                <Rectangle width="59.52" height="7" cornerRadiusTL="3.5" x="-7.68" y="-59.52"/>
+                <Fill>
+                    <SolidColor colorValue="FFD6D6D6"/>
+                </Fill>
+            </Shape>
+            <Shape name="Company line">
+                <Rectangle width="38.4" height="6" cornerRadiusTL="3" x="-18.24" y="-47.12"/>
+                <Fill>
+                    <SolidColor colorValue="FFE4E4E4"/>
+                </Fill>
+            </Shape>
+            <Shape name="Chip">
+                <Rectangle width="24.96" height="10" cornerRadiusTL="5" x="-24" y="-29.76"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Chip 2">
+                <Rectangle width="21.12" height="10" cornerRadiusTL="5" x="3.84" y="-29.76"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Band">
+                <Rectangle width="96" height="37.2" linkCornerRadius="false" cornerRadiusTL="14" cornerRadiusTR="14" cornerRadiusBL="0" cornerRadiusBR="0" x="0" y="-105.4"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFC298"/>
+                </Fill>
+            </Shape>
+            <Shape name="Body">
+                <Rectangle width="96" height="124" cornerRadiusTL="14" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFFFFF"/>
+                </Fill>
+                <Stroke thickness="2" cap="round" join="round">
+                    <SolidColor colorValue="FFE6E6E6"/>
+                </Stroke>
+            </Shape>
+            <Shape name="Shadow" y="5">
+                <Rectangle width="100" height="126" cornerRadiusTL="16" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="121B1B1B"/>
+                </Fill>
+            </Shape>
+            <Shape name="Shadow far" y="10">
+                <Rectangle width="106" height="130" cornerRadiusTL="18" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="0A1B1B1B"/>
+                </Fill>
+            </Shape>
+        </Node>
+        <Node name="Left card" id="5:4" x="120" y="174">
+            <Shape name="Title line">
+                <Rectangle width="59.52" height="7" cornerRadiusTL="3.5" x="-7.68" y="-59.52"/>
+                <Fill>
+                    <SolidColor colorValue="FFD6D6D6"/>
+                </Fill>
+            </Shape>
+            <Shape name="Company line">
+                <Rectangle width="38.4" height="6" cornerRadiusTL="3" x="-18.24" y="-47.12"/>
+                <Fill>
+                    <SolidColor colorValue="FFE4E4E4"/>
+                </Fill>
+            </Shape>
+            <Shape name="Chip">
+                <Rectangle width="24.96" height="10" cornerRadiusTL="5" x="-24" y="-29.76"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Chip 2">
+                <Rectangle width="21.12" height="10" cornerRadiusTL="5" x="3.84" y="-29.76"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Band">
+                <Rectangle width="96" height="37.2" linkCornerRadius="false" cornerRadiusTL="14" cornerRadiusTR="14" cornerRadiusBL="0" cornerRadiusBR="0" x="0" y="-105.4"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Body">
+                <Rectangle width="96" height="124" cornerRadiusTL="14" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFFFFF"/>
+                </Fill>
+                <Stroke thickness="2" cap="round" join="round">
+                    <SolidColor colorValue="FFE6E6E6"/>
+                </Stroke>
+            </Shape>
+            <Shape name="Shadow" y="5">
+                <Rectangle width="100" height="126" cornerRadiusTL="16" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="121B1B1B"/>
+                </Fill>
+            </Shape>
+            <Shape name="Shadow far" y="10">
+                <Rectangle width="106" height="130" cornerRadiusTL="18" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="0A1B1B1B"/>
+                </Fill>
+            </Shape>
+        </Node>
+        <Node name="Right card" id="5:6" x="120" y="174">
+            <Shape name="Title line">
+                <Rectangle width="59.52" height="7" cornerRadiusTL="3.5" x="-7.68" y="-59.52"/>
+                <Fill>
+                    <SolidColor colorValue="FFD6D6D6"/>
+                </Fill>
+            </Shape>
+            <Shape name="Company line">
+                <Rectangle width="38.4" height="6" cornerRadiusTL="3" x="-18.24" y="-47.12"/>
+                <Fill>
+                    <SolidColor colorValue="FFE4E4E4"/>
+                </Fill>
+            </Shape>
+            <Shape name="Chip">
+                <Rectangle width="24.96" height="10" cornerRadiusTL="5" x="-24" y="-29.76"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Chip 2">
+                <Rectangle width="21.12" height="10" cornerRadiusTL="5" x="3.84" y="-29.76"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Band">
+                <Rectangle width="96" height="37.2" linkCornerRadius="false" cornerRadiusTL="14" cornerRadiusTR="14" cornerRadiusBL="0" cornerRadiusBR="0" x="0" y="-105.4"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFDECD"/>
+                </Fill>
+            </Shape>
+            <Shape name="Body">
+                <Rectangle width="96" height="124" cornerRadiusTL="14" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="FFFFFFFF"/>
+                </Fill>
+                <Stroke thickness="2" cap="round" join="round">
+                    <SolidColor colorValue="FFE6E6E6"/>
+                </Stroke>
+            </Shape>
+            <Shape name="Shadow" y="5">
+                <Rectangle width="100" height="126" cornerRadiusTL="16" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="121B1B1B"/>
+                </Fill>
+            </Shape>
+            <Shape name="Shadow far" y="10">
+                <Rectangle width="106" height="130" cornerRadiusTL="18" x="0" y="-62"/>
+                <Fill>
+                    <SolidColor colorValue="0A1B1B1B"/>
+                </Fill>
+            </Shape>
+        </Node>
+        <LinearAnimation loopValue="loop" duration="96" name="Shuffle" id="5:7">
+            <KeyedObject objectId="5:4">
+                <KeyedProperty property="rotation">
+                    <KeyFrameDouble value="0" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="-0.2" frame="30" interpolationType="hold"/>
+                    <KeyFrameDouble value="-0.2" frame="48" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="0" frame="78" interpolationType="hold"/>
+                    <KeyFrameDouble value="0" frame="96" interpolationType="linear"/>
+                </KeyedProperty>
+                <KeyedProperty property="x">
+                    <KeyFrameDouble value="120" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="80" frame="30" interpolationType="hold"/>
+                    <KeyFrameDouble value="80" frame="48" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="120" frame="78" interpolationType="hold"/>
+                    <KeyFrameDouble value="120" frame="96" interpolationType="linear"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="5:6">
+                <KeyedProperty property="rotation">
+                    <KeyFrameDouble value="0" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="0.2" frame="30" interpolationType="hold"/>
+                    <KeyFrameDouble value="0.2" frame="48" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="0" frame="78" interpolationType="hold"/>
+                    <KeyFrameDouble value="0" frame="96" interpolationType="linear"/>
+                </KeyedProperty>
+                <KeyedProperty property="x">
+                    <KeyFrameDouble value="120" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="160" frame="30" interpolationType="hold"/>
+                    <KeyFrameDouble value="160" frame="48" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="120" frame="78" interpolationType="hold"/>
+                    <KeyFrameDouble value="120" frame="96" interpolationType="linear"/>
+                </KeyedProperty>
+            </KeyedObject>
+            <KeyedObject objectId="5:5">
+                <KeyedProperty property="y">
+                    <KeyFrameDouble value="174" frame="0" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="164" frame="30" interpolationType="hold"/>
+                    <KeyFrameDouble value="164" frame="48" interpolationType="cubic">
+                        <CubicEaseInterpolator x1="0.65" y1="0" x2="0.35" y2="1"/>
+                    </KeyFrameDouble>
+                    <KeyFrameDouble value="174" frame="78" interpolationType="hold"/>
+                    <KeyFrameDouble value="174" frame="96" interpolationType="linear"/>
+                </KeyedProperty>
+            </KeyedObject>
+        </LinearAnimation>
+    </Artboard>
+</Rive>

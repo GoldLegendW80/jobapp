@@ -33,6 +33,7 @@ USER_KEYS = {
     "created_at",
     "last_login_at",
     "sessions",
+    "browsers",
 }
 
 
@@ -549,3 +550,48 @@ def test_a_ring_of_admins_disabling_each_other_keeps_one(
     assert set(codes) <= {200, 401, 404, 409}, codes
     assert active_admins(factory) >= 1
     assert codes.count(200) == len(ids) - active_admins(factory)
+
+
+# --- browsers at once (owner, 2026-11-07) -----------------------------------------------------
+
+
+def test_every_account_has_the_servers_browsers_at_once_until_an_admin_lowers_it(
+    api: Api, admin: str, member: str, factory: sessionmaker[Session]
+) -> None:
+    """ "As an admin, i want being able to set the make browser parallel by person": every
+    account starts at the server's BROWSER_SLOTS (2), an admin lowers one to 1 and raises it
+    back; the others keep theirs."""
+    page = listing(api, admin)
+    assert page["browsers_max"] == 2
+    assert {row["email"]: row["browsers"] for row in page["items"]} == {ADMIN: 2, MEMBER: 2}
+    mia = user_id(factory, MEMBER)
+    lowered = patch(api, admin, mia, browsers=1)
+    assert lowered.status_code == 200, lowered.text
+    assert (lowered.json()["browsers"], lowered.json()["sessions"]) == (1, 1)
+    assert load(factory, MEMBER).browsers_at_once == 1
+    assert {row["email"]: row["browsers"] for row in listing(api, admin)["items"]} == {
+        ADMIN: 2,
+        MEMBER: 1,
+    }
+    assert patch(api, admin, user_id(factory, ADMIN), browsers=1).json()["browsers"] == 1
+    assert patch(api, admin, mia, browsers=2).json()["browsers"] == 2
+    assert load(factory, MEMBER).browsers_at_once == 2
+
+
+@pytest.mark.parametrize("bad", [0, 3, -1, "2", 1.5, True, None])
+def test_browsers_at_once_outside_one_to_the_servers_slots_is_422(
+    api: Api, admin: str, member: str, factory: sessionmaker[Session], bad: object
+) -> None:
+    mia = user_id(factory, MEMBER)
+    answer = patch(api, admin, mia, browsers=bad)
+    assert answer.status_code == 422, answer.text
+    assert load(factory, MEMBER).browsers_at_once is None
+
+
+def test_a_member_cannot_set_browsers_at_once(
+    api: Api, admin: str, member: str, factory: sessionmaker[Session]
+) -> None:
+    """Every admin route answers a member 404, as if it did not exist (I5)."""
+    answer = patch(api, member, user_id(factory, MEMBER), browsers=1)
+    assert answer.status_code == 404
+    assert load(factory, MEMBER).browsers_at_once is None

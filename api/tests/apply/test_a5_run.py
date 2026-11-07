@@ -9,6 +9,7 @@ import logging
 import uuid
 from dataclasses import replace
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -746,10 +747,13 @@ def test_a_question_answered_twice_or_not_at_all_stays_left_and_strays_are_ignor
 # --- the queue -----------------------------------------------------------------------------------
 
 
-def test_the_apply_queue_runs_one_fill_at_a_time_and_ticks_every_30_seconds() -> None:
+def test_the_apply_queue_runs_one_fill_per_browser_slot_and_ticks_every_30_seconds() -> None:
     spec = worker.apply_queue()
     assert spec.name == queue.APPLY == "jobapp:apply"
-    assert spec.max_jobs == 1
+    # Two browsers at once (2026-11-06): BROWSER_SLOTS fills, 2 by default, 1 as before.
+    assert spec.max_jobs == 2
+    one = SimpleNamespace(browser_lease_max_s="", browser_session_max_s=1800, browser_slots=1)
+    assert worker.apply_queue(one).max_jobs == 1  # type: ignore[arg-type]
     functions = {f.name: f for f in spec.functions}
     # submit: A6; manual: A9's Apply myself session
     assert set(functions) == {

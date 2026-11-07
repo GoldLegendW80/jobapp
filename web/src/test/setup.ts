@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll } from "vitest";
 
 import { server } from "./server";
@@ -33,6 +33,23 @@ if (missing("ResizeObserver", globalThis)) {
     },
   });
 }
+// The Carousel (Embla) watches which slides are in view; jsdom has no IntersectionObserver.
+if (missing("IntersectionObserver", globalThis)) {
+  Object.defineProperty(globalThis, "IntersectionObserver", {
+    writable: true,
+    value: class {
+      readonly root = null;
+      readonly rootMargin = "";
+      readonly thresholds = [];
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+      takeRecords() {
+        return [];
+      }
+    },
+  });
+}
 // jsdom lays nothing out and only warns on window.scrollTo, which React Router's
 // ScrollRestoration calls on every navigation: a no op (tests spy on it where it matters).
 Object.defineProperty(window, "scrollTo", {
@@ -49,6 +66,10 @@ for (const [name, fn] of [
 ] as const) {
   if (missing(name, proto)) proto[name] = fn;
 }
+
+// Pages load lazily (app/routes.tsx): a file's first visit to a page also compiles that page,
+// which can pass the default 1 s of findBy and waitFor while the whole suite runs in parallel.
+configure({ asyncUtilTimeout: 3000 });
 
 // Any request without a handler fails the test, so nothing reaches a real network.
 beforeAll(() => {

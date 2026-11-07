@@ -17,7 +17,7 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
 /**
  * Documents D17 against the real stack through Caddy, the worker on the fake model backend and
  * the real renderer, one fresh account and only invented data: a posting's CV rendered once
- * through the api (as D12's journey ends), then, through the page's Chat view, "shorter summary"
+ * through the api (as D12's journey ends), then, through the chat on its page, "shorter summary"
  * answered with what changed and the new version, and "use the ledger template" answered with
  * the switch, the content unchanged and the preview drawn with the new template. The chat runs
  * the recorded streams `documents_chat_cv_journey` and `documents_chat_cv_ledger`, named in the
@@ -164,7 +164,6 @@ test("a posting's CV is rendered once, with the consent and a credential", async
 
 test("shorter summary is answered with what changed and the new version", async () => {
   await page.goto(`/jobs/${postingId}/documents/cv`);
-  await page.getByRole("tab", { name: "Chat" }).click();
   await expect(page.getByTestId("document-chat-empty")).toBeVisible();
   await ask("shorter summary");
   await expect(lastAnswer()).toContainText("Changed the summary.", {
@@ -197,7 +196,6 @@ test("use the ledger template switches it, the text unchanged, and the preview f
   expect(drawn.latest?.template_slug).toBe("ledger");
   expect(drawn.draft).toEqual(before.draft);
   await expect(page.getByTestId("document-view")).toContainText("Ledger");
-  await page.getByRole("tab", { name: "See" }).click();
   await expect(page.getByRole("region", { name: "Versions" })).toContainText(
     "ledger",
     { ignoreCase: true },

@@ -8,7 +8,10 @@
  */
 import { http, HttpResponse } from "msw";
 
-import type { SectionData, SectionName } from "@/features/profile/api";
+import type {
+  SectionData,
+  SectionName,
+} from "@/features/profile/api/profile-api";
 
 import { server } from "./server";
 

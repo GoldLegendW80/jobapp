@@ -284,7 +284,11 @@ test("delete the notes after reading the dialog: what goes and what stays", asyn
 
   // The run shows the document as deleted, every step row kept.
   await page.getByText("Every step of this run").click();
-  await expect(page.getByText(/Deleted document\./)).toBeVisible();
+  await expect(
+    page
+      .getByRole("list", { name: "Steps of this run" })
+      .getByText("Deleted document", { exact: true }),
+  ).toBeVisible();
 
   // The item accepted in the first run keeps its value and only the mark of its source; the
   // rejected one is reduced to what a rerun needs and leaves that run's list.

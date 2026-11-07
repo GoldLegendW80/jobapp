@@ -50,10 +50,7 @@ let context: BrowserContext;
 let page: Page;
 let errors: string[];
 
-const card = () =>
-  page.locator("[data-slot=card]").filter({
-    has: page.getByRole("heading", { level: 2, name: "Model access" }),
-  });
+const card = () => page.getByRole("region", { name: "Model access" });
 const form = () => page.getByRole("form", { name: "Model access" });
 const savedBox = () => page.getByRole("region", { name: "Saved credential" });
 const result = () => page.getByTestId("verify-result");

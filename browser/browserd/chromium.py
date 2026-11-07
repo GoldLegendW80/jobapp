@@ -19,6 +19,7 @@ import stat
 import sys
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Any
 
 from browserd import config as c
@@ -41,13 +42,19 @@ REAP_TRIES = 100  # 50 ms apart: what a reap killed is gone in 5 s, or the next 
 WEBGL_SWITCHES = ("--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader")
 
 
-def webgl(request: Request) -> bool:
-    """Whether this lease's Chromium starts with software WebGL: every sweep lease (B20)."""
-    return request.purpose == "sweep"
+def webgl(request: Request, shared: bool = False) -> bool:
+    """Whether this lease's Chromium starts with software WebGL: every sweep lease (B20), and
+    every agent's Chromium of a browser with slots, since a sweep may join it (2026-11-06)."""
+    return request.purpose == "sweep" or (shared and request.automation)
 
 
 def switches(
-    request: Request, lease_dir: str, port: int | None, address: str = "about:blank"
+    request: Request,
+    lease_dir: str,
+    port: int | None,
+    address: str = "about:blank",
+    *,
+    shared: bool = False,
 ) -> list[str]:
     """SPEC-browser's switches. Never --no-sandbox, never --headless. The user agent is
     Chromium's own (B1: "X11; Linux x86_64" with the client hint architecture "arm"): a
@@ -60,7 +67,10 @@ def switches(
     (/usr/bin/chromium), which would otherwise drop the second one. A sweep lease, and no other,
     also disables IsolateSandboxedIframes (B17): a search, signed in or not, runs only in a sweep
     lease, and its purpose is known at launch while a signed in scope arrives later, so every
-    sweep lease carries it and every other lease keeps Chromium's default."""
+    sweep lease carries it and every other lease keeps Chromium's default. `shared` (BROWSER_SLOTS
+    over 1, owner, 2026-11-06): one Chromium serves the slots of one person, a sweep's among
+    them, so an agent's Chromium carries the sweep's switches whatever its first purpose, and
+    its first window opens normal (not maximized) at its slot's region of the wide display."""
     debugging = (
         []
         if port is None
@@ -70,7 +80,13 @@ def switches(
             "--disable-blink-features=AutomationControlled",
         ]
     )
-    sandboxed = ",IsolateSandboxedIframes" if request.purpose == "sweep" else ""
+    sweep_like = request.purpose == "sweep" or (shared and request.automation)
+    sandboxed = ",IsolateSandboxedIframes" if sweep_like else ""
+    window = (
+        [f"--window-position={c.SLOT_W * request.slot},0"]
+        if shared
+        else ["--window-position=0,0", "--start-maximized"]
+    )
     return [
         "chromium",
         "--",
@@ -79,8 +95,7 @@ def switches(
         "--no-first-run",
         "--no-default-browser-check",
         "--window-size=1440,900",
-        "--window-position=0,0",
-        "--start-maximized",
+        *window,
         f"--lang={request.languages[0]}",
         "--password-store=basic",
         # WebRtcHideLocalIpsWithMdns: no mDNS responder (UDP 224.0.0.251:5353, review of PR
@@ -104,7 +119,7 @@ def switches(
         # a DNS query out of the proxy, a WebRTC STUN server's name for instance.
         "--host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1",
         "--disable-quic",
-        *(WEBGL_SWITCHES if webgl(request) else ()),
+        *(WEBGL_SWITCHES if webgl(request, shared) else ()),
         "--",
         address,
     ]
@@ -331,12 +346,12 @@ async def clear_display() -> None:
         raise RuntimeError("a process of a profile uid survived the reap")
 
 
-async def start_display() -> asyncio.subprocess.Process:
+async def start_display(screen: str = c.SCREEN) -> asyncio.subprocess.Process:
     # X11's own socket directory, inside the container's private /tmp.
     os.makedirs("/tmp/.X11-unix", exist_ok=True)  # noqa: S108
     os.chmod("/tmp/.X11-unix", 0o1777)  # noqa: S103, S108
     proc = await asyncio.create_subprocess_exec(
-        "Xvfb", c.DISPLAY, "-screen", "0", c.SCREEN, "-nolisten", "tcp", "-ac",
+        "Xvfb", c.DISPLAY, "-screen", "0", screen, "-nolisten", "tcp", "-ac",
         user=c.DISPLAY_UID, group=c.DISPLAY_UID, extra_groups=[],
         stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL, env={"PATH": "/usr/bin:/bin"}, cwd="/",
@@ -393,6 +408,12 @@ class Chromium:
         self.on_event: Any = None
         self._tasks: list[asyncio.Task[Any]] = []
         self._first_navigation = False
+        # Slots (2026-11-06): the lease that started this Chromium uses the person's own
+        # persisted context; a lease that joins gets a context of its own (`home`).
+        self.shared = getattr(cfg, "slots", 1) > 1
+        self.persisted_by: str | None = lease_id
+        self._homes: dict[str, Any] = {}
+        self._extras: dict[str, list[Any]] = {}
 
     @property
     def lease_dir(self) -> str:
@@ -417,7 +438,7 @@ class Chromium:
     ) -> asyncio.subprocess.Process:
         request = self.request
         self.proc = await asyncio.create_subprocess_exec(
-            *switches(request, self.lease_dir, port, address),
+            *switches(request, self.lease_dir, port, address, shared=self.shared),
             user=request.uid, group=request.uid, extra_groups=[], start_new_session=True,
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL,
             # cwd "/": the chdir happens before the uid change, as root without DAC_OVERRIDE.
@@ -440,6 +461,9 @@ class Chromium:
             self._memory_boundary("cdp_ready")
             context = self.browser.contexts[0]
             context.on("page", self._on_page)
+            if self.shared:
+                origin = self.request.slot
+                context.on("page", lambda page: self._place_later(page, origin))
             with contextlib.suppress(Exception):
                 for page in context.pages:
                     self._memory_page(page)
@@ -475,6 +499,113 @@ class Chromium:
             self._event(event="tab_closed", reason="tabs_max")
             self._tasks.append(asyncio.ensure_future(page.close()))
         self._memory_page(page)
+
+    # Slots (owner, 2026-11-06) -------------------------------------------------------------------
+
+    def slot_of(self, lease: Any) -> "Slot | None":
+        """The tools' view of that lease's slot; None with one browser (the code of one lease)."""
+        return Slot(self, lease.lease_id, lease.request.slot) if self.shared else None
+
+    async def home(self, lease_id: str, slot: int) -> Any:
+        """The context a lease's tabs live in. The lease that started this Chromium: the
+        person's own persisted context, as with one browser. A lease that joined: a context of
+        its own, made on its first use with the person's cookies, so its window, its routes and
+        its tabs are its own; its cookies go back to the profile at its end (`end_slot`). Its
+        local storage is the persisted context's storage state: of every origin this Chromium
+        opened since it started, read and written by Playwright's own hidden page whose requests
+        it answers itself (SPEC-browser "Two browsers at once" names what it leaves out)."""
+        if lease_id == self.persisted_by:
+            return self.browser.contexts[0]
+        found = self._homes.get(lease_id)
+        if found is None:
+            persisted = self.browser.contexts[0]
+            try:
+                state = await asyncio.wait_for(persisted.storage_state(), c.NAVIGATION_S)
+                found = await self.browser.new_context(
+                    no_viewport=True, accept_downloads=False, storage_state=state
+                )
+            except Exception as exc:
+                why = type(exc).__name__
+                log.warning("lease %s: storage state not copied: %s", lease_id[:8], why)
+                found = await self.browser.new_context(no_viewport=True, accept_downloads=False)
+                cookies = await persisted.cookies()
+                if cookies:
+                    await found.add_cookies(cookies)
+            self._homes[lease_id] = found
+            self._adopt(found, slot)
+        return found
+
+    async def new_context(self, lease_id: str, slot: int, **options: Any) -> Any:
+        """Another context of that lease (a website search signed out): closed at its end."""
+        context = await self.browser.new_context(**options)
+        self._extras.setdefault(lease_id, []).append(context)
+        self._adopt(context, slot)
+        return context
+
+    def pages_of(self, lease_id: str) -> list[Any]:
+        """The tabs of that lease's own contexts, none of another slot's."""
+        contexts = list(self._extras.get(lease_id, ()))
+        if lease_id == self.persisted_by:
+            contexts.insert(0, self.browser.contexts[0])
+        elif lease_id in self._homes:
+            contexts.insert(0, self._homes[lease_id])
+        return [page for context in contexts for page in context.pages]
+
+    def _adopt(self, context: Any, slot: int) -> None:
+        context.on("page", self._on_page)
+        context.on("page", lambda page: self._place_later(page, slot))
+
+    def _place_later(self, page: Any, slot: int) -> None:
+        self._tasks = [task for task in self._tasks if not task.done()]
+        self._tasks.append(asyncio.ensure_future(self.place(page, slot)))
+
+    async def place(self, page: Any, slot: int) -> None:
+        """The page's window on its slot's region of the display, where the slot's live view
+        shows it (a popup window included). Best effort: a window left elsewhere is only
+        not seen in that view."""
+        with contextlib.suppress(Exception):
+            client = await page.context.new_cdp_session(page)
+            try:
+                found = await asyncio.wait_for(client.send("Browser.getWindowForTarget"), 5)
+                bounds = found.get("bounds") or {}
+                left = c.SLOT_W * slot
+                if bounds.get("left") == left and bounds.get("width") == c.SLOT_W:
+                    return
+                window = found["windowId"]
+                await client.send(
+                    "Browser.setWindowBounds",
+                    {"windowId": window, "bounds": {"windowState": "normal"}},
+                )
+                await client.send(
+                    "Browser.setWindowBounds",
+                    {
+                        "windowId": window,
+                        "bounds": {"left": left, "top": 0, "width": c.SLOT_W, "height": c.SLOT_H},
+                    },
+                )
+            finally:
+                await client.detach()
+
+    async def end_slot(self, lease_id: str) -> None:
+        """A slot's lease ended while another holds this Chromium: its contexts close, the
+        cookies of its own context kept in the profile first; the persisted context of the lease
+        that started the Chromium loses its tabs and is not given to another lease."""
+        home = self._homes.pop(lease_id, None)
+        contexts = [*self._extras.pop(lease_id, ())]
+        if home is not None:
+            with contextlib.suppress(Exception):
+                cookies = await asyncio.wait_for(home.cookies(), c.CLOSE_S)
+                if cookies:
+                    await asyncio.wait_for(self.browser.contexts[0].add_cookies(cookies), c.CLOSE_S)
+            contexts.append(home)
+        for context in contexts:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(context.close(), c.CLOSE_S)
+        if lease_id == self.persisted_by:
+            self.persisted_by = None
+            with contextlib.suppress(Exception):
+                for page in list(self.browser.contexts[0].pages):
+                    await asyncio.wait_for(page.close(), c.CLOSE_S)
 
     def _memory_page(self, page: Any) -> None:
         with contextlib.suppress(Exception):
@@ -524,7 +655,11 @@ class Chromium:
 
     async def stop(self) -> None:
         """Browser.close over CDP (profile flushed, B1: 0.32 s), the process group killed if it
-        has not exited within CLOSE_S, then the end finished whatever failed before it."""
+        has not exited within CLOSE_S, then the end finished whatever failed before it. The
+        cookies of a joined slot's own context go to the profile first (`end_slot`)."""
+        for lease_id in list(self._homes):
+            with contextlib.suppress(Exception):
+                await self.end_slot(lease_id)
         self.stopping = True
         try:
             with contextlib.suppress(Exception):
@@ -572,6 +707,24 @@ class Chromium:
                          self.lease_dir)  # fmt: skip
         except Exception as exc:
             log.warning("lease %s: directory not removed: %s", self.lease_id, type(exc).__name__)
+
+
+@dataclass(frozen=True)
+class Slot:
+    """What one lease's tools see of a Chromium with slots: its own contexts and tabs only."""
+
+    chromium: Chromium
+    lease_id: str
+    index: int
+
+    async def home(self) -> Any:
+        return await self.chromium.home(self.lease_id, self.index)
+
+    async def new_context(self, **options: Any) -> Any:
+        return await self.chromium.new_context(self.lease_id, self.index, **options)
+
+    def pages(self) -> list[Any]:
+        return self.chromium.pages_of(self.lease_id)
 
 
 CGROUP = "/sys/fs/cgroup"

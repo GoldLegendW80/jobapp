@@ -231,9 +231,12 @@ test("the second message's prompt is rebuilt with the first exchange", async () 
 
 test("deleting the conversation empties it, also after a reload", async () => {
   await panel().getByRole("button", { name: "Delete conversation" }).click();
-  await expect(panel().getByText("Delete this conversation?")).toBeVisible();
+  const confirm = page.getByRole("alertdialog", {
+    name: "Delete this conversation?",
+  });
+  await expect(confirm).toBeVisible();
   await shots(page, "delete-confirm", false);
-  await panel().getByRole("button", { name: "Delete", exact: true }).click();
+  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByText("Conversation deleted.")).toBeVisible();
   await expect(panel().getByTestId("chat-empty")).toBeVisible();
   await page.reload();

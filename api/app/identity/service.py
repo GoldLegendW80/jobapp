@@ -632,8 +632,11 @@ def update_user(
     user_id: UUID,
     is_active: bool | None = None,
     role: Role | None = None,
+    browsers: int | None = None,
 ) -> User:
-    """Disable, enable, promote or demote an account, as the admin `actor_id`. The caller commits.
+    """Disable, enable, promote or demote an account, or set its browsers at once (`browsers`,
+    checked against the server's ceiling by the caller), as the admin `actor_id`. The caller
+    commits.
 
     Every such change takes one transaction advisory lock first, so changes run one at a time
     and each reads the accounts as the previous one left them (read committed takes a new
@@ -685,5 +688,7 @@ def update_user(
         end_user_sessions(session, user.id)  # already disabled: make sure nothing lingers
     if new_role != user.role:
         user.role = new_role
+    if browsers is not None and browsers != user.browsers_at_once:
+        user.browsers_at_once = browsers
     session.flush()
     return user

@@ -102,6 +102,16 @@ def ended_of(payload: Any) -> Ended:
     )  # fmt: skip
 
 
+def held_in(found: Any, lease_id: str) -> dict[str, Any] | None:
+    """That lease in an answer of `current()` while browserd holds it, whatever its slot."""
+    if not isinstance(found, dict):
+        return None
+    lease = found.get("lease")
+    listed = found.get("leases")
+    held = listed if isinstance(listed, list) else [lease]
+    return next((x for x in held if isinstance(x, dict) and x.get("lease_id") == lease_id), None)
+
+
 @dataclass(frozen=True)
 class Started:
     lease_id: str
@@ -144,6 +154,7 @@ class BrowserdClient:
         hosts: Sequence[str] = (),
         submit_selectors: Sequence[str] = (),
         address: str | None = None,
+        browsers: int | None = None,
     ) -> Started:
         body: dict[str, Any] = {
             "user_id": user_id,
@@ -154,6 +165,8 @@ class BrowserdClient:
             "hosts": list(hosts),
             "submit_selectors": list(submit_selectors),
         }
+        if browsers is not None:  # the person's own browsers at once (2026-11-07)
+            body["browsers"] = browsers
         if address is not None:  # B7: where a person's own session opens
             body["address"] = address
         status, payload = await self._call("POST", "/leases", START_TIMEOUT_S, body)
@@ -199,11 +212,20 @@ class BrowserdClient:
         return "failed"
 
     async def current(self) -> dict[str, Any]:
+        """browserd's leases now: `lease` the lowest slot's, `leases` every slot's, `slots` its
+        BROWSER_SLOTS (1 from a browserd that does not say), `last_end` its latest end."""
         status, payload = await self._call("GET", "/leases/current", TIMEOUT_S)
         if status == 200 and isinstance(payload, dict) and "lease" in payload:
             lease = payload.get("lease")
+            lease = lease if isinstance(lease, dict) else None
+            listed = payload.get("leases")
+            if not isinstance(listed, list):  # a browserd of one slot only
+                listed = [lease] if lease else []
+            slots = payload.get("slots")
             return {
-                "lease": lease if isinstance(lease, dict) else None,
+                "lease": lease,
+                "leases": [held for held in listed if isinstance(held, dict)],
+                "slots": slots if type(slots) is int and slots >= 1 else 1,
                 "last_end": payload.get("last_end")
                 if isinstance(payload.get("last_end"), dict)
                 else None,

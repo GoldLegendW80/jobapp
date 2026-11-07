@@ -75,8 +75,7 @@ function logs(...services: string[]): string {
   );
 }
 
-const card = (page: Page) =>
-  page.locator("[aria-labelledby='gmail-card-title']");
+const card = (page: Page) => page.getByRole("region", { name: "Gmail" });
 
 // The card also holds a "Loading" status while the account is fetched: pick the notice by its text.
 const notice = (page: Page, text: string) =>

@@ -1,0 +1,192 @@
+import { zodResolver } from "@hookform/resolvers/zod";
+import { CircleAlert, Timer } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useForm } from "react-hook-form";
+import { toast } from "sonner";
+import { z } from "zod";
+
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
+import { Form } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { SettingsSection } from "@/components/shared/profile/settings-frame";
+import { message } from "@/features/admin/helpers/errors";
+import type { User } from "@/features/auth/api/auth-api";
+import { useChangePassword } from "@/features/auth/api/use-me";
+import {
+  PASSWORD_HINT,
+  passwordProblem,
+} from "@/features/auth/helpers/password-rules";
+import {
+  formatWait,
+  throttledFor,
+  useRetryCountdown,
+} from "@/features/auth/helpers/retry-countdown";
+
+import { fieldError } from "../helpers/field-error";
+import { PasswordField } from "./password-field";
+
+export const PASSWORD_CHANGED =
+  "Password changed. Other devices are signed out.";
+export const SAME_PASSWORD =
+  "The new password must be different from the current one.";
+
+function buildSchema(email: string) {
+  return z
+    .object({ current: z.string(), next: z.string(), confirm: z.string() })
+    .superRefine((values, ctx) => {
+      if (values.current === "")
+        ctx.addIssue({
+          code: "custom",
+          path: ["current"],
+          message: "Enter your current password.",
+        });
+      const problem = passwordProblem(values.next, email);
+      if (problem)
+        ctx.addIssue({ code: "custom", path: ["next"], message: problem });
+      else if (
+        values.current !== "" &&
+        values.next.normalize("NFKC") === values.current.normalize("NFKC")
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["next"],
+          message: SAME_PASSWORD,
+        });
+      if (values.confirm === "")
+        ctx.addIssue({
+          code: "custom",
+          path: ["confirm"],
+          message: "Repeat the new password.",
+        });
+      else if (values.confirm !== values.next)
+        ctx.addIssue({
+          code: "custom",
+          path: ["confirm"],
+          message: "The passwords do not match.",
+        });
+    });
+}
+type Values = z.infer<ReturnType<typeof buildSchema>>;
+const EMPTY: Values = { current: "", next: "", confirm: "" };
+const FIELD = { current_password: "current", new_password: "next" } as const;
+
+/** "Change password": the current one, then the new one twice. Other browsers sign out. */
+export function PasswordCard({ user }: { user: User }) {
+  const schema = useMemo(() => buildSchema(user.email), [user.email]);
+  const form = useForm<Values>({
+    resolver: zodResolver(schema),
+    defaultValues: EMPTY,
+  });
+  const [formError, setFormError] = useState<string>();
+  // After a 429 (too many wrong current passwords) the button waits out Retry-After.
+  const countdown = useRetryCountdown(() => {
+    setFormError(undefined);
+  });
+  const locked = countdown.remaining > 0;
+  const mutation = useChangePassword({
+    onMutate: () => {
+      setFormError(undefined);
+    },
+    onSuccess: () => {
+      form.reset(EMPTY);
+      toast.success(PASSWORD_CHANGED);
+    },
+    onError: (error) => {
+      const wait = throttledFor(error);
+      if (wait !== undefined) countdown.start(wait);
+      const found = fieldError(error, ["current_password", "new_password"]);
+      if (found) {
+        form.setError(
+          FIELD[found.field],
+          { message: found.message },
+          { shouldFocus: true },
+        );
+        return;
+      }
+      setFormError(message(error));
+    },
+  });
+  const pending = mutation.isPending;
+
+  return (
+    <SettingsSection
+      title="Change password"
+      description="Every other browser signed in to your account is signed out. This one stays signed in."
+    >
+      <Form {...form}>
+        <form
+          noValidate
+          aria-label="Change password"
+          className="flex max-w-md flex-col gap-4"
+          onSubmit={(event) =>
+            void form.handleSubmit((values) => {
+              mutation.mutate({
+                current_password: values.current,
+                new_password: values.next,
+              });
+            })(event)
+          }
+        >
+          {/* Lets password managers tie the new password to this account. */}
+          <Input
+            type="email"
+            name="username"
+            autoComplete="username"
+            value={user.email}
+            readOnly
+            hidden
+          />
+          {formError ? (
+            <Alert variant="destructive">
+              <CircleAlert aria-hidden="true" />
+              <AlertDescription>{formError}</AlertDescription>
+            </Alert>
+          ) : null}
+          <PasswordField
+            control={form.control}
+            name="current"
+            label="Current password"
+            autoComplete="current-password"
+          />
+          <PasswordField
+            control={form.control}
+            name="next"
+            label="New password"
+            autoComplete="new-password"
+            description={PASSWORD_HINT}
+          />
+          <PasswordField
+            control={form.control}
+            name="confirm"
+            label="Confirm new password"
+            autoComplete="new-password"
+          />
+          <Button
+            type="submit"
+            className="w-fit"
+            disabled={pending || locked}
+            aria-busy={pending}
+          >
+            {pending ? (
+              <>
+                <Spinner aria-hidden="true" role={undefined} />
+                Changing password
+              </>
+            ) : locked ? (
+              <>
+                <Timer aria-hidden="true" />
+                <span className="tabular-nums">
+                  Try again in {formatWait(countdown.remaining)}
+                </span>
+              </>
+            ) : (
+              "Change password"
+            )}
+          </Button>
+        </form>
+      </Form>
+    </SettingsSection>
+  );
+}

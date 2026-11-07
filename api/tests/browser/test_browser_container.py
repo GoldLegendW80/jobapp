@@ -142,8 +142,8 @@ class Stack:
         return answer["body"]
 
     def end(self) -> None:
-        lease = self.current()["lease"]
-        if lease:
+        """Ends every slot's lease, the last one ending Chromium (BROWSER_SLOTS, 2026-11-06)."""
+        for lease in reversed(self.current()["leases"]):
             # 200 with the end and the profile's size since browser B7.
             assert self.call("DELETE", f"/leases/{lease['lease_id']}")["status"] == 200
 
@@ -304,6 +304,52 @@ def test_a_lease_for_a_new_profile_and_a_second_lease_refused(
     current = stack.current()["lease"]
     assert current["lease_id"] == lease["lease_id"]
     assert "lease_token" not in current
+
+
+# The full command lines of every process whose own holds a word (PS reads the first only).
+LINES = """
+import os, sys
+for pid in filter(str.isdigit, os.listdir("/proc")):
+    try:
+        line = open(f"/proc/{pid}/cmdline", "rb").read().replace(b"\\0", b" ").decode()
+    except OSError:
+        continue
+    if sys.argv[1] in line and pid != str(os.getpid()):
+        print(pid, line)
+"""
+
+
+def lines(stack: Stack, word: str) -> list[str]:
+    """Those processes, Chromium's own children (`--type=`) left out."""
+    return [line for line in stack.python(LINES, word).splitlines() if "--type=" not in line]
+
+
+def test_two_agent_leases_of_one_person_share_one_chromium_in_two_slots(stack: Stack) -> None:
+    """Two browsers at once (owner, 2026-11-06; compose's BROWSER_SLOTS 2): the person's second
+    agent lease joins the running Chromium in slot 1, on a display two slots wide; nobody else
+    joins; the end of one slot leaves the other's Chromium running."""
+    stack.release_left()  # the shared sweep of A (`sweep_of_a`) would take the first slot
+    first = stack.lease(A, 20001, "sweep")
+    main = lines(stack, "--remote-debugging-port")
+    assert len(main) == 1
+    second = stack.lease(A, 20001, "apply_fill")
+    assert (first["slot"], second["slot"]) == (0, 1)
+    current = stack.current()
+    assert current["slots"] == 2
+    assert [lease["lease_id"] for lease in current["leases"]] == [
+        first["lease_id"],
+        second["lease_id"],
+    ]
+    assert lines(stack, "--remote-debugging-port") == main  # the same Chromium, no other
+    assert lines(stack, "2880x900x24")  # Xvfb, one 1440 by 900 region per slot
+    other = stack.call(
+        "POST", "/leases", {"user_id": "b", "profile_id": B, "uid": 20002, "purpose": "sweep"}
+    )
+    assert other["status"] == 409
+    assert stack.call("DELETE", f"/leases/{second['lease_id']}")["status"] == 200
+    left = stack.current()["leases"]
+    assert [lease["lease_id"] for lease in left] == [first["lease_id"]]
+    assert lines(stack, "--remote-debugging-port") == main
 
 
 @pytest.mark.usefixtures("sweep_of_a")
@@ -642,7 +688,7 @@ def test_processes_left_under_a_profile_uid_are_killed(stack: Stack) -> None:
     assert int(killed) >= 1
     assert not [p for p in processes(stack) if p[0] == 20007]
     main = (ROOT / "browser/browserd/__main__.py").read_text(encoding="utf-8")
-    assert main.index("reap_strays()") < main.index("start_display()")
+    assert main.index("reap_strays()") < main.index("start_display(")
 
 
 # A process that never keeps its pid: each one forks and exits, so a list of pids read before the
@@ -683,7 +729,8 @@ def test_a_process_that_keeps_forking_is_reaped(stack: Stack) -> None:
 def test_idle_timeout_and_no_lease_across_a_restart(stack: Stack) -> None:
     stack.lease(A, 20001)
     stack.run("up", "-d", "--wait", "--no-build", "browser", env={"BROWSER_IDLE_S": "2"})
-    assert stack.current() == {"lease": None, "last_end": None}
+    current = stack.current()
+    assert (current["lease"], current["leases"], current["last_end"]) == (None, [], None)
     stack.lease(A, 20001)
     assert stack.wait_ended(attempts=400)["last_end"]["reason"] == "idle"
 

@@ -122,7 +122,7 @@ for (const ats of ["greenhouse", "ashby"] as const) {
   test(`apply on the fake ${ats} form: fill, answer what is left, approve, applied`, async () => {
     const job = await postingOn(ats);
     await page.goto(`/jobs/${job}`);
-    const section = page.getByRole("region", { name: "Apply" });
+    const section = page.getByRole("region", { name: "Your application" });
     await startReviewFirst(page);
     const fillStarted = Date.now();
 
@@ -165,7 +165,7 @@ for (const ats of ["greenhouse", "ashby"] as const) {
       } else if (await choices.count()) {
         await choices.selectOption({ index: 1 });
       } else {
-        await row.getByRole("button", { name: "No", exact: true }).click();
+        await row.getByRole("radio", { name: "No", exact: true }).click();
       }
       await expect(open).toHaveCount(before - 1);
     }

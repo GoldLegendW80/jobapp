@@ -153,7 +153,7 @@ test("a new user opens the documents step", async () => {
     page.getByRole("heading", { level: 2, name: "Step 2: Add your documents" }),
   ).toBeVisible();
   await expect(
-    page.getByText("No document yet. Add a file or paste a text above."),
+    page.getByText("No document yet", { exact: true }),
   ).toBeVisible();
 });
 

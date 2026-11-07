@@ -92,7 +92,7 @@ async function fill(
   await page.goto(`/jobs/${job}`);
   await expect(
     page
-      .getByRole("region", { name: "Apply" })
+      .getByRole("region", { name: "Your application" })
       .getByRole("img", { name: /before the click/ }),
   ).toBeVisible({ timeout: 240_000 });
   const response = await page.request.get(

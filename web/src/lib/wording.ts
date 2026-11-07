@@ -282,6 +282,10 @@ export const WORDING = {
     "Add a few websites to your list in Find jobs and start a search: what the app finds shows up here.",
   findJobs: "Find jobs",
   addSkills: "Add your skills",
+  yourDeck: "Your deck",
+  changeTheMode: "Change the mode",
+  matches: "Matches",
+  gap: "Gap",
   // The summary's optional model key (welcome step 8), saved as Account's Model access does.
   yourApiKeyOptional: "Your Anthropic API key (optional)",
   apiKey: "API key",
@@ -296,6 +300,8 @@ export const WORDING = {
   // The posting page: Apply and the documents first, the rest folded.
   yourApplication: "Your application",
   moreAboutPosting: "More about this posting",
+  // The Jobs list's detail pane: the selected posting on its own page.
+  openFullPage: "Open full page",
   addWebsites: "Add websites",
   // Opportunities O3.
   pay: "Pay",

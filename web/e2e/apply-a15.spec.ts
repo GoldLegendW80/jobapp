@@ -165,14 +165,14 @@ test("an invented candidate prepares documents", async () => {
 async function reviewShot(name: string): Promise<void> {
   await expect(
     page
-      .getByRole("region", { name: "Apply", exact: true })
+      .getByRole("region", { name: "Your application" })
       .getByRole("button", { name: "Approve and submit", exact: true }),
   ).toBeVisible();
   await shots(page, name);
 }
 
 async function approveAndSubmit(job: string): Promise<void> {
-  const section = page.getByRole("region", { name: "Apply", exact: true });
+  const section = page.getByRole("region", { name: "Your application" });
   await section
     .getByRole("button", { name: "Approve and submit", exact: true })
     .click();

@@ -17,8 +17,9 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * an invented profile and a made up model credential (the stack's Anthropic stub accepts it),
  * the worker on the fake model backend and the real renderer. The page cannot name a recorded
  * stream, so the build request it sends is given D9's `script` for this invented profile on its
- * way out (the default stream is written for another profile and would end without a result). Open the profile, accept the consent, build a CV from the profile and see its page,
- * build a second as a copy, make it the default, download the PDF, reload and see the same list.
+ * way out (the default stream is written for another profile and would end without a result).
+ * Open the profile, accept the consent, build a CV from the profile and open its own page, build
+ * a second as a copy, make it the default, download the PDF, reload and see the same list.
  *
  * Locally, as documents-d6.spec.ts (AGENTS_FAKE_BACKEND=1 on the worker), then:
  *   E2E_CADDY_URL=http://127.0.0.1:8099 E2E_COMPOSE_PROJECT=jobapp-d11 \
@@ -74,7 +75,7 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("the CV tab opens first and asks what is sent before anything is built", async () => {
+test("Your CVs, on the profile page, asks what is sent before anything is built", async () => {
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
@@ -82,9 +83,10 @@ test("the CV tab opens first and asks what is sent before anything is built", as
   });
   expect(saved.status()).toBe(200);
 
-  await page.goto("/profile?tab=identity");
-  await page.getByRole("tab", { name: "CV" }).click();
-  await expect(page).toHaveURL(/\/profile\/cv$/);
+  await page.goto("/profile#your-cv");
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Your CVs" }),
+  ).toBeVisible();
   await expect(page.getByText("You have no CV yet")).toBeVisible();
   await expect(
     page.getByText("Confirm what is sent to build your CV."),
@@ -120,6 +122,13 @@ test("the built CV shows its one page, and a reload shows the same list", async 
   await page.reload();
   await page.getByRole("link", { name: first?.name ?? "" }).click();
   await expect(page).toHaveURL(new RegExp(`/profile/cv/${firstId}$`));
+  // The CV is a page of its own, below the profile.
+  await expect(
+    page.getByRole("heading", { level: 1, name: first?.name ?? "" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("main").getByRole("link", { name: "Profile", exact: true }),
+  ).toHaveAttribute("href", "/profile#your-cv");
   await expect(
     page.getByRole("img", { name: /^Page 1 of version/ }),
   ).toBeVisible();
@@ -128,7 +137,7 @@ test("the built CV shows its one page, and a reload shows the same list", async 
 });
 
 test("a copy becomes the default and downloads as a one page PDF", async () => {
-  await page.goto("/profile/cv");
+  await page.goto("/profile#your-cv");
   await page.getByRole("button", { name: "New CV" }).click();
   const dialog = page.getByRole("dialog", { name: "New CV" });
   await dialog.getByRole("radio", { name: "A copy of another CV" }).check();
@@ -165,7 +174,7 @@ test("a copy becomes the default and downloads as a one page PDF", async () => {
 
 test("after a reload the list is the same and the copy is still the default", async () => {
   const before = (await list()).map((one) => [one.id, one.is_default]);
-  await page.goto("/profile/cv");
+  await page.goto("/profile#your-cv");
   const items = page
     .getByRole("list", { name: "Your CVs" })
     .getByRole("listitem");

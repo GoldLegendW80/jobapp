@@ -1,0 +1,66 @@
+/** "Ready for" of the profile page (analysis B7): what each use of the profile still lacks,
+ * from the completeness the api computes, and the one button that fixes it. */
+import type { Profile, SectionName } from "../api/profile-api";
+import { missingLabel } from "./labels";
+
+export interface Readiness {
+  name: string;
+  ready: boolean;
+  /** the one button that fixes it: a place on the page (#...) or another page */
+  fix?: { label: string; href: string };
+  /** the required fields still empty, in words */
+  missing: string[];
+}
+
+/** What each use of the profile still lacks, from the completeness the api computes. */
+export function readiness(profile: Profile): Readiness[] {
+  const missing = (section: SectionName) =>
+    profile.completeness.sections[section]?.missing ?? [];
+  const words = (...sections: SectionName[]) =>
+    sections.flatMap(missing).map(missingLabel);
+  const first = (...fixes: [boolean, string, string][]) => {
+    const found = fixes.find(([lacking]) => lacking);
+    return found ? { label: found[1], href: found[2] } : undefined;
+  };
+  const scoring = first(
+    [missing("skills").length > 0, "Add your skills", "#about-skills"],
+    [
+      missing("search").includes("title_include"),
+      "Add a job title in Settings, Search",
+      "/settings/search",
+    ],
+  );
+  const writing = first(
+    [missing("experience").length > 0, "Add your experience", "#experience"],
+    [missing("facts").length > 0, "Add facts about your work", "#about-you"],
+  );
+  const filling = first(
+    [missing("identity").length > 0, "Add your contact details", "#contact"],
+    [missing("answers").length > 0, "Add your answers", "#about-answers"],
+  );
+  return [
+    {
+      name: "Scoring postings",
+      ready: !scoring,
+      fix: scoring,
+      missing: [
+        ...words("skills"),
+        ...missing("search")
+          .filter((field) => field === "title_include")
+          .map(missingLabel),
+      ],
+    },
+    {
+      name: "Writing CVs",
+      ready: !writing,
+      fix: writing,
+      missing: words("experience", "facts"),
+    },
+    {
+      name: "Filling forms",
+      ready: !filling,
+      fix: filling,
+      missing: words("identity", "answers"),
+    },
+  ];
+}

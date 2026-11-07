@@ -262,12 +262,13 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
   await expect(page.getByRole("main").getByRole("status").first()).toHaveText(
     "1 posting",
   );
-  await expect(page.getByRole("table", { name: "Postings" })).toContainText(
+  await expect(page.getByRole("list", { name: "Postings" })).toContainText(
     POSTING,
   );
 
   // The history: automatic search is off for every account until its owner turns it on.
-  await page.getByRole("button", { name: "Past searches" }).click();
+  await page.getByRole("button", { name: "More actions" }).click();
+  await page.getByRole("menuitem", { name: "Past searches" }).click();
   const history = page.getByRole("dialog", { name: "Past searches" });
   await expect(
     history.getByRole("region", { name: "Automatic search" }),
@@ -301,9 +302,12 @@ test("Schedule: off by default, turned on, fires at its time on the website, tur
   test.setTimeout(600_000);
   const page = pages[A]!;
   await page.goto("/jobs");
-  const button = page.getByRole("button", { name: /^Schedule/ });
-  await expect(button).toContainText("Off");
-  await button.click();
+  // The header's More actions menu says the schedule's state on its Automatic search item.
+  const menu = page.getByRole("button", { name: "More actions" });
+  const item = page.getByRole("menuitem", { name: /^Automatic search/ });
+  await menu.click();
+  await expect(item).toContainText("Off.");
+  await item.click();
   const dialog = page.getByRole("dialog", { name: "Automatic search" });
   await expect(dialog.getByRole("status")).toHaveText(
     "Automatic search is off.",
@@ -321,7 +325,9 @@ test("Schedule: off by default, turned on, fires at its time on the website, tur
   await shots(page, "schedule-dialog", false);
   await page.getByRole("button", { name: "Save" }).click();
   await expect(dialog).toBeHidden();
-  await expect(button).toContainText("On");
+  await menu.click();
+  await expect(item).toContainText("On, ");
+  await page.keyboard.press("Escape");
   const listed = await sweeps(page.request);
   expect(listed.schedule.active).toBe(true);
   const before = listed.items.length;
@@ -348,12 +354,16 @@ test("Schedule: off by default, turned on, fires at its time on the website, tur
   expect(fired.sources.map((source) => source.kind)).toEqual(["custom"]);
 
   // Off again.
-  await button.click();
+  await menu.click();
+  await item.click();
   await dialog
     .getByRole("checkbox", { name: "Search automatically" })
     .uncheck();
   await page.getByRole("button", { name: "Save" }).click();
-  await expect(button).toContainText("Off");
+  await expect(dialog).toBeHidden();
+  await menu.click();
+  await expect(item).toContainText("Off.");
+  await page.keyboard.press("Escape");
   expect((await sweeps(page.request)).schedule.active).toBe(false);
 });
 

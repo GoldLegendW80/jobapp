@@ -52,8 +52,14 @@ def _now_column() -> Mapped[datetime]:
     return mapped_column(sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now())
 
 
+# Browsers at once (owner, 2026-11-07): 1 up to the server's BROWSER_SLOTS, checked by the api;
+# the table holds a wide bound so a higher ceiling later needs no migration.
+BROWSERS_CHECK = "browsers_at_once IS NULL OR browsers_at_once BETWEEN 1 AND 8"
+
+
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = (sa.CheckConstraint(BROWSERS_CHECK, name="browsers_at_once_range"),)
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     email: Mapped[str] = mapped_column(pg.CITEXT, nullable=False, unique=True)
@@ -73,6 +79,15 @@ class User(Base):
         onupdate=sa.func.now(),
     )
     last_login_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # The slots of the browser this person's work may use at once (the admin's setting); None,
+    # every account until an admin changes it: the server's BROWSER_SLOTS (`browsers_of`).
+    browsers_at_once: Mapped[int | None] = mapped_column(sa.SmallInteger)
+
+
+def browsers_of(user: "User", ceiling: int) -> int:
+    """The person's browsers at once: their own number, never above the server's ceiling."""
+    own = user.browsers_at_once
+    return max(1, min(own, ceiling)) if own is not None else ceiling
 
 
 class Session(Base):

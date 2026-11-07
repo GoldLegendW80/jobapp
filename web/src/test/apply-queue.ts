@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 
-import type { Answer } from "@/features/apply/apply-api";
-import type { QueueItem, Summary } from "@/features/apply/queue-api";
+import type { Answer } from "@/features/apply/api/apply-api";
+import type { QueueItem, Summary } from "@/features/apply/api/queue-api";
 
 import { fakeApplication } from "./apply";
 import { server } from "./server";

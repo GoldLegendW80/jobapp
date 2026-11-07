@@ -94,7 +94,7 @@ test("the admin from the CLI signs in and opens the admin area", async () => {
     .getByRole("link", { name: "Admin" })
     .click();
   await expect(
-    admin.getByRole("heading", { name: "Users", level: 1 }),
+    admin.getByRole("heading", { name: "Admin", level: 1 }),
   ).toBeVisible();
   await expect(
     admin.getByRole("heading", { name: "Invites", level: 2 }),

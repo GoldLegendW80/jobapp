@@ -35,7 +35,7 @@ from app.profile import service as profile_service
 from app.profile.models import Profile
 from app.profile.schemas import WIZARD_STEPS
 
-# The step ids of the web wizard (web/src/features/onboarding/steps.ts), in order.
+# The step ids of the web wizard (web/src/features/onboarding/lib/steps.ts), in order.
 STEPS = WIZARD_STEPS
 # The steps whose answer the card waits for: without them a sweep has nothing to look for.
 STEPS_LEFT = ("profile", "looking", "where", "work")

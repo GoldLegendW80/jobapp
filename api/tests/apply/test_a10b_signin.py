@@ -17,6 +17,7 @@ from app.apply.ats import base, generic
 from app.apply.models import AnswerBankEntry, AnswerSource, ApplicationAnswer, Mode, State
 from app.browser.client import BrowserError
 from app.browser.handoff import Outcome
+from app.browser.leases import View
 from tests.apply.a5_support import FakeAgent, FakeLeases, RunForm, run_ashby
 from tests.apply.a8b_support import (
     STEPS_PATH,
@@ -266,7 +267,7 @@ async def test_wait_survival_uses_the_exact_owned_lease():
 
     class Leases:
         async def current(self, user):
-            return SimpleNamespace(lease=lease)
+            return View(lease=lease, held_by_other=False, waiting=())
 
     assert await signin.waiting(Leases(), str(uuid.uuid4()), "mine")
     assert not await signin.waiting(Leases(), str(uuid.uuid4()), "other")
@@ -291,7 +292,7 @@ def test_only_a_sign_in_wait_is_a_sign_in_handoff(state, reason, handoff):
 
     class Leases:
         async def current(self, user):
-            return SimpleNamespace(lease=lease)
+            return View(lease=lease, held_by_other=False, waiting=())
 
     assert asyncio.run(signin.waiting(Leases(), str(uuid.uuid4()), "mine")) is handoff
 
@@ -331,11 +332,13 @@ def test_a_cancelled_fill_keeps_the_person_signing_in_and_binds_the_later_callba
         return Redis()
 
     async def current(user):
-        return SimpleNamespace(
-            lease=SimpleNamespace(
+        return View(
+            lease=SimpleNamespace(  # type: ignore[arg-type]
                 lease_id="lease-1",
                 state="waiting_person" if state["waiting"] else "active",
-            )
+            ),
+            held_by_other=False,
+            waiting=(),
         )
 
     async def interrupted(*args):

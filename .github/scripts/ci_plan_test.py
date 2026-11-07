@@ -1418,7 +1418,7 @@ class JourneysTest(unittest.TestCase):
         "api/app/mail/sync.py": "",
         "api/app/documents/__init__.py": "",
         "api/app/documents/store.py": "from app.mail.rules import Sources\n",
-        "web/src/routes.tsx": 'import { Mail } from "@/features/mail/Mail";\n',
+        "web/src/app/routes.tsx": 'import { Mail } from "@/features/mail/Mail";\n',
         "web/src/lib/api.ts": "",
         "web/src/features/mail/Mail.tsx": 'import { api } from "@/lib/api";\nimport { Row } from "./Row";\n',
         "web/src/features/mail/Row.tsx": "",
@@ -1511,11 +1511,24 @@ class JourneysTest(unittest.TestCase):
         self.assertEqual(self.ran(["web/e2e/jobs.spec.ts"]), ["apps"])
         self.assertEqual(self.ran(["tests/gmail-stub.compose.yml"]), ["mail"])
 
+    def test_a_shared_component_belongs_to_the_module_whose_data_it_shows(self) -> None:
+        # web/ARCHITECTURE.md: a component two pages use lives in components/shared/<module>/.
+        self.assertEqual(
+            ci_plan.web_area("web/src/components/shared/mail/Card.tsx"), "mail"
+        )
+        self.assertEqual(ci_plan.web_area("web/src/features/mail/api/x.ts"), "mail")
+        for path in [
+            "web/src/components/ui/button.tsx",
+            "web/src/components/shared/x.tsx",
+            "web/src/lib/api.ts",
+        ]:
+            self.assertEqual(ci_plan.web_area(path), ci_plan.SHARED, path)
+
     def test_a_file_imported_by_another_module_runs_that_module_s_groups_too(
         self,
     ) -> None:
         # rules.py runs mail's groups and those of documents, whose store imports it; main.py
-        # imports both and is wiring, as routes.tsx is for the web.
+        # imports both and is wiring, as app/routes.tsx is for the web.
         self.assertEqual(
             self.ran(["api/app/mail/rules.py"]), ["mail", "documents", "apply"]
         )
@@ -2105,7 +2118,7 @@ class JourneysTest(unittest.TestCase):
             "api/uv.lock",
             "web/pnpm-lock.yaml",
             "web/src/lib/api.ts",
-            "web/src/routes.tsx",
+            "web/src/app/routes.tsx",
             "web/e2e/apply-helpers.ts",
             "web/e2e/stack.ts",
             "web/playwright.config.ts",
@@ -2450,7 +2463,7 @@ class JourneysTest(unittest.TestCase):
 
     def test_routes_of_a_shared_page_and_main_middleware_run_every_group(self) -> None:
         everything = [g for g, _ in self.GROUPS]
-        shell = "web/src/features/shell/app-shell.tsx"
+        shell = "web/src/app/layouts/app-shell.tsx"
         router = (
             "from fastapi import APIRouter\n"
             'router = APIRouter(prefix="/api/mail")\n'
