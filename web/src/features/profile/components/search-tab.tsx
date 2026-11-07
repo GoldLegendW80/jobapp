@@ -3,7 +3,7 @@
  * titles, unwanted titles, places and unwanted places, as chips (search-lists.tsx), the remote
  * stance and contract types, what the person aims for (target-fields.tsx, O4), the minimum fit to
  * shortlist and the posting age window, where the search runs with the sign in to job websites
- * (B17), the never-apply rules and the documents. Then, with its own Save, the preferences
+ * (B17), the never-apply rules and the writing rules. Then, with its own Save, the preferences
  * section (preferences-card.tsx). Searches run the job websites
  * ticked in Find jobs alone (owner, 2026-10-28): the company boards, the starter list, the fixed
  * browser readers and the freelance feeds are deleted, and the api drops any it still holds.
@@ -28,7 +28,6 @@ import { FieldTitle } from "@/components/ui/field";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { JobWebsitesSignIn } from "@/components/shared/browser/site-signin";
-import { DocumentsSearchOptions } from "@/features/profile/components/generation-settings-card";
 import { REMOTE_WORDS, contractWord } from "@/lib/wording";
 
 import {
@@ -38,6 +37,7 @@ import {
   type SweepSchedule,
 } from "../api/profile-api";
 import { PreferencesCard } from "./preferences-card";
+import { WritingRulesCard } from "./writing-rules-card";
 import { SearchLists } from "@/components/shared/profile/search-lists";
 import { SettingsSection } from "@/components/shared/profile/settings-frame";
 import {
@@ -213,7 +213,7 @@ function SearchForms({
             />
           </SettingsSection>
           <NeverApply form={form} />
-          <DocumentsSearchOptions form={form} />
+          <WritingRulesCard />
           <SaveBar
             label="Search"
             saving={saving}

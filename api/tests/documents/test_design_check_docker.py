@@ -13,11 +13,19 @@ import asyncio
 import dataclasses
 import json
 import re
+from pathlib import Path
 
 import pypdfium2 as pdfium
 import pytest
 
-from app.documents import design_capture, design_check, render_client, template_rules, templates
+from app.documents import (
+    design_capture,
+    design_check,
+    render_client,
+    template_css,
+    template_rules,
+    templates,
+)
 from app.documents.render_client import Checked, RenderError
 from app.ingestion.parser_client import DesignPdf
 from app.profile.schemas import URL_MAX, IdentitySection
@@ -51,32 +59,26 @@ def checker(stack: Stack) -> design_check.Check:
     return check
 
 
+BASELINE = Path(__file__).resolve().parent / "fixtures" / "upload_baseline"
+
+
 def probe(css: str = "", replace: tuple[tuple[str, str], ...] = ()) -> templates.Template:
-    """classic, with `css` appended and each `replace` applied to its style sheet."""
-    classic = templates.registry()["classic"]
-    style = classic.files["style.css"]
+    """classic (the upload rules' baseline, kept as a fixture when the twenty went in D27), with
+    `css` appended and each `replace` applied to its style sheet."""
+    files = {name: (BASELINE / name).read_text(encoding="utf-8") for name in templates.FILES}
+    style = files["style.css"]
     for old, new in replace:
         style = re.sub(old, new, style)
-    manifest = json.loads((classic.folder / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads((BASELINE / "manifest.json").read_text(encoding="utf-8"))
     manifest["slug"] = "probe"
-    return templates.from_files(manifest, {**classic.files, "style.css": style + css})
-
-
-# elegant's double frame is a `position: fixed` box over the whole page, transparent inside: the
-# check takes any box over a field for a cover, and a user template cannot hold a fixed box
-# (template_css), so this bundled one is the only template to meet it.
-COVERED_BY_A_FRAME = frozenset(("elegant",))
+    return templates.from_files(manifest, {**files, "style.css": style + css})
 
 
 @pytest.mark.parametrize("slug", sorted(templates.registry()))
 def test_every_bundled_template_shows_every_field(stack: Stack, slug: str) -> None:
     template = templates.registry()[slug]
     found = asyncio.run(design_check.check_template(template, checker(stack)))
-    if slug in COVERED_BY_A_FRAME:
-        assert found
-        assert {p.code for p in found} == {"covered"}
-    else:
-        assert found == [], [(p.code, p.detail) for p in found]
+    assert found == [], [(p.code, p.detail) for p in found]
 
 
 HIDING = [
@@ -148,6 +150,16 @@ def test_a_style_that_hides_a_field_is_refused_with_its_field(
 ) -> None:
     found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
     assert any(p.code == code and p.detail.startswith(f"{field} ") for p in found), (name, found)
+
+
+# #757 round 1 (B1): print paints an `@page` background under every page, and the check's
+# screenshots never did, so a text in the page's own colour passed while the PDF was black on
+# black. The check page now carries the colour on `html`.
+def test_a_page_background_in_the_text_colour_is_refused_with_contrast(stack: Stack) -> None:
+    css = "@page { background: #111111; } body { color: #111111; }"
+    assert template_css.page_background(css, "#2563eb") == "#111111"
+    found = asyncio.run(design_check.check_template(probe(css), checker(stack)))
+    assert any(p.code == "contrast" for p in found), found
 
 
 # PR #518 round 2: what only another content shape shows (both refused statically too, by

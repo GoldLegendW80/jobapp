@@ -32,6 +32,11 @@ export const baseCvSchema = z.object({
   generation: generationSchema.nullable(),
   /** Design capture is independent of content conversion; old responses have none. */
   design_generation: generationSchema.nullable().default(null),
+  /** How close the template copied from this CV lies on it (D28); older responses have none. */
+  design_fidelity: z
+    .object({ lines: z.number().int(), in_place: z.number().int() })
+    .nullable()
+    .default(null),
 });
 export type BaseCv = z.infer<typeof baseCvSchema>;
 

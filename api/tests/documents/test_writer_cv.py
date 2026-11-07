@@ -126,6 +126,7 @@ def test_the_definition_asks_for_a_private_bound_internal_run() -> None:
     assert "get_profile_section" not in agent.tools
     assert set(agent.tools) == {
         "get_job",
+        "get_job_brief",
         "read_profile_section",
         "get_base_cv",
         "get_draft",
@@ -164,7 +165,7 @@ def test_a_valid_cv_replaces_the_draft_and_queues_its_render(alex: Person) -> No
     assert generation_row(alex.factory, generation).outcome is GenerationOutcome.draft_replaced
     # The first generation took the base CV's template and named the base CV.
     assert row.base_document_id == alex.base
-    assert row.template_slug == "classic"
+    assert row.template_slug == "band"
     assert row.render_state.value == "queued"
     assert row.render_revision == row.draft_revision
     assert _renders(alex) == [render_job.FUNCTION]
@@ -460,10 +461,8 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
         )
     assert letter_ceiling == left
     assert found.input["script"] == "documents_cv_shorten"
-    assert found.input["long_fields"][:2] in (
-        ["summary", "experience.0.bullets.0"],
-        ["experience.0.bullets.0", "summary"],
-    )
+    # band, the default, allows a summary of 420 characters: the bullet alone is too long
+    assert found.input["long_fields"][:2] == ["experience.0.bullets.0"]
     execute(alex, shorten_run)
     with alex.factory() as db:
         modes = db.execute(

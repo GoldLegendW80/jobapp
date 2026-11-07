@@ -64,7 +64,8 @@ Documents queue (app.queue.DOCUMENTS, documents D6, app/documents/render_job.py)
 - resend_queued_renders: cron every minute: a render marked queued whose job was lost is queued
   again. At start, every render left `rendering` by a dead process goes back to idle as
   `interrupted` (reset_interrupted_at_start).
-- documents_tick: cron every minute (documents D10, `documents.tick.run`), registered only once
+- documents_tick: cron every minute (documents D10, D29: the clicks that waited, the base CV
+  builds and recovery, `documents.tick.run`), registered only once
   app/documents/tick.py exists.
 
 Apply queue (app.queue.APPLY, apply A5, app/apply/run.py):
@@ -179,7 +180,8 @@ AGENT_STALE_QUEUED = timedelta(hours=6)
 STOP_WAIT_S = 12.0
 INGESTION_ADVANCE_SECOND = 20  # the tick of the ingestion chain, once a minute
 DOCUMENTS_RESEND_SECOND = 50  # the render queue's resend, once a minute
-DOCUMENTS_TICK_SECOND = 5  # the automatic generation's tick (D10), once a minute
+DOCUMENTS_PANEL_TIMEOUT_S = 1_500  # documents.panel.JOB_TIMEOUT_S (D29)
+DOCUMENTS_TICK_SECOND = 5  # the documents tick (D10, D29), once a minute
 DOCUMENTS_TICK_TIMEOUT_S = 50
 
 
@@ -585,6 +587,13 @@ def agents_queue() -> QueueSpec:
                 max_tries=1,
                 keep_result=0,
             ),
+            func(
+                documents_panel,
+                name="documents_panel",
+                timeout=max(job_timeout_s, DOCUMENTS_PANEL_TIMEOUT_S),
+                max_tries=1,
+                keep_result=0,
+            ),
             func(reap_agent_runs, name="reap_agent_runs", timeout=60, max_tries=1),
             func(profile_titles, name="profile_titles", timeout=job_timeout_s, max_tries=1),
             func(profile_interpret, name="profile_interpret", timeout=job_timeout_s, max_tries=1),
@@ -916,6 +925,14 @@ async def apply_decide(ctx: dict[str, Any], application_id: str) -> None:
         apply_services(ctx), ctx["settings"], ctx.get("redis")
     )
     await apply_submit_run.decision(services, uuid.UUID(application_id))
+
+
+async def documents_panel(ctx: dict[str, Any], panel_id: str) -> str:
+    """The hiring panel of one written document (documents D29), on the agents queue: its seven
+    reviewers, its merge and its rebuild run in this process, at most three at once."""
+    from app.documents import panel
+
+    return await panel.job(agent_context(ctx), uuid.UUID(panel_id))
 
 
 async def apply_tick(ctx: dict[str, Any]) -> int:

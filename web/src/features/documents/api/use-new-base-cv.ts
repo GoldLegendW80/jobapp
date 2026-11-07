@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 import { createBaseCv, type BaseCvRequest } from "./base-cvs-api";
 import { failureSentence } from "./documents-api";
-import { acceptConsent, consentKey, getConsent } from "./spend-api";
+import { acceptConsent, consentKey, getConsent } from "./consent-api";
 import { useRefreshBaseCvs } from "./use-base-cvs";
 
 /**

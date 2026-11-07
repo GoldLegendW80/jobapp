@@ -7,12 +7,7 @@ import type { Kind, Language } from "../api/documents-api";
 import { listAt, MAX, textAt, type Draft } from "./edit-content";
 import { problemsOf, textOf, type Form } from "./edit-form";
 import type { ContactLine, PageFacts } from "./page-facts";
-import {
-  letterDate,
-  PAGE_LABELS,
-  periodOf,
-  type PageLabels,
-} from "./page-labels";
+import { labelsOf, letterDate, periodOf, type PageLabels } from "./page-labels";
 
 export interface SheetRole {
   key: string;
@@ -77,6 +72,7 @@ export function sheetPage({
   form,
   known,
   now,
+  ownLabels,
 }: {
   kind: Kind;
   language: Language;
@@ -86,8 +82,10 @@ export function sheetPage({
   form: Form | null;
   known: boolean;
   now?: Date;
+  /** The template's own section labels in this language. */
+  ownLabels?: Readonly<Record<string, string>>;
 }): SheetPage {
-  const labels = PAGE_LABELS[language];
+  const labels = labelsOf(language, ownLabels);
   const record = (raw: unknown) => (raw ?? {}) as Record<string, unknown>;
   const roles = listAt(content, ["experience"])
     .map(record)
@@ -260,4 +258,16 @@ export function partProblems(page: SheetPage, part: Part): string[] {
 /** The characters of a text as the templates count them (Python's `len`, code points). */
 export function codePoints(text: string): number {
   return Array.from(text).length;
+}
+
+/**
+ * The name's class in band, ledger and photo-columns: `long` past 22 characters (it may wrap
+ * between its words), `longword` when a word is over 14 (it is set smaller).
+ */
+export function nameClass(name: string): string {
+  const classes = ["name"];
+  if (codePoints(name) > 22) classes.push("long");
+  if (name.split(/\s+/).some((word) => codePoints(word) > 14))
+    classes.push("longword");
+  return classes.join(" ");
 }

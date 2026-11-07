@@ -38,6 +38,14 @@ function sentence(capture: BaseCv["design_generation"]): string {
   }
 }
 
+/** How close the copy lies on the upload, as its capture measured it. */
+function fidelitySentence(
+  found: NonNullable<BaseCv["design_fidelity"]>,
+): string {
+  const lines = found.lines === 1 ? "line" : "lines";
+  return `Copied from your CV: ${found.in_place} of ${found.lines} ${lines} in place.`;
+}
+
 /** The api's own sentence for a refusal (409, 422); a fixed one for any other failure. */
 function retryFailure(error: unknown): string {
   return isApiError(error) && (error.status === 409 || error.status === 422)
@@ -73,6 +81,9 @@ export function CaptureStatus({ cv }: { cv: BaseCv }) {
       <AlertDescription className="flex flex-col gap-2">
         <div role="status" aria-live="polite" className="flex flex-col gap-2">
           <p>{sentence(capture)}</p>
+          {capture?.status === "done" && cv.design_fidelity !== null ? (
+            <p>{fidelitySentence(cv.design_fidelity)}</p>
+          ) : null}
           {isOpen(capture) ? (
             <p>Other changes may wait while the design is copied.</p>
           ) : null}

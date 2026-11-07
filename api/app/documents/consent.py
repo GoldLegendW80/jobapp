@@ -1,4 +1,5 @@
-"""The consent of "Automatic generation" (task D9; SPEC-documents.md, Flow step 2, "The spend").
+"""The consent of the documents writers (task D9, revised by D29; SPEC-documents.md, Flow step 2,
+"Writing on a click").
 
 The pattern of ingestion's consent (`app.ingestion.estimate_router`): one row of
 `document_consents` per person and version of the text. The current consent is the row of
@@ -6,24 +7,23 @@ The pattern of ingestion's consent (`app.ingestion.estimate_router`): one row of
 (`tests/documents/test_consent.py` pins a SHA-256 of each version), and everyone is asked
 again. A consent to an older version never counts for the new words.
 
+Version 1 described D10's automatic generation; version 2 (D29) says that nothing is written
+without the person's click, and that the hiring panel reads each document. Version 1 is kept for
+the record of who accepted it.
+
 `figures` is what the dialog shows beside the text: the estimated tokens of one posting (its CV
-and its letter, with the person's own profile and default base CV), and of a typical week at
-the threshold, from the postings of the last 30 days whose fit is at or above it, scaled to
-seven days and rounded up. On an API key, the costs of both at list prices
-(`app.ingestion.pricing`); on a subscription, tokens only.
+and its letter with their hiring panels, from the person's own profile and default base CV). On
+an API key, its cost at list prices (`app.ingestion.pricing`); on a subscription, tokens only.
 
 Nothing here reads a text into a log.
 """
 
 from __future__ import annotations
 
-import math
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from typing import Any
+from datetime import datetime
 
-import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.agents import credentials
@@ -32,8 +32,6 @@ from app.documents import estimate, store
 from app.documents.models import DocumentConsent
 from app.ingestion import pricing
 from app.ingestion.estimate import RunEstimate
-from app.jobs.models import Job
-from app.profile.models import Profile
 
 # Every text a person was ever asked to accept, by version. Never edit the words of a version:
 # ADD the next one, and everyone is asked again (module docstring).
@@ -47,11 +45,18 @@ TEXTS: dict[int, str] = {
         "a letter. Deleting a document here removes it from this app. It does not delete what "
         "Anthropic has already received."
     ),
+    2: (
+        "When you click Write, Apply or Like on a job posting, or upload a CV, the app sends "
+        "your profile without your contact details (its facts, experience, skills and answers), "
+        "your base CV, the pages of a CV you upload as pictures, and that job posting to "
+        "Anthropic, through your own Claude subscription or Anthropic API key, to write a CV and "
+        "a letter and to have a panel of reviewers read and improve them. Nothing is written "
+        "without your click. Deleting a document here removes it from this app. It does not "
+        "delete what Anthropic has already received."
+    ),
 }
 VERSION = max(TEXTS)
 OUTDATED = "The consent text has changed. Read the current text and accept it."
-LOOKBACK_DAYS = 30
-WEEK_DAYS = 7
 MODEL = "claude-opus-5-5"  # on a subscription, as the writers (writer_cv.MODEL)
 MODEL_API_KEY = "claude-sonnet-5-5"
 
@@ -88,54 +93,7 @@ def record(db: Session, user_id: uuid.UUID, at: datetime) -> DocumentConsent:
 class Figures:
     model: str | None  # None without a credential
     priced: bool  # an API key: the costs are shown
-    min_fit: int
-    postings_30_days: int  # at or above the threshold, found in the last 30 days
-    week_postings: int
     posting: RunEstimate
-    week: RunEstimate
-
-
-def min_fit(db: Session, user_id: uuid.UUID) -> int:
-    """The person's threshold (`search.documents.min_fit`, task D10), else the default."""
-    from app.documents.writer_cv import setting
-
-    stored: Any = db.scalar(sa.select(Profile.sections).where(Profile.user_id == user_id)) or {}
-    found = ((stored.get("search") or {}).get("documents") or {}).get("min_fit")
-    if isinstance(found, int) and not isinstance(found, bool) and 0 <= found <= 100:
-        return found
-    return int(setting("documents_min_fit_default"))
-
-
-def postings_at_or_above(
-    db: Session,
-    user_id: uuid.UUID,
-    threshold: int,
-    last_day: date,
-    lookback_days: int = LOOKBACK_DAYS,
-) -> int:
-    """The person's postings found in the last `lookback_days` days (30; `last_day` included, the
-    UTC date of the clock, see `eligibility.found_day`) whose fit is at or above the threshold.
-    A posting without a fit is never counted."""
-    since = last_day - timedelta(days=lookback_days - 1)
-    return int(
-        db.scalar(
-            sa.select(sa.func.count())
-            .select_from(Job)
-            .where(
-                Job.user_id == user_id,
-                Job.fit.is_not(None),
-                Job.fit >= threshold,
-                Job.found_on >= since,
-                Job.found_on <= last_day,
-            )
-        )
-        or 0
-    )
-
-
-def week_postings(count_30_days: int) -> int:
-    """A typical week: the 30 days' count scaled to 7 days, rounded up."""
-    return math.ceil(count_30_days * WEEK_DAYS / LOOKBACK_DAYS)
 
 
 def model_for(kind: CredentialKind | None) -> str | None:
@@ -144,21 +102,11 @@ def model_for(kind: CredentialKind | None) -> str | None:
     return MODEL_API_KEY if kind is CredentialKind.anthropic_api_key else MODEL
 
 
-def figures(db: Session, user_id: uuid.UUID, last_day: date) -> Figures:
+def figures(db: Session, user_id: uuid.UUID) -> Figures:
     credential = credentials.get(db, user_id)
     kind = CredentialKind(credential.kind) if credential is not None else None
-    threshold = min_fit(db, user_id)
     profile = estimate.profile_chars(db, user_id)
     base = estimate.base_chars(db, user_id, None)
-    one = estimate.posting(profile, base, estimate.POSTING_DEFAULT_CHARS, **estimate.limits())
-    count = postings_at_or_above(db, user_id, threshold, last_day)
-    week = week_postings(count)
-    return Figures(
-        model=model_for(kind),
-        priced=pricing.priced(kind),
-        min_fit=threshold,
-        postings_30_days=count,
-        week_postings=week,
-        posting=one,
-        week=estimate.times(one, week),
-    )
+    pair = estimate.posting(profile, base, estimate.POSTING_DEFAULT_CHARS, **estimate.limits())
+    one = estimate.with_panels(pair, estimate.POSTING_DEFAULT_CHARS, **estimate.limits())
+    return Figures(model=model_for(kind), priced=pricing.priced(kind), posting=one)

@@ -1,0 +1,159 @@
+{
+  "slug": "band",
+  "version": 1,
+  "name": {
+    "en": "Band",
+    "fr": "Bandeau"
+  },
+  "description": {
+    "en": "A dark band with rounded corners across the top for the name and the contact lines, then one row per section: its label on the left, its body on the right, round bullets.",
+    "fr": "Un bandeau sombre aux coins arrondis en haut pour le nom et les coordonnées, puis une ligne par section : son intitulé à gauche, son contenu à droite, des puces rondes."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "ats friendly",
+    "photo"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "inter-tight"
+  ],
+  "accent": "#262525",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.0,
+        "line_height": 1.333,
+        "section_gap": 19.0,
+        "item_gap": 12.4,
+        "margin": 15.7
+      },
+      {
+        "body_size": 9.71,
+        "line_height": 1.311,
+        "section_gap": 16.9,
+        "item_gap": 11.1,
+        "margin": 14.9
+      },
+      {
+        "body_size": 9.43,
+        "line_height": 1.289,
+        "section_gap": 14.7,
+        "item_gap": 9.7,
+        "margin": 14.1
+      },
+      {
+        "body_size": 9.14,
+        "line_height": 1.267,
+        "section_gap": 12.6,
+        "item_gap": 8.4,
+        "margin": 13.3
+      },
+      {
+        "body_size": 8.86,
+        "line_height": 1.246,
+        "section_gap": 10.4,
+        "item_gap": 7.0,
+        "margin": 12.4
+      },
+      {
+        "body_size": 8.57,
+        "line_height": 1.224,
+        "section_gap": 8.3,
+        "item_gap": 5.7,
+        "margin": 11.6
+      },
+      {
+        "body_size": 8.29,
+        "line_height": 1.202,
+        "section_gap": 6.1,
+        "item_gap": 4.3,
+        "margin": 10.8
+      },
+      {
+        "body_size": 8.0,
+        "line_height": 1.18,
+        "section_gap": 4.0,
+        "item_gap": 3.0,
+        "margin": 10.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 60,
+      "summary": 420,
+      "highlight": 110,
+      "competency": 90,
+      "main_bullet": 190,
+      "bullet": 120,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 10.5,
+        "line_height": 1.45,
+        "section_gap": 14.0,
+        "item_gap": 9.0,
+        "margin": 15.7
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.416,
+        "section_gap": 12.6,
+        "item_gap": 8.0,
+        "margin": 15.0
+      },
+      {
+        "body_size": 9.9,
+        "line_height": 1.382,
+        "section_gap": 11.2,
+        "item_gap": 7.0,
+        "margin": 14.2
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.348,
+        "section_gap": 9.8,
+        "item_gap": 6.0,
+        "margin": 13.5
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.314,
+        "section_gap": 8.4,
+        "item_gap": 5.0,
+        "margin": 12.7
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 4.0,
+        "margin": 12.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 60,
+      "paragraph": 900
+    }
+  },
+  "labels": {
+    "en": {
+      "summary": "About",
+      "competencies": "Skills",
+      "experience": "Professional Experience",
+      "education": "Education",
+      "highlights": "Key Achievements"
+    },
+    "fr": {
+      "summary": "À propos",
+      "competencies": "Compétences",
+      "experience": "Expériences Professionnelles",
+      "education": "Formation",
+      "highlights": "Réalisations Clés"
+    }
+  },
+  "thumbnail_of": "2a70a2880c6a39fe0edbef57c83a8cf3b633845d13f8f9f7628c20f77e837690"
+}

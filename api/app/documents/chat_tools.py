@@ -51,7 +51,7 @@ def _set_template(scope: app_tools.Scope) -> SdkMcpTool[Any]:
     @tool(
         chat.SET_TEMPLATE,
         "Switch this document to another template of the gallery, by its slug (for example "
-        '"sidebar"). The text stays the same. An unknown slug answers with the gallery.',
+        '"ledger"). The text stays the same. An unknown slug answers with the gallery.',
         {
             "type": "object",
             "properties": {"slug": {"type": "string", "maxLength": 64}},

@@ -186,17 +186,18 @@ function PauseSection({ settings }: { settings: ApplySettings }) {
 }
 
 /**
- * The three fit thresholds side by side: the two set elsewhere, read only with the way to them,
- * and "Apply automatically from", changed here.
+ * The two fit thresholds side by side: "Show postings from", set elsewhere and read only here
+ * with the way to it, and "Apply automatically from", changed here. Documents are written on a
+ * click only since documents D29, so they have no threshold.
  */
 function ThresholdsSection({ settings }: { settings: ApplySettings }) {
   return (
     <SettingsSection
       title="Fit thresholds"
-      description="Three fit scores, from 0 to 100: what the app shows you, writes documents for, and applies to by itself."
+      description="Two fit scores, from 0 to 100: what the app shows you, and what it applies to by itself."
       className="@container max-w-none"
     >
-      <div className="grid gap-6 @3xl:grid-cols-3">
+      <div className="grid gap-6 @3xl:grid-cols-2">
         <Threshold title="Show postings from">
           <Score value={settings.show_postings_from} />
           <p className="text-sm text-muted-foreground">
@@ -205,16 +206,6 @@ function ThresholdsSection({ settings }: { settings: ApplySettings }) {
           </p>
           <ThresholdLink to="/settings/search">
             Open Settings, Search
-          </ThresholdLink>
-        </Threshold>
-        <Threshold title="Write documents from">
-          <Score value={settings.write_documents_from} />
-          <p className="text-sm text-muted-foreground">
-            The app writes a CV and a letter for postings from this fit score.
-            It is a documents setting, read only here.
-          </p>
-          <ThresholdLink to="/settings/search">
-            Open the documents settings
           </ThresholdLink>
         </Threshold>
         <MinFit settings={settings} />

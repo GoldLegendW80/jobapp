@@ -14,7 +14,7 @@
 {% if contact %}
 <ul class="{{ class }}">
 {% for line in contact %}
-<li>{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+<li class="{{ line.kind }}">{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
 {% endfor %}
 </ul>
 {% endif %}

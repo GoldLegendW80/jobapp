@@ -184,7 +184,7 @@ def test_lost_final_hook_settles_only_after_existing_grace(
             tick.recover(db, world.user, world.clock() + timedelta(seconds=2 * tick.HOOK_GRACE_S))
             == 0
         )
-    assert (GenerationMode.posting, GenerationMode.base_profile) == tick.COUNTED_MODES
+    assert {GenerationMode.base_upload, GenerationMode.template_capture} <= set(tick.RECOVERY_MODES)
 
 
 def prepared(world: Any) -> uuid.UUID:

@@ -40,10 +40,10 @@ def test_each_template_names_its_counters_per_kind(
         assert gallery[slug]["soft_limits"] == {
             kind: asdict(spec.soft_limits) for kind, spec in template.kinds.items()
         }
-    classic = gallery["classic"]["soft_limits"]
-    assert classic["cv"]["summary"] == 330
-    assert classic["cv"]["main_bullet"] == 190
-    assert classic["letter"]["paragraph"] == 900
-    assert classic["letter"]["summary"] is None
+    band = gallery["band"]["soft_limits"]
+    assert band["cv"]["summary"] == 420
+    assert band["cv"]["main_bullet"] == 190
+    assert band["letter"]["paragraph"] == 900
+    assert band["letter"]["summary"] is None
     assert gallery["upload-abcd1234"]["user"] is True
     assert gallery["upload-abcd1234"]["soft_limits"] == gallery[templates.DEFAULT]["soft_limits"]

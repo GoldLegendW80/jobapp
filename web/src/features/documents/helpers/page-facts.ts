@@ -21,10 +21,12 @@ export interface PageSchool {
   location: string | null;
 }
 
-/** A contact line as templates.contact_lines prints it; `link` when it prints as a link. */
+/** A contact line as templates.contact_lines prints it; `link` when it prints as a link, `kind`
+ * its class (a template orders the lines and draws their icons by it). */
 export interface ContactLine {
   text: string;
   link: boolean;
+  kind: "email" | "phone" | "place" | "link";
 }
 
 export interface PageFacts {
@@ -130,10 +132,12 @@ export function contactLines(
   identity: Partial<SectionData["identity"]> | undefined,
 ): ContactLine[] {
   const lines: ContactLine[] = [];
-  if (identity?.email) lines.push({ text: identity.email, link: true });
-  if (identity?.phone) lines.push({ text: identity.phone, link: false });
+  if (identity?.email)
+    lines.push({ text: identity.email, link: true, kind: "email" });
+  if (identity?.phone)
+    lines.push({ text: identity.phone, link: false, kind: "phone" });
   const place = [identity?.city, identity?.country].filter(Boolean).join(", ");
-  if (place !== "") lines.push({ text: place, link: false });
+  if (place !== "") lines.push({ text: place, link: false, kind: "place" });
   const seen = new Set<string>();
   for (const url of [
     identity?.linkedin_url,
@@ -142,7 +146,11 @@ export function contactLines(
   ]) {
     if (!url || seen.has(url)) continue;
     seen.add(url);
-    lines.push({ text: shown(url), link: /^https:\/\/[^\s/]/i.test(url) });
+    lines.push({
+      text: shown(url),
+      link: /^https:\/\/[^\s/]/i.test(url),
+      kind: "link",
+    });
   }
   return lines;
 }

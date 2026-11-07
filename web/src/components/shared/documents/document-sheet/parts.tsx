@@ -193,7 +193,9 @@ export function ContactLines({
     <ul className={className}>
       <Lines>
         {page.contact.map((line) => (
-          <li key={line.text}>{line.link ? <a>{line.text}</a> : line.text}</li>
+          <li key={line.text} className={line.kind}>
+            {line.link ? <a>{line.text}</a> : line.text}
+          </li>
         ))}
       </Lines>
     </ul>

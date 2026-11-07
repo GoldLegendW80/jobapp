@@ -1,5 +1,4 @@
 import { Plus } from "lucide-react";
-import { Link } from "react-router";
 
 import { Section } from "@/components/blocks/section";
 import { Button } from "@/components/ui/button";
@@ -12,7 +11,7 @@ import { CvActions } from "./cv-actions";
 import { CvRow } from "./cv-row";
 import { NoCvYet } from "./no-cv-yet";
 
-/** Your CVs on the profile page: the person's CVs (or the first build), "New CV", the threshold. */
+/** Your CVs on the profile page: the person's CVs (or the first build), "New CV", and when a posting's documents are written. */
 export function CvOverview({
   cvs,
   max,
@@ -21,7 +20,6 @@ export function CvOverview({
   consentReady,
   consentError,
   noExperience,
-  minFit,
   onNew,
   onBuild,
 }: {
@@ -32,7 +30,6 @@ export function CvOverview({
   consentReady: boolean;
   consentError: boolean;
   noExperience: boolean;
-  minFit: number | undefined;
   onNew: () => void;
   onBuild: () => void;
 }) {
@@ -83,18 +80,13 @@ export function CvOverview({
         </Card>
       )}
 
-      {minFit !== undefined ? (
-        <p className="text-sm text-muted-foreground" data-testid="threshold">
-          Documents are written for new postings with a fit of {minFit} or more.{" "}
-          <Link
-            to="/settings/search"
-            className="font-medium text-foreground underline underline-offset-4"
-          >
-            Change it in the Search options
-          </Link>
-          .
-        </p>
-      ) : null}
+      <p
+        className="text-sm text-muted-foreground"
+        data-testid="written-on-click"
+      >
+        A posting's CV and letter are written when you click Write on the job
+        page, or Apply.
+      </p>
     </Section>
   );
 }

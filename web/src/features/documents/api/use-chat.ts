@@ -13,7 +13,7 @@ import {
   generationKey,
   getGeneration,
 } from "./documents-api";
-import { consentKey } from "./spend-api";
+import { consentKey } from "./consent-api";
 import { isOpen, POLL_MS } from "../helpers/labels";
 
 /** The conversation of a document's Chat view. */

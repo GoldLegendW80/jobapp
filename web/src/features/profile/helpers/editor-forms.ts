@@ -332,7 +332,7 @@ export const searchSchema = z.object({
     times: z.array(z.string()),
     timezone: z.string(),
   }),
-  // Edited by the documents card of this tab (documents/generation-settings-card.tsx).
+  // No card edits it since documents D29 (written on a click only): saved as it was read.
   documents: z.object({
     auto: z.boolean(),
     min_fit: z.number().int().min(0).max(100),

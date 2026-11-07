@@ -1,0 +1,163 @@
+{
+  "slug": "ledger",
+  "version": 1,
+  "name": {
+    "en": "Ledger",
+    "fr": "Registre"
+  },
+  "description": {
+    "en": "A cream page between heavy black rules, the name in capitals, contact lines in two columns, then one row per section between thin grey rules on a grid of four columns.",
+    "fr": "Une page crème entre deux épais filets noirs, le nom en capitales, les coordonnées sur deux colonnes, puis une ligne par section entre de fins filets gris, sur une grille de quatre colonnes."
+  },
+  "tags": [
+    "one column",
+    "sans",
+    "ats friendly",
+    "photo"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "gantari"
+  ],
+  "accent": "#000000",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.0,
+        "line_height": 1.3,
+        "section_gap": 17.7,
+        "item_gap": 11.8,
+        "margin": 11.8
+      },
+      {
+        "body_size": 9.8,
+        "line_height": 1.286,
+        "section_gap": 16.2,
+        "item_gap": 10.8,
+        "margin": 11.4
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.271,
+        "section_gap": 14.6,
+        "item_gap": 9.9,
+        "margin": 11.0
+      },
+      {
+        "body_size": 9.4,
+        "line_height": 1.257,
+        "section_gap": 13.1,
+        "item_gap": 8.9,
+        "margin": 10.6
+      },
+      {
+        "body_size": 9.2,
+        "line_height": 1.243,
+        "section_gap": 11.6,
+        "item_gap": 7.9,
+        "margin": 10.2
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.229,
+        "section_gap": 10.1,
+        "item_gap": 6.9,
+        "margin": 9.8
+      },
+      {
+        "body_size": 8.8,
+        "line_height": 1.214,
+        "section_gap": 8.5,
+        "item_gap": 6.0,
+        "margin": 9.4
+      },
+      {
+        "body_size": 8.6,
+        "line_height": 1.2,
+        "section_gap": 7.0,
+        "item_gap": 5.0,
+        "margin": 9.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 60,
+      "summary": 420,
+      "highlight": 70,
+      "competency": 30,
+      "main_bullet": 300,
+      "bullet": 240,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 10.5,
+        "line_height": 1.45,
+        "section_gap": 14.0,
+        "item_gap": 9.0,
+        "margin": 11.8
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.416,
+        "section_gap": 12.6,
+        "item_gap": 8.0,
+        "margin": 11.3
+      },
+      {
+        "body_size": 9.9,
+        "line_height": 1.382,
+        "section_gap": 11.2,
+        "item_gap": 7.0,
+        "margin": 10.7
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.348,
+        "section_gap": 9.8,
+        "item_gap": 6.0,
+        "margin": 10.1
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.314,
+        "section_gap": 8.4,
+        "item_gap": 5.0,
+        "margin": 9.6
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.28,
+        "section_gap": 7.0,
+        "item_gap": 4.0,
+        "margin": 9.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 60,
+      "paragraph": 900
+    }
+  },
+  "labels": {
+    "en": {
+      "summary": "About me",
+      "highlights": "Recognition",
+      "competencies": "Core Skills",
+      "experience": "Experience",
+      "skills": "Skills",
+      "education": "Education",
+      "languages": "Languages"
+    },
+    "fr": {
+      "summary": "À propos",
+      "highlights": "Distinctions",
+      "competencies": "Compétences clés",
+      "experience": "Expérience",
+      "skills": "Compétences",
+      "education": "Formation",
+      "languages": "Langues"
+    }
+  },
+  "thumbnail_of": "a18728aaa0a968b612aa90a217b6d29dbb87cf7ab6fb775b2bc7c4ff9d392402"
+}

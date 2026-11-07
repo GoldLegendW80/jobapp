@@ -15,8 +15,9 @@ import * as baseCvsApi from "../api/base-cvs-api";
 import * as chatApi from "../api/chat-api";
 import * as documentSettingsApi from "../api/document-settings-api";
 import * as documentsApi from "../api/documents-api";
+import * as panelApi from "../api/panel-api";
 import * as postingDocumentsApi from "../api/posting-documents-api";
-import * as spendApi from "../api/spend-api";
+import * as consentApi from "../api/consent-api";
 import * as templatesApi from "../api/templates-api";
 
 /** Every file of the documents api, one per resource, read as one. */
@@ -24,8 +25,9 @@ const api = {
   ...documentsApi,
   ...baseCvsApi,
   ...postingDocumentsApi,
+  ...panelApi,
   ...templatesApi,
-  ...spendApi,
+  ...consentApi,
   ...chatApi,
   ...documentSettingsApi,
 };
@@ -38,32 +40,17 @@ const generation = {
   wait_reason: null,
   error: null,
 };
-const spend = {
-  day: "2026-10-14",
-  auto: true,
-  min_fit: 70,
-  daily_ceiling: 100,
-  written_today: 3,
-  waiting: 0,
-  postings_30_days: 12,
-  to_write: 2,
-  to_write_estimate: { tokens: { low: 1, high: 2 }, cost: null },
-  priced: false,
-  cost_note: "Quota.",
-  today: { input: 1, output: 2, cost_usd: "0.10" },
-  last_30_days: { input: 3, output: 4, cost_usd: "1.00" },
-};
 const template = {
-  slug: "classic",
+  slug: "band",
   version: 1,
   user: false,
-  name: { en: "Classic", fr: "Classique" },
+  name: { en: "Band", fr: "Classique" },
   description: { en: "x", fr: "x" },
   tags: ["ats"],
   photo: "none",
   accent: null,
   kinds: ["cv", "letter"],
-  thumbnails: { cv: "/api/document-templates/classic/thumbnail?kind=cv&v=1" },
+  thumbnails: { cv: "/api/document-templates/band/thumbnail?kind=cv&v=1" },
 };
 const message = {
   id: 1,
@@ -171,6 +158,13 @@ const CASES: Case[] = [
     reply: document,
   },
   {
+    name: "getPanel",
+    run: () => api.getPanel("d1"),
+    method: "GET",
+    url: "/api/documents/d1/panel",
+    reply: { panel: null, input_tokens: 0, output_tokens: 0 },
+  },
+  {
     name: "saveDraft",
     run: () => api.saveDraft("d1", { headline: "x" }, 4),
     method: "PUT",
@@ -182,10 +176,10 @@ const CASES: Case[] = [
   {
     name: "patchDocument",
     run: () =>
-      api.patchDocument("d1", { language: "fr", template_slug: "compact" }),
+      api.patchDocument("d1", { language: "fr", template_slug: "ledger" }),
     method: "PATCH",
     url: "/api/documents/d1",
-    body: { language: "fr", template_slug: "compact" },
+    body: { language: "fr", template_slug: "ledger" },
     reply: document,
   },
   {
@@ -303,29 +297,7 @@ const CASES: Case[] = [
     body: { version: 1 },
     reply: fakeConsent({ accepted: true }),
   },
-  {
-    name: "getSpend",
-    run: () => api.getSpend(55),
-    method: "GET",
-    url: "/api/documents/spend?min_fit=55",
-    reply: spend,
-  },
-  {
-    name: "getSkillsSpend",
-    run: () => api.getSkillsSpend({ years_experience: 4 }),
-    method: "POST",
-    url: "/api/documents/spend/skills",
-    body: { skills: { years_experience: 4 } },
-    reply: {
-      auto: true,
-      min_fit: 70,
-      writes: true,
-      newly: 2,
-      newly_estimate: { tokens: { low: 1, high: 2 }, cost: null },
-      priced: false,
-      cost_note: "",
-    },
-  },
+
   {
     name: "getSettings",
     run: () => api.getSettings(),
@@ -415,8 +387,8 @@ describe("documents-api", () => {
     expect(api.originalPageUrl("d1", 2)).toBe(
       "/api/documents/d1/original?page=2",
     );
-    expect(api.templateThumbnailUrl("classic", "letter")).toBe(
-      "/api/document-templates/classic/thumbnail?kind=letter",
+    expect(api.templateThumbnailUrl("band", "letter")).toBe(
+      "/api/document-templates/band/thumbnail?kind=letter",
     );
   });
 

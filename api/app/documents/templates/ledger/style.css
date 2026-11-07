@@ -1,0 +1,113 @@
+/* ledger: a cream page, heavy black rules at the top and the bottom and under the header,
+   thin grey rules between the sections, a label column on the left and a body on a grid of
+   four columns. Gantari is the bundled stand in for the original's TT Hazelnuts, measured
+   closest in shape and width. The density comes from the step on :root: --body-size,
+   --line-height, --section-gap, --item-gap, --margin. */
+@page { size: A4; background: #fdfbf7; }
+* { box-sizing: border-box; }
+html {
+  font-family: "Gantari", sans-serif;
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  color: #000000;
+}
+body { margin: 0; }
+p, ul, h1, h2, h3 { margin: 0; padding: 0; font-weight: inherit; font-size: inherit; }
+a { color: inherit; text-decoration: none; }
+li, p, h3 { overflow-wrap: anywhere; }
+
+.heavy { border-top: 2.2pt solid #000000; }
+.head { display: flex; flex-wrap: wrap; align-items: flex-start; padding: 16.0pt 0 14.3pt; }  /* the contact lines go under the name only when the two cannot stand side by side whole */
+.photo {
+  flex: 0 0 auto;
+  width: 46pt;
+  height: 46pt;
+  object-fit: cover;
+  border-radius: 50%;
+  margin-right: 12pt;
+}
+.who { flex: 1 1 0; min-width: min-content; padding-right: 12pt; }
+.name {
+  font-size: 1.7em;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.name.longword { font-size: 1.2em; }  /* a word over 14 letters stays whole on the line */
+.headline { margin-top: 0.8pt; font-weight: 700; letter-spacing: 0.01em; line-height: 1.3; }
+.contact {
+  flex: 0 0 auto;
+  min-width: 211.2pt;
+  max-width: 100%;  /* a line longer than the page still wraps inside it */
+  display: grid;
+  grid-template-columns: minmax(105.6pt, max-content) minmax(105.6pt, max-content);
+  grid-auto-flow: column;
+  grid-template-rows: auto auto auto;
+  list-style: none;
+  font-size: 0.8em;
+  line-height: 1.34;
+  margin-top: 1pt;
+}
+.contact li { padding-right: 4pt; }
+.contact .phone { order: 1; }
+.contact .email { order: 2; }
+.contact .place { order: 3; }
+.contact .link { order: 4; }
+
+.row {
+  display: flex;
+  padding: var(--section-gap) 0 13pt;
+  border-top: 0.8pt solid #a6a6a6;
+}
+.heavy + .row { border-top: 0; padding-bottom: 16pt; }
+.label {
+  flex: 0 0 105.7pt;
+  padding-right: 8pt;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.body { flex: 1 1 auto; min-width: 0; }
+.summary { font-size: 1.1em; line-height: 1.364; }
+.pair { display: flex; margin-top: 9.2pt; }
+.half { flex: 0 0 212.9pt; padding-right: 8pt; }
+.half + .half { flex: 1 1 auto; padding-right: 0; }
+.title { font-weight: 700; line-height: 1.27; }
+.lines { list-style: none; font-size: 0.8em; line-height: 1.34; margin-top: 4.6pt; }
+.lines.two { column-count: 2; column-gap: 0; }
+.lines.two li { break-inside: avoid; padding-right: 4pt; }
+
+.role + .role { margin-top: var(--item-gap); }
+.meta { font-size: 0.8em; line-height: 1.34; margin-top: 3.8pt; }
+.text { font-size: 0.8em; line-height: 1.34; }
+.meta + .text { margin-top: 4.9pt; }
+
+.cells { display: flex; flex-wrap: wrap; }
+.cells .lines { margin-top: 3.8pt; }
+.cell { flex: 0 0 25%; padding-right: 10pt; }
+.cells .cell:nth-child(n+5) { margin-top: var(--item-gap); }
+/* A cell holding a text over 40 characters takes the whole row, so a long text wraps on the
+   width of the body rather than a quarter of it (D27); the original's cells hold short ones. */
+.cell.wide { flex-basis: 100%; }
+.cells .cell + .cell.wide, .cells .cell.wide + .cell { margin-top: var(--item-gap); }
+.lang { font-size: 0.8em; line-height: 1.34; padding-top: 1.9pt; }
+
+.letter-body { padding: 24pt 0 24pt 105.7pt; }
+.letter-body p { margin-bottom: var(--item-gap); }
+.date { text-align: right; }
+.recipient { margin-top: var(--section-gap); }
+.subject { margin: var(--section-gap) 0; }
+.subject strong { font-weight: 700; }
+.paragraph { white-space: pre-line; }
+.closing { margin-top: var(--section-gap); }
+.signature { font-weight: 700; margin-top: var(--section-gap); letter-spacing: 0.04em; text-transform: uppercase; }
+
+/* each word of the name is set whole: a double barrelled name never breaks at its hyphen */
+.word { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+/* The name: a word never breaks, at its hyphen either; up to 22 characters it stands on one
+   line, a longer one wraps between its words (D27). */
+.name { white-space: nowrap; }
+.name.long { white-space: normal; }
+.name .word { white-space: nowrap; }
+.name.longword .word { white-space: normal; }  /* broken inside only when it cannot fit whole */

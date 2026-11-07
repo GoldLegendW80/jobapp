@@ -73,11 +73,9 @@ describe("your CVs", () => {
     );
     const estimates = within(dialog).getByTestId("consent-estimates");
     expect(estimates).toHaveTextContent(
-      "One posting: about 12,000 to 20,000 tokens.",
+      "One posting, its CV and letter read by the hiring panel: about 12,000 to 20,000 tokens.",
     );
-    expect(estimates).toHaveTextContent(
-      "A typical week at your threshold of 70: 5 postings, about 60,000 to 100,000 tokens.",
-    );
+    expect(estimates).not.toHaveTextContent("A typical week");
     expect(estimates).toHaveTextContent("tokens count against your quota");
     const agree = within(dialog).getByRole("button", {
       name: "Agree and build my CV",
@@ -178,10 +176,10 @@ describe("your CVs", () => {
           name: "French CV",
           is_default: false,
           source: "built",
-          template_slug: "compact",
+          template_slug: "ledger",
         }),
       ],
-      consent: { accepted: true, min_fit: 65 },
+      consent: { accepted: true },
     });
     await openCvs();
     const list = await screen.findByRole("list", { name: "Your CVs" });
@@ -189,20 +187,16 @@ describe("your CVs", () => {
     expect(first).toHaveTextContent("Main CV");
     expect(first).toHaveTextContent("Default");
     expect(first).toHaveTextContent("From your profile");
-    expect(first).toHaveTextContent("Template: Classic");
+    expect(first).toHaveTextContent("Template: Band");
     expect(second).toHaveTextContent("Built in the app");
-    expect(second).toHaveTextContent("Template: Compact");
+    expect(second).toHaveTextContent("Template: Ledger");
     expect(second).not.toHaveTextContent("Default");
     expect(
       within(first!).queryByRole("button", { name: /^Make default/ }),
     ).toBeNull();
-    const line = await screen.findByTestId("threshold");
+    const line = await screen.findByTestId("written-on-click");
     expect(line).toHaveTextContent(
-      "Documents are written for new postings with a fit of 65 or more.",
-    );
-    expect(within(line).getByRole("link")).toHaveAttribute(
-      "href",
-      "/settings/search",
+      "A posting's CV and letter are written when you click Write on the job page, or Apply.",
     );
   });
 

@@ -42,7 +42,10 @@ BLAKE = "e2e-docs-base-blake@example.org"
 BASES = "/api/documents/base-cvs"
 CONSENT = "/api/documents/consent"
 # SHA-256 of each consent text: editing the words of a version fails here (consent.py).
-DIGESTS = {1: "34d57d47024662f34306e675e84339a437d499faa24e64a51ed6f1db9a2d1f51"}
+DIGESTS = {
+    1: "34d57d47024662f34306e675e84339a437d499faa24e64a51ed6f1db9a2d1f51",
+    2: "aa4987bd6058d98d66b37846f1b9d3d2e63215e6f3db9d2c8ae6f4eef941eca6",
+}
 
 
 @pytest.fixture
@@ -122,16 +125,19 @@ def test_consent_is_asked_recorded_once_and_asked_again_when_the_text_changes(
 ) -> None:
     token, user = alex
     first = api.request("GET", CONSENT, token=token).json()
-    assert first["version"] == 1
+    assert first["version"] == 2
     assert first["accepted"] is False
-    assert first["text"] == consent.TEXTS[1]
+    assert first["text"] == consent.TEXTS[2]
     assert "pictures" in first["text"]
+    assert "Nothing is written without your click." in first["text"]
+    assert "automatic" not in first["text"].lower()
     assert first["model"] is None  # no credential yet
     assert first["posting"]["tokens"]["low"] < first["posting"]["tokens"]["high"]
     assert first["posting"]["cost"] is None
-    assert first["week"]["postings"] == 0
+    assert "week" not in first
+    assert "min_fit" not in first
 
-    stale = api.request("POST", CONSENT, token=token, json={"version": 2})
+    stale = api.request("POST", CONSENT, token=token, json={"version": 1})
     assert stale.status_code == 422
     assert stale.json()["detail"] == consent.OUTDATED
     accepted = _consent(api, token)
@@ -140,39 +146,33 @@ def test_consent_is_asked_recorded_once_and_asked_again_when_the_text_changes(
     again = _consent(api, token).json()
     assert again["accepted_at"] == accepted.json()["accepted_at"]  # the first date stays
 
-    monkeypatch.setattr(consent, "TEXTS", {**consent.TEXTS, 2: "A new text."})
-    monkeypatch.setattr(consent, "VERSION", 2)
+    monkeypatch.setattr(consent, "TEXTS", {**consent.TEXTS, 3: "A new text."})
+    monkeypatch.setattr(consent, "VERSION", 3)
     bumped = api.request("GET", CONSENT, token=token).json()
-    assert bumped["version"] == 2
+    assert bumped["version"] == 3
     assert bumped["accepted"] is False
     with factory() as db:
         assert writer_base.wait_reason(db, user) is not None
 
 
-def test_consent_estimates_count_the_last_30_days_at_or_above_the_threshold(
+def test_the_consent_estimate_is_one_posting_with_its_hiring_panels(
     api: Api, alex: Any, factory: sessionmaker[Session], clock: Any
 ) -> None:
+    from app.documents import estimate
+
     token, user = alex
     _credential(factory, user, clock)
-    today = clock().date()
-    rows = [(90, 0), (70, 29), (69, 1), (None, 2), (95, 30)]  # (fit, days ago)
-    with factory() as db:
-        for fit, ago in rows:
-            db.execute(
-                sa.text(
-                    "INSERT INTO jobs (user_id, slug, company, title, fit, found_on) VALUES "
-                    "(:u, :s, 'Example SA', 'Engineer', :f, :d)"
-                ),
-                {"u": user, "s": uuid.uuid4().hex, "f": fit, "d": today - timedelta(days=ago)},
-            )
-        db.commit()
     body = api.request("GET", CONSENT, token=token).json()
-    assert body["min_fit"] == 70
-    assert body["week"]["postings_30_days"] == 2  # 90 today and 70 at 29 days; not 69, None, 30
-    assert body["week"]["postings"] == 1  # 2 * 7 / 30, rounded up
     assert body["model"] == "claude-sonnet-5-5"
     assert body["posting"]["cost"]["currency"] == "USD"
-    assert body["week"]["tokens"] == body["posting"]["tokens"]
+    with factory() as db:
+        pair = estimate.posting(
+            estimate.profile_chars(db, user),
+            estimate.base_chars(db, user, None),
+            estimate.POSTING_DEFAULT_CHARS,
+            **estimate.limits(),
+        )
+    assert body["posting"]["tokens"]["high"] > pair.high  # the panels are counted
 
 
 # --- building from the profile ------------------------------------------------------------------
@@ -186,7 +186,7 @@ def test_a_build_waits_for_the_consent_then_the_credential_then_starts(
     assert response.status_code == 202, response.text
     built = response.json()["base_cv"]
     assert built["source"] == "built"
-    assert built["template_slug"] == "classic"
+    assert built["template_slug"] == "band"
     assert built["is_default"] is True
     assert built["name"] == "My CV"
     assert built["generation"]["status"] == "waiting"
@@ -267,7 +267,7 @@ def test_a_copy_takes_the_draft_and_template_and_another_persons_is_404(
             BaseSource.built,
             at=clock(),
             content=load("base_cv_alex.json"),
-            template_slug="sidebar",
+            template_slug="photo-columns",
         )
         db.commit()
         source_id, draft = str(source.id), source.draft
@@ -275,7 +275,7 @@ def test_a_copy_takes_the_draft_and_template_and_another_persons_is_404(
     assert response.status_code == 201, response.text
     copy = response.json()["base_cv"]
     assert copy["name"] == "Copy of Original"
-    assert copy["template_slug"] == "sidebar"
+    assert copy["template_slug"] == "photo-columns"
     assert copy["source"] == "built"
     assert copy["is_default"] is False
     assert copy["generation"] is None

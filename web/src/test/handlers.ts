@@ -178,7 +178,7 @@ export const handlers = [
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),
   // No chat thread yet (job detail's Chat panel).
   http.get("*/api/agents/threads", () => HttpResponse.json({ items: [] })),
-  // Nothing written for a posting, one base CV, the default threshold (job detail's Documents section).
+  // Nothing written for a posting and one base CV (job detail's Documents section).
   http.get("*/api/jobs/:id/documents", () =>
     HttpResponse.json({ documents: [] }),
   ),
@@ -189,7 +189,7 @@ export const handlers = [
           id: "cv-default",
           name: "My CV",
           source: "profile",
-          template_slug: "classic",
+          template_slug: "band",
           language: "en",
           is_default: true,
           created_at: "2026-10-14T08:00:00Z",
@@ -202,36 +202,9 @@ export const handlers = [
       max: 10,
     }),
   ),
-  http.get("*/api/documents/spend", () =>
-    HttpResponse.json({
-      day: "2026-10-14",
-      auto: true,
-      min_fit: 70,
-      daily_ceiling: 100,
-      written_today: 0,
-      waiting: 0,
-      postings_30_days: 0,
-      to_write: 0,
-      to_write_estimate: { tokens: { low: 0, high: 0 }, cost: null },
-      newly: 0,
-      newly_estimate: { tokens: { low: 0, high: 0 }, cost: null },
-      priced: false,
-      cost_note: "",
-      today: { input: 0, output: 0, cost_usd: "0" },
-      last_30_days: { input: 0, output: 0, cost_usd: "0" },
-    }),
-  ),
-  // A skills draft that starts nothing (the line beside Save skills stays empty).
-  http.post("*/api/documents/spend/skills", () =>
-    HttpResponse.json({
-      auto: true,
-      min_fit: 70,
-      writes: false,
-      newly: 0,
-      newly_estimate: { tokens: { low: 0, high: 0 }, cost: null },
-      priced: false,
-      cost_note: "",
-    }),
+  // No hiring panel read the document yet (documents D29).
+  http.get("*/api/documents/:id/panel", () =>
+    HttpResponse.json({ panel: null, input_tokens: 0, output_tokens: 0 }),
   ),
   // No skills change rescored yet (the line after Save skills).
   http.get("*/api/jobs/rescore/status", () =>

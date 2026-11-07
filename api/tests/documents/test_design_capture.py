@@ -1,7 +1,7 @@
 """D25b: the design capture of an uploaded CV, end to end on the fake backend (no model, no key)
 with the parser and the renderer played by fakes (the real renderer's check is
 test_design_check_docker.py): a capture stored as the person's user template and the base CV's
-new version, a repair, a refusal by the rules and by the render check (`classic` kept), a
+new version, a repair, a refusal by the rules and by the render check (its template kept), a
 fidelity pass that breaks the rules (the accepted template kept), the capture run twice, a DOCX
 and a scanned PDF, the file's bytes gone, waiting for the credential, A's template never
 resolved for B, a row tampered with, the secret rules on the layout's texts, the grey photo
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import uuid
 from typing import Any
@@ -20,16 +21,18 @@ import sqlalchemy as sa
 from PIL import Image
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
-from app.agents import credentials
-from app.agents.models import CredentialKind
+from app.agents import credentials, failures
+from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.documents import (
     base_router,
     consent,
     design_capture,
     design_check,
+    fidelity,
     render_client,
     render_job,
     store,
+    template_rules,
     writer_base,
     writer_design_tools,
 )
@@ -86,10 +89,17 @@ def jpeg(width: int = 300, height: int = 424) -> bytes:
     return out.getvalue()
 
 
-def design(*texts: str, scanned: bool = False, pages: int = 2) -> DesignPdf:
+def design(
+    *texts: str, scanned: bool = False, pages: int = 2, headings: tuple[str, ...] = ()
+) -> DesignPdf:
+    """A page of `texts` in one body style, then `headings` as section headings (capitals, at
+    the body's size, met twice or more, below the header: design_spec's role)."""
     runs = tuple(
         TextRun(text, (600, 600 + 200 * n, 3000, 720 + 200 * n), 0, 100, "#1d232b")
         for n, text in enumerate(texts)
+    ) + tuple(
+        TextRun(text, (600, 3000 + 600 * n, 3000, 3120 + 600 * n), 0, 100, "#1d232b", caps=True)
+        for n, text in enumerate(headings)
     )
     page = DesignPage(
         index=0,
@@ -212,6 +222,112 @@ def test_a_capture_becomes_the_base_cvs_template_as_a_new_version(
         assert render_job.template_of(db, who.user, row.slug).slug == row.slug
 
 
+# #757 round 1 (B4): a run that stops on its turn limit, wall time or token budget after an
+# accepted submit keeps the best accepted template; a cancel or an upload gone keeps nothing.
+def test_a_run_stopped_on_its_turn_limit_keeps_the_accepted_template(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_turn_limit"))
+    with who.factory() as db:
+        run = db.get(AgentRun, generation.run_id)
+        assert run is not None
+        assert (run.status, run.error) == (RunStatus.failed, failures.TURN_LIMIT.format(turns=14))
+    assert generation.status is GenerationStatus.done, generation.error
+    (row,) = own_templates(who.factory, who.user)
+    assert document_row(who.factory, base).template_slug == row.slug
+    (version,) = versions(who.factory, base)
+    assert (version.origin, version.template_slug) == (Origin.template, row.slug)
+    assert [job["function"] for job in who.queue.jobs] == [render_job.FUNCTION]
+
+
+@pytest.mark.parametrize("end", ["cancelled", "gone"])
+def test_a_cancelled_run_or_an_upload_gone_keeps_nothing_it_accepted(
+    who: Person, monkeypatch: pytest.MonkeyPatch, end: str
+) -> None:
+    """The same accepted submit, the run's end seen by settle as a cancel, or with the upload
+    gone (`found.gone`) on top of the turn limit."""
+    Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    real = design_capture.settle
+
+    def settle(sessions, run_id, status, found, at):
+        assert found.accepted is not None  # the stream's submit was accepted
+        if end == "cancelled":
+            status = RunStatus.cancelled
+        else:
+            found.gone = True
+        return real(sessions, run_id, status, found, at)
+
+    monkeypatch.setattr(design_capture, "settle", settle)
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_turn_limit"))
+    if end == "cancelled":
+        assert generation.status is GenerationStatus.cancelled
+    else:
+        assert (generation.status, generation.error) == (GenerationStatus.failed, "binding_gone")
+    assert own_templates(who.factory, who.user) == []
+    assert document_row(who.factory, base).template_slug == "band"
+    assert versions(who.factory, base) == []
+    assert who.queue.jobs == []
+
+
+STOPS = [
+    (RunStatus.failed, failures.TURN_LIMIT.format(turns=14), True),
+    (RunStatus.failed, failures.TURN_LIMIT.format(turns=20), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="15 minutes"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="1 minute"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="2.5 minutes"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="45 seconds"), True),
+    (RunStatus.failed, failures.TIME_LIMIT.format(minutes="a while"), False),
+    (RunStatus.failed, failures.TOKEN_LIMIT, True),
+    (RunStatus.cancelled, failures.TURN_LIMIT.format(turns=14), False),
+    (RunStatus.cancelled, None, False),
+    (RunStatus.done, None, False),
+    (RunStatus.failed, None, False),
+    (RunStatus.failed, failures.BINDING_GONE, False),
+    (RunStatus.failed, failures.NO_RESULT, False),
+    (RunStatus.failed, failures.BUSY, False),
+    (RunStatus.failed, failures.INTERNAL, False),
+    (RunStatus.failed, failures.API_ERROR.format(status=500), False),
+    (RunStatus.failed, failures.FAILED.format(reason="error_during_execution"), False),
+    (RunStatus.failed, failures.TURN_LIMIT.format(turns=14) + " Then it failed.", False),
+    (RunStatus.failed, "The run reached its limit of turns.", False),
+]
+
+
+@pytest.mark.parametrize(("status", "error", "limit"), STOPS)
+def test_only_a_stop_on_a_limit_counts_as_one(status, error, limit) -> None:
+    run = AgentRun(status=status, error=error)
+    assert design_capture.stopped_on_a_limit(status, run) is limit
+    assert design_capture.stopped_on_a_limit(status, None) is False
+
+
+# #757 round 1 (follow up): each view_render was a full render; a second one in the same pass
+# is answered from the first, in words, without a render or an image.
+def test_a_second_view_render_in_one_pass_is_answered_without_a_render(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    services = Services(monkeypatch, design("Morgan Exampleton", "Platform Engineer"))
+    answers: list[Any] = []
+    real = writer_design_tools.view_render
+
+    async def view_render(scope):
+        answers.append(await real(scope))
+        return answers[-1]
+
+    monkeypatch.setattr(writer_design_tools, "view_render", view_render)
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_viewed_twice"))
+    assert generation.status is GenerationStatus.done, generation.error
+    first, second = answers
+    assert [block["type"] for block in first] == ["image", "text"]
+    assert [block["type"] for block in second] == ["text"]
+    assert second[0]["text"] == f"{writer_design_tools.SAME_RENDER}\n{first[1]['text']}"
+    # the accepted submit's measure and the first view_render: two renders, not three
+    assert len(services.renderer.calls) == 2
+
+
 def test_a_refusal_is_repaired_once(who: Person, monkeypatch: pytest.MonkeyPatch) -> None:
     Services(monkeypatch, design("Morgan Exampleton"))
     base = uploaded_base(who)
@@ -234,7 +350,7 @@ def test_two_refusals_keep_the_default_design_and_say_so(
     assert generation.status is GenerationStatus.failed
     assert generation.error == "invalid_output"
     assert own_templates(who.factory, who.user) == []
-    assert document_row(who.factory, base).template_slug == "classic"
+    assert document_row(who.factory, base).template_slug == "band"
     assert versions(who.factory, base) == []
     assert who.queue.jobs == []
 
@@ -310,7 +426,7 @@ def test_a_scanned_cv_is_captured_and_said_so(who: Person, monkeypatch: pytest.M
     assert "scanned" in row.manifest["capture"]["notes"]
 
 
-def test_the_file_without_its_bytes_fails_the_capture_at_once_and_keeps_classic(
+def test_the_file_without_its_bytes_fails_the_capture_at_once_and_keeps_its_template(
     who: Person, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     services = Services(monkeypatch, design("Morgan Exampleton"))
@@ -321,7 +437,7 @@ def test_the_file_without_its_bytes_fails_the_capture_at_once_and_keeps_classic(
     assert run_id is None  # no model is called
     assert (generation.status, generation.error) == (GenerationStatus.failed, "binding_gone")
     assert services.asked == []
-    assert document_row(who.factory, base).template_slug == "classic"
+    assert document_row(who.factory, base).template_slug == "band"
 
 
 def test_a_capture_that_fails_after_the_conversion_leaves_the_cv_converted(
@@ -399,7 +515,7 @@ def test_a_persons_template_never_resolves_for_another(
     other = person(factory, migrated_url, USER_B)
     with factory() as db:
         assert template_system.resolve(db, other.user, row.slug) is None
-        assert render_job.template_of(db, other.user, row.slug).slug == "classic"
+        assert render_job.template_of(db, other.user, row.slug).slug == "band"
         with pytest.raises(store.TemplateUnknownError):
             render_job.switch(db, other.user, other.base, at=AT, template_slug=row.slug)
 
@@ -418,10 +534,10 @@ def test_a_row_that_breaks_the_rules_resolves_to_nothing(
         )
         db.commit()
         assert template_system.resolve(db, who.user, row.slug) is None
-        assert render_job.template_of(db, who.user, row.slug).slug == "classic"
+        assert render_job.template_of(db, who.user, row.slug).slug == "band"
         db.execute(sa.delete(DocumentUserTemplate).where(DocumentUserTemplate.id == row.id))
         db.commit()
-        assert render_job.template_of(db, who.user, row.slug).slug == "classic"
+        assert render_job.template_of(db, who.user, row.slug).slug == "band"
 
 
 def test_the_layouts_texts_go_through_the_secret_rules_one_and_two_at_a_time() -> None:
@@ -531,21 +647,66 @@ def test_the_docx_names_and_fonts_go_through_the_secret_rules() -> None:
     assert layout["theme"]["minor"] == "Arimo"  # mapped by code, never the file's string
 
 
-def test_decide_allows_one_repair_and_one_fidelity_pass() -> None:
+def _measured(score: float) -> fidelity.Measure:
+    """A measure whose score is `score`: the page ink and the share of lines in place alike."""
+    return fidelity.Measure(score, 100, 100, round(score * 100), 0.5, 0.5, 1.0, 1.0, ())
+
+
+def test_decide_allows_one_repair_then_fidelity_passes_that_keep_the_best() -> None:
     bad = (Problem("style.css", 0, "covered", "name at the loosest step"),)
-    files = {"style.css": "a"}
 
-    def run(*answers: tuple[Problem, ...], passes: int = 2) -> list[str]:
+    def run(*answers, passes: int = 4) -> tuple[list[str], design_capture.RunState]:
         state = design_capture.RunState()
-        return [design_capture.decide(state, files, found, passes) for found in answers]
+        said = []
+        for at, (found, score) in enumerate(answers):
+            files = {"style.css": f"version {at}"}
+            measure = None if score is None else _measured(score)
+            said.append(design_capture.decide(state, files, found, passes, measure))
+            said[-1] = said[-1].split("\n")[0]
+        return said, state
 
-    assert run((), ()) == [design_capture.ACCEPTED, design_capture.STORED]
-    assert run((), bad) == [design_capture.ACCEPTED, design_capture.KEPT]
-    assert run(bad, (), ())[1:] == [design_capture.ACCEPTED, design_capture.STORED]
-    assert run(bad, bad, ())[1:] == [design_capture.REFUSED, design_capture.NO_MORE]
-    assert run(bad, (), (), ())[3] == design_capture.NO_MORE
-    assert run((), passes=0) == [design_capture.STORED]
-    assert run(bad, (), passes=1)[1] == design_capture.STORED
+    first = design_capture.ACCEPTED.split("\n")[0]
+    better, not_better = design_capture.BETTER, design_capture.NOT_BETTER
+    # the passes stop when the score stops rising, and the best is the one kept
+    said, state = run(((), 0.60), ((), 0.70), ((), 0.80), ((), 0.803))
+    assert said == [first, better, better, not_better]
+    assert state.accepted == {"style.css": "version 2"}
+    assert state.best == pytest.approx(0.80)
+    assert state.closed
+    # a later pass that is worse leaves the best in place
+    said, state = run(((), 0.70), ((), 0.50))
+    assert said == [first, not_better]
+    assert state.accepted == {"style.css": "version 0"}
+    # a pass that breaks the rules keeps the best
+    said, state = run(((), 0.60), ((), 0.75), (bad, None))
+    assert said == [first, better, design_capture.KEPT]
+    assert state.accepted == {"style.css": "version 1"}
+    # at most `passes` fidelity passes after the first accepted template
+    said, state = run(((), 0.1), ((), 0.2), ((), 0.3), passes=2)
+    assert said == [first, better, design_capture.STORED]
+    assert run(((), 0.1), ((), 0.2), ((), 0.3), ((), 0.4), passes=2)[0][3] == design_capture.NO_MORE
+    # one repair, then the end
+    assert run((bad, None), ((), 0.5))[0] == [run((bad, None))[0][0], first]
+    assert run((bad, None), (bad, None), ((), 0.9))[0][1:] == [
+        design_capture.REFUSED,
+        design_capture.NO_MORE,
+    ]
+    assert run(((), 0.5), passes=0)[0] == [design_capture.STORED]
+    # a DOCX has no page to measure on: its one correction is taken as before
+    said, state = run(((), None), ((), None), passes=1)
+    assert said == [first, design_capture.STORED]
+    assert state.accepted == {"style.css": "version 1"}
+
+
+def test_the_measure_reaches_the_writer_in_words_and_the_row_in_numbers() -> None:
+    offset = fidelity.Offset("EXPERIENCE", 0.2, 4.8, 0.0)
+    found = fidelity.Measure(0.81, 50, 49, 47, 0.4, 0.7, 1.2, 4.8, (offset,))
+    words = design_capture.said(found)
+    assert "47 of 50 lines in place" in words
+    assert 'The line "EXPERIENCE" is 4.8pt lower than in the CV.' in words
+    summary = found.summary()
+    assert summary["in_place"] == 47
+    assert "EXPERIENCE" not in json.dumps(summary)
 
 
 def test_the_estimate_counts_the_images() -> None:
@@ -553,8 +714,136 @@ def test_the_estimate_counts_the_images() -> None:
 
     pdf = design_estimate.capture(10_000)
     docx = design_estimate.capture(10_000, pages=0)
-    # 5 turns of (7,000 + 3,334) fixed, 4 of (4,000 + 3 images of 1,600), 3 of 4,000 output.
-    assert pdf.low == 5 * 10_334 + 4 * (4_000 + 4_800) + 3 * 4_000 + 4_000 + 5 * 500
-    assert pdf.high - docx.high == 9 * 1_600 * 4
+    # 5 turns of (7,000 + 3,334) fixed, 4 of (5,000 + 3 images of 1,600: two pages and one
+    # view_render), 3 of 4,000 output.
+    assert pdf.low == 5 * 10_334 + 4 * (5_000 + 4_800) + 3 * 4_000 + 4_000 + 5 * 500
+    # each page twice, sent again at each of the 13 later turns: the renders are the same
+    assert pdf.high - docx.high == 4 * 1_600 * 13
+    # 14 turns, 6 submits: the refused one sent again 10 times, its repair and the four passes
+    # 9, 7, 5, 3 and 1 times, each with its view_render, and one more view_render 9 times
+    resent = 10 * 13_334 + 25 * (13_334 + 1_600) + 9 * 1_600
+    assert docx.high == 14 * 10_334 + 13 * 40_000 + resent + 6 * 13_334 + 14 * 500
+    assert design_estimate.capture(design_estimate.prompt_chars("design")).high <= 1_500_000
     assert pdf.ceiling == 2 * pdf.high
     assert asyncio.iscoroutinefunction(design_check.check_template)
+
+
+def _inputs_with(headings: tuple[str, ...]) -> design_capture.Inputs:
+    tokens = template_rules.from_pdf(parser_client.DesignPdf(1, False, False, (), (), ()))
+    return design_capture.Inputs("pdf", tokens, "none", {}, (), (), headings=headings)
+
+
+LABEL_CASES = [
+    ({"experience": "Expériences Professionnelles"}, None),
+    ({"summary": "About me", "languages": "Langues parlées"}, None),
+    ({"summary": "  About me  "}, None),  # trimmed, as the run's text is
+    ({"summary": "About you"}, "not a heading of the upload"),
+    ({"summary": design_capture.REDACTED}, "not a heading of the upload"),
+    # #757 round 1 (B2): a run text of the upload that is no heading would print on every later
+    # document, outside the fact check
+    ({"summary": "Morgan Exampleton"}, "not a heading of the upload"),  # the name
+    ({"summary": "Platform Engineer"}, "not a heading of the upload"),  # a headline
+    ({"experience": "Example Robotics"}, "not a heading of the upload"),  # an organisation
+    ({"summary": "About me", "skills": "Led a team of 12"}, "not a heading of the upload"),
+    ({"summary": "about me"}, "not a heading of the upload"),  # case: exact text only
+    ({"summary": "About  me"}, "not a heading of the upload"),
+    ({"summary": "About - me"}, "a dash"),
+    ({"summary": "About – me"}, "a dash"),
+    ({"summary": "-About"}, "a dash"),
+    ({"summary": "About <b>"}, "a dash or a <"),
+    ({"summary": "x" * 41}, "1 to 40"),
+    ({"summary": ""}, "1 to 40"),
+    ({"photo": "About me"}, "no label key"),
+    ({"summary": 3}, "1 to 40"),
+    (["About me"], "an object"),
+]
+
+
+@pytest.mark.parametrize(("proposed", "said"), LABEL_CASES)
+def test_a_label_is_taken_only_as_the_exact_text_of_a_heading_of_the_upload(proposed, said):
+    headings = ("Expériences Professionnelles", "About me", "Langues parlées", "About - me",
+                "About – me", "-About", "About <b>", "x" * 41, design_capture.REDACTED)  # fmt: skip
+    labels, problems = design_capture.labels_of(proposed, _inputs_with(headings), "fr")
+    if said is None:
+        assert problems == ()
+        assert labels == {"fr": {k: v.strip() for k, v in proposed.items()}}
+    else:
+        assert labels is None
+        assert any(said in p.detail for p in problems), problems
+    assert design_capture.labels_of(None, _inputs_with(headings), "fr") == (None, ())
+
+
+def test_the_name_a_headline_and_an_organisation_of_a_real_layout_are_no_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The inputs as read_inputs builds them from an extraction: only the section heading runs
+    are labels; every other run text is refused."""
+    found = design(
+        "Morgan Exampleton", "Platform Engineer", "Example Robotics", headings=("PROFILE", "SKILLS")
+    )
+    Services(monkeypatch, found)
+    inputs = asyncio.run(design_capture.read_inputs(PDF, "application/pdf"))
+    assert inputs.headings == ("PROFILE", "SKILLS")
+    labels, problems = design_capture.labels_of({"summary": "PROFILE"}, inputs, "en")
+    assert (labels, problems) == ({"en": {"summary": "PROFILE"}}, ())
+    for text in ("Morgan Exampleton", "Platform Engineer", "Example Robotics"):
+        labels, problems = design_capture.labels_of({"summary": text}, inputs, "en")
+        assert labels is None
+        assert [p.detail for p in problems] == ["labels: summary is not a heading of the upload"]
+
+
+def test_several_measured_passes_keep_the_best_with_the_uploads_heading_as_label(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """documents_design_passes: four accepted submits; the measure rises, then falls: the
+    second best is stored with its label, the numbers of its measure, and no text of the CV."""
+    layout = design("Morgan Exampleton", "Platform Engineer", headings=("PROFILE", "SKILLS"))
+    services = Services(monkeypatch, layout)
+    # the score of each version, read from the sheet the renderer was given last (a submit and
+    # a view_render measure the same version alike)
+    scores = {".pass0 ": 0.50, ".pass1 ": 0.62, ".pass2 ": 0.70, ".pass3 ": 0.40}
+    seen: list[str] = []
+
+    def measure(original_page, original, pdf, png):
+        seen.append(original[0].text if original else "")
+        html = services.renderer.calls[-1]
+        return _measured(next(v for k, v in scores.items() if k in html))
+
+    monkeypatch.setattr(fidelity, "measure", measure)
+    base = uploaded_base(who)
+    generation = generation_row(who.factory, capture(who, base, "documents_design_passes"))
+    assert generation.status is GenerationStatus.done, generation.error
+    assert seen[0] == "Morgan Exampleton"  # the original's lines, as the model read them
+    (row,) = own_templates(who.factory, who.user)
+    assert ".pass2 " in row.css
+    assert ".pass3 " not in row.css
+    assert row.manifest["labels"] == {"en": {"summary": "PROFILE"}}
+    kept = row.manifest["capture"]["fidelity"]
+    assert kept["score"] == pytest.approx(0.70)
+    assert kept["in_place"] == 70
+    assert "Morgan" not in json.dumps(row.manifest["capture"])
+    with who.factory() as db:
+        document = store.get(db, who.user, base)
+        assert document is not None
+        found = base_router._out(db, document).design_fidelity
+    assert found is not None
+    assert (found.in_place, found.lines) == (70, 100)
+
+
+def test_the_base_view_shows_no_fidelity_for_a_bundled_template_or_a_bad_row(
+    who: Person, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    Services(monkeypatch, design("Morgan Exampleton"))
+    base = uploaded_base(who)
+    with who.factory() as db:
+        document = store.get(db, who.user, base)
+        assert document is not None
+        assert base_router._out(db, document).design_fidelity is None  # band, the default
+    capture(who, base, "documents_design_valid")
+    with who.factory() as db:
+        row = db.scalars(sa.select(DocumentUserTemplate)).one()
+        row.manifest = {**row.manifest, "capture": {"fidelity": {"lines": 3, "in_place": 9}}}
+        db.commit()
+        document = store.get(db, who.user, base)
+        assert document is not None
+        assert base_router._out(db, document).design_fidelity is None

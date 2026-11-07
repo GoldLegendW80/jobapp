@@ -184,12 +184,12 @@ export const Saving: Story = {
   args: { dirty: true, saving: true },
 };
 
-/** A line beside Save on what the save will start (the rescore of postings after a skills change). */
+/** A line beside Save on what the last save started (the rescore of postings after a skills change). */
 export const WithANote: Story = {
   name: "Save with a note beside it",
   args: {
-    dirty: true,
-    note: "This change brings 3 postings to a fit of 70 or more: their CV and letter are written automatically.",
+    dirty: false,
+    note: "4 more postings now fit you at 70 or more.",
   },
 };
 

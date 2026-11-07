@@ -9,7 +9,6 @@ import {
   postingDocumentsKey,
   writeNow,
 } from "./posting-documents-api";
-import { spendKey } from "./spend-api";
 import { postingPollInterval } from "../helpers/posting-documents-state";
 
 /**
@@ -26,8 +25,8 @@ export function usePostingDocuments(jobId: string, expectLetter?: boolean) {
 }
 
 /**
- * Once the work on a posting's documents ends (`busy` turns false), the posting and the spend are
- * read again: the render that ends it may have moved the posting to `cv_ready`.
+ * Once the work on a posting's documents ends (`busy` turns false), the posting is read again:
+ * the render that ends it may have moved the posting to `cv_ready`.
  */
 export function useRefreshWhenWorkEnds(jobId: string, busy: boolean) {
   const client = useQueryClient();
@@ -35,7 +34,6 @@ export function useRefreshWhenWorkEnds(jobId: string, busy: boolean) {
   useEffect(() => {
     if (wasBusy.current && !busy) {
       void client.invalidateQueries({ queryKey: jobKey(jobId) });
-      void client.invalidateQueries({ queryKey: spendKey() });
     }
     wasBusy.current = busy;
   }, [busy, client, jobId]);

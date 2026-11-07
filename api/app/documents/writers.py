@@ -20,6 +20,7 @@ WRITERS: tuple[str, ...] = (
     "writer_design",  # D25b: documents_design
     "chat",  # D17: the chat of a document
     "generate",  # D7: the generations, the final hook and the shortening pass
+    "panel",  # D29: the hiring panel's seven reviewers and its merge
 )
 
 

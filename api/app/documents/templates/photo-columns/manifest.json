@@ -1,0 +1,162 @@
+{
+  "slug": "photo-columns",
+  "version": 1,
+  "name": {
+    "en": "Photo and columns",
+    "fr": "Photo et colonnes"
+  },
+  "description": {
+    "en": "A photo at the top left beside the name in capitals, contact lines with icons, then the profile across the page and two columns that open on thin rules.",
+    "fr": "Une photo en haut à gauche à côté du nom en capitales, des coordonnées avec leurs icônes, puis le profil sur toute la largeur et deux colonnes ouvertes par de fins filets."
+  },
+  "tags": [
+    "two columns",
+    "sans",
+    "photo"
+  ],
+  "photo": "optional",
+  "fonts": [
+    "raleway"
+  ],
+  "accent": "#07113c",
+  "cv": {
+    "steps": [
+      {
+        "body_size": 10.0,
+        "line_height": 1.5,
+        "section_gap": 15.3,
+        "item_gap": 8.2,
+        "margin": 8.0
+      },
+      {
+        "body_size": 9.69,
+        "line_height": 1.454,
+        "section_gap": 13.6,
+        "item_gap": 7.3,
+        "margin": 7.7
+      },
+      {
+        "body_size": 9.37,
+        "line_height": 1.409,
+        "section_gap": 11.9,
+        "item_gap": 6.4,
+        "margin": 7.4
+      },
+      {
+        "body_size": 9.06,
+        "line_height": 1.363,
+        "section_gap": 10.2,
+        "item_gap": 5.5,
+        "margin": 7.1
+      },
+      {
+        "body_size": 8.74,
+        "line_height": 1.317,
+        "section_gap": 8.6,
+        "item_gap": 4.7,
+        "margin": 6.9
+      },
+      {
+        "body_size": 8.43,
+        "line_height": 1.271,
+        "section_gap": 6.9,
+        "item_gap": 3.8,
+        "margin": 6.6
+      },
+      {
+        "body_size": 8.11,
+        "line_height": 1.226,
+        "section_gap": 5.2,
+        "item_gap": 2.9,
+        "margin": 6.3
+      },
+      {
+        "body_size": 7.8,
+        "line_height": 1.18,
+        "section_gap": 3.5,
+        "item_gap": 2.0,
+        "margin": 6.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 40,
+      "summary": 420,
+      "highlight": 90,
+      "competency": 45,
+      "main_bullet": 220,
+      "bullet": 180,
+      "paragraph": null
+    }
+  },
+  "letter": {
+    "steps": [
+      {
+        "body_size": 10.5,
+        "line_height": 1.55,
+        "section_gap": 14.0,
+        "item_gap": 9.0,
+        "margin": 8.0
+      },
+      {
+        "body_size": 10.2,
+        "line_height": 1.504,
+        "section_gap": 12.6,
+        "item_gap": 8.0,
+        "margin": 7.6
+      },
+      {
+        "body_size": 9.9,
+        "line_height": 1.458,
+        "section_gap": 11.2,
+        "item_gap": 7.0,
+        "margin": 7.2
+      },
+      {
+        "body_size": 9.6,
+        "line_height": 1.412,
+        "section_gap": 9.8,
+        "item_gap": 6.0,
+        "margin": 6.8
+      },
+      {
+        "body_size": 9.3,
+        "line_height": 1.366,
+        "section_gap": 8.4,
+        "item_gap": 5.0,
+        "margin": 6.4
+      },
+      {
+        "body_size": 9.0,
+        "line_height": 1.32,
+        "section_gap": 7.0,
+        "item_gap": 4.0,
+        "margin": 6.0
+      }
+    ],
+    "soft_limits": {
+      "headline": 40,
+      "paragraph": 900
+    }
+  },
+  "labels": {
+    "en": {
+      "summary": "Profile",
+      "education": "Education",
+      "skills": "Skills",
+      "languages": "Spoken languages",
+      "experience": "Experience",
+      "competencies": "Expertise",
+      "highlights": "Achievements"
+    },
+    "fr": {
+      "summary": "Profil",
+      "education": "Formation",
+      "skills": "Compétences",
+      "languages": "Langues parlées",
+      "experience": "Expérience",
+      "competencies": "Expertise",
+      "highlights": "Réalisations"
+    }
+  },
+  "thumbnail_of": "31c37b17303a4284b7ebfd1814ca18f3f9d965c1319c5579bcec424df0ef700d"
+}

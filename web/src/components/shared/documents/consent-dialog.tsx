@@ -14,7 +14,7 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Spinner } from "@/components/ui/spinner";
 
-import type { Consent, Estimate } from "@/features/documents/api/spend-api";
+import type { Consent, Estimate } from "@/features/documents/api/consent-api";
 import { money, tokenRange } from "@/features/documents/helpers/labels";
 
 function figure(estimate: Estimate): string {
@@ -106,10 +106,9 @@ export function ConsentDialog({
         >
           <h4 className="font-semibold">What it costs</h4>
           <ul className="flex flex-col gap-1">
-            <li>One posting: {figure(consent.posting)}.</li>
             <li>
-              A typical week at your threshold of {consent.min_fit}:{" "}
-              {consent.week.postings} postings, {figure(consent.week)}.
+              One posting, its CV and letter read by the hiring panel:{" "}
+              {figure(consent.posting)}.
             </li>
           </ul>
           <p className="text-muted-foreground">{consent.cost_note}</p>

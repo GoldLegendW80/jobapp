@@ -10,7 +10,7 @@ import type {
   DocumentOut,
   VersionSummary,
 } from "@/features/documents/api/documents-api";
-import type { Consent } from "@/features/documents/api/spend-api";
+import type { Consent } from "@/features/documents/api/consent-api";
 
 import { server } from "./server";
 
@@ -24,14 +24,7 @@ export function fakeConsent(overrides: Partial<Consent> = {}): Consent {
     accepted: false,
     accepted_at: null,
     model: "claude-opus-5-5",
-    min_fit: 70,
     posting: { tokens: { low: 12_000, high: 20_000 }, cost: null },
-    week: {
-      tokens: { low: 60_000, high: 100_000 },
-      cost: null,
-      postings: 5,
-      postings_30_days: 18,
-    },
     cost_note:
       "On a Claude subscription, tokens count against your quota, not as money.",
     ...overrides,
@@ -46,7 +39,7 @@ export function fakeVersion(
     origin: "generated",
     created_at: "2026-10-14T09:00:00Z",
     language: "en",
-    template_slug: "classic",
+    template_slug: "band",
     template_version: 1,
     fit: "one_page",
     fit_step: 0,
@@ -67,7 +60,7 @@ export function fakeCv(overrides: Partial<BaseCv> = {}): BaseCv {
     id: "cv-1",
     name: "My CV",
     source: "profile",
-    template_slug: "classic",
+    template_slug: "band",
     language: "en",
     is_default: true,
     created_at: "2026-10-14T08:00:00Z",
@@ -76,6 +69,7 @@ export function fakeCv(overrides: Partial<BaseCv> = {}): BaseCv {
     render_state: "idle",
     generation: { id: "g-1", status: "done", wait_reason: null, error: null },
     design_generation: null,
+    design_fidelity: null,
     ...overrides,
   };
 }

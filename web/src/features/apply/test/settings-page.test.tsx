@@ -254,29 +254,19 @@ describe("the Applications page", () => {
     ).toBeChecked();
   });
 
-  it("labels the three thresholds apart and changes only the third", async () => {
+  it("labels the two thresholds apart and changes only the second", async () => {
     fakeSettings();
     fakeCaps([]);
     fakeBank([]);
     await openPage();
-    // The three side by side, in one group.
+    // The two side by side, in one group.
     const thresholds = cardOf("Fit thresholds");
-    for (const name of [
-      "Show postings from",
-      "Write documents from",
-      "Apply automatically from",
-    ])
+    for (const name of ["Show postings from", "Apply automatically from"])
       expect(thresholds).toContainElement(cardOf(name));
     expect(
       within(cardOf("Show postings from")).getByText("60"),
     ).toBeInTheDocument();
-    expect(
-      within(cardOf("Write documents from")).getByText("65"),
-    ).toBeInTheDocument();
     expect(within(cardOf("Show postings from")).queryByRole("textbox")).toBe(
-      null,
-    );
-    expect(within(cardOf("Write documents from")).queryByRole("textbox")).toBe(
       null,
     );
     expect(
@@ -290,6 +280,9 @@ describe("the Applications page", () => {
     expect(
       screen.getByRole("link", { name: "Open Settings, Search" }),
     ).toHaveAttribute("href", "/settings/search");
+    // Documents D29: nothing is written from a fit score any more, so no such card.
+    expect(screen.queryByText("Write documents from")).toBe(null);
+    expect(screen.queryByText(/writes a CV and a letter/)).toBe(null);
   });
 
   it("says Not set for a threshold the person has not set", async () => {
@@ -299,9 +292,6 @@ describe("the Applications page", () => {
     await openPage();
     expect(
       within(cardOf("Show postings from")).getByText("Not set"),
-    ).toBeInTheDocument();
-    expect(
-      within(cardOf("Write documents from")).getByText("Not set"),
     ).toBeInTheDocument();
   });
 

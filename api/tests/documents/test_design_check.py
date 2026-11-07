@@ -14,7 +14,7 @@ from PIL import Image
 from pydantic import ValidationError
 
 from app.documents import content as c
-from app.documents import design_check, render_client, templates
+from app.documents import design_check, render_client, template_css, templates
 from app.documents.render_client import Checked, RenderError, Seen
 from app.documents.template_css import Problem
 from app.profile.schemas import IdentitySection
@@ -99,7 +99,7 @@ class Recorded:
 
 
 def test_every_shape_is_checked_at_both_steps_in_the_page_box_of_the_step() -> None:
-    template = templates.registry()["classic"]
+    template = templates.registry()["band"]
     check = Recorded("render_failed")
     found = asyncio.run(design_check.check_template(template, check))
     widths = []
@@ -116,9 +116,47 @@ def test_every_shape_is_checked_at_both_steps_in_the_page_box_of_the_step() -> N
     assert any("the name and contact lines at their longest" in p.detail for p in found)
 
 
+# #757 round 1 (B1): print paints the `@page` background, the check's screenshots do not, so
+# every page sent to /check carries it on `html`, before the sheet (whose own `html` or `body`
+# background still wins); a stored render never does (the PDF paints `@page` itself).
+def test_the_check_page_carries_the_page_background_and_a_stored_render_does_not() -> None:
+    template = templates.registry()["band"]
+    assert template_css.page_background(template.files["style.css"], template.accent) == "#f8f8f8"
+    check = Recorded("render_failed")
+    asyncio.run(design_check.check_template(template, check))
+    assert check.htmls
+    for html in check.htmls:
+        painted = html.index("html{background-color:#f8f8f8}")
+        assert painted < html.index("@page { size: A4; background: #f8f8f8; }")
+    sample = design_check.canary("cv")
+    stored = templates.build_html(
+        template, "cv", sample.content, sample.view, "en", 0, sample.rendered_on
+    )
+    assert "html{background-color:" not in stored
+
+
+PAGE_BACKGROUNDS = [
+    ("@page { size: A4; }", None),
+    ("@page { background: #111111; }", "#111111"),
+    ("@page { background-color: #ABCDEF; }", "#abcdef"),
+    ("@page { background: #fff; }", "#ffffff"),
+    ("@page { background: var(--accent); }", "#2563eb"),
+    (":root { --paper: #fdfbf7; } @page { background: var(--paper); }", "#fdfbf7"),
+    ("@page { background: #111111; } @page { background: #222222; }", "#222222"),
+    ("@page :first { background: #111111; }", None),
+    ("body { background: #111111; }", None),
+    ("@page { background: url(x.png); }", None),
+]
+
+
+@pytest.mark.parametrize(("css", "colour"), PAGE_BACKGROUNDS)
+def test_the_page_background_is_the_colour_print_paints(css: str, colour: str | None) -> None:
+    assert template_css.page_background(css, "#2563eb") == colour
+
+
 @pytest.mark.parametrize("code", ["renderer_unavailable", "timeout"])
 def test_a_renderer_down_busy_or_slow_says_nothing_of_the_template(code: str) -> None:
-    template = templates.registry()["classic"]
+    template = templates.registry()["band"]
     with pytest.raises(design_check.CheckUnavailableError):
         asyncio.run(design_check.check_template(template, Recorded(code)))
 
@@ -145,7 +183,7 @@ def _checked(
     return Checked(
         width=width,
         scroll_width=width if scroll_width is None else scroll_width,
-        height=10_000 // width,  # the tightest step, the wider page, is shorter
+        height=1_000_000 // width,  # the tightest step, the wider page, is shorter
         shown=shown,
         scale=1,
         found=tuple((seen,) for _ in range(needles)),
@@ -189,7 +227,7 @@ class Wide:
 
 
 def test_a_page_wider_than_its_text_is_scaled_at_every_shape_and_step() -> None:
-    template = templates.registry()["classic"]
+    template = templates.registry()["band"]
     assert asyncio.run(design_check.check_template(template, Wide(1))) == []
     found = asyncio.run(design_check.check_template(template, Wide(2)))
     wheres = [

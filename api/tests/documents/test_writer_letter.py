@@ -156,6 +156,7 @@ def test_the_definition_asks_for_a_private_bound_internal_run() -> None:
     assert "get_profile_section" not in agent.tools
     assert set(agent.tools) == {
         "get_job",
+        "get_job_brief",
         "read_profile_section",
         "get_base_cv",
         "get_document",
@@ -217,11 +218,11 @@ def test_the_letter_takes_the_template_of_the_postings_cv(alex: Person) -> None:
     cv = give_cv_text(alex, {"schema": 1, "headline": "Platform Engineer"})
     with alex.factory() as db:
         db.execute(
-            sa.text("UPDATE documents SET template_slug = 'compact' WHERE id = :d"), {"d": cv}
+            sa.text("UPDATE documents SET template_slug = 'ledger' WHERE id = :d"), {"d": cv}
         )
         db.commit()
     document, _, _ = write_letter(alex, "documents_letter_valid")
-    assert document_row(alex.factory, document).template_slug == "compact"
+    assert document_row(alex.factory, document).template_slug == "ledger"
 
 
 def test_the_recipient_defaults_to_the_postings_company(alex: Person) -> None:
@@ -568,7 +569,7 @@ def test_the_letter_follows_the_cv_with_its_estimate_and_base_and_what_the_ceili
     assert letter.status is GenerationStatus.running
     assert letter.mode is GenerationMode.posting
     # The CV's figures; the template its write gave the CV is the CV's own record.
-    assert parent.estimate[generate.WRITE_TEMPLATE] == "classic"
+    assert parent.estimate[generate.WRITE_TEMPLATE] == "band"
     assert letter.estimate == {
         k: v for k, v in parent.estimate.items() if k != generate.WRITE_TEMPLATE
     }

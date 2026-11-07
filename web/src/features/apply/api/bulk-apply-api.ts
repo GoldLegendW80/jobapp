@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 
-import { estimateSchema } from "@/features/documents/api/spend-api";
+import { estimateSchema } from "@/features/documents/api/consent-api";
 import { request } from "@/lib/api";
 
 const postingSchema = z.object({

@@ -39,19 +39,13 @@ export function fakeTemplate(
 
 /** Bundled ones in the api's order (by slug), then the person's own, as the api lists them. */
 export const TEMPLATES: Template[] = [
-  fakeTemplate("banner", { tags: ["one column", "sans", "photo", "colour"] }),
-  fakeTemplate("classic", {
+  fakeTemplate("band", {
     tags: ["one column", "sans", "ats friendly", "photo"],
   }),
-  fakeTemplate("compact", {
-    tags: ["one column", "sans", "no photo", "compact", "ats friendly"],
-    photo: "none",
+  fakeTemplate("ledger", {
+    tags: ["one column", "sans", "ats friendly", "photo"],
   }),
-  fakeTemplate("sidebar", { tags: ["two columns", "sans", "photo", "colour"] }),
-  fakeTemplate("serif", {
-    tags: ["one column", "serif", "no photo", "ats friendly"],
-    photo: "none",
-  }),
+  fakeTemplate("photo-columns", { tags: ["two columns", "sans", "photo"] }),
   fakeTemplate("upload-abcd1234", {
     user: true,
     name: { en: "My uploaded look", fr: "My uploaded look" },

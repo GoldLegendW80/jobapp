@@ -149,7 +149,7 @@ export function isRemoved(
 }
 
 export const REMOVED_SENTENCE =
-  "The template this document used is no longer available, so it is printed with Classic. Choose another one to change it.";
+  "The template this document used is no longer available, so it is printed with Band, the default. Choose another one to change it.";
 
 /** A letter is never shortened and a base CV has no shortening pass: "Make it fit" is a posting's CV's. */
 export function canShorten(document: DocumentOut): boolean {

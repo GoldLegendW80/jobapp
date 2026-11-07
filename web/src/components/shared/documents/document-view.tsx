@@ -30,6 +30,7 @@ import { PdfActions, PrintedPage } from "./document-view/printed-page";
 import { VersionMeta } from "./document-view/version-heading";
 import { VersionSheet } from "./document-view/version-sheet";
 import { EditPanel } from "./edit-panel";
+import { PanelPanel } from "./panel-panel";
 import { TemplatePanel } from "./template-panel";
 import { isOpen } from "@/features/documents/helpers/labels";
 import { versionTitle } from "@/features/documents/helpers/versions";
@@ -50,13 +51,13 @@ type Header = Omit<ComponentProps<typeof PageHeader>, "actions"> & {
 
 /**
  * One document, a base CV or a posting's CV or letter, whole on one page: its page, edited where
- * it is read, what the fact check corrected and its template in the main column; the chat, the
- * versions, the printed page and the facts in the side rail. The same component serves /profile/cv/:id and
- * /jobs/:id/documents/:kind; with `header` it draws the page's header, which holds the PDF of the
- * version shown and, on a phone, opens the chat. `generation` is what the caller knows of the
- * document's latest generation (the list of base CVs, or the posting's card); while it is open the
- * document is read again every POLL_MS (WAITING_POLL_MS while it waits for the person), and once
- * more when it ends.
+ * it is read, what the fact check corrected, its template and its hiring panel in the main
+ * column; the chat, the versions, the printed page and the facts in the side rail. The same
+ * component serves /profile/cv/:id and /jobs/:id/documents/:kind; with `header` it draws the
+ * page's header, which holds the PDF of the version shown and, on a phone, opens the chat.
+ * `generation` is what the caller knows of the document's latest generation (the list of base
+ * CVs, or the posting's card); while it is open the document is read again every POLL_MS
+ * (WAITING_POLL_MS while it waits for the person), and once more when it ends.
  */
 export function DocumentView({
   documentId,
@@ -226,6 +227,7 @@ function LoadedDocument({
             )}
           </div>
           <TemplatePanel {...panel} />
+          <PanelPanel {...panel} />
           {compare.available ? <compare.ComparePanel /> : null}
         </PageBody>
       </div>

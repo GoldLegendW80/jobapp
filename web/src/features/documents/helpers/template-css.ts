@@ -3,7 +3,7 @@
  * the page drawn here: `html`, `body` (and its class) and `:root` are its root, `@page` its
  * paper's padding, print lengths scale with the paper's width, `data-sheet-ui` stays out of it.
  */
-import type { MirrorStep } from "./template-mirror";
+import { TEMPLATE_ICONS, type MirrorStep } from "./template-mirror";
 
 /** One CSS pixel of the A4 page, 793.7 px wide, as a share of the paper's width. */
 const PAGE_PX = "calc(100cqw / 793.7)";
@@ -123,6 +123,24 @@ export function pageMargins(css: string): PageMargins {
   return margins;
 }
 
+/**
+ * The colour the template's `@page` paints the paper with (the last such rule, as the cascade
+ * reads it), or null: print paints it under the page (template_css.page_background).
+ */
+export function pageBackground(css: string, accent: string): string | null {
+  let colour: string | null = null;
+  for (const match of withoutComments(css).matchAll(RULE)) {
+    if ((match[1] ?? "").trim() !== "@page") continue;
+    for (const [property, value] of declarations(match[2] ?? "")) {
+      if (property !== "background" && property !== "background-color")
+        continue;
+      if (/^#[0-9a-f]{3,8}$/i.test(value)) colour = value;
+      else if (value === "var(--accent)") colour = accent;
+    }
+  }
+  return colour;
+}
+
 function rule(selectors: string, block: string): string {
   const scope = selectors
     .split(",")
@@ -164,7 +182,7 @@ export function templateCss(slug: string, css: string): string {
   ].join("\n");
 }
 
-/** The custom properties of the paper: the scale, the step's density, the accent. */
+/** The custom properties of the paper: the scale, the step's density, the accent, the icons. */
 export function pageProperties(
   step: MirrorStep,
   accent: string,
@@ -181,19 +199,36 @@ export function pageProperties(
     "--item-gap": `calc(${String(step.item_gap)} * var(--tpl-pt))`,
     "--margin": `calc(${String(step.margin)} * var(--tpl-mm))`,
     "--accent": accent,
+    ...Object.fromEntries(
+      Object.entries(TEMPLATE_ICONS).map(([kind, url]) => [
+        `--icon-${kind}`,
+        url,
+      ]),
+    ),
   };
 }
 
-const styles = new Map<string, { css: string; margins: PageMargins }>();
+interface TemplateStyle {
+  css: string;
+  margins: PageMargins;
+  background: string | null;
+}
 
-/** A template's scoped style and paper margins, worked out once per template. */
+const styles = new Map<string, TemplateStyle>();
+
+/** A template's scoped style, paper margins and paper colour, worked out once per template. */
 export function templateStyle(
   slug: string,
   css: string,
-): { css: string; margins: PageMargins } {
+  accent: string,
+): TemplateStyle {
   const known = styles.get(slug);
   if (known !== undefined) return known;
-  const made = { css: templateCss(slug, css), margins: pageMargins(css) };
+  const made = {
+    css: templateCss(slug, css),
+    margins: pageMargins(css),
+    background: pageBackground(css, accent),
+  };
   styles.set(slug, made);
   return made;
 }

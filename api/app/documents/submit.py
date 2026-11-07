@@ -357,6 +357,8 @@ def handle(context: WriterContext | None, run_id: uuid.UUID, raw: object) -> tup
         state.exhausted = left <= 0
         return _invalid_answer(found, left), True
     content, separators = corrections.fix_separators(kind, found.content, context.settings)
+    content, placeholders = corrections.drop_placeholders(kind, content)
+    separators = [*separators, *placeholders]
     if isinstance(content, c.LetterContent) and not content.recipient.strip() and context.recipient:
         content = content.model_copy(update={"recipient": context.recipient})
     if isinstance(content, c.ProposalContent) and content.to != context.contact:

@@ -158,7 +158,7 @@ def test_the_order_decision_held_hold_recheck_click(
     found = application(db, app_id)
     assert (found.mode, found.dry_run, found.created_at) == (Mode.full_auto, False, AT)
     [like] = [e for e in events(db, app_id) if e.kind == "liked"]
-    assert like.data["full_auto"]["min_fit"] == 80
+    assert like.data["full_auto"]["min_fit"] == 70  # its own default (documents D29)
     assert like.data["full_auto"]["hold_s"] == 900
     assert app_id in submit.due(db, AT + HOUR)
 
@@ -319,7 +319,7 @@ def _text_rule(db: Session, person: Person, app_id: uuid.UUID) -> None:
 
 
 CHECKS = [
-    ("below_min_fit", lambda db, p, a: _fit(db, p, 79)),
+    ("below_min_fit", lambda db, p, a: _fit(db, p, 69)),
     ("below_min_fit", lambda db, p, a: _fit(db, p, None)),
     ("fields_left", _left),
     ("model_check_not_run", _agent_text),

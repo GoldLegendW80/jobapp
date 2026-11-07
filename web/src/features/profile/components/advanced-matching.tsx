@@ -16,7 +16,7 @@ import {
   withAdvanced,
   type SkillsForm,
 } from "../helpers/editor-forms";
-import { RescoreLine, SkillsCostLine } from "./skills-rescore";
+import { RescoreLine } from "./skills-rescore";
 import { CategoriesGroup } from "./skills/category-list";
 import { RequirementsGroup } from "./skills/requirements-group";
 import { TryIt } from "./skills/try-it";
@@ -71,13 +71,7 @@ export function AdvancedMatching({
             saving={saving}
             dirty={dirty}
             note={
-              dirty ? (
-                <SkillsCostLine
-                  control={form.control}
-                  dirty={dirty}
-                  toSkills={toSkills}
-                />
-              ) : savedAt !== null ? (
+              !dirty && savedAt !== null ? (
                 <RescoreLine revision={savedAt} />
               ) : null
             }

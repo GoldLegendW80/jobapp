@@ -51,7 +51,6 @@ export function YourCvs() {
         max={max}
         building={create.isPending}
         consentMissing={consent.data?.accepted === false}
-        minFit={consent.data?.min_fit}
         consentReady={consent.data !== undefined}
         consentError={consent.isError}
         noExperience={

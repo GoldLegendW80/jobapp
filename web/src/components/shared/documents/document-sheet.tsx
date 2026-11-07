@@ -44,7 +44,7 @@ const capitalized = (text: string) =>
 /** An A4 page's height in CSS pixels: the paper is at least one page long. */
 const PAGE_HEIGHT = "calc(1122.5 * var(--tpl-px))";
 
-/** The template drawn: the document's, else Classic, as the renderer prints an unknown one. */
+/** The template drawn: the document's, else Band, as the renderer prints an unknown one. */
 function resolve(template: string, kind: Kind, step: number | null) {
   const drawn = template in LAYOUTS && template in TEMPLATE_MIRROR;
   const slug = drawn ? template : DEFAULT_TEMPLATE;
@@ -77,7 +77,7 @@ export function DocumentSheet({
 }: {
   kind: Kind;
   language: Language;
-  /** The document's template; one not drawn here (a person's own) is drawn as Classic. */
+  /** The document's template; one not drawn here (a person's own) is drawn as Band. */
   template: string;
   /** The density step the PDF was printed at (a version's `fit_step`); the loosest by default. */
   step?: number | null;
@@ -100,7 +100,11 @@ export function DocumentSheet({
     step,
   );
   useTemplateFonts(mirror.fonts);
-  const { css, margins } = templateStyle(slug, mirror.css);
+  const { css, margins, background } = templateStyle(
+    slug,
+    mirror.css,
+    mirror.accent,
+  );
   const page = sheetPage({
     kind,
     language,
@@ -110,6 +114,7 @@ export function DocumentSheet({
     form,
     known,
     now: date,
+    ownLabels: mirror.labels[language],
   });
   const notes =
     form === null
@@ -124,7 +129,7 @@ export function DocumentSheet({
       <div className="flex flex-col gap-3">
         {drawn ? null : (
           <p className="text-sm text-muted-foreground">
-            This page is drawn with Classic: the printed page shows your own
+            This page is drawn with Band: the printed page shows your own
             template.
           </p>
         )}
@@ -150,6 +155,7 @@ export function DocumentSheet({
             className="relative w-full overflow-hidden rounded-md border bg-white shadow-sm"
             style={{
               ...pageProperties(density, mirror.accent),
+              ...(background === null ? {} : { backgroundColor: background }),
               minHeight: PAGE_HEIGHT,
               paddingTop: margins.top,
               paddingRight: margins.right,

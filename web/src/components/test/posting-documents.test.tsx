@@ -21,7 +21,9 @@ import type { PostingDocument } from "@/features/documents/api/posting-documents
 import { POLL_MS } from "@/features/documents/helpers/labels";
 import {
   cardState,
+  isBusy,
   LETTER_FOLLOW_MS,
+  postingPollInterval,
 } from "@/features/documents/helpers/posting-documents-state";
 
 const JOB_ID = "00000000-0000-4000-9000-000000000001";
@@ -252,7 +254,7 @@ describe("the Documents section of a posting", () => {
     const { user, section } = await openSection();
     for (const kind of ["posting-cv", "posting-letter"]) {
       expect(within(section).getByTestId(kind)).toHaveTextContent(
-        "Not written yet",
+        "Not written yet. It is written when you click Write or Apply.",
       );
     }
     // The letter is written from the CV, so it has no button of its own before the CV exists.
@@ -271,12 +273,15 @@ describe("the Documents section of a posting", () => {
     expect(api.posted[0]?.body).toEqual({ kinds: ["cv", "letter"] });
   });
 
-  it("names the threshold for a posting under it, and the button writes the CV", async () => {
-    const api = fakePosting([], { fit: 58, minFit: 70 });
+  it("says a document is written on a click only, whatever the fit, and Write now writes the CV", async () => {
+    const api = fakePosting([], { fit: 95 });
     const { user, section } = await openSection();
     expect(
-      within(section).getAllByText("Fit 58 is under your threshold of 70"),
+      within(section).getAllByText(
+        "Not written yet. It is written when you click Write or Apply.",
+      ),
     ).toHaveLength(2);
+    expect(within(section).queryByText(/threshold/)).toBeNull();
     await user.click(
       within(within(section).getByTestId("posting-cv")).getByRole("button", {
         name: "Write now",
@@ -286,16 +291,6 @@ describe("the Documents section of a posting", () => {
       expect(api.posted).toHaveLength(1);
     });
     expect(api.posted[0]?.body).toEqual({ kinds: ["cv"] });
-  });
-
-  it("says nothing is written automatically when the switch is off", async () => {
-    fakePosting([], { fit: 90, auto: false });
-    const { section } = await openSection();
-    expect(
-      within(section).getAllByText(
-        "Documents are not written automatically. Write it when you want it.",
-      ),
-    ).toHaveLength(2);
   });
 
   it("explains a wait and links to where it is settled; Write now replaces only a wait of the automatic writer", async () => {
@@ -474,6 +469,66 @@ describe("the Documents section of a posting", () => {
     );
   });
 
+  it("keeps reading while the CV's hiring panel runs; the letter says it follows the panel and offers no Write", async () => {
+    const api = fakePosting([
+      postingDocument("cv", {
+        latest: fakeVersion({ number: 1 }),
+        panel_running: true,
+        letter_coming: true,
+      }),
+    ]);
+    const { section } = await openSection();
+    const letter = within(section).getByTestId("posting-letter");
+    expect(letter).toHaveTextContent(
+      "Written after the CV: the hiring panel is reviewing the CV first.",
+    );
+    expect(letter.textContent).not.toMatch(SEPARATOR);
+    expect(
+      within(letter).queryByRole("button", { name: /Write/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      within(section).queryByRole("button", { name: "Write both now" }),
+    ).not.toBeInTheDocument();
+    const before = api.reads;
+    // The panel ends: version 2 of the CV, and the letter's own generation.
+    api.documents = [
+      ready("cv"),
+      postingDocument("letter", {
+        latest: null,
+        generation: { status: "running", wait_reason: null },
+      }),
+    ];
+    await waitFor(
+      () => {
+        expect(within(section).getByTestId("posting-cv")).toHaveTextContent(
+          "Version 2",
+        );
+      },
+      { timeout: POLL_MS * 4 },
+    );
+    expect(api.reads).toBeGreaterThan(before);
+    expect(within(section).getByTestId("posting-letter")).toHaveTextContent(
+      "Writing the letter",
+    );
+  });
+
+  it("keeps the letter's empty state with Write while the CV's panel runs and no letter is coming", async () => {
+    fakePosting([
+      postingDocument("cv", {
+        latest: fakeVersion({ number: 1 }),
+        panel_running: true,
+        letter_coming: false,
+      }),
+    ]);
+    const { section } = await openSection();
+    const letter = within(section).getByTestId("posting-letter");
+    expect(letter).not.toHaveTextContent("hiring panel is reviewing");
+    expect(letter).toHaveTextContent("Not written yet");
+    expect(
+      within(letter).getByRole("button", { name: /Write/ }),
+    ).toBeInTheDocument();
+  });
+
   describe("on the test's own clock", () => {
     beforeEach(() => {
       vi.useFakeTimers({
@@ -606,7 +661,7 @@ describe("the Documents section of a posting", () => {
       });
       expect(api.reads).toBe(reads);
       expect(screen.getByTestId("posting-letter")).toHaveTextContent(
-        "Not written yet",
+        "Not written yet. It is written when you click Write or Apply.",
       );
     });
 
@@ -698,21 +753,7 @@ describe("the state of a card", () => {
   const on = { auto: true, min: 70 };
   it.each([
     ["no document, fit at the threshold", undefined, 70, on, { tag: "empty" }],
-    [
-      "no document, one under",
-      undefined,
-      69,
-      on,
-      { tag: "under", fit: 69, min: 70 },
-    ],
     ["no document, no score", undefined, null, on, { tag: "empty" }],
-    [
-      "no document, switch off",
-      undefined,
-      10,
-      { auto: false, min: 70 },
-      { tag: "manual" },
-    ],
     ["threshold not known yet", undefined, 10, undefined, { tag: "empty" }],
     [
       "waiting with a reason",
@@ -800,7 +841,42 @@ describe("the state of a card", () => {
       on,
       { tag: "ready" },
     ],
-  ])("%s", (_name, document, fit, threshold, expected) => {
-    expect(cardState(document, fit, threshold)).toEqual(expected);
+  ])("%s", (_name, document, _fit, _threshold, expected) => {
+    expect(cardState(document)).toEqual(expected);
+  });
+});
+
+describe("a hiring panel on the posting's documents", () => {
+  it("a letter not written yet follows the CV's panel; one with a version keeps its state", () => {
+    expect(cardState(undefined, true)).toEqual({ tag: "follows" });
+    expect(
+      cardState(postingDocument("letter", { latest: null }), true),
+    ).toEqual({ tag: "follows" });
+    expect(
+      cardState(postingDocument("letter", { latest: fakeVersion() }), true).tag,
+    ).not.toBe("follows");
+    expect(
+      cardState(
+        postingDocument("letter", {
+          latest: null,
+          generation: { status: "running", wait_reason: null },
+        }),
+        true,
+      ),
+    ).toEqual({ tag: "writing" });
+    expect(cardState(undefined)).toEqual({ tag: "empty" });
+  });
+
+  it("reads again every POLL_MS while a panel runs, and stops when it ends", () => {
+    const reviewed = postingDocument("cv", {
+      latest: fakeVersion(),
+      panel_running: true,
+    });
+    expect(postingPollInterval({ documents: [reviewed] })).toBe(POLL_MS);
+    expect(isBusy(reviewed)).toBe(true);
+    const ended = {
+      documents: [postingDocument("cv", { latest: fakeVersion() })],
+    };
+    expect(postingPollInterval(ended)).toBe(false);
   });
 });

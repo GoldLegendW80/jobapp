@@ -66,6 +66,7 @@ BANNED = "A phrase you banned"
 FILLED_IN = "Filled in because nothing was left"
 KEPT = "Kept as written, for you to check"
 NOT_PRINTABLE_REASON = "A character this template cannot print"
+PLACEHOLDER_REASON = "A fact your profile does not hold: asked in the hiring panel"
 REASONS: tuple[str, ...] = (
     NOT_IN_PROFILE,
     NUMBER_NOT_STATED,
@@ -74,6 +75,7 @@ REASONS: tuple[str, ...] = (
     FILLED_IN,
     KEPT,
     NOT_PRINTABLE_REASON,
+    PLACEHOLDER_REASON,
 )
 
 FALLBACK = "fallback"
@@ -81,6 +83,30 @@ VERSION_REMOVED = "version_removed"
 # A character no font of the template's library draws (CJK, for one): replaced by its closest
 # printable form, else dropped, before the render (templates.printable), so it never fails.
 NOT_PRINTABLE = "not_printable"
+# The hiring panel's `[ADD: ...]` (D29): a fix that needs a fact the profile lacks. The question
+# goes to the panel record; the bracket never reaches a CV or a letter (`drop_placeholders`).
+PLACEHOLDER = "placeholder"
+# The family, in English and French: a square or curly bracket opened on a word that asks for a
+# fact ([ADD: ...], [À AJOUTER], [AJOUTER], [INSERT], [TBD], [TODO], [Your title], [Nom de
+# l'entreprise], [XX], ...), closed or not, case and accents as the writer typed them; and any
+# single word asking for a fact (the list below: [COMPANY], [Name], [DATE: start], ...); and any
+# bracket of two or more words in capitals ([COMPANY NAME], [NOMBRE D'ANNÉES]), which no CV
+# line holds; a bracketed acronym alone ([AWS], [SQL], [UX/UI]) is a fact and stays.
+_ASKING = (
+    r"ADD|ADDS|ADDED|INSERT|FILL(?:\s+IN)?|TBD|TBC|TBA|TODO|TO\s+DO|PLACEHOLDER|MISSING|"
+    r"UNKNOWN|YOUR|(?:[AÀ]\s+)?AJOUTER|AJOUT|(?:[AÀ]\s+)?COMPL[EÉ]TER|INS[EÉ]RER|"
+    r"[AÀ]\s+(?:D[EÉ]FINIR|PR[EÉ]CISER|CONFIRMER|RENSEIGNER)|PR[EÉ]CISER|MANQUANT|INCONNU|"
+    r"VOTRE|NOM\s+DE|NOMBRE\s+DE|"
+    r"COMPANY|(?:FIRST|LAST)\s*NAME|NAME|DATE|E-?MAIL|PHONE|ADDRESS|CITY|POSITION|TITLE|ROLE|JOB|"
+    r"MANAGER|RECRUITER|X{1,3}|ENTREPRISE|SOCI[EÉ]T[EÉ]|NOM|PR[EÉ]NOM|POSTE|VILLE|ADRESSE|"
+    r"T[EÉ]L[EÉ]PHONE"
+)
+_CAPS = r"[A-ZÀ-ÖØ-Þ][A-ZÀ-ÖØ-Þ0-9_/'\u2019.-]*"
+PLACEHOLDER_PATTERN = re.compile(
+    r"\s*(?:[\[{]\s*(?:" + _ASKING + r")\b[^\]}]*[\]}]?"
+    r"|(?-i:\[\s*" + _CAPS + r"(?:\s+" + _CAPS + r")+\s*(?::[^\]]*)?\]))",
+    re.IGNORECASE,
+)
 # A claim ambiguous by construction (`rules.POLICY`) that no token cut could take: the sentence
 # is kept as written and the record shows the person the claim (`before` equals `after`).
 NEEDS_REWRITE = rules.NEEDS_REWRITE
@@ -115,6 +141,8 @@ def reason_for(code: str) -> str:
         return FILLED_IN
     if code == NOT_PRINTABLE:
         return NOT_PRINTABLE_REASON
+    if code == PLACEHOLDER:
+        return PLACEHOLDER_REASON
     return NOT_IN_PROFILE
 
 
@@ -219,6 +247,28 @@ def clip(text: str, limit: int) -> str:
 
 
 # --- step 2: the dash rule ----------------------------------------------------------------------
+
+
+def drop_placeholders(
+    kind: c.Kind, content: c.CvContent | c.LetterContent
+) -> tuple[c.CvContent | c.LetterContent, list[Correction]]:
+    """Every `[ADD: ...]` the hiring panel's rebuild may leave (or any writer, from a posting
+    that asks for one) removed by code, one record per field changed: such a bracket, closed or
+    not, case folded, never prints. A field left empty is dropped as a cut leaves it."""
+    found = [
+        (path, text)
+        for path, text in c.text_fields(content)
+        if PLACEHOLDER_PATTERN.search(text) is not None
+    ]
+    if not found:
+        return content, []
+    data = c.dump(content)
+    records = []
+    for path, text in found:
+        fixed = " ".join(PLACEHOLDER_PATTERN.sub("", text).split())
+        _set(data, path, fixed or None)
+        records.append(_record(path, text, fixed, PLACEHOLDER, "code"))
+    return _rebuild(kind, data), records
 
 
 def fix_separators(

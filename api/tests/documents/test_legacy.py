@@ -28,7 +28,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
 from app.config import get_settings
-from app.documents import cli, eligibility, freeze, legacy, render_client, render_job, store, tick
+from app.documents import cli, freeze, legacy, render_client, render_job, store
 from app.documents.models import (
     Author,
     Document,
@@ -245,7 +245,7 @@ def test_every_shape_of_posting_is_imported_as_the_plan_says(world: World) -> No
     sent = documents_of(world.factory, world.applied)
     assert set(sent) == {Kind.cv, Kind.letter}
     for kind, document in sent.items():
-        assert document.template_slug == store.CLASSIC
+        assert document.template_slug == store.DEFAULT_TEMPLATE
         assert document.draft_written_by is Author.import_
         assert document.base_document_id is None
         assert document.language.value == "en"
@@ -431,16 +431,6 @@ def test_a_sent_postings_draft_is_never_rendered_again(world: World) -> None:
     (version,) = versions_of(world.factory, cv.id)
     with world.factory() as db:
         assert freeze.pdf(db, world.alex, version.id) == pdf
-
-
-def test_imported_postings_are_never_written_automatically(world: World) -> None:
-    run_import(world.factory, world.alex)
-    fresh = add_posting(world.factory, world.alex, "found")
-    setting = eligibility.Setting(auto=True, min_fit=70, daily_ceiling=100)
-    with world.factory() as db:
-        eligible = tick.eligible(db, world.alex, setting, None, AT.date(), 30)
-    # Every imported posting (and the one with PDFs only) is refused; a new one is not.
-    assert [candidate.id for candidate in eligible] == [fresh]
 
 
 def test_the_apply_module_reads_the_imported_versions(world: World) -> None:

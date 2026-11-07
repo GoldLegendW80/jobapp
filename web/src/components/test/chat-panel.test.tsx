@@ -18,7 +18,7 @@ import { server } from "@/test/server";
 
 import { drawn } from "@/features/documents/helpers/chat-text";
 import { DocumentView } from "@/components/shared/documents/document-view";
-import type { Consent } from "@/features/documents/api/spend-api";
+import type { Consent } from "@/features/documents/api/consent-api";
 import type {
   DocumentOut,
   GenerationDetail,

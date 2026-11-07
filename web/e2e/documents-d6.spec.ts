@@ -20,7 +20,7 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * Documents D6 against the real stack through Caddy, the worker and the real renderer, no mocks,
  * one fresh account and only invented data: a profile, a base CV and a posting; a hand written
  * CV draft saved through the api is rendered to a one page PDF whose text holds the invented
- * name and the first employer's organisation; switching to the `sidebar` template makes a new
+ * name and the first employer's organisation; switching to the `photo-columns` template makes a new
  * version with a new one page PDF, the first one unchanged; the posting is then `cv_ready`.
  * The first page of each version is kept as evidence (tasks/evidence/documents-d6/).
  *
@@ -77,13 +77,13 @@ test("a hand written draft renders to a one page PDF with the person's facts", a
   const saved = await saveDraft(page.request, cvId, person.cvDraft);
   expect(saved.render.state).toBe("queued");
   expect(saved.render.revision).toBe(saved.draft_revision);
-  expect(saved.template_slug).toBe("classic");
+  expect(saved.template_slug).toBe("band");
 
   const rendered = await waitForRender(page.request, cvId, 1);
   const latest = rendered.latest;
   expect(latest).toEqual(
     expect.objectContaining({
-      template_slug: "classic",
+      template_slug: "band",
       pages: 1,
       has_pdf: true,
     }),
@@ -94,42 +94,43 @@ test("a hand written draft renders to a one page PDF with the person's facts", a
   expect(pdf.text).toContain(person.firstEmployer);
   expect(pdf.filename).toBe("Morgan_Exampleton_Brindle_Example_Labs_CV.pdf");
   firstPdf = pdf.bytes;
-  keep(EVIDENCE, "classic.pdf", pdf.bytes);
+  keep(EVIDENCE, "band.pdf", pdf.bytes);
   const image = await page.request.get(
     `/api/documents/${cvId}/versions/${latest?.number ?? 0}/page1.png`,
   );
   expect(image.status()).toBe(200);
-  keep(EVIDENCE, "classic-page1.png", Buffer.from(await image.body()));
+  keep(EVIDENCE, "band-page1.png", Buffer.from(await image.body()));
 });
 
-test("switching to sidebar makes a new one page version, the first unchanged", async () => {
+test("switching to photo-columns makes a new one page version, the first unchanged", async () => {
   const before =
     (await waitForRender(page.request, cvId, 1)).latest?.number ?? 0;
   const patched = await patchDocument(page.request, cvId, {
-    template_slug: "sidebar",
+    template_slug: "photo-columns",
   });
-  expect(patched.template_slug).toBe("sidebar");
+  expect(patched.template_slug).toBe("photo-columns");
 
   const rendered = await waitForRender(page.request, cvId, before + 1);
   const latest = rendered.latest;
   expect(latest).toEqual(
     expect.objectContaining({
-      template_slug: "sidebar",
+      template_slug: "photo-columns",
       pages: 1,
       has_pdf: true,
     }),
   );
   const pdf = await pdfOf(page.request, cvId, latest?.number ?? 0);
   expect(pdf.pages).toBe(1);
-  expect(pdf.text).toContain(person.name);
+  // photo-columns sets the name in capitals (CSS), and the PDF text holds them so
+  expect(pdf.text.toLowerCase()).toContain(person.name.toLowerCase());
   expect(pdf.text).toContain(person.firstEmployer);
   expect(pdf.bytes.equals(firstPdf)).toBe(false);
-  keep(EVIDENCE, "sidebar.pdf", pdf.bytes);
+  keep(EVIDENCE, "photo-columns.pdf", pdf.bytes);
   const image = await page.request.get(
     `/api/documents/${cvId}/versions/${latest?.number ?? 0}/page1.png`,
   );
   expect(image.status()).toBe(200);
-  keep(EVIDENCE, "sidebar-page1.png", Buffer.from(await image.body()));
+  keep(EVIDENCE, "photo-columns-page1.png", Buffer.from(await image.body()));
 
   const first = await pdfOf(page.request, cvId, before);
   expect(first.bytes.equals(firstPdf)).toBe(true);

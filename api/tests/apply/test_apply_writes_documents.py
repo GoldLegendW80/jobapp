@@ -10,7 +10,7 @@ played by storing the versions they would make: no model, no browser, no company
 from __future__ import annotations
 
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import sqlalchemy as sa
 from fastapi import FastAPI
@@ -23,6 +23,7 @@ from app.apply.models import Mode, State
 from app.documents import generate, store
 from app.documents.models import (
     Author,
+    DocumentPanel,
     FitResult,
     GenerationMode,
     GenerationStatus,
@@ -30,6 +31,7 @@ from app.documents.models import (
     GenerationWait,
     Kind,
     Origin,
+    PanelStatus,
 )
 from tests.apply import a1_support
 from tests.apply.conftest import AT, Person
@@ -207,6 +209,108 @@ def test_a_letter_that_never_begins_after_its_cv_is_not_waited_for_good(
     assert application(db, app_id).error_code == run.NOT_WRITTEN
 
 
+def _cv_panel(
+    db: Session,
+    user_id: uuid.UUID,
+    posting_id: uuid.UUID,
+    *,
+    started: bool,
+    opened: datetime | None = None,
+) -> uuid.UUID:
+    """The hiring panel the CV's write opened (documents D29) at AT + 2 minutes: running, or
+    waiting its turn behind another panel of the person (`started_at` None); `opened` moves its
+    start. Commits."""
+    opened = opened or AT + timedelta(minutes=2)
+    cv = next(d for d in store.posting_documents(db, user_id, posting_id) if d.kind == Kind.cv)
+    made = DocumentPanel(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        document_id=cv.id,
+        kind="cv",
+        status=PanelStatus.running.value,
+        reviewed_version=1,
+        created_at=opened,
+        started_at=opened if started else None,
+    )
+    db.add(made)
+    db.commit()
+    return made.id
+
+
+def _end_panel(db: Session, panel_id: uuid.UUID, at: datetime) -> None:
+    db.execute(
+        sa.update(DocumentPanel)
+        .where(DocumentPanel.id == panel_id)
+        .values(status=PanelStatus.done.value, finished_at=at)
+    )
+    db.commit()
+
+
+def test_a_bulk_apply_waits_for_panels_run_one_after_the_other_and_none_is_blocked(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    """Three Apply clicks at once: the three CVs are written, then their hiring panels run one
+    after the other (one per person at a time), 20 minutes each, and each letter follows its
+    CV's panel. No application ends `documents_not_written` while its panel waits its turn,
+    the letter's grace counts from its panel's end, and each one fills once its letter is
+    there."""
+    titles = ("Applied AI Engineer", "ML Engineer", "Data Engineer")
+    jobs = [posting(db, person_a.user_id, form(stub), title=t, kinds=()) for t in titles]
+    apps = [apply_click(db, person_a, job_id).application.id for job_id in jobs]
+    for job_id in jobs:
+        write(db, person_a.user_id, job_id, Kind.cv)  # its run ended at AT + 2 minutes
+    panels = [
+        _cv_panel(db, person_a.user_id, job_id, started=number == 0)
+        for number, job_id in enumerate(jobs)
+    ]
+    ends = [AT + timedelta(minutes=2 + 20 * (number + 1)) for number in range(3)]
+
+    def waiting(at: datetime, among: range) -> None:
+        for number in among:
+            assert run.prepare(db, apps[number], at) == "waiting_documents", (number, at)
+            db.commit()
+            assert application(db, apps[number]).state is State.queued
+
+    # Past the CV's grace, the three wait: one panel runs, two wait their turn.
+    waiting(AT + timedelta(minutes=2) + run.LETTER_START_GRACE + timedelta(minutes=1), range(3))
+    for number in range(3):
+        _end_panel(db, panels[number], ends[number])
+        if number + 1 < 3:  # the next panel takes the slot
+            db.execute(
+                sa.update(DocumentPanel)
+                .where(DocumentPanel.id == panels[number + 1])
+                .values(started_at=ends[number])
+            )
+            db.commit()
+        # The letter has not begun yet: within its grace from the panel's end, it waits.
+        waiting(ends[number] + run.LETTER_START_GRACE - timedelta(seconds=1), range(number, 3))
+        write(db, person_a.user_id, jobs[number], Kind.letter)
+        assert filled(factory, apps[number], stub) == "ready"
+        assert set(application(db, apps[number]).document_versions) == {"cv", "letter"}
+    for app_id in apps:
+        assert application(db, app_id).error_code != run.NOT_WRITTEN
+
+
+def test_a_letter_that_never_begins_after_its_cvs_panel_is_not_waited_for_good(
+    db: Session, person_a: Person, stub: str
+) -> None:
+    """The bound: the panel ended (or the tick closed it), and no letter began within the grace
+    from that end."""
+    job_id = posting(db, person_a.user_id, form(stub), kinds=())
+    app_id = apply_click(db, person_a, job_id).application.id
+    write(db, person_a.user_id, job_id, Kind.cv)
+    panel_id = _cv_panel(db, person_a.user_id, job_id, started=True)
+    ended = AT + timedelta(minutes=40)
+    _end_panel(db, panel_id, ended)
+    assert run.prepare(db, app_id, ended + run.LETTER_START_GRACE - timedelta(seconds=1)) == (
+        "waiting_documents"
+    )
+    db.commit()
+    assert run.prepare(db, app_id, ended + run.LETTER_START_GRACE) == "blocked"
+    db.commit()
+    assert application(db, app_id).error_code == run.NOT_WRITTEN
+
+
 def test_documents_already_there_ask_nothing_and_a_like_keeps_its_code(
     db: Session, person_a: Person, stub: str
 ) -> None:
@@ -238,3 +342,26 @@ def test_review_first_goes_to_review_once_written_never_straight_to_submit(
     found = application(db, app_id)
     assert (found.state, found.mode) == (State.ready, Mode.review)
     assert authorisations(db, app_id) == []
+
+
+def test_a_panel_opened_before_the_apply_click_and_still_running_is_waited_for(
+    db: Session, person_a: Person, stub: str
+) -> None:
+    """A Write click on the CV opened its panel before the Apply click: the letter still follows
+    its end, so the wait holds past the CV's grace, then counts from the panel's end."""
+    job_id = posting(db, person_a.user_id, form(stub), kinds=())
+    app_id = apply_click(db, person_a, job_id).application.id
+    write(db, person_a.user_id, job_id, Kind.cv)
+    panel_id = _cv_panel(db, person_a.user_id, job_id, started=True, opened=AT - timedelta(hours=1))
+    late = AT + timedelta(minutes=2) + run.LETTER_START_GRACE + timedelta(hours=1)
+    assert run.prepare(db, app_id, late) == "waiting_documents"
+    db.commit()
+    ended = late + timedelta(minutes=5)
+    _end_panel(db, panel_id, ended)
+    assert run.prepare(db, app_id, ended + run.LETTER_START_GRACE - timedelta(seconds=1)) == (
+        "waiting_documents"
+    )
+    db.commit()
+    assert run.prepare(db, app_id, ended + run.LETTER_START_GRACE) == "blocked"
+    db.commit()
+    assert application(db, app_id).error_code == run.NOT_WRITTEN

@@ -842,7 +842,7 @@ def test_a_frozen_version_does_not_change_through_any_route_of_d6(
     restored = api.post(f"/api/documents/{document}/versions/2/restore", token=token)
     assert restored.status_code == 200
     switched = api.request(
-        "PATCH", f"/api/documents/{document}", token=token, json={"template_slug": "sidebar"}
+        "PATCH", f"/api/documents/{document}", token=token, json={"template_slug": "photo-columns"}
     )
     assert switched.status_code == 200, switched.text
     assert _frozen_state(factory, document) == before

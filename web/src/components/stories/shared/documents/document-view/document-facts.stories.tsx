@@ -35,7 +35,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** One page, in English, with Classic. */
+/** One page, in English, with Band. */
 export const OnePage: Story = { name: "Fits one page" };
 
 /** Longer than one page, in red. */

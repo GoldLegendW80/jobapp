@@ -18,9 +18,9 @@ import { clearAttempts, makeShots, newContext, watchErrors } from "./stack";
  * Documents D17 against the real stack through Caddy, the worker on the fake model backend and
  * the real renderer, one fresh account and only invented data: a posting's CV rendered once
  * through the api (as D12's journey ends), then, through the chat on its page, "shorter summary"
- * answered with what changed and the new version, and "use the banner template" answered with
+ * answered with what changed and the new version, and "use the ledger template" answered with
  * the switch, the content unchanged and the preview drawn with the new template. The chat runs
- * the recorded streams `documents_chat_cv_journey` and `documents_chat_cv_banner`, named in the
+ * the recorded streams `documents_chat_cv_journey` and `documents_chat_cv_ledger`, named in the
  * message's `script`, added here on the way out of the browser (D12's pattern for Write now).
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
@@ -39,7 +39,7 @@ const KEY = `sk-ant-api03-e2egood${"Dn9x".repeat(20)}Rn42`;
 // The recorded stream of each message the journey sends.
 const SCRIPTS: Record<string, string> = {
   "shorter summary": "journey",
-  "use the banner template": "banner",
+  "use the ledger template": "ledger",
 };
 const SHORTER =
   "Platform engineer with about 3.5 years of professional engineering, running the deployment platform of the billing team at Quillmere Example Works.";
@@ -184,20 +184,20 @@ test("shorter summary is answered with what changed and the new version", async 
   await makeShots(EVIDENCE, "d17")(page, "chat");
 });
 
-test("use the banner template switches it, the text unchanged, and the preview follows", async () => {
+test("use the ledger template switches it, the text unchanged, and the preview follows", async () => {
   const before = await readDocument(page.request, cvId);
-  await ask("use the banner template");
-  await expect(lastAnswer()).toContainText("Switched the template to Banner.", {
+  await ask("use the ledger template");
+  await expect(lastAnswer()).toContainText("Switched the template to Ledger.", {
     timeout: 60_000,
   });
   await expect(lastAnswer()).toContainText("This is version 3.");
   const drawn = await waitForRender(page.request, cvId, 3);
-  expect(drawn.template_slug).toBe("banner");
-  expect(drawn.latest?.template_slug).toBe("banner");
+  expect(drawn.template_slug).toBe("ledger");
+  expect(drawn.latest?.template_slug).toBe("ledger");
   expect(drawn.draft).toEqual(before.draft);
-  await expect(page.getByTestId("document-view")).toContainText("Banner");
+  await expect(page.getByTestId("document-view")).toContainText("Ledger");
   await expect(page.getByRole("region", { name: "Versions" })).toContainText(
-    "banner",
+    "ledger",
     { ignoreCase: true },
   );
   await makeShots(EVIDENCE, "d17")(page, "template");

@@ -6,7 +6,7 @@ import type {
   VersionSummary,
 } from "@/features/documents/api/documents-api";
 import type { PostingDocument } from "@/features/documents/api/posting-documents-api";
-import type { Consent } from "@/features/documents/api/spend-api";
+import type { Consent } from "@/features/documents/api/consent-api";
 import type { Template } from "@/features/documents/api/templates-api";
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { fakeCv, fakeDocumentOf, fakeDocuments } from "@/test/documents";
@@ -64,11 +64,9 @@ ${lines(48, 582, 499, 4)}`;
 }
 
 const ACCENTS: Record<string, string> = {
-  banner: "#c2410c",
-  classic: "#1f4e79",
-  compact: "#3f3f46",
-  sidebar: "#0f766e",
-  serif: "#7c2d12",
+  band: "#262525",
+  ledger: "#000000",
+  "photo-columns": "#07113c",
 };
 
 /** Serves every template's thumbnail as an invented page drawn in its accent. */

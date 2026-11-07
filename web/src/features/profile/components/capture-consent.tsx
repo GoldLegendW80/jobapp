@@ -12,7 +12,7 @@ import {
 import { isApiError } from "@/lib/api";
 
 import { ConsentDialog } from "@/components/shared/documents/consent-dialog";
-import { type Consent } from "@/features/documents/api/spend-api";
+import { type Consent } from "@/features/documents/api/consent-api";
 import {
   useFetchConsent,
   useResumeConsent,

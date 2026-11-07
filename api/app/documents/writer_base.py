@@ -74,6 +74,8 @@ from app.documents import (
     design_capture,
     estimate,
     generate,
+    panel,
+    panel_hold,
     profile_view,
     render_job,
     store,
@@ -111,10 +113,11 @@ MODEL = "claude-opus-5-5"
 MODEL_API_KEY = "claude-sonnet-5-5"
 PROMPT_PATH = Path(__file__).parent / "prompts" / "base.md"
 TOOLS = ("read_profile_section", "get_upload_text", "submit_base")
-MODES = (GenerationMode.base_profile, GenerationMode.base_upload)
+MODES = (GenerationMode.base_profile, GenerationMode.base_upload, GenerationMode.panel)
 DEFAULT_SCRIPTS = {
     GenerationMode.base_profile: "documents_base_valid",
     GenerationMode.base_upload: "documents_base_upload_valid",
+    GenerationMode.panel: "documents_base_panel",
 }
 FIRST_NAME = "My CV"  # the name of the one the app builds on its own
 UPLOADED_NAME = "My uploaded CV"  # an upload whose file name leaves nothing
@@ -135,11 +138,13 @@ class BaseInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     generation_id: uuid.UUID = Field(strict=False)
-    mode: Literal["base_profile", "base_upload"] = "base_profile"
+    mode: Literal["base_profile", "base_upload", "panel"] = "base_profile"
     language: Literal["en", "fr"] = "en"
     limits: dict[str, int | None] = Field(default_factory=dict, max_length=12)
     token_budget: int = Field(ge=0)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
+    # `panel` only: the key of the hiring panel's instructions, held in this process (D29).
+    panel: str | None = Field(default=None, pattern=panel_hold.KEY_PATTERN)
 
 
 def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
@@ -174,6 +179,9 @@ def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
         if document.source_document_id is None:
             return None  # the file was deleted in ingestion
         upload_id = str(document.source_document_id)
+    elif generation.mode is GenerationMode.panel and document.source_document_id is not None:
+        # The hiring panel's rebuild of a converted upload (D29): its file stays a source.
+        upload_id = str(document.source_document_id)
     return {
         "generation_id": str(generation.id),
         "document_id": str(document.id),
@@ -195,6 +203,8 @@ class BaseWriter(definitions.AgentDefinition):
             if shown
             else ""
         )
+        if data.get("mode") == GenerationMode.panel.value:
+            return f"{panel_hold.read(data.get('panel'))}\n\nLanguage: {language}. {limits}".strip()
         if data.get("mode") == GenerationMode.base_upload.value:
             return (
                 "Convert the person's uploaded CV into their base CV: read it with "
@@ -238,12 +248,18 @@ async def _on_final(final: definitions.FinalRun) -> None:
     if final.agent != NAME:
         return
     prepared: uuid.UUID | None = None
+    reviewed: uuid.UUID | None = None
 
     def after_finish(db: Session, generation: DocumentGeneration) -> None:
-        nonlocal prepared
+        nonlocal prepared, reviewed
         if generation.mode is GenerationMode.base_upload:
             intent = design_capture.prepare_after_conversion(db, generation, at=final.clock())
             prepared = intent.id if intent is not None else None
+            # The hiring panel reviews the converted CV against the target roles (D29, item 9).
+            opened = panel.begin(
+                db, generation, at=final.clock(), enabled=final.settings.documents_panel_enabled
+            )
+            reviewed = opened.id if opened is not None else None
 
     taken = _with_fixed(submit.take(final.run_id), take_fixed(final.run_id))
     render = await asyncio.to_thread(
@@ -259,6 +275,8 @@ async def _on_final(final: definitions.FinalRun) -> None:
         await _queue_render(final, render)
     if prepared is not None:
         await design_capture.enqueue(final, prepared)
+    if reviewed is not None:
+        await generate.send_panel(final, reviewed)
 
 
 async def _queue_render(final: definitions.FinalRun, render: tuple[uuid.UUID, int]) -> None:
@@ -351,6 +369,55 @@ def wait_reason(db: Session, user_id: uuid.UUID) -> GenerationWait | None:
     return None
 
 
+def click_wait(db: Session, user_id: uuid.UUID, at: datetime) -> GenerationWait | None:
+    """Why a click's posting generation (Write, an Apply, a Like) cannot start now, None when it
+    can (D29). A person with no base CV and a profile with an employer gets one built from the
+    profile here, for that click (source `profile`, trigger `click`): the CV waits with
+    `base_cv` until it is written, then the letter follows the CV as always. A default base CV
+    built from the profile that was never written (no version, no open generation: D10's
+    automatic build cancelled at the deploy) counts as none: it is built for the click. The
+    consent and the credential come first: without them nothing is written, the base CV
+    included.
+
+    Two clicks at once (two Apply, a click and a Like, a click and the tick) build one base CV:
+    everything is read under lock 1 (`store.lock_person`), which every caller takes before its
+    posting's lock (lock 2), so the second click reads the first one's base CV here."""
+    store.lock_person(db, user_id)
+    reason = wait_reason(db, user_id)
+    default = store.default_base(db, user_id)
+    if view_of(db, user_id, at).employers:
+        if default is None and not store.base_cvs(db, user_id):
+            default = build_from_profile(
+                db, user_id, at=at, source=BaseSource.profile, trigger=GenerationTrigger.click
+            ).document
+        elif default is not None and _never_written(db, user_id, default):
+            _profile_generation(db, user_id, default, at=at, trigger=GenerationTrigger.click)
+    building = default is not None and store.open_generation(db, user_id, default.id) is not None
+    return GenerationWait.base_cv if reason is None and building else reason
+
+
+def _never_written(db: Session, user_id: uuid.UUID, document: Document) -> bool:
+    """A base CV built from the profile whose builds all ended without writing it: its draft is
+    still the skeleton (revision 1, never edited), it has no version, nothing open, and a build
+    from the profile that never ended `done` (D10's automatic one, cancelled at the deploy)."""
+    if document.base_source not in (BaseSource.profile, BaseSource.built):
+        return False
+    if document.draft_revision != 1 or store.versions(db, user_id, document.id):
+        return False
+    if store.open_generation(db, user_id, document.id) is not None:
+        return False
+    statuses = set(
+        db.scalars(
+            sa.select(DocumentGeneration.status).where(
+                DocumentGeneration.user_id == user_id,
+                DocumentGeneration.document_id == document.id,
+                DocumentGeneration.mode == GenerationMode.base_profile,
+            )
+        )
+    )
+    return bool(statuses) and GenerationStatus.done not in statuses
+
+
 @dataclass(frozen=True)
 class Built:
     document: Document
@@ -384,9 +451,22 @@ def build_from_profile(
     if not view.employers:
         logger.info("documents.base.skeleton", extra={"document_id": str(document.id)})
         return Built(document, None)
+    return Built(document, _profile_generation(db, user_id, document, at=at, trigger=trigger))
+
+
+def _profile_generation(
+    db: Session,
+    user_id: uuid.UUID,
+    document: Document,
+    *,
+    at: datetime,
+    trigger: GenerationTrigger,
+) -> DocumentGeneration:
+    """The generation that writes `document` from the profile, queued or waiting for its
+    reason; started by `start_ready` after the caller's commit."""
     figures = estimate.for_base(db, user_id)
     reason = wait_reason(db, user_id)
-    generation = generate.create(
+    return generate.create(
         db,
         document,
         GenerationMode.base_profile,
@@ -398,7 +478,6 @@ def build_from_profile(
         status=GenerationStatus.waiting if reason is not None else GenerationStatus.queued,
         wait_reason=reason,
     )
-    return Built(document, generation)
 
 
 # --- an upload ----------------------------------------------------------------------------------
@@ -574,6 +653,7 @@ def start(
     at: datetime,
     script: str | None = None,
     settings: Settings | None = None,
+    panel: str | None = None,
 ) -> AgentRun:
     """The writer run of a base generation, `queued`, and the generation `running`. The caller
     commits, then `generate.enqueue_run`. Raises agent_runs.ActiveRunsError when the person has
@@ -595,6 +675,8 @@ def start(
         "limits": asdict(template.kinds["cv"].soft_limits),
         "token_budget": generation.token_ceiling,
     }
+    if panel is not None:
+        data["panel"] = panel  # the hiring panel's rebuild (D29): its instructions' key
     chosen = _script(settings, generation.mode, script)
     if chosen is not None:
         data["script"] = chosen
@@ -632,23 +714,22 @@ def start_ready(
     at: datetime,
     script: str | None = None,
     settings: Settings | None = None,
-    auto: bool = True,
 ) -> list[uuid.UUID]:
     """Start the person's open base generations that may start now, oldest first; the others
     keep (or get) their reason to wait. Returns the runs to enqueue after the caller's commit.
-    One that meets the person's limit of active runs stays `queued` for the next call. `auto`
-    False (the person turned automatic generation off): the automatic ones are left as they are."""
+    One that meets the person's limit of active runs stays `queued` for the next call. A
+    generation of trigger `auto` (the first base CV D10 built at the tick) is never started:
+    nothing is written without a click (D29), and the tick cancels it (`tick.cancel_auto`)."""
     query = (
         sa.select(DocumentGeneration.id)
         .where(
             DocumentGeneration.user_id == user_id,
             DocumentGeneration.mode.in_(MODES),
             DocumentGeneration.status.in_((GenerationStatus.waiting, GenerationStatus.queued)),
+            DocumentGeneration.trigger != GenerationTrigger.auto,
         )
         .order_by(DocumentGeneration.created_at, DocumentGeneration.id)
     )
-    if not auto:
-        query = query.where(DocumentGeneration.trigger != GenerationTrigger.auto)
     open_ids = list(db.scalars(query))
     started: list[uuid.UUID] = []
     reason = wait_reason(db, user_id)

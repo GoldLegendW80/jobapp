@@ -202,7 +202,6 @@ export const SettingsSection: Story = {
       </CardHeader>
       <CardContent className="flex flex-col gap-1 text-sm">
         <p>Show postings from 50.</p>
-        <p>Write documents from 70.</p>
         <p>Apply automatically from 85.</p>
       </CardContent>
       <CardFooter className="justify-end border-t">

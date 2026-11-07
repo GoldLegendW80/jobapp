@@ -54,7 +54,7 @@ describe("the page of a posting's document", () => {
     ).toBeVisible();
 
     const details = screen.getByRole("region", { name: "Details" });
-    expect(details).toHaveTextContent("TemplateClassic");
+    expect(details).toHaveTextContent("TemplateBand");
     expect(details).toHaveTextContent("LanguageEnglish");
     expect(within(details).getByTestId("fit")).toHaveTextContent("One page");
     const versions = await screen.findByRole("region", { name: "Versions" });

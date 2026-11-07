@@ -110,7 +110,7 @@ describe("uploaded CV capture controls", () => {
         retry,
       );
       expect(
-        screen.queryByText(/Classic was kept|last attempt failed/i),
+        screen.queryByText(/Band was kept|last attempt failed/i),
       ).toBeNull();
       if (status === "queued" || status === "running")
         expect(
@@ -413,7 +413,7 @@ describe("capture completion across CV navigation", () => {
       if (remount) await act(() => router.navigate("/profile"));
       const cv = {
         ...api.cvs[0]!,
-        template_slug: terminal === "done" ? "upload-new" : "classic",
+        template_slug: terminal === "done" ? "upload-new" : "band",
         design_generation: terminal === null ? null : capture(terminal),
       };
       api.cvs[0] = cv;
@@ -558,5 +558,28 @@ describe("capture completion across CV navigation", () => {
     const reads = api.requests.length;
     await act(() => vi.advanceTimersByTimeAsync(POLL_MS * 20));
     expect(api.requests).toHaveLength(reads);
+  });
+
+  it("says how many lines of the CV the copy keeps in place once it is done", async () => {
+    await show(capture("done"), {
+      template_slug: "upload-existing",
+      design_fidelity: { lines: 50, in_place: 47 },
+    });
+    expect(
+      screen.getByText("Copied from your CV: 47 of 50 lines in place."),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing of the fidelity while a new copy runs or without a measure", async () => {
+    await show(capture("running"), {
+      template_slug: "upload-existing",
+      design_fidelity: { lines: 50, in_place: 47 },
+    });
+    expect(screen.queryByText(/lines in place/)).not.toBeInTheDocument();
+  });
+
+  it("keeps an old answer without the field readable", async () => {
+    await show(capture("done"), { template_slug: "upload-existing" });
+    expect(screen.queryByText(/lines in place/)).not.toBeInTheDocument();
   });
 });

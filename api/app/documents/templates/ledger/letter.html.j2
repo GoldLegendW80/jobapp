@@ -1,0 +1,34 @@
+{#- ledger, the letter: the CV's header between its heavy rules, then the date, the
+    recipient, the subject, the salutation, the paragraphs, the closing and the name in the
+    CV's body column, and a heavy rule to close. -#}
+{% extends "_base/page.html.j2" %}
+{% import "_base/macros.html.j2" as base with context %}
+{% block body %}
+<div class="heavy"></div>
+<header class="head">
+{{ base.portrait() }}
+<div class="who">
+<h1 class="name{% if name|length > 22 %} long{% endif %}{% if name.split()|map("length")|select(">", 14)|list %} longword{% endif %}">{{ base.words(name) }}</h1>
+{% if content.headline %}<p class="headline">{{ content.headline }}</p>{% endif %}
+</div>
+{% if contact %}
+<ul class="contact">
+{% for line in contact %}
+<li class="{{ line.kind }}">{% if line.href %}<a href="{{ line.href }}">{{ line.text }}</a>{% else %}{{ line.text }}{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+</header>
+<div class="heavy"></div>
+
+<div class="letter-body">
+{{ base.letter_date() }}
+{% if content.recipient %}<p class="recipient">{{ content.recipient }}</p>{% endif %}
+{% if content.subject %}<p class="subject"><strong>{{ base.label("subject") }}</strong> {{ content.subject }}</p>{% endif %}
+{% if content.salutation %}<p class="salutation">{{ content.salutation }}</p>{% endif %}
+{{ base.paragraphs(content.paragraphs) }}
+{% if content.closing %}<p class="closing">{{ content.closing }}</p>{% endif %}
+<p class="signature">{{ base.words(name) }}</p>
+</div>
+<div class="heavy"></div>
+{% endblock %}

@@ -17,6 +17,8 @@ import {
 } from "@/design-system/fixtures/template-sample";
 import type { Draft } from "@/features/documents/helpers/edit-content";
 import { pageFacts } from "@/features/documents/helpers/page-facts";
+import { labelsOf } from "@/features/documents/helpers/page-labels";
+import { TEMPLATE_MIRROR } from "@/features/documents/helpers/template-mirror";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATES = path.resolve(here, "../../../../api/app/documents/templates");
@@ -41,6 +43,31 @@ const DEFAULTS: Record<string, string> = {
   contact_lines: "contact",
   portrait: "photo",
 };
+/** The kinds of contact line (templates.contact_lines), each the class of its line. */
+const CONTACT_KINDS = ["email", "phone", "place", "link"];
+/** The macros that print the contact lines with their kind. */
+const KIND_MACROS = new Set([
+  "header",
+  "contact_lines",
+  "contact_column",
+  "contact_across",
+]);
+
+/** Each `class="..."` value, read past the quotes of the Jinja tags inside it. */
+function classValues(text: string): string[] {
+  const values: string[] = [];
+  for (const match of text.matchAll(/class="/g)) {
+    let at = match.index + match[0].length;
+    const start = at;
+    while (at < text.length && text[at] !== '"') {
+      const tag = text.slice(at, at + 2);
+      const end = tag === "{%" ? "%}" : tag === "{{" ? "}}" : null;
+      at = end === null ? at + 1 : text.indexOf(end, at) + 2;
+    }
+    values.push(text.slice(start, at));
+  }
+  return values;
+}
 
 /** Every class a template's cv.html.j2 or letter.html.j2 prints, its macros' included. */
 function printed(slug: string, kind: Kind): Set<string> {
@@ -52,11 +79,9 @@ function printed(slug: string, kind: Kind): Set<string> {
   const add = (words: string) => {
     for (const one of words.split(/\s+/)) if (one !== "") out.add(one);
   };
-  for (const match of text.matchAll(/class="([^"]*)"/g))
+  for (const value of classValues(text))
     add(
-      (match[1] ?? "")
-        .replace(/\{%[\s\S]*?%\}/g, " ")
-        .replace(/\{\{[\s\S]*?\}\}/g, " "),
+      value.replace(/\{%[\s\S]*?%\}/g, " ").replace(/\{\{[\s\S]*?\}\}/g, " "),
     );
   for (const match of text.matchAll(/\b(?:base|layout)\.(\w+)\(([^)]*)\)/g)) {
     const [, macro = "", args = ""] = match;
@@ -65,7 +90,9 @@ function printed(slug: string, kind: Kind): Set<string> {
     given.forEach(add);
     if (given.length === 0 && macro in DEFAULTS) add(DEFAULTS[macro] ?? "");
     (MACROS[macro] ?? []).forEach(add);
+    if (KIND_MACROS.has(macro)) CONTACT_KINDS.forEach(add);
   }
+  if (text.includes("line.kind")) CONTACT_KINDS.forEach(add);
   // A template without a place for the photo prints none, whatever the profile has.
   const manifest = JSON.parse(
     readFileSync(path.join(TEMPLATES, slug, "manifest.json"), "utf-8"),
@@ -110,11 +137,28 @@ const VARIANTS = [
     }),
     photo: null,
   },
+  { facts: facts({ full_name: "Alex Wolfeschlegelsteinhausen" }), photo: null },
   { facts: facts({ full_name: null }), photo: null },
+  {
+    facts: facts(),
+    photo: null,
+    // A skill over 60 characters: a whole row of cells, a wider left column.
+    cv: {
+      ...SAMPLE_CV,
+      skills: [
+        {
+          label: "Platform",
+          items: [
+            "Kubernetes operators written for the release platform of every team",
+          ],
+        },
+      ],
+    },
+  },
 ];
 
-const content = (kind: Kind): Draft =>
-  kind === "cv" ? SAMPLE_CV : SAMPLE_LETTER;
+const content = (kind: Kind, cv: Draft = SAMPLE_CV): Draft =>
+  kind === "cv" ? cv : SAMPLE_LETTER;
 
 function drawn(slug: string, kind: Kind): Set<string> {
   const out = new Set<string>();
@@ -124,7 +168,7 @@ function drawn(slug: string, kind: Kind): Set<string> {
         kind={kind}
         language="en"
         template={slug}
-        content={content(kind)}
+        content={content(kind, variant.cv)}
         facts={variant.facts}
         photo={variant.photo}
         form={null}
@@ -264,11 +308,13 @@ describe("each template's page drawn here", () => {
         />,
       );
       const sheet = screen.getByTestId("document-sheet");
-      for (const heading of ["Profile", "Selected achievements", "Skills"])
+      const labels = labelsOf("en", TEMPLATE_MIRROR[slug]?.labels.en);
+      for (const heading of [labels.summary, labels.highlights])
         expect(
           within(sheet).queryByRole("heading", { name: heading }),
           `${slug}: ${heading}`,
         ).toBeNull();
+      expect(sheet, slug).not.toHaveTextContent("Kubernetes");
       expect(sheet, slug).not.toHaveTextContent(/Add /);
       expect(within(sheet).queryAllByRole("button"), slug).toEqual([]);
       unmount();
@@ -280,7 +326,7 @@ describe("each template's page drawn here", () => {
       <DocumentSheet
         kind="letter"
         language="fr"
-        template="classic"
+        template="band"
         content={SAMPLE_LETTER}
         facts={facts()}
         form={null}
@@ -293,7 +339,7 @@ describe("each template's page drawn here", () => {
     expect(sheet.textContent).toContain("Objet\u00a0:");
   });
 
-  it("draws a template it does not know with Classic, and says so", () => {
+  it("draws a template it does not know with Band, and says so", () => {
     render(
       <DocumentSheet
         kind="cv"
@@ -308,10 +354,10 @@ describe("each template's page drawn here", () => {
     expect(
       screen
         .getByTestId("document-sheet")
-        .querySelector('[data-template-sheet="classic"]'),
+        .querySelector('[data-template-sheet="band"]'),
     ).not.toBeNull();
     expect(
-      screen.getByText(/This page is drawn with Classic/),
+      screen.getByText(/This page is drawn with Band/),
     ).toBeInTheDocument();
   });
 
@@ -320,7 +366,7 @@ describe("each template's page drawn here", () => {
       <DocumentSheet
         kind="cv"
         language="en"
-        template="sidebar"
+        template="ledger"
         content={SAMPLE_CV}
         facts={facts()}
         form={null}

@@ -22,7 +22,7 @@ const meta = {
   args: {
     kind: "cv",
     language: "en",
-    template: "classic",
+    template: "band",
     content: CV_DRAFT,
     facts: CAMILLE_FACTS,
     form: null,
@@ -74,13 +74,13 @@ export const EditALetter: Story = {
   ),
 };
 
-/** In French with a serif template: the headings and the date print in French. */
-export const FrenchSerif: Story = {
-  name: "In French, a serif template",
-  args: { language: "fr", template: "serif" },
+/** In French with Ledger: the template's own headings and the date print in French. */
+export const FrenchLedger: Story = {
+  name: "In French, with Ledger",
+  args: { language: "fr", template: "ledger" },
 };
 
-/** A person's own template is drawn with Classic; the printed page shows their design. */
+/** A person's own template is drawn with Band; the printed page shows their design. */
 export const OwnTemplate: Story = {
   name: "A template of your own",
   args: { template: "mine-3f2a" },

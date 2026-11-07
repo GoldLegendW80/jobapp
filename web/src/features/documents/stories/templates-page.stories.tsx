@@ -35,7 +35,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** The CV written for the first posting, in the Classic look. */
+/** The CV written for the first posting, in the Band look. */
 const POSTING_CV: DocumentOut = {
   ...fakeDocumentOf(fakeCv({ id: "b", name: "Main CV" }), {
     latest: fakeVersion(),

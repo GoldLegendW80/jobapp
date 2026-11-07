@@ -30,7 +30,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "One document of a posting in its Documents section: page 1, its state in words, and what to do next. The CV row also chooses the base CV it is written from.",
+          "One document of a posting in its Documents section: page 1, its state in words, the hiring panel's outcome in one line, and what to do next. The CV row also chooses the base CV it is written from.",
       },
     },
   },
@@ -41,8 +41,6 @@ const meta = {
       latest,
       generation: { status: "done", wait_reason: null },
     }),
-    fit: 91,
-    threshold: { auto: true, min: 70 },
     cvs: [fakeCv()],
     choice: undefined,
     onChoose: fn(),
@@ -64,6 +62,12 @@ export const Ready: Story = {};
 export const NotWritten: Story = {
   name: "Not written yet",
   args: { document: undefined },
+};
+
+/** The letter follows the CV's hiring panel: no Write meanwhile. */
+export const LetterAfterThePanel: Story = {
+  name: "The letter after the CV's hiring panel",
+  args: { kind: "letter", document: undefined, afterPanel: true },
 };
 
 /** Being written. */

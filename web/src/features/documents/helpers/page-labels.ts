@@ -1,7 +1,7 @@
 /**
  * What the document's page prints around the text the person writes, as the templates print it
- * (api/app/documents/templates/_base/labels.json): the headings in the page's language, the
- * periods of a role or a school, and the date of a letter.
+ * (api/app/documents/templates/_base/labels.json, under each template's own section labels): the
+ * headings in the page's language, the periods of a role or a school, and the date of a letter.
  */
 import type { Language } from "../api/documents-api";
 
@@ -76,6 +76,32 @@ export const PAGE_LABELS: Record<Language, PageLabels> = {
     ],
   },
 };
+
+/** The labels a template may name its own way (templates.LABEL_KEYS). */
+const SECTION_KEYS = [
+  "summary",
+  "highlights",
+  "competencies",
+  "experience",
+  "education",
+  "skills",
+  "languages",
+  "contact",
+  "subject",
+] as const;
+
+/** The shared labels of `language` under a template's own section labels, as build_html merges them. */
+export function labelsOf(
+  language: Language,
+  own: Readonly<Record<string, string>> = {},
+): PageLabels {
+  const labels = { ...PAGE_LABELS[language] };
+  for (const key of SECTION_KEYS) {
+    const value = own[key];
+    if (value !== undefined) labels[key] = value;
+  }
+  return labels;
+}
 
 /** "2021" or "March 2021" from "2021" or "2021-03"; what is not a period prints as typed. */
 function when(value: string, labels: PageLabels): string {

@@ -110,9 +110,11 @@ from app.documents import freeze as documents
 from app.documents.models import (
     Document,
     DocumentGeneration,
+    DocumentPanel,
     DocumentVersion,
     GenerationMode,
     Kind,
+    PanelStatus,
     Scope,
 )
 from app.identity.models import User
@@ -422,7 +424,13 @@ def _asked(db: Session, application: Application) -> frozenset[str]:
 
 def _letter_gone(db: Session, application: Application, now: datetime) -> bool:
     """An asked letter with no version and nothing coming: True once a writing of it begun
-    since the click ended without one, or once none began LETTER_START_GRACE after the CV's."""
+    since the click ended without one, or once none began LETTER_START_GRACE after it could
+    start. The letter follows the CV's hiring panel (documents D29), and in a bulk Apply the
+    panels run one after the other (one per person at a time): while a CV panel is still running
+    or waiting its turn, even one a Write click opened before the Apply click, the letter is
+    still coming; once a panel since the click has ended, the grace counts from its end. A panel
+    whose job is lost is closed by the documents tick (`panel.recover`), which starts the letter,
+    so this wait always ends."""
     rows = db.execute(
         sa.select(Document.kind, DocumentGeneration.finished_at)
         .join(Document, Document.id == DocumentGeneration.document_id)
@@ -438,6 +446,25 @@ def _letter_gone(db: Session, application: Application, now: datetime) -> bool:
     if any(row.kind is Kind.letter for row in rows):
         return True
     ended = [row.finished_at for row in rows if row.kind is Kind.cv and row.finished_at]
+    panels = db.execute(
+        sa.select(DocumentPanel.status, DocumentPanel.finished_at)
+        .join(Document, Document.id == DocumentPanel.document_id)
+        .where(
+            DocumentPanel.user_id == application.user_id,
+            Document.user_id == application.user_id,
+            Document.posting_id == application.posting_id,
+            Document.scope == Scope.posting,
+            Document.kind == Kind.cv,
+            sa.or_(
+                DocumentPanel.created_at >= application.created_at,
+                DocumentPanel.status == PanelStatus.running.value,
+                DocumentPanel.finished_at >= application.created_at,
+            ),
+        )
+    ).all()
+    if any(row.status == PanelStatus.running.value for row in panels):
+        return False  # the CV's panel runs or waits its turn: the letter follows its end
+    ended += [row.finished_at for row in panels if row.finished_at is not None]
     return not ended or now - max(ended) >= LETTER_START_GRACE
 
 

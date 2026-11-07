@@ -209,6 +209,31 @@ choice made by the build that stands until the owner says otherwise.
 - 2026-10-21 (#358): a posting that leaves `applied` before the approved version's render lands is
   frozen by the next trigger (Try again, Mark as sent, apply's send, a return to applied): one
   `SPEC-documents.md` sentence plus a test pinning it.
+- 2026-11-06 (D27): with three PDF CVs made with Canva attached, the owner wrote: "now i want you deep focus on the templates. There is 3 templates attached to this message. I want to to replicate exactly these tree as editable cv, create the resume in the same style, remove all the templates of the app and upload this one. then, according to the method you used to replicate these templates, I want you to implement this in the app so when a user upload his cv, the app will use the exact same style for generating new cv and cover letters."
+  The three, replicated by measurement as `band`, `photo-columns` and `ledger`, replace the twenty
+  bundled templates (this revises "switched among 20 templates": a document is switched among the
+  three and the person's own). The default is `band`. A document on a removed template moves to
+  the nearest of the three (migration 0035: `sidebar`, `split-right`, `portrait`, `banner`,
+  `columns-header`, `cards`, `grid` to `photo-columns`; `serif`, `elegant`, `executive`, `nordic` to
+  `ledger`; every other to `band`); versions keep theirs. The second half, the design capture of an
+  upload with the same method, is task D28. D28 built it: an upload is measured, its fonts chosen by
+  name or by measurement, its template written from the numbers and rendered, compared and
+  corrected over several passes, the best kept (SPEC-documents.md, "Design capture of an upload").
+- 2026-11-06 (D29), the owner wrote: "I don't want to automaticaly generate the cv and cover letter anymore. I want to generate them manually from the job detail page or when i click on apply to the job. For the cv, analyze deeply this project : https://github.com/alexyc9381/hiring-panel-skill you must understand how it works perfectly and implement it during the cv and cover letter build to have perfect cv and cover letter", "use also this project skills when the user upload his cv", and "also when generating the cv and cover letter for the jobs, hiring-panel-skill must know everything about the jobs to be perfectly specialise on the job, the company, the offer ect.."
+  Nothing writes a CV, a letter or a base CV without the person's click: the job page's Write, an
+  Apply (one click, bulk, a Like, Full auto's apply after a Like) or an upload. This revises
+  "Automatic generation is limited by a fit score threshold" above and SPEC-documents.md
+  Decisions 14, 15 and 17: no fit threshold for documents, no daily safety ceiling, no backfill;
+  the settings card leaves the page, `search.documents` stays readable and unread, Full auto keeps
+  its own default threshold of 70, and the consent gets text version 2. A click with no base CV
+  builds one from the profile first. Every CV and letter build, and the conversion of an uploaded
+  CV, goes through the hiring panel of hiring-panel-skill (MIT, credited in NOTICE): seven
+  reviewers on Sonnet that each try to reject it alone, with a job brief of the posting, the
+  company and the offer; one merged list of mistakes; a rebuild with the same facts through the
+  fact check; the screen again. A failing step never blocks: the first version stays. It also
+  revises item 4 of "Product audit: chapters 1 and 2" (2026-11-05): the rescore after a skills
+  change no longer says a possible document cost before saving, since no document is written
+  without a click.
 
 ## Interactive job search (2026-10-24, #626)
 

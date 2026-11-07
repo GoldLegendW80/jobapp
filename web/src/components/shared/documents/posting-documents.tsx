@@ -16,7 +16,6 @@ import {
   useRefreshWhenWorkEnds,
   useWriteNow,
 } from "@/features/documents/api/use-posting-documents";
-import { useCurrentSpend } from "@/features/documents/api/use-spend";
 import { failureSentence } from "@/features/documents/api/documents-api";
 import { isOpen } from "@/features/documents/helpers/labels";
 import { PostingDocumentRow } from "./posting-document-row";
@@ -30,17 +29,16 @@ import {
 /**
  * The "Documents" section of the job page (SPEC-documents.md, "Job detail page"): the posting's
  * CV and letter as two rows of one card, and Write both now while neither is written. The
- * documents are read again while a generation is open or a page is being drawn, and for a short
- * while after the CV's generation closes, until the letter that follows it has its own. The
- * posting is read again when the work ends: the render that ends it may have moved the posting
- * to `cv_ready`.
+ * documents are read again while a generation is open, a page is being drawn or a hiring panel
+ * runs, and for a short while after the CV's generation and its panel end, until the letter that
+ * follows it has its own. The posting is read again when the work ends: the render that ends it
+ * may have moved the posting to `cv_ready`.
  */
 export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   const [choice, setChoice] = useState<string>();
   // CV generations seen closing; 0 when no letter is expected or its generation is read.
   const [letterWindow, setLetterWindow] = useState(0);
   const documents = usePostingDocuments(job.id, letterWindow > 0);
-  const spend = useCurrentSpend();
   const cvs = useBaseCvList();
   const noBase = cvs.data !== undefined && cvs.data.base_cvs.length === 0;
   const nothingWritten =
@@ -58,7 +56,12 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
   );
 
   const cvGeneration = documentOf(documents.data, "cv")?.generation ?? null;
-  const cvOpen = isOpen(cvGeneration);
+  // The CV's hiring panel runs: the letter follows its end, not the CV generation's (D29).
+  const cvPanel = documentOf(documents.data, "cv")?.panel_running === true;
+  // Only when a letter is coming does the letter row say it follows the panel.
+  const letterFollows =
+    cvPanel && documentOf(documents.data, "cv")?.letter_coming === true;
+  const cvOpen = isOpen(cvGeneration) || cvPanel;
   const letterOpen = isOpen(documentOf(documents.data, "letter")?.generation);
   const [cvWasOpen, setCvWasOpen] = useState(cvOpen);
   if (cvOpen !== cvWasOpen) {
@@ -78,20 +81,18 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
     };
   }, [letterWindow]);
 
-  const threshold = spend.data
-    ? { auto: spend.data.auto, min: spend.data.min_fit }
-    : undefined;
-
   const write = useWriteNow(job.id);
   // Neither document exists: one click writes the CV and the letter that follows it.
   const cvDocument = documentOf(documents.data, "cv");
   const cvReady = (cvDocument?.latest ?? null) !== null;
   const letterWritten =
     (documentOf(documents.data, "letter")?.latest ?? null) !== null;
-  const untouched = (["cv", "letter"] as const).every((kind) =>
-    ["empty", "under", "manual"].includes(
-      cardState(documentOf(documents.data, kind), job.fit, threshold).tag,
-    ),
+  const untouched = (["cv", "letter"] as const).every(
+    (kind) =>
+      cardState(
+        documentOf(documents.data, kind),
+        kind === "letter" && letterFollows,
+      ).tag === "empty",
   );
 
   const offerBoth = documents.data !== undefined && untouched && !noExperience;
@@ -148,13 +149,12 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                   jobId={job.id}
                   kind={kind}
                   document={documentOf(documents.data, kind)}
-                  fit={job.fit}
-                  threshold={threshold}
                   cvs={cvs.data?.base_cvs ?? []}
                   choice={choice}
                   onChoose={setChoice}
                   cvReady={cvReady}
                   letterWritten={letterWritten}
+                  afterPanel={kind === "letter" && letterFollows}
                 />
               ))}
             </div>

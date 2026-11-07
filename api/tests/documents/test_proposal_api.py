@@ -173,7 +173,7 @@ def test_a_draft_over_the_hard_limits_is_422(
     assert _read(api, alex)["draft_revision"] == revision
 
 
-@pytest.mark.parametrize("change", [{"template_slug": "classic"}, {"language": "fr"}])
+@pytest.mark.parametrize("change", [{"template_slug": "band"}, {"language": "fr"}])
 def test_the_template_and_language_switch_refuse_a_proposal(
     api: Api, alex: dict[str, Any], change: dict[str, Any]
 ) -> None:

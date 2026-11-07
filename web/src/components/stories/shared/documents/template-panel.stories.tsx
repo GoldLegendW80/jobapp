@@ -53,7 +53,7 @@ export const AfterASentVersion: Story = {
   },
 };
 
-/** The template in use was removed: Classic prints it until another is chosen. */
+/** The template in use was removed: Band prints it until another is chosen. */
 export const TemplateRemoved: Story = {
   name: "The template in use was removed",
   args: { document: { ...CV, template_slug: "upload-gone0000" } },

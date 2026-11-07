@@ -45,7 +45,7 @@ CHECK_MAX_HEIGHT). A renderer that cannot be reached, is busy or times out raise
 CheckUnavailableError: nothing is known of the template, and no repair is spent.
 
 Any problem refuses the template as a refusal of `template_rules` does: back to the model once,
-then `classic` is kept. A Problem names a file, a field path and a step, never a text.
+then the base CV keeps its template. A Problem names a file, a field path and a step, never a text.
 
 Luminance is read from the screenshots' 8 bit luma with the sRGB curve, an approximation of the
 WCAG relative luminance per pixel; anti aliasing makes the edges of a glyph lighter, which is why
@@ -121,7 +121,7 @@ IDENTITY_MAX = {
     "linkedin_url": profile_schemas.URL_MAX,
     "website": profile_schemas.URL_MAX,
 }
-# The lone letter's paragraph: at PARAGRAPH_MAX the tallest bundled letter (sidebar's) passes
+# The lone letter's paragraph: at PARAGRAPH_MAX the tallest bundled letter passes
 # CHECK_MAX_HEIGHT; a text box has no fixed height (template_css), so length beyond is pages.
 LONE_PARAGRAPH = 1_200
 
@@ -432,7 +432,15 @@ async def _one(
     sample = canary(kind, shape)
     photo = grey_photo() if template.photo != "none" else None
     html = templates.build_html(
-        template, kind, sample.content, sample.view, "en", step, sample.rendered_on, photo=photo
+        template,
+        kind,
+        sample.content,
+        sample.view,
+        "en",
+        step,
+        sample.rendered_on,
+        photo=photo,
+        paint_page=True,
     )
     texts = tuple(text for _, text in sample.needles)
     file = f"{kind}.html.j2"

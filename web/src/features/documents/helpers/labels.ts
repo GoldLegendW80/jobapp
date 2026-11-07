@@ -13,7 +13,7 @@ import type {
   VersionSummary,
   WaitReason,
 } from "../api/documents-api";
-import type { Estimate } from "../api/spend-api";
+import type { Estimate } from "../api/consent-api";
 import type { GenerationBrief } from "../api/posting-documents-api";
 
 export const SOURCE_LABELS: Record<BaseSource, string> = {
@@ -32,7 +32,7 @@ export const ORIGIN_LABELS: Record<Origin, string> = {
   legacy: "Imported",
 };
 
-/** A bundled slug as a name ("classic" is "Classic"); the person's own are "From your CV". */
+/** A bundled slug as a name ("photo-columns" is "Photo columns"); the person's own are "From your CV". */
 export function templateLabel(slug: string): string {
   if (slug.startsWith("upload-")) return "From your CV";
   const words = slug.split("-").filter((word) => word !== "");

@@ -92,8 +92,8 @@ let second: Who;
 const people: Who[] = [];
 
 /** A posting of `who` at `url`, with its CV and letter written unless `documents` is false.
- * Under the threshold of 70 (`fit`), the documents tick writes nothing for it by itself, and one
- * click Apply never reads the threshold. */
+ * The documents tick writes nothing by itself (documents D29), and one click Apply never reads a
+ * fit threshold. */
 async function postingOn(
   who: Who,
   url: string,

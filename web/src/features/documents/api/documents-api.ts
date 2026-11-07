@@ -1,7 +1,7 @@
 /**
  * One document of the documents module (SPEC-documents.md, "API"): the vocabulary, its shapes, its
  * draft, its versions and its generations. The other resources have their own file beside this
- * one: base CVs, a posting's documents, templates, spend and consent, chat, settings. Shapes
+ * one: base CVs, a posting's documents, the hiring panel, templates, consent, chat, settings. Shapes
  * mirror the response models of api/app/documents/router.py and base_router.py.
  *
  * Page images and PDFs are fetched by the browser with the session cookie, so they are

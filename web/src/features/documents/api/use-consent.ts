@@ -12,7 +12,7 @@ import {
   consentKey,
   getConsent,
   type Consent,
-} from "./spend-api";
+} from "./consent-api";
 
 /** The consent to what the writer sends to a model, and the model it would use. */
 export function useConsent() {

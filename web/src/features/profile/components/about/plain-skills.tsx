@@ -34,7 +34,7 @@ import {
   type SkillsForm,
 } from "@/features/profile/helpers/editor-forms";
 import { ABOUT_WORDS as W } from "@/features/profile/helpers/about-words";
-import { RescoreLine, SkillsCostLine } from "../skills-rescore";
+import { RescoreLine } from "../skills-rescore";
 import { CategoryLists } from "../skills/category-list";
 import { Requirements } from "../skills/requirements-group";
 import { AdvancedLine } from "./advanced-line";
@@ -113,13 +113,7 @@ export const PlainSkills = memo(function PlainSkills({
             saving={saving}
             dirty={dirty}
             note={
-              dirty ? (
-                <SkillsCostLine
-                  control={form.control}
-                  dirty={dirty}
-                  toSkills={toSkills}
-                />
-              ) : savedAt !== null ? (
+              !dirty && savedAt !== null ? (
                 <RescoreLine revision={savedAt} />
               ) : null
             }

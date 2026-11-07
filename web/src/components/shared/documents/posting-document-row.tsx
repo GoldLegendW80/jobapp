@@ -32,6 +32,8 @@ import {
   type CardState,
 } from "@/features/documents/helpers/posting-documents-state";
 
+import { PanelLine } from "./panel-panel";
+
 /** Width of the page 1 thumbnail of a row: sharp at twice its size on screen. */
 const PREVIEW_WIDTH = 160;
 
@@ -59,19 +61,16 @@ export function PostingDocumentRow({
   jobId,
   kind,
   document,
-  fit,
-  threshold,
   cvs,
   choice,
   onChoose,
   cvReady,
   letterWritten,
+  afterPanel = false,
 }: {
   jobId: string;
   kind: Kind;
   document: PostingDocument | undefined;
-  fit: number | null;
-  threshold: { auto: boolean; min: number } | undefined;
   /** The base CVs, for the CV card's "Based on". */
   cvs: BaseCv[];
   /** The base CV the person picked on the CV card, if any. */
@@ -81,9 +80,11 @@ export function PostingDocumentRow({
   cvReady: boolean;
   /** The posting's letter has a version: a CV written again takes the letter along. */
   letterWritten: boolean;
+  /** The CV's hiring panel runs: a letter not written yet follows its end (D29). */
+  afterPanel?: boolean;
 }) {
   const selectId = useId();
-  const state = cardState(document, fit, threshold);
+  const state = cardState(document, afterPanel);
   const latest = document?.latest ?? null;
 
   const write = useWriteNow(jobId);
@@ -120,8 +121,6 @@ export function PostingDocumentRow({
   const canWrite =
     (kind === "cv" || cvReady) &&
     (state.tag === "empty" ||
-      state.tag === "under" ||
-      state.tag === "manual" ||
       (state.tag === "waiting" && !clickWouldWait) ||
       state.tag === "failed");
 
@@ -148,6 +147,7 @@ export function PostingDocumentRow({
         </div>
 
         <StateLine state={state} kind={kind} hasVersion={latest !== null} />
+        {latest !== null ? <PanelLine documentId={document?.id} /> : null}
 
         {kind === "cv" && cvs.length > 0 ? (
           <Field className="gap-1.5">
@@ -343,22 +343,16 @@ function StateLine({
           {state.message ?? "Preview not available right now"}
         </p>
       );
-    case "under":
+    case "follows":
       return (
         <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Fit {state.fit} is under your threshold of {state.min}
-        </p>
-      );
-    case "manual":
-      return (
-        <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Documents are not written automatically. Write it when you want it.
+          Written after the CV: the hiring panel is reviewing the CV first.
         </p>
       );
     case "empty":
       return (
         <p className="text-sm text-muted-foreground" data-testid="card-state">
-          Not written yet
+          Not written yet. It is written when you click Write or Apply.
         </p>
       );
   }

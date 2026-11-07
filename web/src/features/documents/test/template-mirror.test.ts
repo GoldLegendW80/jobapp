@@ -27,6 +27,7 @@ interface Manifest {
   photo: string;
   fonts: string[];
   accent: string;
+  labels?: Record<string, Record<string, string>>;
   cv: { steps: Record<string, number>[] };
   letter: { steps: Record<string, number>[] };
 }
@@ -51,6 +52,9 @@ const style = (slug: string) =>
     .filter((line) => line !== "")
     .join("\n");
 
+/** The contact line icons every template reads as `--icon-<kind>` (templates.icon_css). */
+const ICON_KINDS = ["email", "phone", "place", "link"] as const;
+
 const STEP = [
   "body_size",
   "line_height",
@@ -73,15 +77,22 @@ async function mirrorSource(): Promise<string> {
           fonts: one.fonts,
           accent: one.accent,
           photo: one.photo,
+          labels: one.labels ?? {},
           steps: { cv: steps("cv"), letter: steps("letter") },
           css: style(slug),
         },
       ];
     }),
   );
+  const icons = Object.fromEntries(
+    ICON_KINDS.map((kind) => [
+      kind,
+      `url(data:image/svg+xml;base64,${readFileSync(path.join(TEMPLATES, "_icons", `${kind}.svg`)).toString("base64")})`,
+    ]),
+  );
   const text = `/**
- * Generated from api/app/documents/templates (each manifest.json and style.css) by
- * test/template-mirror.test.ts, never by hand: after a change there, run (in web/)
+ * Generated from api/app/documents/templates (each manifest.json and style.css, the icons of
+ * _icons) by test/template-mirror.test.ts, never by hand: after a change there, run (in web/)
  * pnpm exec vitest run src/features/documents/test/template-mirror.test.ts --update=all
  */
 export interface MirrorStep {
@@ -97,12 +108,17 @@ export interface MirroredTemplate {
   fonts: readonly string[];
   accent: string;
   photo: "required" | "optional" | "none";
+  /** The template's own section labels per language, over the shared ones of labels.json. */
+  labels: { readonly en?: Readonly<Record<string, string>>; readonly fr?: Readonly<Record<string, string>> };
   /** The density steps, loosest first: a version's \`fit_step\` is an index. */
   steps: { cv: readonly MirrorStep[]; letter: readonly MirrorStep[] };
   css: string;
 }
 
 export const TEMPLATE_MIRROR: Readonly<Record<string, MirroredTemplate>> = ${JSON.stringify(mirror)};
+
+/** The contact line icons, \`--icon-<kind>\` of every page (templates.icon_css). */
+export const TEMPLATE_ICONS: Readonly<Record<string, string>> = ${JSON.stringify(icons)};
 `;
   // As `prettier --write` formats it: the repository has no prettier configuration.
   return format(text, { parser: "typescript", plugins: [estree, typescript] });

@@ -42,11 +42,9 @@ describe("the order of the templates", () => {
     expect(slugs(ordered([...TEMPLATES, second]))).toEqual([
       "upload-abcd1234",
       "upload-ffff0000",
-      "banner",
-      "classic",
-      "compact",
-      "sidebar",
-      "serif",
+      "band",
+      "ledger",
+      "photo-columns",
     ]);
     expect(ordered([])).toEqual([]);
   });
@@ -69,13 +67,11 @@ describe("the language of the names", () => {
   });
 
   it("names a template in the language, else in English, else from its slug", () => {
-    const classic = fakeTemplate("classic");
-    expect(nameOf(classic, "fr")).toBe("Classic FR");
-    expect(nameOf({ ...classic, name: { en: "Classic" } }, "fr")).toBe(
-      "Classic",
-    );
-    expect(nameOf({ ...classic, slug: "split-right", name: {} }, "en")).toBe(
-      "Split right",
+    const band = fakeTemplate("band");
+    expect(nameOf(band, "fr")).toBe("Band FR");
+    expect(nameOf({ ...band, name: { en: "Band" } }, "fr")).toBe("Band");
+    expect(nameOf({ ...band, slug: "photo-columns", name: {} }, "en")).toBe(
+      "Photo columns",
     );
   });
 });
@@ -86,15 +82,16 @@ describe("the filters", () => {
   });
 
   it.each([
-    [{ photo: "with" }, ["banner", "classic", "sidebar"]],
-    [{ photo: "without" }, ["compact", "serif", "upload-abcd1234"]],
-    [{ columns: "one" }, ["banner", "classic", "compact", "serif"]],
-    [{ columns: "two" }, ["sidebar"]],
-    [{ ats: true }, ["classic", "compact", "serif"]],
-    [{ photo: "without", ats: true }, ["compact", "serif"]],
-    [{ photo: "with", columns: "two" }, ["sidebar"]],
+    [{ photo: "with" }, ["band", "ledger", "photo-columns"]],
+    [{ photo: "without" }, ["upload-abcd1234"]],
+    [{ columns: "one" }, ["band", "ledger"]],
+    [{ columns: "two" }, ["photo-columns"]],
+    [{ ats: true }, ["band", "ledger"]],
+    [{ photo: "without", ats: true }, []],
+    [{ photo: "with", columns: "two" }, ["photo-columns"]],
     [{ photo: "without", columns: "two" }, []],
-    [{ photo: "with", columns: "one", ats: true }, ["classic"]],
+    [{ photo: "with", columns: "two", ats: true }, []],
+    [{ photo: "with", columns: "one", ats: true }, ["band", "ledger"]],
   ] as const)("%o shows %o", (filters, expected) => {
     expect(shown(filters)).toEqual(expected);
   });
@@ -185,12 +182,12 @@ describe("what a switch says", () => {
   });
 
   it("knows a template that is no longer served, once the list is read", () => {
-    expect(isRemoved("classic", TEMPLATES)).toBe(false);
+    expect(isRemoved("band", TEMPLATES)).toBe(false);
     expect(isRemoved("upload-abcd1234", TEMPLATES)).toBe(false);
     expect(isRemoved("upload-gone0000", TEMPLATES)).toBe(true);
     expect(isRemoved("retired", TEMPLATES)).toBe(true);
     expect(isRemoved("retired", undefined)).toBe(false);
-    expect(isRemoved("classic", [])).toBe(true);
+    expect(isRemoved("band", [])).toBe(true);
   });
 
   it("goes back to the page of the document, and opens the gallery for it", () => {
