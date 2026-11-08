@@ -17,6 +17,7 @@ export const CLOSED_CHECK: Liveness = {
   reason: "page_says",
   sentence: "Cette offre n’est plus disponible.",
   checked_at: CHECKED_AT,
+  moved: true,
 };
 
 export const OPEN_CHECK: Liveness = {
