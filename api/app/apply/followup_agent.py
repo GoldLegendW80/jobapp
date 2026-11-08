@@ -63,9 +63,17 @@ ERRORS = {
     "token_budget": "The draft stopped at its token limit. Try again.",
     "queue_down": "The assistant is unavailable. Try again in a minute.",
 }
-# The profile the writer reads: no contact detail, no search settings.
+# The profile the writer reads: no contact detail, no search settings, and of the answers only
+# what a follow up may say (never EEO answers, pronouns, salary or consents).
 SECTIONS = ("identity", "experience", "facts", "skills", "answers")
 IDENTITY = ("full_name", "headline", "city", "country", "languages")
+ANSWER_FIELDS = (
+    "preferred_name",
+    "motivation",
+    "years_experience_stated",
+    "highest_degree",
+    "highest_degree_year",
+)
 
 
 class FollowUpInput(BaseModel):
@@ -122,8 +130,10 @@ def bind(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
 def _profile(db: Session, user_id: uuid.UUID, now: datetime) -> dict[str, Any]:
     sections = profile_service.sections_view(profile_service.get_profile(db, user_id, now))
     shown = {name: sections.get(name) for name in SECTIONS if sections.get(name)}
-    if isinstance(shown.get("identity"), Mapping):
-        shown["identity"] = {k: v for k, v in shown["identity"].items() if k in IDENTITY}
+    for name, allowed in (("identity", IDENTITY), ("answers", ANSWER_FIELDS)):
+        if name in shown:
+            fields = shown[name] if isinstance(shown[name], Mapping) else {}
+            shown[name] = {k: v for k, v in fields.items() if k in allowed}
     return shown
 
 
