@@ -205,6 +205,15 @@ afterEach(() => {
   window.sessionStorage.clear();
 });
 
+/** Where this tab keeps the reading its wizard started (use-building.ts), for `member`. */
+const BUILDING_KEY = `welcome:building:${member.id}`;
+function startedByWizard(run: string, written = false, userId = member.id) {
+  window.sessionStorage.setItem(
+    `welcome:building:${userId}`,
+    JSON.stringify({ run, written }),
+  );
+}
+
 // An invented key of the accepted shape; its last four characters are WXyz.
 const KEY = `sk-ant-api03-${"Ab1_".repeat(20)}WXyz`;
 
@@ -1117,6 +1126,8 @@ describe("the wizard", () => {
     fakeOnboarding();
     fakeDocuments([fakeDocument({ id: "d1", name: "cv.md" })]);
     fakeRuns({ runs: [fakeRun({ id: "r1", status: "running" })] });
+    // The wizard started it before a reload.
+    startedByWizard("r1");
     const user = userEvent.setup();
     renderApp("/welcome?step=building");
     expect(
@@ -1125,6 +1136,114 @@ describe("the wizard", () => {
     expect(next()).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Skip this step" }));
     await screen.findByText(/Step 4 of 10/);
+  });
+
+  it("leaves alone a reading started in Fill my profile, and offers its own", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding();
+    fakeDocuments([fakeDocument({ id: "d1", name: "cv.md" })]);
+    const runs = fakeRuns({
+      runs: [
+        fakeRun({ id: "r9", status: "running" }),
+        fakeRun({ id: "r8", status: "done" }),
+      ],
+    });
+    // The record of another run, from another person in this tab.
+    startedByWizard("r8", false, "00000000-0000-4000-8000-000000000009");
+    const additions = fakeAdditions("r8", BUILT, {
+      decided: [],
+      skipped: [],
+      stopped: [],
+      pending: 3,
+    });
+    renderApp("/welcome?step=building");
+    expect(
+      await screen.findByRole("button", { name: "Build my profile" }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("building-status")).toBeNull();
+    expect(next()).toBeEnabled();
+    expect(
+      runs.calls.filter((call) =>
+        call.path.startsWith("/api/ingestion/runs/r"),
+      ),
+    ).toEqual([]);
+    expect(additions.accepted).toEqual([]);
+  });
+
+  it("writes the wizard's reading that ended while the step was closed, without a second run", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding();
+    fakeDocuments([fakeDocument({ id: "d1", name: "cv.md" })]);
+    const runs = fakeRuns({
+      runs: [
+        fakeRun({
+          id: "r1",
+          status: "done",
+          finished_at: "2026-11-08T10:05:00Z",
+        }),
+      ],
+    });
+    startedByWizard("r1");
+    const additions = fakeAdditions("r1", BUILT, {
+      decided: ["p-role", "p-years"],
+      skipped: [{ id: "p-headline", reason: "replace" }],
+      stopped: [],
+      pending: 1,
+    });
+    renderApp("/welcome?step=building");
+    expect(
+      await screen.findByText("Your profile is ready: 2 facts added."),
+    ).toBeVisible();
+    expect(additions.accepted).toEqual([
+      { proposal_ids: ["p-role", "p-headline", "p-years"], fill_empty: true },
+    ]);
+    expect(runs.sent("POST", "/api/ingestion/runs")).toEqual([]);
+    expect(
+      screen.queryByRole("button", { name: "Build my profile" }),
+    ).toBeNull();
+    expect(
+      JSON.parse(window.sessionStorage.getItem(BUILDING_KEY) ?? "null"),
+    ).toEqual({ run: "r1", written: true });
+  });
+
+  it.each(["failed", "cancelled"] as const)(
+    "offers the reading again when the wizard's own reading %s",
+    async (status) => {
+      fakeSession(member);
+      fakeProfile(null);
+      fakeOnboarding();
+      fakeDocuments([fakeDocument({ id: "d1", name: "cv.md" })]);
+      fakeRuns({ runs: [fakeRun({ id: "r1", status })] });
+      startedByWizard("r1");
+      const additions = fakeAdditions("r1", BUILT, {
+        decided: [],
+        skipped: [],
+        stopped: [],
+        pending: 3,
+      });
+      renderApp("/welcome?step=building");
+      expect(
+        await screen.findByRole("button", { name: "Build my profile" }),
+      ).toBeVisible();
+      expect(additions.accepted).toEqual([]);
+    },
+  );
+
+  it("offers the reading again when the wizard's own reading cannot be read any more", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding();
+    fakeDocuments([fakeDocument({ id: "d1", name: "cv.md" })]);
+    const runs = fakeRuns();
+    startedByWizard("r7");
+    renderApp("/welcome?step=building");
+    expect(
+      await screen.findByRole("button", { name: "Build my profile" }),
+    ).toBeVisible();
+    expect(runs.sent("GET", "/api/ingestion/runs/r7")).toHaveLength(1);
+    expect(next()).toBeEnabled();
   });
 
   it("explains a Like, and keeps the Apply click's review box in apply's settings", async () => {
@@ -1192,7 +1311,7 @@ describe("the wizard", () => {
     );
   });
 
-  it("asks for no model key on step 1, and says what an upload does without one", async () => {
+  it("asks for no model key on step 2, and says what an upload does without one", async () => {
     fakeSession(member);
     fakeProfile(null);
     fakeCvDocuments();
@@ -1202,7 +1321,7 @@ describe("the wizard", () => {
     await screen.findByText(/Step 2 of 10/);
     expect(
       await screen.findByText(
-        /Turning it into a CV you can edit uses your Anthropic API key: until one is saved, that part waits/,
+        /Turning it into a CV you can edit uses the Claude access saved in Model access: until one is saved, that part waits/,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/model of your credential/)).toBeNull();

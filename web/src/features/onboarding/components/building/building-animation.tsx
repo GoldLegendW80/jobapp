@@ -41,7 +41,8 @@ class SceneBoundary extends Component<
 /**
  * The animation of "Building your profile", decoration only (hidden from screen readers): the
  * runtime loads once the browser is idle, never with reduced motion, and fades in once drawn.
- * When it cannot load, the space stays empty: the step's own words and bar say where it stands.
+ * Where it does not play (reduced motion, no Rive, a failed load) it takes no space: the step's
+ * own words and bar say where it stands.
  */
 export function BuildingAnimation({
   progress,
@@ -53,13 +54,15 @@ export function BuildingAnimation({
   className?: string;
 }) {
   const motion = !useMediaQuery("(prefers-reduced-motion: reduce)");
+  const [supported] = useState(riveSupported);
   const [start, setStart] = useState(false);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
-  const live = motion && start && !failed;
+  const plays = motion && supported && !failed;
+  const live = plays && start;
 
   useEffect(() => {
-    if (!motion || !riveSupported()) return;
+    if (!motion || !supported) return;
     if (typeof window.requestIdleCallback === "function") {
       const id = window.requestIdleCallback(
         () => {
@@ -77,7 +80,7 @@ export function BuildingAnimation({
     return () => {
       window.clearTimeout(id);
     };
-  }, [motion]);
+  }, [motion, supported]);
 
   const onReady = useCallback(() => {
     setReady(true);
@@ -86,6 +89,7 @@ export function BuildingAnimation({
     setFailed(true);
   }, []);
 
+  if (!plays) return null;
   return (
     <div
       aria-hidden="true"

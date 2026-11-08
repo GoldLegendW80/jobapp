@@ -16,7 +16,7 @@ import {
 const STEP_LABEL =
   "inline-flex min-h-8 w-full items-center gap-2 rounded-md px-2 leading-5 whitespace-nowrap";
 
-/** The bar above the step, at every width: its value is the step, 1 to 8. */
+/** The bar above the step, at every width: its value is the step, 1 to 10. */
 export function WizardBar({ current }: { current: number }) {
   const name = STEP_NAMES[STEP_IDS[current] ?? "profile"];
   return (

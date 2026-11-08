@@ -1,10 +1,11 @@
 """GET /api/ingestion/prompt: the laptop-analysis prompt, filled for the caller (SPEC-ingestion.md,
 "Laptop-analysis prompt"; tasks/ingestion/todo.md, G3).
 
-The user copies the prompt from step 1 of /profile/fill (or step 3 of the welcome wizard) and runs
-it with Claude Code or Codex on their own computer. Since version 2 (owner, 2026-11-07) that
-assistant looks through the home folder and answers in the conversation with the profile, which
-the user reads, copies and pastes into the app; the prompt names no app and asks for no file.
+The user copies the prompt from step 1 of /profile/fill (or from Advanced in Your profile, step 2
+of the welcome wizard) and runs it with Claude Code or Codex on their own computer. Since version
+2 (owner, 2026-11-07) that assistant looks through the home folder and answers in the
+conversation with the profile, which the user reads, copies and pastes into the app; the prompt
+names no app and asks for no file.
 This app never reads the user's computer and runs nothing on it: the route only hands out text.
 
 - The text lives in `prompts/laptop_dossier.md`: a front matter with `PROMPT_VERSION`, one

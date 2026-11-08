@@ -1,7 +1,10 @@
 import { useEffect, useRef } from "react";
 
 import { LoadError } from "@/components/blocks/load-error";
-import type { ModelCredential } from "@/features/agents/api/agents-api";
+import type {
+  CredentialCheck,
+  ModelCredential,
+} from "@/features/agents/api/agents-api";
 import {
   useModelAccess,
   type VerifyOutcome,
@@ -31,18 +34,27 @@ function statusOf(
           : "Checking it with Anthropic",
     };
   if (outcome?.tone === "error") return { tone: "error", text: outcome.text };
-  if (check && check.state !== "verified")
-    return { tone: "error", text: check.message };
+  if (check?.state === "invalid") return { tone: "error", text: check.message };
   if (!saved)
     return {
       tone: "none",
       text: "No credential saved. Agents need one to run.",
     };
   const name = `${KIND_LABEL[saved.kind]} ending in ${saved.last4}`;
+  // A busy or unreachable check says nothing against a success recorded before or since.
   if (outcome?.tone === "success" || saved.verified_at)
     return { tone: "success", text: `${name}, verified.` };
+  if (check && check.state !== "verified")
+    return { tone: "error", text: check.message };
   return { tone: "none", text: outcome?.text ?? `${name}, not verified yet.` };
 }
+
+/** A check that ended busy or unavailable settled nothing: opening the page asks again. */
+const SETTLED = new Set<CredentialCheck["state"]>([
+  "checking",
+  "verified",
+  "invalid",
+]);
 
 /**
  * The Claude credential the person's agents run on, in one field: saved, it is checked with
@@ -55,12 +67,12 @@ export function ModelAccess() {
   const verifyNow = verify.mutate;
   const checked = useRef<string>();
 
-  // Each credential saved is checked once, by its date of saving, unless a check already ran.
+  // Each credential saved is checked once per opening, by its date of saving, until settled.
   useEffect(() => {
     if (
       !saved ||
       saved.verified_at ||
-      saved.check ||
+      (saved.check && SETTLED.has(saved.check.state)) ||
       checked.current === saved.updated_at
     )
       return;

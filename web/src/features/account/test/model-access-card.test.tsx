@@ -377,6 +377,73 @@ describe("model access card", () => {
     },
   );
 
+  it.each([
+    ["busy", "Anthropic is busy or rate limiting this token. Try again later."],
+    ["unavailable", "Anthropic could not be reached. Try again later."],
+  ] as const)(
+    "checks again on opening a subscription token whose check ended %s, then turns it green",
+    async (state, said) => {
+      const sub: ModelCredential = {
+        ...saved,
+        kind: "claude_subscription",
+        last4: "Tok3",
+      };
+      let current: ModelCredential = {
+        ...sub,
+        check: { state, message: said },
+      };
+      const api = credentialApi({
+        initial: current,
+        get: () => HttpResponse.json(current),
+        verify: () => {
+          current = {
+            ...sub,
+            verified_at: "2026-11-08T08:02:00Z",
+            check: { state: "verified", message: "Claude Code answered." },
+          };
+          return HttpResponse.json({
+            result: "checking",
+            message: "Checking the token with Claude Code.",
+            credential: { ...sub, check: { state: "checking", message: "" } },
+          });
+        },
+      });
+      await openCard();
+      await waitFor(
+        () => {
+          expect(status()).toHaveTextContent(
+            "Claude subscription token ending in Tok3, verified.",
+          );
+        },
+        { timeout: CHECK_POLL_MS * 3 },
+      );
+      expect(status()).toHaveAttribute("data-tone", "success");
+      expect(api.verifies).toBe(1);
+    },
+  );
+
+  it("shows a token verified since a busy check green, without checking it again", async () => {
+    const state = credentialApi({
+      initial: {
+        ...saved,
+        kind: "claude_subscription",
+        last4: "Tok3",
+        verified_at: "2026-11-08T09:00:00Z",
+        check: {
+          state: "busy",
+          message:
+            "Anthropic is busy or rate limiting this token. Try again later.",
+        },
+      },
+    });
+    await openCard();
+    const said = await stands(
+      "Claude subscription token ending in Tok3, verified.",
+    );
+    expect(said).toHaveAttribute("data-tone", "success");
+    expect(state.verifies).toBe(0);
+  });
+
   it("turns the field red with the reason when Anthropic refuses the key, checked once", async () => {
     const state = credentialApi({
       initial: saved,

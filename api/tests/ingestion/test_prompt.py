@@ -37,6 +37,8 @@ PINNED = {
     # The whole home folder, for a recruiter profile, answered in the conversation and naming no
     # app (owner, 2026-11-07).
     2: "33fa0da2fc0f8bd37c2caa4e3e0fcc8f2288235f2384553183a8ed6027d21838",
+    # The cloud drives a Mac keeps under ~/Library are read, the rest of ~/Library still skipped.
+    3: "b5cfd958293eaef3efe5861378237ce85c20dd82547aab9e5bae7eae1c708909",
 }
 
 # What the assistant must be told, each as the words of the template (spaces and case as written).
@@ -150,7 +152,7 @@ OUTPUT_RULES = {
     "plain Markdown": "in plain Markdown: no HTML, no images, no tables.",
     "copied whole": "not in a file and not in a code block, so I can copy it whole.",
     "every heading kept": "Keep every heading.",
-    "the first line": "profile-format: 2\n",
+    "the first line": "profile-format: 3\n",
     "contact details only from the CV": (
         "Take my email address and phone number only from my own CV."
     ),
@@ -210,7 +212,7 @@ def test_signed_in_user_gets_both_prompts_the_version_and_the_hash(api: Api, ali
     assert response.status_code == 200, response.text
     body = response.json()
     assert set(body) == {"version", "sha256", "output_folder", "claude_code", "codex"}
-    assert body["version"] == template().version == 2
+    assert body["version"] == template().version == 3
     assert body["sha256"] == template().sha256
     assert re.fullmatch(r"[0-9a-f]{64}", body["sha256"])
     assert body["output_folder"] == OUTPUT_FOLDER
@@ -504,6 +506,14 @@ def test_the_whole_home_folder_is_read_and_nothing_outside_it() -> None:
         assert "My home folder `~` and everything under it." in text
         assert "<FOLDER" not in text
         assert "Read only inside my home folder." in text
+
+
+def test_the_cloud_drives_of_a_mac_are_read_though_library_is_skipped() -> None:
+    # Synced cloud drives are a place to look, and on macOS they live under ~/Library.
+    for text in _texts():
+        assert "the folders of cloud drives synced to this computer" in text
+        assert "such as `~/Library` and `~/.cache`" in text
+        assert "look through `~/Library/CloudStorage` and `~/Library/Mobile Documents`" in text
 
 
 def test_the_prompt_asks_for_nothing_it_forbids() -> None:
