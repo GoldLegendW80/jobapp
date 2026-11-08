@@ -382,6 +382,20 @@ class InterviewPrepContent(_Content):
             ]
         return out
 
+    def shown_fields(self) -> list[tuple[str, str]]:
+        """Every field the writer writes and the person reads: the target, the expected
+        questions, the gaps and their answers, the stories and what to ask. The debrief is the
+        person's own words and is left out."""
+        out = [("target", self.target)]
+        for i, question in enumerate(self.expected):
+            out += [
+                (f"expected.{i}.question", question.question),
+                (f"expected.{i}.why", question.why),
+            ]
+        out += [(f"gaps.{i}.gap", gap.gap) for i, gap in enumerate(self.gaps)]
+        out += self.checked_fields()
+        return out + [(f"ask.{i}", text) for i, text in enumerate(self.ask)]
+
 
 # Notes on an offer letter (SPEC-documents.md, "Reading an offer"): no field holds a verdict or a
 # score, and a quote is the letter's own words.
@@ -521,14 +535,17 @@ def content_hash(kind: Kind, content: BaseModel) -> bytes:
 def text_fields(content: BaseModel) -> list[tuple[str, str]]:
     """Every printed text field as `(path, text)`, in the order a reader meets them. `target`,
     `notes`, a proposal's `to`, the fixed facts and the letter's own words quoted in offer notes
-    are not written prose of the document and are left out."""
+    are not written prose of the document and are left out; offer notes give each clause's title
+    then its plain words. An interview preparation gives its claims only (`checked_fields`): the
+    dash rule reads all it shows (`dash_fields`)."""
     if isinstance(content, ProposalContent):
         return [("subject", content.subject), ("body", content.body)]
     if isinstance(content, InterviewPrepContent):
         return content.checked_fields()
     if isinstance(content, OfferNotesContent):
         out = [("summary", content.summary)]
-        out += [(f"clauses.{i}.plain", clause.plain) for i, clause in enumerate(content.clauses)]
+        for i, clause in enumerate(content.clauses):
+            out += [(f"clauses.{i}.title", clause.title), (f"clauses.{i}.plain", clause.plain)]
         out += [(f"differences.{i}", text) for i, text in enumerate(content.differences)]
         return out + [(f"questions.{i}", text) for i, text in enumerate(content.questions)]
     if isinstance(content, LetterContent):
@@ -552,6 +569,13 @@ def text_fields(content: BaseModel) -> list[tuple[str, str]]:
         out.append((f"skills.{i}.label", group.label))
         out += [(f"skills.{i}.items.{j}", text) for j, text in enumerate(group.items)]
     return out
+
+
+def dash_fields(content: BaseModel) -> list[tuple[str, str]]:
+    """The fields the dash rule fixes: the printed ones, and all a preparation shows."""
+    if isinstance(content, InterviewPrepContent):
+        return content.shown_fields()
+    return text_fields(content)
 
 
 def kind_of(content: BaseModel) -> Kind:

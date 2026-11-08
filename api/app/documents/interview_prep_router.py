@@ -1,7 +1,8 @@
 """The interview preparation api (interview_prep.py; SPEC-documents.md, "Interview preparation").
 
 - `GET /api/jobs/{job_id}/interview-prep`: the posting's preparation (null before the first
-  Prepare), its writing, the Practice chat and the pending proposal of the kept stories.
+  Prepare), its writing, the Practice chat and the pending proposal of the kept stories when it
+  holds stories of this posting.
 - `POST /api/jobs/{job_id}/interview-prep`: Prepare, on the person's click (202). 409 without
   the consent or a credential, or while a writing or a practice turn runs; 429 when the
   person's runs are all busy. Nothing is stored then.
@@ -138,7 +139,7 @@ def read_prep(job_id: uuid.UUID, user: CurrentUser, request: Request, db: Db) ->
     if owned is None:
         raise _error(status.HTTP_404_NOT_FOUND, POSTING_NOT_FOUND)
     document = interview_prep.of_posting(db, user.id, job_id)
-    proposal = interview_prep.pending_stories(db, user.id)
+    proposal = interview_prep.pending_stories(db, user.id, job_id)
     if document is None:
         db.rollback()
         return PrepOut(

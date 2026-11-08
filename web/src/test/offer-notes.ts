@@ -18,6 +18,8 @@ export const NO_OFFER_NOTES: OfferNotes = {
   busy: false,
   letter: null,
   pay: { posting: { pay: null }, pay_sought: [] },
+  truncated: false,
+  read_chars: null,
 };
 
 export const OFFER_NOTES: OfferNotes = {
@@ -57,6 +59,8 @@ export const OFFER_NOTES: OfferNotes = {
     posting: { pay: "55,000 to 65,000 EUR a year" },
     pay_sought: ["60,000 to 70,000 EUR a year"],
   },
+  truncated: false,
+  read_chars: null,
 };
 
 /** GET answers `notes`; POST answers `afterRead` and is recorded. */

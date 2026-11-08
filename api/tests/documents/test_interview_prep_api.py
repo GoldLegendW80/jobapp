@@ -170,6 +170,17 @@ def test_a_debrief_by_hand_makes_a_version_with_notes_on_the_claims_only(
     proposal = kept.json()["proposal_id"]
     assert api.get(_url(alex), token=alex["token"]).json()["stories_proposal"] == proposal
     with factory() as db:
+        other = db.execute(
+            sa.text(
+                "INSERT INTO jobs (user_id, slug, company, title, status) VALUES "
+                "(:u, :s, 'Example Robotics', 'SRE', 'interview') RETURNING id"
+            ),
+            {"u": alex["user"], "s": f"robotics-{uuid.uuid4().hex[:8]}"},
+        ).scalar_one()
+        db.commit()
+    elsewhere = api.get(f"/api/jobs/{other}/interview-prep", token=alex["token"]).json()
+    assert elsewhere["stories_proposal"] is None  # another posting's stories are not shown here
+    with factory() as db:
         assert store.get(db, alex["user"], document).draft_written_by is Author.user
 
 

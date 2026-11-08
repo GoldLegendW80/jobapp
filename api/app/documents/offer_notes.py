@@ -148,12 +148,57 @@ def pay_context(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> dict[
     }
 
 
-def offer_text(db: Session, user_id: uuid.UUID, binding: Mapping[str, Any] | None) -> str | None:
-    """The bound letter's text as the agents read it, None once ingestion no longer holds it."""
+@dataclass(frozen=True, slots=True)
+class Letter:
+    """The letter's text as the agents read it (at most writer_base.UPLOAD_MAX_CHARS
+    characters), and the characters of the whole letter."""
+
+    text: str
+    total: int
+
+    @property
+    def truncated(self) -> bool:
+        return len(self.text) < self.total
+
+
+def letter_read(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> Letter | None:
+    """The person's letter as the agents read it, None once ingestion no longer holds it."""
+    text = writer_base.upload_text(db, user_id, upload_id)
+    if text is None:
+        return None
+    total = db.scalar(
+        sa.select(sa.func.char_length(IngestionDocument.text)).where(
+            IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id
+        )
+    )
+    return Letter(text, max(total or 0, len(text)))
+
+
+def offer_text(db: Session, user_id: uuid.UUID, binding: Mapping[str, Any] | None) -> Letter | None:
+    """The bound letter as the agents read it, None once ingestion no longer holds it."""
     upload_id = (binding or {}).get("upload_id")
     if not upload_id:
         return None
-    return writer_base.upload_text(db, user_id, uuid.UUID(str(upload_id)))
+    return letter_read(db, user_id, uuid.UUID(str(upload_id)))
+
+
+def _read_chars(db: Session, user_id: uuid.UUID, upload_id: uuid.UUID) -> int | None:
+    """The characters the agents read of a letter longer than they read, None otherwise. The
+    text itself is loaded only for such a letter."""
+    text = IngestionDocument.text
+    found = db.execute(
+        sa.select(
+            sa.func.char_length(text),
+            sa.func.octet_length(sa.func.left(text, writer_base.UPLOAD_MAX_CHARS)),
+        ).where(IngestionDocument.id == upload_id, IngestionDocument.user_id == user_id)
+    ).one_or_none()
+    if found is None or found[0] is None:
+        return None
+    chars, head = found
+    if chars <= writer_base.UPLOAD_MAX_CHARS and head <= writer_base.UPLOAD_MAX_BYTES:
+        return None
+    read = letter_read(db, user_id, upload_id)
+    return len(read.text) if read is not None and read.truncated else None
 
 
 # --- the agents ---------------------------------------------------------------------------------
@@ -659,11 +704,31 @@ class View:
     busy: bool  # a reading or a chat change is open
     letter: tuple[uuid.UUID, str] | None  # the file read and its name, None once deleted
     pay: dict[str, Any]
+    read_chars: int | None = None  # what was read of a letter longer than that, else None
 
 
-def view(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> View | None:
+def _settle_stale(db: Session, user_id: uuid.UUID, document_id: uuid.UUID, at: datetime) -> None:
+    """A chat change whose run ended without its final hook, settled by `chat.recover` and
+    committed, as the documents chat's own read does; a locked row is left for the next read."""
+    found = store.open_generation(db, user_id, document_id)
+    if found is None or found.mode is not GenerationMode.chat:
+        return
+    try:
+        document = store.lock_document(db, user_id, document_id)
+        if chat.recover(db, document, at):
+            store.commit(db)
+        else:
+            db.rollback()
+    except (store.DocumentBusyError, store.NotFoundError):
+        db.rollback()
+
+
+def view(
+    db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, at: datetime | None = None
+) -> View | None:
     """The posting's notes as its page shows them; None for a posting that is not the
-    person's."""
+    person's. With `at`, a chat change whose hook was lost is settled first (`_settle_stale`),
+    so the notes do not stay busy."""
     context = pay_context(db, user_id, posting_id)
     if context is None:
         return None
@@ -677,6 +742,8 @@ def view(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> View | None:
     )
     if document is None:
         return View(None, None, None, False, None, context)
+    if at is not None:
+        _settle_stale(db, user_id, document.id, at)
     versions = store.versions(db, user_id, document.id)
     reading = db.execute(
         sa.select(DocumentGeneration)
@@ -704,6 +771,7 @@ def view(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID) -> View | None:
         store.open_generation(db, user_id, document.id) is not None,
         letter,
         context,
+        _read_chars(db, user_id, letter[0]) if letter is not None else None,
     )
 
 

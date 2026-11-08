@@ -329,17 +329,23 @@ without their web research.
   the merged mistakes): the panel is read, never run again. It submits through D7's
   `submit.handle`: the stories and the answers to the gaps are claims, checked against the
   profile, the base CV and the posting's title and company, so a figure the profile does not
-  state is corrected and recorded (Decision 4). A new preparation keeps the person's debrief.
+  state is corrected and recorded (Decision 4). Every field it shows (the target, the questions
+  and why, the gaps and their answers, the stories, the questions to ask) follows the dash rule,
+  whatever the person's own documents use; the debrief is the person's words and is left as
+  written. A new preparation keeps the person's debrief.
 - **Practice** (`POST /api/documents/{id}/practice`): a chat of channel `practice`; each message
   starts `documents_interview_practice`, which reads the preparation and the practice so far and
   answers through a strict tool with feedback on the last answer and one next question. Code
-  writes the answer; a run that fails says so, and a turn whose hook was lost is closed by the
-  next read.
+  writes the answer, its dashes used as separators replaced, at most 2,102 characters whatever
+  the chat's own message limit (`interview_prep.PRACTICE_ANSWER_MAX`); a run that fails says
+  so, and a turn whose hook was lost is closed by the next read.
 - **Debrief**: what was asked, appended by hand to the draft (a version).
 - **Kept stories** (`POST /api/documents/{id}/stories`): the stories the person ticks become one
   pending proposal of the profile's facts block "Interview stories" (appended to it, never
   replacing it), written only when the person accepts it on the page (`/api/proposals/{id}`);
-  the next preparation reads that block.
+  the next preparation reads that block. A second Keep before that answer adds to the pending
+  proposal, which keeps the stories of the first; the page of a posting shows a pending proposal
+  only when it holds stories of that posting's preparation.
 - **Page** `/jobs/:id/interview`: the questions, gaps, stories (Keep in my profile, then Accept or
   Reject), questions to ask and the Debrief in the main column, Practice in the side rail,
   Prepare again in the header.
@@ -360,15 +366,20 @@ either missing, nothing stored), and writes the posting's document of kind `offe
 its own words quoted, what it means in plain words), what differs from the posting's stated pay
 (`opportunities/pay.py`) and from the person's `search.compensation`, and questions for a
 lawyer. The notes are in the letter's own language (`upload.language_of`, French or English); a
-quote stays word for word, every other field follows the dash rule. No field holds a verdict or a
+quote stays word for word, every other field (a clause's title included) follows the dash rule.
+The agents read the letter's first 30,000 characters (`writer_base.UPLOAD_MAX_CHARS`): for a
+longer letter `get_offer_text` answers `truncated` with the characters read and the letter's
+own, the prompt has the summary say that only its beginning was read, and the section shows
+"Only the first 30,000 characters of the letter were read." No field holds a verdict or a
 score, the prompt forbids both and any outside fact, and a submit that tells the person to sign
 or calls signing safe is refused back to the agent (`offer_notes.VERDICT`, English and French;
 wording outside that list rests on the prompt). The page says the notes are not legal advice.
 Their chat is the documents chat (`chat.post` hands the message to `offer_notes.post_message`:
 the agent `documents_chat_offer_notes`, the same consent as the reading; a version of origin
 `chat` per change). `GET /api/documents/offer-notes/{posting_id}` answers the notes, the newest
-reading, the letter's name and what they were compared with; `GET /api/jobs/{id}/documents`
-leaves the notes out.
+reading, the letter's name, what they were compared with and `truncated` (with `read_chars`);
+it settles first a chat change whose run ended without its hook (`chat.recover`), so the notes
+do not stay busy. `GET /api/jobs/{id}/documents` leaves the notes out.
 
 ## The writers
 

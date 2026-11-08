@@ -8,14 +8,18 @@ the binding; and the canary. Real Postgres at head."""
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import uuid
+from datetime import timedelta
 
 import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import credentials
+from app.agents.models import AgentRun, RunStatus
+from app.agents.tools import Scope
 from app.documents import chat, offer_notes, store, writer_base
 from app.documents import content as c
 from app.documents.models import (
@@ -265,7 +269,11 @@ def test_describing_what_the_letter_asks_is_no_verdict(said: str) -> None:
 
 def test_a_quote_is_the_letters_own_words_and_the_rest_follows_the_dash_rule() -> None:
     run_id = uuid.uuid4()
-    quoted = {**NOTES["clauses"][0], "quote": "It is safe to sign - the employer"}
+    quoted = {
+        **NOTES["clauses"][0],
+        "title": "Pay \u2014 monthly",
+        "quote": "It is safe to sign - the employer",
+    }
     raw = {**NOTES, "summary": "A permanent role - in Lyon.", "clauses": [quoted]}
     assert offer_notes.handle(run_id, raw)[1] is False
     accepted = offer_notes.take(run_id).accepted
@@ -273,8 +281,86 @@ def test_a_quote_is_the_letters_own_words_and_the_rest_follows_the_dash_rule() -
     notes = accepted.content
     assert isinstance(notes, c.OfferNotesContent)
     assert " - " not in notes.summary
+    assert notes.clauses[0].title == "Pay, monthly"
     assert notes.clauses[0].quote == "It is safe to sign - the employer"
-    assert [record.field_path for record in accepted.corrections] == ["summary"]
+    assert [record.field_path for record in accepted.corrections] == ["summary", "clauses.0.title"]
+
+
+def test_a_verdict_in_a_clause_title_is_refused() -> None:
+    run_id = uuid.uuid4()
+    titled = {**NOTES["clauses"][0], "title": "Safe to sign"}
+    answer, error = offer_notes.handle(run_id, {**NOTES, "clauses": [titled]})
+    assert error
+    assert "clauses.0.title" in answer
+
+
+def test_a_long_field_with_a_dash_keeps_its_comma_up_to_its_own_limit() -> None:
+    run_id = uuid.uuid4()
+    plain = "a" * 600 + " - " + "b" * 100  # 703 characters, over a line but under OFFER_PLAIN_MAX
+    raw = {**NOTES, "clauses": [{**NOTES["clauses"][0], "plain": plain}]}
+    assert offer_notes.handle(run_id, raw)[1] is False
+    accepted = offer_notes.take(run_id).accepted
+    assert accepted is not None
+    assert accepted.content.clauses[0].plain == "a" * 600 + ", " + "b" * 100  # type: ignore[union-attr]
+
+
+def test_a_letter_longer_than_what_is_read_says_so(alex: Person) -> None:
+    pytest.importorskip("claude_agent_sdk")
+    from app.documents import offer_tools
+
+    clause = "Annex. The employer may update the travel policy at any time. "
+    long_text = (LETTER + clause * 500)[:31_000]
+    assert len(long_text) == 31_000
+    letter = upload(alex.factory, alex.user, long_text)
+    read(alex, letter)
+    with alex.factory() as db:
+        found = offer_notes.offer_text(db, alex.user, {"upload_id": str(letter)})
+        assert found is not None
+        assert found.truncated
+        assert (len(found.text), found.total) == (writer_base.UPLOAD_MAX_CHARS, 31_000)
+        shown = offer_notes.view(db, alex.user, alex.posting)
+        assert shown is not None
+        assert shown.read_chars == writer_base.UPLOAD_MAX_CHARS
+    told = offer_tools._letter(Scope(alex.factory, alex.user, binding={"upload_id": str(letter)}))
+    assert told is not None
+    data = json.loads(told)
+    assert (data["truncated"], data["read_chars"], data["total_chars"]) == (True, 30_000, 31_000)
+    assert '"truncated": true' in offer_notes.READER.system_prompt
+
+    short = upload(alex.factory, alex.user, FRENCH)
+    with alex.factory() as db:
+        found = offer_notes.offer_text(db, alex.user, {"upload_id": str(short)})
+        assert found is not None
+        assert not found.truncated
+    told = offer_tools._letter(Scope(alex.factory, alex.user, binding={"upload_id": str(short)}))
+    assert told is not None
+    assert json.loads(told)["truncated"] is False
+
+
+def test_a_chat_change_whose_hook_was_lost_is_settled_by_the_next_read(alex: Person) -> None:
+    document_id, _, run_id = read(alex, upload(alex.factory, alex.user, LETTER))
+    execute(alex, run_id)
+    with alex.factory() as db:
+        posted = chat.post(db, alex.user, document_id, "Shorter.", at=AT, settings=alex.settings)
+        db.commit()
+    with alex.factory() as db:
+        db.execute(
+            sa.update(AgentRun)
+            .where(AgentRun.id == posted.run_id)
+            .values(status=RunStatus.failed, finished_at=AT)
+        )
+        db.commit()
+        early = offer_notes.view(
+            db, alex.user, alex.posting, AT + timedelta(seconds=chat.HOOK_GRACE_S - 1)
+        )
+        assert early is not None
+        assert early.busy
+        late = offer_notes.view(
+            db, alex.user, alex.posting, AT + timedelta(seconds=chat.HOOK_GRACE_S + 1)
+        )
+        assert late is not None
+        assert not late.busy
+    assert generation_row(alex.factory, posted.generation.id).status is GenerationStatus.failed
 
 
 def test_a_score_has_no_field_to_go_in() -> None:

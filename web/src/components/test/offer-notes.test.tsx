@@ -80,6 +80,27 @@ describe("the Offer section of a posting", () => {
     ).toBeVisible();
   });
 
+  it("says when the letter was longer than what was read, and only then", async () => {
+    posting("interview", {
+      ...OFFER_NOTES,
+      truncated: true,
+      read_chars: 30_000,
+    });
+    renderApp(`/jobs/${JOB_ID}`);
+    const said = await screen.findByTestId("offer-letter-truncated");
+    expect(said.textContent).toBe(
+      "Only the first 30,000 characters of the letter were read.",
+    );
+    expect(said.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("says nothing of a length when the whole letter was read", async () => {
+    posting("interview", OFFER_NOTES);
+    renderApp(`/jobs/${JOB_ID}`);
+    await screen.findByTestId("offer-notes");
+    expect(screen.queryByTestId("offer-letter-truncated")).toBeNull();
+  });
+
   it("sends the chosen letter to ingestion, asks its consent once, then reads it", async () => {
     const api = posting("interview");
     fakeDocuments();

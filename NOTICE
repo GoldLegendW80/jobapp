@@ -37,6 +37,11 @@ keyword-match.mjs; the starter list of banned phrases (api/app/documents/setting
 from its cv-voice.mjs; keeping a chat correction as a writing rule
 (api/app/documents/writing_rules.py) follows its modes/retro.md.
 
+Reading an offer (api/app/documents/offer_notes.py and the prompts
+api/app/documents/prompts/offer_notes*.md) follows the posture of its offer-prep mode: a clause
+walk in plain words, the deltas against the posting's pay and questions for a lawyer, never a
+verdict or a score, without its web research.
+
 Your search in numbers (api/app/opportunities/insights.py, web/src/features/jobs/helpers/insights.ts)
 takes its floors, its silent window and its two dated benchmarks from calibrate.mjs,
 funnel-velocity.mjs, analyze-patterns.mjs, close-stale.mjs and templates/benchmarks.yml; the reasons

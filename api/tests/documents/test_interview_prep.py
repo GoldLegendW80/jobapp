@@ -5,6 +5,7 @@ kept stories as a proposal the person accepts. Invented people and postings only
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -15,7 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import proposals as agent_proposals
 from app.agents.models import AgentRun, ProposalStatus, RunStatus
-from app.documents import consent, interview_prep, store, submit
+from app.documents import consent, interview_prep, rules, store, submit
 from app.documents import content as c
 from app.documents.models import (
     RENDERED_KINDS,
@@ -29,7 +30,15 @@ from app.documents.models import (
     Origin,
 )
 from app.profile import service as profile_service
-from tests.documents.store_support import AT, USER_A, db, engine, factory, migrated_url
+from tests.documents.store_support import (
+    AT,
+    USER_A,
+    add_posting,
+    db,
+    engine,
+    factory,
+    migrated_url,
+)
 from tests.documents.writer_support import Person, execute, generation_row, person, versions
 
 __all__ = ["db", "engine", "factory", "migrated_url"]
@@ -284,6 +293,57 @@ def test_a_practice_turn_is_validated_and_kept_once() -> None:
     assert interview_prep.practice_text(turn) == "Why us?"
 
 
+def _sized(sentence: str, size: int, end: str) -> str:
+    return (sentence * (size // len(sentence) + 1))[: size - 1] + end
+
+
+def test_a_practice_answer_of_the_largest_size_is_kept(alex: Person) -> None:
+    started = prepare(alex)
+    execute(alex, started.run_id)
+    posted = practice(alex, started.document.id, "Start.")
+    turn = interview_prep.Turn(
+        feedback=_sized("Clear answer, now name the figure. ", interview_prep.FEEDBACK_MAX, "."),
+        question=_sized("Which part did you build yourself ", interview_prep.QUESTION_MAX, "?"),
+    )
+    assert len(interview_prep.practice_text(turn)) == interview_prep.PRACTICE_ANSWER_MAX
+    assert alex.settings.documents_chat_max_chars < interview_prep.PRACTICE_ANSWER_MAX
+    interview_prep.settle_practice(alex.factory, posted.run_id, RunStatus.done, turn, AT)
+    assert generation_row(alex.factory, posted.generation.id).status is GenerationStatus.done
+    assert chat(alex, started.document.id)[-1] == ("assistant", interview_prep.practice_text(turn))
+
+
+def test_a_practice_turn_follows_the_dash_rule() -> None:
+    run_id = uuid.uuid4()
+    raw = {
+        "feedback": "Clear \u2014 but name the figure.",
+        "question": "Why us \u2013 and why now?",
+    }
+    assert interview_prep.practice_turn(run_id, raw) == (interview_prep.STORED, False)
+    turn = interview_prep.take_turn(run_id)
+    assert turn is not None
+    assert (turn.feedback, turn.question) == ("Clear, but name the figure.", "Why us, and why now?")
+    half = interview_prep.FEEDBACK_MAX // 2
+    longest = {"feedback": "x" * (half - 1) + "\u2014" + "y" * half}  # ", " would pass the limit
+    run_id = uuid.uuid4()
+    assert interview_prep.practice_turn(run_id, longest) == (interview_prep.STORED, False)
+    kept = interview_prep.take_turn(run_id)
+    assert kept is not None
+    assert len(kept.feedback) <= interview_prep.FEEDBACK_MAX
+    assert not rules.separators(kept.feedback)
+
+
+def test_the_preparation_follows_the_dash_rule_whatever_the_persons_documents_use(
+    alex: Person,
+) -> None:
+    started = prepare(alex)
+    binding = {"generation_id": str(started.generation.id), "document_id": str(started.document.id)}
+    with alex.factory() as db:
+        assert store.settings(db, alex.user).no_dash_separators is False
+        context = interview_prep.context(db, alex.user, binding)
+    assert context is not None
+    assert context.settings.no_dash_separators is True
+
+
 # --- Keep stories -------------------------------------------------------------------------------
 
 
@@ -309,6 +369,61 @@ def test_kept_stories_change_the_profile_only_once_accepted(alex: Person) -> Non
         assert interview_prep.keep_stories(db, alex.user, started.document.id, [0], AT) is None
         with pytest.raises(ValueError, match="no story chosen"):
             interview_prep.keep_stories(db, alex.user, started.document.id, [7], AT)
+
+
+def _block(who: Person) -> str:
+    with who.factory() as db:
+        blocks = profile_service.get_profile(db, who.user, AT).sections["facts"]["blocks"]
+    return next(b["body"] for b in blocks if b["title"] == interview_prep.STORIES_BLOCK)
+
+
+def test_a_second_keep_before_the_accept_keeps_the_stories_of_both(alex: Person) -> None:
+    started = prepare(alex)
+    execute(alex, started.run_id)
+    stories = c.parse("interview_prep", draft(alex, started.document.id)).stories  # type: ignore[union-attr]
+    with alex.factory() as db:
+        first = interview_prep.keep_stories(db, alex.user, started.document.id, [0], AT)
+        db.commit()
+        second = interview_prep.keep_stories(db, alex.user, started.document.id, [1], AT)
+        db.commit()
+        assert first is not None
+        assert second is not None
+        db.refresh(first)
+        assert first.status is ProposalStatus.superseded
+        agent_proposals.accept(db, alex.user, second.id, AT)
+        db.commit()
+    body = _block(alex)
+    assert interview_prep.story_text(stories[0]) in body
+    assert interview_prep.story_text(stories[1]) in body
+
+
+def test_a_stories_proposal_shows_only_on_the_postings_whose_stories_it_holds(
+    alex: Person,
+) -> None:
+    started = prepare(alex)
+    execute(alex, started.run_id)
+    with alex.factory() as db:
+        other = add_posting(db, alex.user)
+        db.commit()
+    elsewhere = prepare(dataclasses.replace(alex, posting=other))
+    execute(alex, elsewhere.run_id)
+    with alex.factory() as db:
+        made = interview_prep.keep_stories(db, alex.user, started.document.id, [0], AT)
+        db.commit()
+        assert made is not None
+        assert interview_prep.pending_stories(db, alex.user, alex.posting).id == made.id  # type: ignore[union-attr]
+        assert interview_prep.pending_stories(db, alex.user, other) is None
+        both = interview_prep.keep_stories(db, alex.user, elsewhere.document.id, [1], AT)
+        db.commit()
+        assert both is not None
+        assert both.payload[interview_prep.PROPOSAL_POSTINGS] == sorted(
+            [str(alex.posting), str(other)]
+        )
+        assert interview_prep.pending_stories(db, alex.user, alex.posting).id == both.id  # type: ignore[union-attr]
+        assert interview_prep.pending_stories(db, alex.user, other).id == both.id  # type: ignore[union-attr]
+        agent_proposals.reject(db, alex.user, both.id, AT)
+        db.commit()
+        assert interview_prep.pending_stories(db, alex.user, alex.posting) is None
 
 
 def test_a_story_is_appended_to_the_block_never_replacing_it() -> None:

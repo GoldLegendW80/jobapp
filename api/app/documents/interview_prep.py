@@ -20,7 +20,9 @@ versions, the hand edits and restores of router.py. Nothing writes it without th
   is settled by the next read (`recover_practice`).
 - **Debrief**: the person appends what was asked to the draft by hand (router.py's save).
 - **Keep stories** (`keep_stories`): the stories the person picks become one pending proposal of
-  the profile's facts block "Interview stories" (`item_proposals`), written only when accepted.
+  the profile's facts block "Interview stories" (`item_proposals`), written only when accepted;
+  a second keep before that adds to the pending one, and the page of a posting shows only a
+  proposal that holds its stories (`pending_stories`).
 
 Logs carry ids and codes, never a text.
 """
@@ -44,7 +46,7 @@ from app.agents.definitions import FinalRun
 from app.agents.models import FINAL_STATUSES, AgentRun, Proposal, ProposalStatus, RunStatus
 from app.config import Settings, get_settings
 from app.documents import content as c
-from app.documents import corrections, estimate, generate, panel, store, submit, writer_base
+from app.documents import corrections, estimate, generate, panel, rules, store, submit, writer_base
 from app.documents.models import (
     Channel,
     Document,
@@ -62,6 +64,8 @@ logger = logging.getLogger("app.documents.interview_prep")
 
 KIND = "interview_prep"
 STORIES_BLOCK = "Interview stories"
+# What a stories proposal records beside its item: the stories it adds and their postings.
+PROPOSAL_STORIES, PROPOSAL_POSTINGS = "prep_stories", "prep_postings"
 PRACTICE_KEPT = 40  # the messages a practice run reads
 HOOK_GRACE_S = 120  # as the tick's
 PRACTICE_FAILED = "The practice partner could not answer. Send your message again."
@@ -231,7 +235,8 @@ def context(
 ) -> submit.WriterContext | None:
     """What a submit of the preparation is checked against: the profile, the base CV the
     generation names and the posting's title and company (a preparation may name the role and
-    the company, as a letter does). None when the bound document is gone."""
+    the company, as a letter does), with the dash rule on whatever the person's documents use:
+    the preparation is the app's text to the person. None when the bound document is gone."""
     if binding is None:
         return None
     generation = db.execute(
@@ -253,7 +258,7 @@ def context(
     return submit.WriterContext(
         kind=KIND,
         sources=submit.proposal_sources(reading),
-        settings=store.settings(db, user_id),
+        settings=store.settings(db, user_id).model_copy(update={"no_dash_separators": True}),
         employer_keys=tuple(employer.key for employer in reading.view.employers),
         soft_limits=submit.NO_SOFT_LIMITS,
         fallbacks=corrections.Fallbacks(),
@@ -294,14 +299,19 @@ async def on_final(final: FinalRun) -> None:
 # --- Practice -----------------------------------------------------------------------------------
 
 
+FEEDBACK_MAX, QUESTION_MAX = 1_500, 600
+# The longest answer a turn makes (`practice_text`), whatever the chat's own message limit.
+PRACTICE_ANSWER_MAX = FEEDBACK_MAX + 2 + QUESTION_MAX
+
+
 class Turn(BaseModel):
     """What the practice partner submits once per run: feedback on the person's last answer
     (empty before the first question) and the next question."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    feedback: str = Field(default="", max_length=1_500)
-    question: str = Field(default="", max_length=600)
+    feedback: str = Field(default="", max_length=FEEDBACK_MAX)
+    question: str = Field(default="", max_length=QUESTION_MAX)
 
 
 TURN_SCHEMA = Turn.model_json_schema()
@@ -310,9 +320,17 @@ _TURNS: dict[uuid.UUID, Turn] = {}
 _TURNS_LOCK = threading.Lock()
 
 
+def _undashed(text: str, limit: int) -> str:
+    """The dash rule on a turn: the compact replacement when the plain one would pass `limit`."""
+    found = rules.separators(text)
+    fixed = rules.apply_separators(text, found)
+    return fixed if len(fixed) <= limit else rules.apply_separators(text, found, compact=True)
+
+
 def practice_turn(run_id: uuid.UUID | None, raw: object) -> tuple[str, bool]:
-    """One submit of a practice run: `(answer, is_error)`. The first valid one is kept for the
-    final hook; a second is answered as already stored."""
+    """One submit of a practice run: `(answer, is_error)`, its dashes used as separators
+    replaced. The first valid one is kept for the final hook; a second is answered as already
+    stored."""
     if run_id is None:
         return PRACTICE_FAILED, True
     try:
@@ -320,6 +338,10 @@ def practice_turn(run_id: uuid.UUID | None, raw: object) -> tuple[str, bool]:
     except ValidationError as exc:
         paths = sorted({".".join(str(p) for p in e["loc"]) or "(the turn)" for e in exc.errors()})
         return "Not stored: fix " + ", ".join(paths) + " and submit again.", True
+    turn = Turn(
+        feedback=_undashed(turn.feedback, FEEDBACK_MAX),
+        question=_undashed(turn.question, QUESTION_MAX),
+    )
     if not (turn.feedback.strip() or turn.question.strip()):
         return "Not stored: give feedback, a question, or both.", True
     with _TURNS_LOCK:
@@ -425,6 +447,7 @@ def _close(
         at=at,
         channel=Channel.practice,
         generation_id=generation.id,
+        max_chars=PRACTICE_ANSWER_MAX,
     )
     generation.status = status
     generation.error = None if status is GenerationStatus.done else "run_failed"
@@ -524,18 +547,22 @@ def story_text(story: c.Story) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def stories_body(current: str, stories: Sequence[c.Story]) -> str:
-    """The block's body with each story not already in it appended."""
+def _appended(current: str, texts: Sequence[str]) -> str:
     body = current.strip()
-    for story in stories:
-        text = story_text(story)
+    for text in texts:
         if text and text not in body:
             body = f"{body}\n\n{text}".strip()
     return body
 
 
+def stories_body(current: str, stories: Sequence[c.Story]) -> str:
+    """The block's body with each story not already in it appended."""
+    return _appended(current, [story_text(story) for story in stories])
+
+
 def _current_block(db: Session, user_id: uuid.UUID, at: datetime) -> str:
-    profile = profile_service.get_profile(db, user_id, at)
+    """The block STORIES_BLOCK of the profile, which stays locked: two keeps run one at a time."""
+    profile = profile_service.get_profile(db, user_id, at, lock=True)
     facts = profile_service.sections_view(profile).get("facts") or {}
     for block in facts.get("blocks") or ():
         if str(block.get("title", "")).casefold() == STORIES_BLOCK.casefold():
@@ -543,12 +570,20 @@ def _current_block(db: Session, user_id: uuid.UUID, at: datetime) -> str:
     return ""
 
 
+def _listed(proposal: Proposal | None, key: str) -> list[str]:
+    found = (proposal.payload.get(key) if proposal is not None else None) or ()
+    return [str(item) for item in found]
+
+
 def keep_stories(
     db: Session, user_id: uuid.UUID, document_id: uuid.UUID, indexes: Sequence[int], at: datetime
 ) -> Proposal | None:
     """One pending proposal of the facts block STORIES_BLOCK with the chosen stories appended,
     None when the profile holds them all already. Raises store.NotFoundError and ValueError (no
-    story chosen). Nothing changes in the profile until the person accepts it."""
+    story chosen). Nothing changes in the profile until the person accepts it.
+
+    A proposal still pending (one stands at a time: the new one supersedes it) keeps its stories
+    in the new one, and the postings they came from (PROPOSAL_POSTINGS), where the page shows it."""
     from app.agents import proposals
 
     document = own(db, user_id, document_id)
@@ -558,14 +593,18 @@ def keep_stories(
     if not picked:
         raise ValueError("no story chosen")
     current = _current_block(db, user_id, at)
-    body = stories_body(current, picked)
-    if body == current.strip():
+    texts = [story_text(story) for story in picked]
+    if _appended(current, texts) == current.strip():
         return None
+    pending = pending_stories(db, user_id)
+    carried = _listed(pending, PROPOSAL_STORIES)
+    added = [text for text in dict.fromkeys([*carried, *texts]) if text and text not in current]
+    postings = _listed(pending, PROPOSAL_POSTINGS) if carried else []
     payload = {
         "section": "facts",
         "key": "blocks",
         "action": "add",
-        "value": {"title": STORIES_BLOCK, "body": body},
+        "value": {"title": STORIES_BLOCK, "body": _appended(current, added)},
         "citations": [],
     }
     try:
@@ -581,23 +620,32 @@ def keep_stories(
         )
     except proposals.NotStoredError:
         return None
+    made.payload = {
+        **made.payload,
+        PROPOSAL_STORIES: added,
+        PROPOSAL_POSTINGS: sorted({*postings, str(document.posting_id)}),
+    }
+    db.flush()
     logger.info("documents.interview_prep.stories", extra={"document_id": str(document_id)})
     return made
 
 
-def pending_stories(db: Session, user_id: uuid.UUID) -> Proposal | None:
-    """The pending proposal of the stories block, if any."""
+def pending_stories(
+    db: Session, user_id: uuid.UUID, posting_id: uuid.UUID | None = None
+) -> Proposal | None:
+    """The pending proposal of the stories block, if any; with `posting_id`, only one that holds
+    stories of that posting's preparation."""
+    held = [
+        Proposal.user_id == user_id,
+        Proposal.target == "profile",
+        Proposal.status == ProposalStatus.pending,
+        Proposal.payload["section"].astext == "facts",
+        Proposal.payload["value"]["title"].astext == STORIES_BLOCK,
+    ]
+    if posting_id is not None:
+        held.append(Proposal.payload[PROPOSAL_POSTINGS].contains([str(posting_id)]))
     return db.scalars(
-        sa.select(Proposal)
-        .where(
-            Proposal.user_id == user_id,
-            Proposal.target == "profile",
-            Proposal.status == ProposalStatus.pending,
-            Proposal.payload["section"].astext == "facts",
-            Proposal.payload["value"]["title"].astext == STORIES_BLOCK,
-        )
-        .order_by(Proposal.created_at.desc())
-        .limit(1)
+        sa.select(Proposal).where(*held).order_by(Proposal.created_at.desc()).limit(1)
     ).first()
 
 
