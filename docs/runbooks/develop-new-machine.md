@@ -63,4 +63,7 @@ API key check, Claude Code in the worker: agent runs, the subscription token che
 the running api and worker and sets `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` to it (the runner
 keeps that variable for Claude Code). Without it, every model call of the stack fails with
 `CERTIFICATE_VERIFY_FAILED`, shown as "Anthropic could not be reached". Never on the Jetson. The file names the inspecting certificate of your
-network: keep it out of the repository and out of pull requests.
+network: keep it out of the repository and out of pull requests. The proxy that inspects the
+traffic can read every model call that goes through it, the credential in its headers included:
+with this overlay, save only a throwaway test API key that you revoke afterwards, never your
+subscription token nor a key you use elsewhere.
