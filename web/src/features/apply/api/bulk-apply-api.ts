@@ -7,6 +7,7 @@
 import { z } from "zod";
 
 import { estimateSchema } from "@/features/documents/api/consent-api";
+import { noticesSchema } from "@/features/jobs/api/notices-api";
 import { request } from "@/lib/api";
 
 const postingSchema = z.object({
@@ -24,6 +25,7 @@ const itemSchema = postingSchema.extend({
   /** An application by e-mail: Review first, the person sends it. */
   email: z.boolean(),
   seen: z.string(),
+  notices: noticesSchema.optional(),
 });
 export type BulkItem = z.infer<typeof itemSchema>;
 

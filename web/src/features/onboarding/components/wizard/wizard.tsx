@@ -1,3 +1,5 @@
+import { useState } from "react";
+
 import { Page, PageBody } from "@/components/blocks/page";
 import { PageHeader } from "@/components/blocks/page-header";
 import { Button } from "@/components/ui/button";
@@ -14,7 +16,7 @@ import { WizardBar, WizardSteps } from "./wizard-progress";
 import { WizardStep } from "./wizard-step";
 
 /** The wizard once the profile and the steps passed are loaded: header, the progress bar, the
- * open step, the bar of buttons under it, the eight steps in the side rail, and the profile's
+ * open step, the bar of buttons under it, the ten steps in the side rail, and the profile's
  * conflict dialog. */
 export function Wizard({
   profile,
@@ -26,6 +28,8 @@ export function Wizard({
   settings: ApplySettings | undefined;
 }) {
   const wizard = useWizard({ profile, state, settings });
+  // Building your profile keeps Next waiting while it reads and writes.
+  const [hold, setHold] = useState(false);
   return (
     <Page>
       <PageHeader
@@ -56,8 +60,8 @@ export function Wizard({
       >
         <div className="flex flex-col gap-6">
           <WizardBar current={wizard.index} />
-          <WizardStep wizard={wizard} settings={settings} />
-          <WizardNav wizard={wizard} />
+          <WizardStep wizard={wizard} settings={settings} onHold={setHold} />
+          <WizardNav wizard={wizard} hold={hold} />
         </div>
       </PageBody>
 

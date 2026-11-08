@@ -238,3 +238,9 @@ export function fakeAbout(
   );
   return state;
 }
+
+/** The titles of the parts of About you, top to bottom. */
+export function aboutPartTitles(): (string | null)[] {
+  const about = document.getElementById("about-you");
+  return Array.from(about?.querySelectorAll("h3") ?? [], (h) => h.textContent);
+}

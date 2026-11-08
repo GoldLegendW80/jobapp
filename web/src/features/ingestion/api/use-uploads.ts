@@ -40,8 +40,8 @@ export interface Uploads extends UploadsState {
 
 /** What the page is told about: every file kept, and every upload stopped on its way. */
 export interface UploadEvents {
-  /** The server kept the file, or already had it. */
-  onStored: (stored: StoredDocument) => void;
+  /** The server kept the file, or already had it; `file` is the one sent. */
+  onStored: (stored: StoredDocument, file?: File) => void;
   /**
    * An upload on its way was stopped. Its bytes may all have arrived before the stop did, in
    * which case the server keeps the file: the page looks at the list again.
@@ -188,7 +188,7 @@ export class UploadQueue {
             });
           else this.#drop(id);
           this.#announcement = sentence;
-          if (!this.#stopped) this.#events.onStored(document);
+          if (!this.#stopped) this.#events.onStored(document, file);
         },
         (error: unknown) => {
           if (isApiError(error) && error.kind === "aborted") {
@@ -225,8 +225,8 @@ export function useUploads(events: UploadEvents): Uploads {
   const queue = useRef<UploadQueue>();
   useEffect(() => {
     const created = new UploadQueue(setState, {
-      onStored: (document) => {
-        latest.current.onStored(document);
+      onStored: (document, file) => {
+        latest.current.onStored(document, file);
       },
       onCancelled: () => {
         latest.current.onCancelled();

@@ -165,12 +165,13 @@ def _record(path: str, before: str, after: str, code: str, by: By) -> Correction
 
 # --- paths in the JSON of a content -------------------------------------------------------------
 
-_LISTS = ("highlights", "competencies", "paragraphs")
+_LISTS = ("highlights", "competencies", "paragraphs", "ask", "differences", "questions")
 _REQUIRED = {
     "cv": ("headline", "summary"),
     "base": ("headline", "summary"),
     "letter": ("subject",),
     "proposal": ("subject", "body"),
+    "interview_prep": (),
 }
 
 
@@ -190,7 +191,8 @@ def _set(data: dict[str, Any], path: str, value: str | None) -> None:
 
 def _prune(data: dict[str, Any]) -> None:
     """Drop the entries marked None or left empty: a bullet, a highlight, a competency, a
-    paragraph, a skills item; a skills group whose label went or whose items all went."""
+    paragraph, an entry of a list of lines (`ask`, `differences`, `questions`), a skills item;
+    a skills group whose label went or whose items all went."""
     for name in _LISTS:
         if name in data:
             data[name] = [item for item in data[name] if item]
@@ -211,11 +213,25 @@ def _rebuild(kind: c.Kind, data: dict[str, Any]) -> c.CvContent | c.LetterConten
     return c.MODELS[kind].model_validate(data)  # type: ignore[return-value]
 
 
+# The limit of a field of a list of objects, by the list and the field's name.
+_NESTED_MAX = {
+    ("gaps", "answer"): c.PREP_TEXT_MAX,
+    ("expected", "why"): c.PREP_TEXT_MAX,
+    ("clauses", "plain"): c.OFFER_PLAIN_MAX,
+    ("clauses", "quote"): c.BULLET_MAX,
+}
+
+
 def field_max(path: str) -> int:
     """The hard limit of a printed field, from its path."""
-    head = path.split(".", 1)[0]
+    parts = path.split(".")
+    head, last = parts[0], parts[-1]
     if head == "skills" or head == "competencies":
         return c.TERM_MAX
+    if head == "stories":
+        return c.LINE_MAX if last == "title" else c.PREP_TEXT_MAX
+    if len(parts) == 3 and (head, last) in _NESTED_MAX:
+        return _NESTED_MAX[(head, last)]
     return {
         "headline": c.HEADLINE_MAX,
         "summary": c.SUMMARY_MAX,
@@ -223,6 +239,8 @@ def field_max(path: str) -> int:
         "experience": c.BULLET_MAX,
         "paragraphs": c.PARAGRAPH_MAX,
         "body": c.PROPOSAL_BODY_MAX,
+        "differences": c.BULLET_MAX,
+        "questions": c.BULLET_MAX,
     }.get(head, c.LINE_MAX)
 
 
@@ -274,13 +292,14 @@ def drop_placeholders(
 def fix_separators(
     kind: c.Kind, content: c.CvContent | c.LetterContent, settings: DocumentSettings
 ) -> tuple[c.CvContent | c.LetterContent, list[Correction]]:
-    """With the dash rule on, every dash used as a separator replaced, one record per field
-    changed (its text before and after). Off, the content is returned as it is."""
+    """With the dash rule on, every dash used as a separator replaced in the fields the rule
+    reads (`c.dash_fields`), one record per field changed (its text before and after). Off, the
+    content is returned as it is."""
     if not settings.no_dash_separators:
         return content, []
     found = [
         (path, text, seps)
-        for path, text in c.text_fields(content)
+        for path, text in c.dash_fields(content)
         if (seps := rules.separators(text))
     ]
     if not found:

@@ -34,14 +34,15 @@ import {
  * width (375 px) and lands on /welcome; by keyboard only (focus, typing, Space on the choices,
  * Enter on the buttons) N uploads an invented CV (a PDF written by ./ingestion-pdf.ts from
  * api/tests/documents/fixtures/upload_morgan.txt) through the CV upload panel, agrees to what is
- * sent, sees it converted on the fake model backend, then fills the roles, the places and the
- * contracts; Back shows every value typed. N's account is then given skills. A reload, a fresh visit of /welcome and a
+ * sent, sees it converted on the fake model backend, then fills the roles and why N looks, the
+ * places, the contracts, the notice period (an offered answer), the earliest start and the work
+ * authorisation; Back shows every value typed. N's account is then given skills. A reload, a fresh visit of /welcome and a
  * second device (a new browser context signed in as N) open the step left, since the steps
  * passed are kept in the profile. N skips Websites to search, the pay is "Rather not say", Full
  * auto points to Application settings and cannot be chosen here, and "Start" on the summary,
  * which warns that the list is empty, opens Find jobs with the sentence that asks to add
  * websites, and starts no sweep: N has no website. The profile holds the
- * answers and apply's mode is still Review first. Signing in again lands on the home page with
+ * answers, its Answers section complete, and apply's mode is still Review first. Signing in again lands on the home page with
  * no card. Person B, beside N, still gets the wizard, puts it off with "Skip for now", and after
  * signing in again is not sent to it but sees the card; B has no website either, so B's
  * Start ends the wizard the same way. No screen shows a dash.
@@ -94,6 +95,7 @@ const SKILLS = {
 // Find jobs on the list (product audit, chapter 1, 2026-11-04).
 const NO_WEBSITES =
   "Your list of websites is empty. Add a few, then start your first search.";
+const WHY = "I want to ship assistants that a small team can trust.";
 
 let admin: Person;
 let adminContext: BrowserContext;
@@ -156,8 +158,8 @@ async function accept(page: Page, link: string, name: string) {
   await page.goto(link);
   await page.getByLabel("Name").fill(name);
   await page.getByLabel(/^(New password|Password)$/).fill(PASSWORD);
-  await page.getByLabel("Confirm password").fill(PASSWORD);
-  await page.getByLabel("Confirm password").press("Enter");
+  await page.getByLabel("Confirm password", { exact: true }).fill(PASSWORD);
+  await page.getByLabel("Confirm password", { exact: true }).press("Enter");
   await expect(page.locator("html[data-onboarding]")).toHaveCount(1);
 }
 
@@ -170,7 +172,7 @@ const step = (page: Page, number: number) =>
   expect(
     page.getByRole("heading", {
       level: 2,
-      name: new RegExp(`^Step ${number} of 8`),
+      name: new RegExp(`^Step ${number} of 10`),
     }),
   ).toBeVisible();
 const next = (page: Page) =>
@@ -253,7 +255,7 @@ test("wizard route variants stay put and wizard return targets fall back home", 
   }
 });
 
-test("a new member lands on the wizard and imports an invented CV in step 1", async () => {
+test("a new member lands on the wizard and imports an invented CV in step 2", async () => {
   await accept(pageN, await invite(N.email), N.name);
   await expect(pageN).toHaveURL(/\/welcome$/);
   await step(pageN, 1);
@@ -262,14 +264,19 @@ test("a new member lands on the wizard and imports an invented CV in step 1", as
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
+  // Step 1 is Model access; the key was saved through its route above.
   await noDash(pageN);
+  await next(pageN);
+  await step(pageN, 2);
   await shots(pageN, "step-1");
 
-  await pageN.getByTestId("upload-cv-file").setInputFiles({
+  // One place for every file; the first PDF or Word file is the CV, without a click.
+  await pageN.getByTestId("document-files").setInputFiles({
     name: FILE,
     mimeType: "application/pdf",
     buffer: makePdf([{ lines: LINES }]),
   });
+  await expect(pageN.getByText("Your CV", { exact: true })).toBeVisible();
   const consent = pageN.getByRole("dialog", {
     name: "What is sent to build your CV",
   });
@@ -288,7 +295,6 @@ test("a new member lands on the wizard and imports an invented CV in step 1", as
 
   // A LinkedIn export or a pasted text: stored and read from the step itself (#484), up to the
   // estimate; the run is not started here (it would ask the model).
-  await pageN.getByRole("button", { name: "Advanced" }).click();
   await pageN
     .getByLabel("Or paste a text")
     .fill("Robin Sampleton, data engineer at Example Robotics since 2023.");
@@ -316,42 +322,52 @@ test("a new member lands on the wizard and imports an invented CV in step 1", as
   await next(pageN);
 });
 
-test("steps 2 to 5 by keyboard, and Back keeps every value", async () => {
-  await step(pageN, 2);
+// Step 3 builds the profile with the model: never started here (it would ask the model).
+test("step 3 can be skipped, steps 4 to 7 by keyboard, and Back keeps every value", async () => {
+  await step(pageN, 3);
+  await expect(
+    pageN.getByRole("button", { name: "Build my profile" }),
+  ).toBeVisible();
+  await noDash(pageN);
+  await press(pageN.getByRole("button", { name: "Skip this step" }), "Enter");
+  await step(pageN, 4);
   await expect(
     pageN.getByRole("button", { name: "Skip this step" }),
   ).toHaveCount(0);
   await pageN.getByLabel("Roles").focus();
   await pageN.keyboard.type("AI engineer, Applied AI engineer");
+  await pageN.getByLabel("Why you are looking").focus();
+  await pageN.keyboard.type(WHY);
   await press(pageN.getByRole("button", { name: "Advanced" }), "Enter");
   await press(pageN.getByRole("checkbox", { name: "Senior" }), "Space");
   await noDash(pageN);
   await next(pageN);
 
-  await step(pageN, 3);
+  await step(pageN, 5);
   await pageN.getByLabel("Places").focus();
   await pageN.keyboard.type("Paris");
   await press(pageN.getByRole("radio", { name: "Hybrid" }), "Space");
   await noDash(pageN);
   await next(pageN);
 
-  await step(pageN, 4);
+  await step(pageN, 6);
   await back(pageN);
-  await step(pageN, 3);
+  await step(pageN, 5);
   await expect(pageN.getByLabel("Places")).toHaveValue("Paris");
   await expect(pageN.getByRole("radio", { name: "Hybrid" })).toBeChecked();
   await back(pageN);
-  await step(pageN, 2);
+  await step(pageN, 4);
   await expect(pageN.getByLabel("Roles")).toHaveValue(
     "AI engineer, Applied AI engineer",
   );
+  await expect(pageN.getByLabel("Why you are looking")).toHaveValue(WHY);
   await expect(pageN.getByRole("checkbox", { name: "Senior" })).toBeChecked();
   await next(pageN);
-  await step(pageN, 3);
+  await step(pageN, 5);
   await next(pageN);
 
   // Websites to search: the list, its examples, and what an address can be.
-  await step(pageN, 4);
+  await step(pageN, 6);
   await expect(
     pageN.getByRole("button", { name: "Add LinkedIn", exact: true }),
   ).toBeVisible();
@@ -364,7 +380,7 @@ test("steps 2 to 5 by keyboard, and Back keeps every value", async () => {
   await shots(pageN, "step-4");
   await press(pageN.getByRole("button", { name: "Skip this step" }), "Enter");
 
-  await step(pageN, 5);
+  await step(pageN, 7);
   // One group of contracts, Freelance mission its last box (audit chapter 2).
   await expect(
     pageN.getByRole("group", { name: "Contracts (choose any)" }),
@@ -375,10 +391,32 @@ test("steps 2 to 5 by keyboard, and Back keeps every value", async () => {
     "Space",
   );
   await press(pageN.getByRole("checkbox", { name: "Permanent" }), "Space");
+  // The answers forms ask: none chosen for N, one offered in a click.
+  await expect(pageN.getByLabel("Notice period")).toHaveValue("");
+  await press(
+    pageN.getByRole("button", { name: "Notice period: 1 month" }),
+    "Enter",
+  );
+  await pageN.getByLabel("Earliest start").focus();
+  await pageN.keyboard.type("January 2027");
+  await pageN.getByLabel("Country or region").focus();
+  await pageN.keyboard.type("France");
+  await press(
+    pageN
+      .getByRole("group", { name: "May you work there?" })
+      .getByRole("radio", { name: "Yes" }),
+    "Space",
+  );
+  await press(
+    pageN
+      .getByRole("group", { name: "Do you need a visa sponsorship?" })
+      .getByRole("radio", { name: "No" }),
+    "Space",
+  );
   await noDash(pageN);
   await shots(pageN, "step-5");
   await next(pageN);
-  await step(pageN, 6);
+  await step(pageN, 8);
 });
 
 test("a reload, a fresh visit of /welcome and another device open the step left", async ({
@@ -387,9 +425,9 @@ test("a reload, a fresh visit of /welcome and another device open the step left"
   // The account's skills.
   await putSection(pageN, "skills", () => SKILLS);
   await pageN.reload();
-  await step(pageN, 6);
+  await step(pageN, 8);
   await pageN.goto("/welcome");
-  await step(pageN, 6);
+  await step(pageN, 8);
   expect((await stateOf(pageN)).passed).toEqual([
     "profile",
     "looking",
@@ -403,7 +441,7 @@ test("a reload, a fresh visit of /welcome and another device open the step left"
     await signIn(page, N.email, PASSWORD);
     await expect(page).toHaveURL(/\/jobs$/);
     await page.goto("/welcome");
-    await step(page, 6);
+    await step(page, 8);
   } finally {
     await other.close();
   }
@@ -414,7 +452,7 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
   await noDash(pageN);
   await next(pageN);
 
-  await step(pageN, 7);
+  await step(pageN, 9);
   const full = pageN.getByRole("radio", { name: /Full auto/ });
   await expect(full).toBeDisabled();
   await expect(full).not.toBeChecked();
@@ -439,11 +477,18 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
   await shots(pageN, "step-7");
   await next(pageN);
 
-  await step(pageN, 8);
+  await step(pageN, 10);
   const summary = pageN.locator("dl");
   await expect(summary).toContainText("AI engineer, Applied AI engineer");
   await expect(summary).toContainText("Paris; Hybrid");
   await expect(summary).toContainText("Freelance mission, Permanent");
+  await expect(summary).toContainText(`Why you are looking: ${WHY}`);
+  await expect(summary).toContainText(
+    "Notice period: 1 month; earliest start: January 2027",
+  );
+  await expect(summary).toContainText(
+    "Work authorisation: France, you may work there, no visa sponsorship needed",
+  );
   await expect(summary).toContainText("Rather not say");
   await expect(summary).toContainText(
     "Review first after a Like; Apply sends each filled form for you",
@@ -470,8 +515,10 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
   const profile = (await (await pageN.request.get("/api/profile")).json()) as {
     sections: {
       search: Record<string, unknown>;
+      answers: Record<string, unknown>;
       preferences: { documents_tone: string };
     };
+    completeness: { sections: Record<string, unknown> };
   };
   expect(profile.sections.search).toMatchObject({
     title_include: { terms: ["AI engineer", "Applied AI engineer"] },
@@ -480,6 +527,19 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
     remote_stance: "hybrid",
     contract_types: ["Freelance", "CDI"],
     compensation: { salary: null, daily_rate: null },
+  });
+  expect(profile.sections.answers).toMatchObject({
+    motivation: WHY,
+    notice_period: "1 month",
+    earliest_start: "January 2027",
+    work_authorization: [
+      { country: "France", answer: "Yes", needs_sponsorship: false },
+    ],
+    salary_stance: "leave_blank",
+  });
+  expect(profile.completeness.sections.answers).toEqual({
+    percent: 100,
+    missing: [],
   });
   expect(profile.sections.preferences.documents_tone).toBe("warm");
   const settings = (await (
@@ -542,7 +602,7 @@ test("B, with roles and no website, ends the wizard without a sweep", async () =
     title_include: { terms: ["Analytics engineer"], advanced_regex: false },
   }));
   await pageB.goto("/welcome?step=summary");
-  await step(pageB, 8);
+  await step(pageB, 10);
   await expect(
     pageB.getByText(/Your list of websites is empty, so the first search/),
   ).toBeVisible();

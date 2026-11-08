@@ -4,6 +4,7 @@ import { userEvent, within } from "storybook/test";
 
 import { AppAt } from "@/design-system/app-at";
 import {
+  CAMILLE_REFUSED,
   camilleDocuments,
   camilleEstimate,
   doneRun,
@@ -36,7 +37,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Fill my profile with an agent: prepare a dossier, add documents, then review what the agent proposes, one step open at a time. Route /profile/fill, the open step in `?step=`.",
+          "Fill my profile with an agent: analyze your computer, add documents, then review what the agent proposes, one step open at a time. Route /profile/fill, the open step in `?step=`.",
       },
     },
   },
@@ -76,8 +77,8 @@ function camilleFilling(runs: Run[] = []) {
   fakeCamilleProposals();
 }
 
-/** As a new user with nothing to add yet, I want a prompt for my coding assistant to write a dossier about me, so that I start from more than a blank profile. */
-export const PrepareADossierWithACodingAssistant: Story = {
+/** As a new user with nothing to add yet, I want a prompt for my coding assistant to analyze my computer for my recruiter profile, so that I start from more than a blank profile. */
+export const AnalyzeMyComputerWithACodingAssistant: Story = {
   beforeEach: () => {
     fakeSession(camille);
     fakeProfile(null);
@@ -154,6 +155,15 @@ export const ReviewWhatTheAgentProposes: Story = {
   render: () => <AppAt path="/profile/fill?step=review" />,
   beforeEach: () => {
     camilleFilling([doneRun()]);
+  },
+};
+
+/** As a job seeker whose CV lists more skills than the review shows, I want to read why some proposals were not kept, so that I know what to add by hand. */
+export const SeeWhyProposalsWereNotKept: Story = {
+  render: () => <AppAt path="/profile/fill?step=review" />,
+  beforeEach: () => {
+    camilleFilling([{ ...doneRun(), refused: CAMILLE_REFUSED }]);
+    fakeCamilleProposals(undefined, CAMILLE_REFUSED);
   },
 };
 

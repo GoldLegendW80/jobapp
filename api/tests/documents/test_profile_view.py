@@ -142,3 +142,14 @@ def test_a_base_cv_built_from_nothing_is_still_a_source() -> None:
     assert isinstance(empty, c.BaseCvContent)
     sources = sources_for(view_of("blake", empty), empty, "", None)
     assert sources.profile == ()
+
+
+def test_a_writing_rule_is_never_a_source_of_a_claim() -> None:
+    from app.documents import writing_rules
+
+    view = view_of("alex")
+    rule = (writing_rules.BLOCK_TITLE, "- Use 'architect' instead of 'developer'.")
+    ruled = dataclasses.replace(view, facts_blocks=(*view.facts_blocks, rule))
+    sources = sources_for(ruled, None, None, None)
+    assert not any("architect" in text for text in sources.profile)
+    assert sources.profile == sources_for(view, None, None, None).profile

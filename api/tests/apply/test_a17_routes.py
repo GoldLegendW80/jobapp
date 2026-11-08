@@ -149,6 +149,12 @@ CASES = (
         "/api/browser/handoff/later/cancel",
         {"module": "application", "ref": "{application_id}"},
     ),
+    Case("GET", "/api/apply/followups", foreign_status=200, exception="owner-filtered list"),
+    Case("PUT", "/api/apply/followups/settings", {"enabled": True}, 200, "authenticated switch"),
+    Case("POST", "/api/apply/followups/{posting_id}/draft"),
+    Case("PUT", "/api/apply/followups/{posting_id}/draft", {"subject": "Hello", "body": "Hi"}),
+    Case("POST", "/api/apply/followups/{posting_id}/sent"),
+    Case("POST", "/api/apply/followups/{posting_id}/gmail", {"to": "e2e-jobs@example.org"}),
 )
 
 # Supplement the Apply registry with its linked document editor and bytes.

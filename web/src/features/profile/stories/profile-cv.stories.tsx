@@ -24,7 +24,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The person's base CVs, the ones every document for a posting is written from: the list is the first section of the profile page (/profile#your-cv, where /profile/cv lands), and each CV has a page of its own below the profile (/profile/cv/:id: its name, Make default, Rename and Delete, then the CV).",
+          "The person's base CVs, the ones every document for a posting is written from: the list is the first tab of the profile page, CVs (/profile, where /profile/cv lands), and each CV has a page of its own below the profile (/profile/cv/:id: its name, Make default, Rename and Delete, then the CV).",
       },
     },
   },

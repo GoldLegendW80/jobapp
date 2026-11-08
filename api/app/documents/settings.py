@@ -2,12 +2,17 @@
 
 Stored in `document_settings` (D5), read and saved by the api (`GET` and `PUT
 /api/documents/settings`), and handed to the pure checks as this frozen value. Off by default
-for a new user: no dash rule, no banned phrase. Rules only a reader can judge stay in the
-profile's `facts` section and reach the writer as text.
+for a new user: no dash rule, no banned phrase, no starter list. Rules only a reader can judge
+stay in the profile's `facts` section and reach the writer as text.
+
+The starter list (`STARTER_PHRASES`, from `cv-voice.mjs` of career-ops, MIT, NOTICE) is the
+common phrases of written CVs the person can switch on beside their own. A phrase of it that the
+person's own CV already uses is never banned (`banned_phrases`): their words stay theirs.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
@@ -16,6 +21,36 @@ from app.documents import rules
 
 BANNED_PHRASES_MAX = 50
 BANNED_PHRASE_MAX = 100
+
+STARTER_PHRASES = (
+    "passionate about",
+    "results-oriented",
+    "results-driven",
+    "proven track record",
+    "leveraged",
+    "leveraging",
+    "leverage",
+    "spearheaded",
+    "spearheading",
+    "spearhead",
+    "facilitated",
+    "facilitating",
+    "synergies",
+    "synergy",
+    "cutting-edge",
+    "cutting edge",
+    "in today's fast-paced world",
+    "demonstrated ability to",
+    "best practices",
+    "significant impact",
+    "measurable impact",
+    "orchestrated",
+    "championed",
+    "utilized",
+    "delve",
+    "tapestry",
+    "pivotal",
+)
 
 Phrase = Annotated[str, StringConstraints(min_length=1, max_length=BANNED_PHRASE_MAX)]
 
@@ -27,6 +62,8 @@ class DocumentSettings(BaseModel):
     no_dash_separators: bool = False
     # Whole words, compared with case and accents folded; a sentence holding one is corrected.
     banned_phrases: Annotated[tuple[Phrase, ...], Field(max_length=BANNED_PHRASES_MAX)] = ()
+    # The starter list joins the banned phrases, less what the person's own CV uses.
+    starter_phrases: bool = False
 
     @field_validator("banned_phrases", mode="before")
     @classmethod
@@ -51,3 +88,19 @@ class DocumentSettings(BaseModel):
 
 
 DEFAULT = DocumentSettings()
+
+
+def banned_phrases(value: DocumentSettings, own_cv: Iterable[str]) -> tuple[str, ...]:
+    """The phrases a document is checked for: the person's own, then, with the starter list on,
+    each starter phrase that no text of the person's own CV holds as whole words."""
+    if not value.starter_phrases:
+        return value.banned_phrases
+    texts = list(own_cv)
+    taken = {rules.fold(phrase).text for phrase in value.banned_phrases}
+    starter = [
+        phrase
+        for phrase in STARTER_PHRASES
+        if rules.fold(phrase).text not in taken
+        and not any(rules.banned(text, (phrase,)) for text in texts)
+    ]
+    return (*value.banned_phrases, *starter)

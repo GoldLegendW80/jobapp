@@ -23,9 +23,9 @@ import {
   throttledFor,
   useRetryCountdown,
 } from "@/features/auth/helpers/retry-countdown";
+import { PasswordField } from "@/components/shared/auth/password-field";
 
 import { fieldError } from "../helpers/field-error";
-import { PasswordField } from "./password-field";
 
 export const PASSWORD_CHANGED =
   "Password changed. Other devices are signed out.";

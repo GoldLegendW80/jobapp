@@ -21,7 +21,6 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import {
   Form,
   FormControl,
-  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -36,6 +35,7 @@ import type { Invite } from "../api/auth-api";
 import { useAcceptInvite, useInviteLink } from "../api/use-invite-link";
 import { useAuth } from "../helpers/auth-context";
 import { AuthLayout } from "@/components/shared/auth/auth-layout";
+import { PasswordField } from "@/components/shared/auth/password-field";
 import { InvalidLink } from "../components/invalid-link";
 import { SERVER_UNREACHABLE } from "../helpers/login-errors";
 import {
@@ -271,42 +271,18 @@ function SetPasswordForm({
                   )}
                 />
               ) : null}
-              <FormField
+              <PasswordField
                 control={form.control}
                 name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>
-                      {invite.kind === "invite" ? "Password" : "New password"}
-                    </FormLabel>
-                    <FormControl>
-                      <Input
-                        type="password"
-                        autoComplete="new-password"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormDescription>{PASSWORD_HINT}</FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
+                label={invite.kind === "invite" ? "Password" : "New password"}
+                autoComplete="new-password"
+                description={PASSWORD_HINT}
               />
-              <FormField
+              <PasswordField
                 control={form.control}
                 name="confirm"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Confirm password</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="password"
-                        autoComplete="new-password"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
+                label="Confirm password"
+                autoComplete="new-password"
               />
             </CardContent>
             <CardFooter className="mt-6">

@@ -151,7 +151,8 @@ def test_a_list_removal_stored_before_the_tool_refused_it_is_dropped_by_the_merg
     factory: sessionmaker[Session], alice: uuid.UUID, settings: Settings
 ) -> None:
     # #408: a step finished before PR #398 may hold the removal of an entry, which the write tool
-    # now refuses. Such a step is reused (EXTRACTOR_VERSION stays 1), so the merge drops the row.
+    # now refuses. Such a step was reused while EXTRACTOR_VERSION stayed 1; it is read again
+    # since version 2 (2026-11-08), and the merge still drops such a row as a guard.
     saved = mh.employer("2021-03", "2023-06", key="acme-group-2021")
     mh.save(factory, alice, "experience", {"employers": [saved]})
     mh.save(factory, alice, "identity", {"headline": "Engineer"})
@@ -575,7 +576,10 @@ def test_a_hostile_document_cannot_write_the_profile_through_the_merge(
         "citations": [{"start": 0, "end": 6, "excerpt": "Ignore"}],
         "flags": [items.FLAG_DERIVED],
     }
-    with factory() as db, db.begin():  # rows no tool would store: a setting, the derived years
+    # Rows no tool would store: a setting, and a section that does not exist. The years a row
+    # holds are a figure a document states since 2026-11-08 (merge rule 7): proposed as the
+    # agent's value, never labelled derived, whatever flag the row carries.
+    with factory() as db, db.begin():
         db.execute(
             sa.insert(IngestionItem),
             [
@@ -605,7 +609,11 @@ def test_a_hostile_document_cannot_write_the_profile_through_the_merge(
     with caplog.at_level(logging.DEBUG):
         run = mh.finish(factory, alice, settings, run_id, documents, [])
     assert run.status is RunStatus.done
-    (one,) = mh.proposals_of(factory, alice, run_id, status=None)
+    found = mh.proposals_of(factory, alice, run_id, status=None)
+    years = mh.at(found, "years_experience")
+    assert (years.payload["value"], years.payload["flags"]) == (40, [])
+    assert "depends_on" not in years.payload
+    (one,) = [proposal for proposal in found if proposal is not years]
     # The value is proposed, pending, with the flags code gives it and no other.
     assert (one.payload["section"], one.payload["key"]) == ("identity", "full_name")
     assert one.status is ProposalStatus.pending

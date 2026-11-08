@@ -46,6 +46,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.ingestion import item_proposals
+from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun
 from app.jobs import service as jobs_service
 
@@ -149,6 +150,28 @@ class Additions:
         return dict(Counter(self.skipped.values()))
 
 
+def cv_first(db: Session, user_id: uuid.UUID, run: IngestionRun) -> list[str]:
+    """The run's document ids in their order, the person's CV first: an upload kept to become a
+    base CV (`keep_bytes`), or the upload one of the person's base CVs was converted from."""
+    from app.documents.models import Document, Scope
+
+    ids = [str(one) for one in run.document_ids or ()]
+    if not ids:
+        return []
+    kept = sa.select(IngestionDocument.id).where(
+        IngestionDocument.user_id == user_id,
+        IngestionDocument.id.in_(run.document_ids),
+        IngestionDocument.keep_bytes.is_(True),
+    )
+    converted = sa.select(Document.source_document_id).where(
+        Document.user_id == user_id,
+        Document.scope == Scope.base,
+        Document.source_document_id.in_(run.document_ids),
+    )
+    cvs = {str(one) for one in db.scalars(kept.union(converted)).all()}
+    return [one for one in ids if one in cvs] + [one for one in ids if one not in cvs]
+
+
 def accept_additions(
     db: Session,
     user_id: uuid.UUID,
@@ -156,6 +179,7 @@ def accept_additions(
     proposal_ids: Sequence[uuid.UUID],
     now: datetime,
     *,
+    fill_empty: bool = False,
     wait_ms: int = LOCK_WAIT_MS,
 ) -> Additions:
     """ "Accept all additions" (owner, 2026-11-05): the ids given that are pending items of this
@@ -163,11 +187,22 @@ def accept_additions(
     (`accept_many`: additions only, locked facts only where they fill an empty slot). A section
     one item stops applies nothing and the others go on; an item that no longer fits is marked
     `invalid` on the way. The caller commits. Raises ReviewBusyError when a lock is not free in
-    time."""
+    time.
+
+    With `fill_empty` (the welcome wizard, owner 2026-11-08), a conflict or a derived value of
+    those ids that fills an empty slot is taken too: a conflict with the value the person's CV
+    cites, else the value of the document that comes first in the run (`cv_first`)."""
     _wait_at_most(db, wait_ms)
+    run = run_of(db, user_id, run_id) if fill_empty else None
+    documents = cv_first(db, user_id, run) if run is not None else None
     try:
         result = item_proposals.accept_many(
-            db, user_id, now, proposal_ids=proposal_ids, ingestion_run_id=run_id
+            db,
+            user_id,
+            now,
+            proposal_ids=proposal_ids,
+            ingestion_run_id=run_id,
+            fill_empty=documents if fill_empty else None,
         )
     except DBAPIError as exc:
         if jobs_service.is_lock_timeout(exc):

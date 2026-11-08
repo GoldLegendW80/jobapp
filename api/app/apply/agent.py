@@ -57,7 +57,7 @@ from typing import Any, Protocol
 
 from app.apply import answers, guardrails, terms
 from app.apply.ats import base
-from app.documents import profile_view
+from app.documents import profile_view, writing_rules
 from app.documents import rules as doc_rules
 from app.jobs.gazetteer import places_of
 from app.mail import factcheck_rules
@@ -753,7 +753,8 @@ def sources_of(
     """Personal prose and independent typed facts, retaining their distinct provenance.
     The posting legitimises its own title and company only."""
     view = profile_view.build(profile_for(sections), 0)
-    own = [body for _, body in view.facts_blocks]
+    # The person's writing rules are instructions to the writer, never a source of a claim.
+    own = [body for title, body in view.facts_blocks if title != writing_rules.BLOCK_TITLE]
     metadata = [f"{e.title} {e.organisation} {e.start or ''} {e.end or ''}" for e in view.employers]
     metadata += [f"{s.degree} {s.school} {s.start or ''} {s.end or ''}" for s in view.schools]
     if view.motivation:

@@ -1,37 +1,46 @@
 """/api/me/model-credential: the caller's own model credential (SPEC-agents.md, Credentials).
 
-- GET answers {kind, last4, verified_at, updated_at}, or 404 when none is saved.
-- PUT {kind, secret} stores it encrypted and unverified (replacing any earlier one): 422 with
-  "secret: ..." when the value is not a credential of that kind, 429 over SAVE_LIMIT saves per
-  WINDOW_S, 503 when the server has no CREDENTIALS_KEY.
+- GET answers {kind, last4, verified_at, updated_at, check}, or 404 when none is saved. `check`
+  is where the worker's check of a subscription token stands (token_check.py), null for a key.
+- PUT {kind, secret} stores it encrypted and unverified (replacing any earlier one, `check` null):
+  422 with "secret: ..." when the value is not a credential of that kind, 429 over SAVE_LIMIT
+  saves per WINDOW_S, 503 when the server has no CREDENTIALS_KEY.
 - DELETE removes it: 204, also when there was none.
-- POST /verify checks it for real (verify.py): 200 {result, message, credential} when the API
-  accepted the key (verified_at set) or for a subscription token (result "unverified": checked
-  on the first agent run); 400 when Anthropic refused it (verified_at cleared); 429 with
-  Retry-After when Anthropic is busy or rate limiting, or over VERIFY_LIMIT checks per WINDOW_S;
-  503 when Anthropic could not be reached; 404 without a credential; 409 when the stored
-  ciphertext cannot be read with this server's keys, or holds a value off the shape the save
-  accepts (credentials.shape_error), which is then neither checked nor hidden.
+- POST /verify checks it for real. An API key at once (verify.py): 200 {result "verified",
+  message, credential} (verified_at set); 400 when Anthropic refused it (verified_at cleared); 429
+  with Retry-After when Anthropic is busy or rate limiting; 503 when it could not be reached. A
+  subscription token by one Claude Code run in the worker: 200 {result "checking"} once queued,
+  or while a check of the same save is queued or running (none queued twice); 503 when the queue
+  is down. Both: 429 over VERIFY_LIMIT checks per WINDOW_S; 404 without a credential; 409 when
+  the stored ciphertext cannot be read with this server's keys, or holds a value off the shape
+  the save accepts (credentials.shape_error), which is then neither checked nor hidden.
 
 The user always comes from the session (default deny, CSRF on every write, like every /api
 route). No answer, error or log line carries the secret.
 """
 
+import logging
+from datetime import datetime
 from typing import Annotated
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
-from app.agents import credentials
+from app import queue as queues
+from app.agents import credentials, runs, token_check
 from app.agents.crypto import DecryptError, Keyring
+from app.agents.models import CredentialKind
 from app.agents.ratelimit import RateLimiter
-from app.agents.schemas import CredentialIn, CredentialOut, VerifyOut
+from app.agents.schemas import CheckOut, CredentialIn, CredentialOut, VerifyOut
 from app.agents.verify import Outcome, Verifier
 from app.db import get_session
 from app.identity import deps, throttle
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
 from app.logging_config import hidden
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/me/model-credential", tags=["agents"])
 
@@ -56,16 +65,10 @@ UNUSABLE = (
 CHANGED = "The credential was replaced while it was checked. Verify it again."
 TOO_MANY_SAVES = "Too many credential changes."
 TOO_MANY_CHECKS = "Too many checks."
-INVALID = (
-    "Anthropic refused this credential: it is wrong, revoked or has no access. Paste a new one."
-)
+INVALID = token_check.INVALID
 BUSY = "Anthropic is busy or rate limiting this key. Try again later."
-UNAVAILABLE = "Anthropic could not be reached. Try again later."
+UNAVAILABLE = token_check.UNAVAILABLE
 VERIFIED = "Anthropic accepted this key."
-UNVERIFIED = (
-    "A subscription token cannot be checked from the server without running Claude Code. "
-    "It is checked by the first agent run."
-)
 
 _404 = {404: {"model": ErrorOut, "description": "No credential saved"}}
 _429 = {429: {"model": ErrorOut, "description": "Too many attempts; see Retry-After"}}
@@ -96,12 +99,53 @@ def _changed_or_gone(db: Session, user: User) -> HTTPException:
     return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=CHANGED)
 
 
+def _with_check(request: Request, user: User, out: CredentialOut) -> CredentialOut:
+    """`out` with where the worker's check of a subscription token stands; none when Redis
+    cannot say. These routes are sync: the Redis client lives on the event loop."""
+    if out.kind is not CredentialKind.claude_subscription:
+        return out
+    store: token_check.Store = request.app.state.token_checks
+    try:
+        found = anyio.from_thread.run(store.read, user.id)
+    except token_check.StoreUnavailableError:
+        logger.warning("token check state unreadable", extra={"user_id": str(user.id)})
+        return out
+    return out.model_copy(update={"check": token_check.current(found, out.updated_at)})
+
+
+def _queue_token_check(
+    request: Request, db: Session, user: User, checked_at: datetime
+) -> VerifyOut:
+    row = credentials.get(db, user.id)
+    if (
+        row is None
+        or row.updated_at != checked_at
+        or row.kind is not CredentialKind.claude_subscription
+    ):
+        raise _changed_or_gone(db, user)
+    try:
+        anyio.from_thread.run(
+            token_check.queue_check,
+            request.app.state.token_checks,
+            request.app.state.queue,
+            user.id,
+            checked_at,
+        )
+    except (token_check.StoreUnavailableError, queues.QueueUnavailableError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=runs.QUEUE_DOWN
+        ) from None
+    checking = CheckOut(state="checking", message=token_check.CHECKING)
+    credential = CredentialOut.model_validate(row).model_copy(update={"check": checking})
+    return VerifyOut(result="checking", message=token_check.CHECKING, credential=credential)
+
+
 @router.get("", response_model=CredentialOut, responses=_404)
-def get_credential(user: CurrentUser, db: Db) -> CredentialOut:
+def get_credential(request: Request, user: CurrentUser, db: Db) -> CredentialOut:
     row = credentials.get(db, user.id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
-    return CredentialOut.model_validate(row)
+    return _with_check(request, user, CredentialOut.model_validate(row))
 
 
 @router.put(
@@ -168,10 +212,14 @@ def verify_credential(request: Request, user: CurrentUser, db: Db) -> VerifyOut:
     # The re-encryption of a row written by the previous key is kept whatever the check says.
     db.commit()
     checked_kind, checked_at = revealed.row.kind, revealed.row.updated_at
+    if checked_kind is CredentialKind.claude_subscription:
+        # Claude Code runs in the worker only, which decrypts the token again there.
+        del revealed
+        return _queue_token_check(request, db, user, checked_at)
     verifier: Verifier = request.app.state.model_verifier
     # Out of every log line of the process while the check holds it.
     with hidden(revealed.secret):
-        result = verifier.check(checked_kind, revealed.secret)
+        result = verifier.check(revealed.secret)
     # Drops this function's reference only: Python cannot wipe a str from memory.
     del revealed
     if result.outcome in (Outcome.verified, Outcome.invalid):
@@ -189,13 +237,6 @@ def verify_credential(request: Request, user: CurrentUser, db: Db) -> VerifyOut:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
         return VerifyOut(
             result="verified", message=VERIFIED, credential=CredentialOut.model_validate(row)
-        )
-    if result.outcome is Outcome.unverified:
-        row = credentials.get(db, user.id)
-        if row is None or row.updated_at != checked_at or row.kind is not checked_kind:
-            raise _changed_or_gone(db, user)
-        return VerifyOut(
-            result="unverified", message=UNVERIFIED, credential=CredentialOut.model_validate(row)
         )
     if result.outcome is Outcome.busy:
         raise HTTPException(

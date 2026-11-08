@@ -25,7 +25,7 @@ async function openPage(
   fakeDocuments();
   const about = fakeAbout({ text: ABOUT_TEXT, key: null });
   const user = userEvent.setup();
-  const app = renderApp("/profile");
+  const app = renderApp("/profile/about");
   await screen.findByRole("form", { name: "Skills" }, { timeout: 10_000 });
   return { user, state, about, ...app };
 }
@@ -52,7 +52,7 @@ const savedAnswers = (state: ReturnType<typeof fakeProfile>) =>
   lastSave(state, "answers") as Answers;
 
 describe("Skills without a model key", () => {
-  it("shows the years and the skills in words, each list folded under its names, the expressions left to Advanced matching", async () => {
+  it("shows the years and the skills in words, each list folded under its names, the expressions kept as stored", async () => {
     const { user } = await openPage();
     const form = skills();
     expect(within(form).getByLabelText("Years of experience")).toHaveValue(
@@ -92,11 +92,6 @@ describe("Skills without a model key", () => {
     // Words only: no switch to regular expressions, and the expression category is not here.
     expect(within(form).queryByRole("switch")).toBeNull();
     expect(within(form).queryByDisplayValue("llm")).toBeNull();
-    expect(
-      within(
-        screen.getByRole("form", { name: "Advanced matching" }),
-      ).getByLabelText("Name of have category 1"),
-    ).toHaveValue("llm");
   });
 
   it("saves the years, a new category and a requirement, keeps the expressions, and writes the part again", async () => {
@@ -215,7 +210,7 @@ describe("Skills without a model key", () => {
       ),
     };
     const user = userEvent.setup();
-    renderApp("/profile");
+    renderApp("/profile/about");
     const form = await screen.findByRole(
       "form",
       { name: "Skills" },

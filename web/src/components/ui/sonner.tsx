@@ -9,11 +9,13 @@ import type * as React from "react";
 import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 // The app follows the operating system theme (index.css), so the toaster does too: no theme
-// provider, unlike the generated component, which read it from next-themes.
+// provider, unlike the generated component, which read it from next-themes. Top right in the
+// whole app (owner, 2026-11-07).
 const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner
       theme="system"
+      position="top-right"
       className="toaster group"
       icons={{
         success: <CircleCheckIcon className="size-4" />,

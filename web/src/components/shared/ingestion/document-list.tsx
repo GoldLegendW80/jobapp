@@ -7,6 +7,7 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { EmptyState } from "@/components/blocks/empty-state";
 import {
@@ -69,12 +70,15 @@ export function DocumentList({
   flat = false,
   onPreview,
   onDelete,
+  action,
 }: {
   documents: IngestionDocument[];
   /** Inside a card already: the empty state draws no box of its own. */
   flat?: boolean;
   onPreview: (document: IngestionDocument) => void;
   onDelete: (document: IngestionDocument) => void;
+  /** A page's own action on a document, before Preview and Delete. */
+  action?: (document: IngestionDocument) => ReactNode;
 }) {
   if (documents.length === 0)
     return (
@@ -93,6 +97,7 @@ export function DocumentList({
           document={document}
           onPreview={onPreview}
           onDelete={onDelete}
+          action={action?.(document)}
         />
       ))}
     </ul>
@@ -115,10 +120,12 @@ function DocumentRow({
   document,
   onPreview,
   onDelete,
+  action,
 }: {
   document: IngestionDocument;
   onPreview: (document: IngestionDocument) => void;
   onDelete: (document: IngestionDocument) => void;
+  action?: ReactNode;
 }) {
   const status = statusView(document);
   const pages = pagesLabel(document);
@@ -156,6 +163,7 @@ function DocumentRow({
             ) : null}
             {status.label}
           </Badge>
+          {action}
           {hasText(document) ? (
             <Tooltip>
               <TooltipTrigger asChild>

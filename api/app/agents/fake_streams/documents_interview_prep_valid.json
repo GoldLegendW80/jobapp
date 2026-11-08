@@ -1,0 +1,224 @@
+{
+ "description": "The interview preparation writer reads the profile, the sent documents, the hiring panel's record and the posting, and submits a preparation every claim of which the profile states.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_job",
+     "mcp__app__get_job_brief",
+     "mcp__app__read_profile_section",
+     "mcp__app__get_sent_documents",
+     "mcp__app__get_hiring_panel",
+     "mcp__app__submit_interview_prep"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_prep_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read what I need first."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_prep_001_0_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "facts"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_prep_001_1_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "experience"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_prep_001_2_read_profile_section",
+       "name": "mcp__app__read_profile_section",
+       "input": {
+        "section": "skills"
+       }
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_prep_001_3_get_sent_documents",
+       "name": "mcp__app__get_sent_documents",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_prep_001_4_get_hiring_panel",
+       "name": "mcp__app__get_hiring_panel",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_prep_001_5_get_job_brief",
+       "name": "mcp__app__get_job_brief",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_prep_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_docs_prep_002_submit_interview_prep",
+       "name": "mcp__app__submit_interview_prep",
+       "input": {
+        "schema": 1,
+        "target": "Platform engineer at Lumen Example",
+        "expected": [
+         {
+          "question": "Walk me through a deployment platform you ran.",
+          "basis": "posting",
+          "round": "hiring_manager",
+          "why": "The posting asks for someone to run the deployment platform."
+         },
+         {
+          "question": "Why do you want to join Lumen Example?",
+          "basis": "posting",
+          "round": "recruiter",
+          "why": "Every first screen asks it."
+         },
+         {
+          "question": "Which part of the platform did you build yourself?",
+          "basis": "hiring_panel",
+          "round": "hiring_manager",
+          "why": "The hiring panel asked it of the CV."
+         }
+        ],
+        "gaps": [
+         {
+          "gap": "The posting asks for Kubernetes; the profile does not name it.",
+          "answer": "Say plainly that you have not run Kubernetes in production yet, and describe the deployment platform you ran at Example Corp."
+         }
+        ],
+        "stories": [
+         {
+          "title": "The deployment platform of the payments team",
+          "situation": "At Example Corp the payments team shipped by hand.",
+          "task": "Give the team one way to deploy.",
+          "action": "I built and ran the deployment platform the team relies on.",
+          "result": "Engineers ship every day through it."
+         },
+         {
+          "title": "Internal tools for the support team",
+          "situation": "At Sample Labs the support team lacked tools.",
+          "task": "Build what they needed.",
+          "action": "I built internal tools in Python and React.",
+          "result": "The support team works with them every day."
+         }
+        ],
+        "ask": [
+         "How will you measure the success of this role after six months?",
+         "Who uses the platform today, and what do they ask for most?"
+        ]
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_docs_prep_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "The preparation is stored."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 100,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 4,
+    "session_id": "{session_id}",
+    "result": "The preparation is stored.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 4000,
+     "output_tokens": 400
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

@@ -15,7 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function openPage(path = "/profile") {
+async function openPage(path = "/profile/contact") {
   const user = userEvent.setup();
   fakeDocuments();
   renderApp(path);
@@ -148,7 +148,7 @@ const exportFile = (
     { type: "application/json" },
   );
 
-async function openImport(path = "/profile") {
+async function openImport(path = "/profile/contact") {
   const user = await openPage(path);
   await user.click(
     within(await openMenu(user)).getByRole("menuitem", {
@@ -241,7 +241,7 @@ describe("import dialog: a valid file", () => {
       "Photo: none in the fileKept",
     ]);
     expect(summary).toHaveTextContent(
-      "Completeness after the import: 97% (now 97%)",
+      "Completeness after the import: 96% (now 96%)",
     );
     expect(summary).toHaveTextContent(/Exported 9 Oct 2026/);
     await user.click(replaceButton(dialog));
@@ -273,9 +273,9 @@ describe("import dialog: a valid file", () => {
     const summary = await within(dialog).findByRole("region", {
       name: "What the import replaces",
     });
-    // answers 80, search 80, the rest 100: (4 x 100 + 160) / 6 = 93.3
+    // answers 80, search 75, the rest 100: (4 x 100 + 155) / 6 = 92.5, half to even
     expect(summary).toHaveTextContent(
-      "Completeness after the import: 93% (now 0%)",
+      "Completeness after the import: 92% (now 0%)",
     );
     expect(summary).toHaveTextContent("Photo: the file has oneReplaced");
   });

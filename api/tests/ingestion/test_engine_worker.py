@@ -3,8 +3,12 @@ limits of the agents queue computed once the ingestion agents are registered, an
 `on_final` hook is given to start the next step."""
 
 import asyncio
+import json
+import subprocess
+import sys
 import uuid
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,6 +37,27 @@ class Pool:
     async def enqueue_job(self, function: str, *args: Any, **options: Any) -> object:
         self.jobs.append((function, args, options))
         return object()
+
+
+def _as_the_worker_builds_it() -> dict[str, float]:
+    """The agents queue's limits in a fresh interpreter, as the worker process builds them: this
+    process may hold agents that another test's imports registered (the api's job finder)."""
+    code = (
+        "import json\n"
+        "from app import worker\n"
+        "spec = worker.agents_queue()\n"
+        "print(json.dumps({'timeout': spec.job_timeout_s,"
+        " 'stale': worker.agent_stale_running().total_seconds()}))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
+        timeout=120,
+    )
+    return json.loads(done.stdout.splitlines()[-1])
 
 
 def test_the_cron_runs_every_minute_on_the_ingestion_queue_and_keeps_no_result() -> None:
@@ -70,7 +95,8 @@ def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply
     assert definitions.AGENTS[form_agent.NAME].wall_time_s == 3600
     assert spec.name == queues.AGENTS
     assert spec.max_jobs == worker.MAX_AGENT_RUNS == 2
-    assert spec.job_timeout_s == 3720  # 3600 aggregate transport, 120 runner cleanup
+    fresh = _as_the_worker_builds_it()
+    assert fresh["timeout"] == 3720  # 3600 aggregate transport, 120 runner cleanup
     assert spec.job_timeout_s == longest + worker.AGENT_JOB_MARGIN_S
     assert all(agent.wall_time_s <= spec.job_timeout_s for agent in definitions.AGENTS.values())
     (run_agent,) = [one for one in spec.functions if one.name == "run_agent"]
@@ -79,7 +105,7 @@ def test_the_shared_agents_queue_keeps_ingestion_budgets_and_allows_paused_apply
     assert run_agent.coroutine.keywords == {"default_timeout_s": spec.job_timeout_s}
     assert run_agent.timeout_s == worker.RUN_AGENT_MAX_S == 86_520
     assert run_agent.max_tries == 1
-    assert worker.agent_stale_running().total_seconds() == 3900  # 3600 plus 300 stale grace
+    assert fresh["stale"] == 3900  # 3600 plus 300 stale grace
     assert worker.agent_stale_running().total_seconds() == longest + worker.AGENT_STALE_MARGIN_S
 
 

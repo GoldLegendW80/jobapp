@@ -10,7 +10,7 @@ import pytest
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
-from app.jobs import router, service
+from app.jobs import notices, router, service
 from app.jobs.models import Job, JobStatus
 from app.jobs.schemas import JobDetail, JobListItem, PayIn
 from app.opportunities.pay import pay_text
@@ -122,7 +122,8 @@ def test_actual_detail_construction_keeps_decimal_until_json(monkeypatch):
     job = Job(**data, posting_text="Invented posting.", legacy={})
     monkeypatch.setattr(service, "list_files", lambda *args: [])
     monkeypatch.setattr(service, "recent_events", lambda *args: ([], 0))
-    detail = router._detail(None, SimpleNamespace(id=uuid.uuid4()), job)
+    monkeypatch.setattr(notices, "notices_of", lambda db, user_id, jobs, today: {job.id: []})
+    detail = router._detail(None, SimpleNamespace(id=uuid.uuid4()), job, date(2026, 10, 8))
     assert detail.pay_min == Decimal("4.35")
     assert isinstance(detail.pay_min, Decimal)
     assert isinstance(detail.model_dump()["pay_min"], Decimal)

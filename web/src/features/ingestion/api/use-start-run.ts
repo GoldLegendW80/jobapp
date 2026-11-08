@@ -205,5 +205,14 @@ export function useStartRun({
         consent: text,
       });
     },
+    /** The start as a promise: the run, or a rejection the `notice` explains. */
+    run: (): Promise<Run | undefined> =>
+      ready
+        ? start.mutateAsync({
+            estimate,
+            selection: shown.selection,
+            consent: text,
+          })
+        : Promise.resolve(undefined),
   };
 }

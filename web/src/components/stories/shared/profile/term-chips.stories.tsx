@@ -58,7 +58,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "A list of terms as chips, with the field that adds one, a remove button per chip and, for skills, the switch to regular expressions: the categories and requirements of Advanced matching on the profile page, the lists of Settings, Search and Find jobs, the industries of the search.",
+          "A list of terms as chips, with the field that adds one, a remove button per chip and, for skills, the switch to regular expressions: the lists of Settings, Search and Find jobs, the industries of the search.",
       },
     },
   },

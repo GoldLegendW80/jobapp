@@ -53,11 +53,10 @@ describe("profile page", () => {
   it("loads the imported profile and shows its completeness in the rail", async () => {
     fakeSession(admin);
     fakeProfile();
-    await openProfile();
+    await openProfile("/profile/contact");
     // Search needs a job website ticked in Find jobs (owner, 2026-10-28), which the
     // imported profile does not hold.
-    expect(within(rail()).getByText("97% complete")).toBeVisible();
-    expect(screen.queryByRole("tab")).toBeNull();
+    expect(within(rail()).getByText("96% complete")).toBeVisible();
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(within(rail()).queryByText(/^Missing:/)).toBeNull();
     expect(screen.getByLabelText("Full name")).toHaveValue("Harald Example");
@@ -71,7 +70,7 @@ describe("profile page", () => {
   it("shows an empty profile at 0% with what each use is missing", async () => {
     fakeSession(member);
     fakeProfile(null);
-    await openProfile();
+    const { user, location } = await openProfile("/profile/contact");
     expect(within(rail()).getByText("0% complete")).toBeVisible();
     expect(
       within(rail()).getByText(
@@ -84,7 +83,9 @@ describe("profile page", () => {
       ),
     ).toBeVisible();
     expect(screen.getByText("No language yet.")).toBeVisible();
-    expect(screen.getByText("No employer yet.")).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Experience" }));
+    expect(location()).toBe("/profile/experience");
+    expect(await screen.findByText("No employer yet.")).toBeVisible();
   });
 
   it("sends the old address of the Search tab to Settings, Search", async () => {
@@ -99,17 +100,25 @@ describe("profile page", () => {
   });
 
   it.each([
-    ["/profile?tab=identity", "/profile#contact"],
-    ["/profile?tab=experience", "/profile#experience"],
-    ["/profile?tab=facts", "/profile#about-you"],
-    ["/profile?tab=skills", "/profile#about-skills"],
-    ["/profile?tab=answers", "/profile#about-answers"],
-    ["/profile?tab=cv", "/profile#your-cv"],
+    ["/profile?tab=identity", "/profile/contact"],
+    ["/profile?tab=experience", "/profile/experience"],
+    ["/profile?tab=facts", "/profile/about"],
+    ["/profile?tab=skills", "/profile/about#about-skills"],
+    ["/profile?tab=answers", "/profile/about#about-answers"],
+    ["/profile?tab=cv", "/profile"],
     ["/profile/cv", "/profile#your-cv"],
     ["/profile?tab=gone", "/profile"],
-  ])("lands the old address %s on its section", async (old, now) => {
+    ["/profile#contact", "/profile/contact"],
+    ["/profile#experience", "/profile/experience"],
+    ["/profile#advanced-matching", "/profile/about#about-skills"],
+    ["/profile/matching", "/profile/about#about-skills"],
+    ["/profile#about-you", "/profile/about"],
+    ["/profile#about-skills", "/profile/about#about-skills"],
+    ["/profile#your-cv", "/profile#your-cv"],
+  ])("lands the old address %s on its tab", async (old, now) => {
     fakeSession(admin);
     fakeProfile();
+    fakeAbout();
     const { location } = await openProfile(old);
     expect(location()).toBe(now);
   });
@@ -123,12 +132,13 @@ describe("profile page", () => {
     ) {
       scrolled.push(this.id);
     });
-    await openProfile("/profile?tab=identity");
+    fakeAbout();
+    await openProfile("/profile?tab=answers");
     await waitFor(() => {
-      expect(scrolled).toContain("contact");
+      expect(scrolled).toContain("about-answers");
     });
-    expect(document.getElementById("contact")).toContainElement(
-      screen.getByLabelText("Full name"),
+    expect(screen.getByRole("region", { name: "Answers" })).toContainElement(
+      document.getElementById("about-answers"),
     );
   });
 
@@ -164,28 +174,35 @@ async function openPage(options: Parameters<typeof fakeAbout>[0] = {}) {
   fakeDocuments();
   const about = fakeAbout(options);
   const user = userEvent.setup();
-  const app = renderApp("/profile");
+  const app = renderApp("/profile/about");
   await screen.findByRole("heading", { level: 1, name: "Profile" });
-  await screen.findByRole("navigation", { name: "Parts of About you" });
+  await screen.findByRole("button", { name: "Add a part" });
   return { user, about, ...app };
 }
 
 describe("the sections of the page", () => {
-  it("shows its parts top to bottom, no tabs, with Ready for in place of the bar", async () => {
-    await openPage();
-    expect(screen.queryByRole("tab")).toBeNull();
-    expect(screen.queryByRole("progressbar")).toBeNull();
-    const headings = screen
-      .getAllByRole("heading", { level: 2 })
-      .map((heading) => heading.textContent);
-    expect(headings).toEqual([
-      "Your CVs",
-      "Upload your CV",
-      "Experience and education",
+  it("shows one part per tab, each at its own address, with Ready for in place of the bar", async () => {
+    const { user, location } = await openPage();
+    // Tabs, not one long page (owner, 2026-11-07).
+    const tabs = within(
+      screen.getByRole("tablist", { name: "Parts of your profile" }),
+    ).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "CVs",
+      "Experience",
       "About you",
-      "Advanced matching",
-      "Contact and links",
+      "Contact",
     ]);
+    expect(screen.getByRole("tab", { name: "About you" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(
+      screen
+        .getAllByRole("heading", { level: 2 })
+        .map((heading) => heading.textContent),
+    ).toEqual(["About you"]);
     const ready = screen.getByRole("list", { name: "Ready for" });
     expect(
       within(ready)
@@ -206,8 +223,15 @@ describe("the sections of the page", () => {
     ).toHaveAttribute("href", "/profile/fill");
     // The jobs and schools, and the identity with the languages, stay forms; the search is in
     // Settings (owner, 2026-11-05).
-    expect(screen.getByRole("form", { name: "Experience" })).toBeVisible();
-    expect(screen.getByLabelText("Full name")).toHaveValue("Harald Example");
+    await user.click(screen.getByRole("tab", { name: "Experience" }));
+    expect(location()).toBe("/profile/experience");
+    expect(
+      await screen.findByRole("form", { name: "Experience" }),
+    ).toBeVisible();
+    await user.click(screen.getByRole("tab", { name: "Contact" }));
+    expect(await screen.findByLabelText("Full name")).toHaveValue(
+      "Harald Example",
+    );
     expect(screen.queryByRole("form", { name: "Search" })).toBeNull();
     expect(
       screen.getByRole("link", { name: "Settings, Search" }),
@@ -219,21 +243,20 @@ describe("the sections of the page", () => {
     fakeProfile(null);
     fakeDocuments();
     fakeAbout({ text: "## Skills\n\n## Answers\n" });
-    renderApp("/profile");
+    renderApp("/profile/about");
     const ready = await screen.findByRole("list", { name: "Ready for" });
     expect(
       within(ready).getByRole("link", { name: "Add your skills" }),
-    ).toHaveAttribute("href", "#about-skills");
+    ).toHaveAttribute("href", "/profile/about#about-skills");
     expect(
       within(ready).getByRole("link", { name: "Add your experience" }),
-    ).toHaveAttribute("href", "#experience");
+    ).toHaveAttribute("href", "/profile/experience");
     expect(
       within(ready).getByRole("link", { name: "Add your contact details" }),
-    ).toHaveAttribute("href", "#contact");
+    ).toHaveAttribute("href", "/profile/contact");
     // Empty parts say so, and the first of each kind is where Ready for sends the person.
     expect(await screen.findAllByText("Nothing here yet.")).toHaveLength(2);
     expect(document.getElementById("about-skills")).not.toBeNull();
-    expect(document.getElementById("experience")).not.toBeNull();
   });
 
   it("puts History, Export and Import under More actions", async () => {
@@ -263,7 +286,7 @@ describe("contact and links", () => {
   it("saves with the loaded revision, toasts, and bases the next save on the new one", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     const headline = screen.getByLabelText("Headline");
     await user.clear(headline);
     await user.type(headline, "  Applied AI Engineer ");
@@ -297,7 +320,7 @@ describe("contact and links", () => {
   it("validates before sending: email, URL, phone, length, duplicate language", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     await user.clear(screen.getByLabelText("Email"));
     await user.type(screen.getByLabelText("Email"), "nope");
     await user.clear(screen.getByLabelText("Website"));
@@ -332,7 +355,7 @@ describe("contact and links", () => {
   it("adds, reorders and removes languages", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     await user.click(screen.getByRole("button", { name: "Add language" }));
     const added = screen.getByLabelText("Language 4");
     expect(added).toHaveFocus();
@@ -370,7 +393,7 @@ describe("contact and links", () => {
         ),
       ),
     );
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), "!");
     await user.click(saveButton("identity"));
     expect(
@@ -394,7 +417,7 @@ describe("contact and links", () => {
         ),
       ),
     );
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), "!");
     await user.click(saveButton("identity"));
     expect(
@@ -408,7 +431,7 @@ describe("contact and links", () => {
     fakeSession(admin);
     fakeProfile();
     server.use(http.put("*/api/profile/identity", () => HttpResponse.error()));
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), " II");
     await user.click(saveButton("identity"));
     expect(
@@ -424,7 +447,7 @@ describe("conflicts", () => {
   async function conflicted() {
     fakeSession(admin);
     const state = fakeProfile();
-    const app = await openProfile();
+    const app = await openProfile("/profile/contact");
     // Another tab saves first.
     state.sections.identity = {
       ...haraldLike().identity,
@@ -477,7 +500,7 @@ describe("unsaved changes guard", () => {
   it("asks before leaving the page by a link: Keep editing stays, Discard goes", async () => {
     fakeSession(admin);
     fakeProfile();
-    const { user, location } = await openProfile();
+    const { user, location } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), " edited");
     await user.click(screen.getByRole("link", { name: "Admin" }));
     const dialog = await screen.findByRole("alertdialog", {
@@ -489,7 +512,7 @@ describe("unsaved changes guard", () => {
     await user.click(
       within(dialog).getByRole("button", { name: "Keep editing" }),
     );
-    expect(location()).toBe("/profile");
+    expect(location()).toBe("/profile/contact");
     expect(screen.getByLabelText("Headline")).toHaveValue(
       "GenAI Engineer edited",
     );
@@ -516,7 +539,7 @@ describe("unsaved changes guard", () => {
   it("asks once per navigation, and again for a later change", async () => {
     fakeSession(admin);
     fakeProfile();
-    const { user, location, router } = await openProfile();
+    const { user, location, router } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), " edited");
     await user.click(
       screen.getByRole("link", { name: "Fill my profile with an agent" }),
@@ -534,7 +557,7 @@ describe("unsaved changes guard", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
 
     // Back on the profile, the saved value shows and a new change is guarded again.
-    await router.navigate("/profile");
+    await router.navigate("/profile/contact");
     const headline = await screen.findByLabelText("Headline");
     expect(headline).toHaveValue("GenAI Engineer");
     await user.type(headline, "!");
@@ -544,23 +567,26 @@ describe("unsaved changes guard", () => {
         name: "Discard unsaved changes?",
       }),
     ).toBeVisible();
-    expect(location()).toBe("/profile");
+    expect(location()).toBe("/profile/contact");
   });
 
-  it("names every form with unsaved changes", async () => {
+  it("asks before another tab replaces a form with unsaved changes", async () => {
     fakeSession(admin);
     fakeProfile();
-    const { user } = await openProfile();
-    await user.type(screen.getByLabelText("Job title at employer 1"), "!");
+    const { user, location } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), "!");
-    await user.click(screen.getByRole("link", { name: "Admin" }));
-    expect(
-      await screen.findByRole("alertdialog", {
-        name: "Discard unsaved changes?",
-      }),
-    ).toHaveTextContent(
-      "Your changes to Experience and education, Contact and links are not saved.",
+    await user.click(screen.getByRole("tab", { name: "Experience" }));
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Discard unsaved changes?",
+    });
+    expect(dialog).toHaveTextContent(
+      "Your changes to Contact and links are not saved.",
     );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Keep editing" }),
+    );
+    expect(location()).toBe("/profile/contact");
+    expect(screen.getByLabelText("Headline")).toHaveValue("GenAI Engineer!");
   });
 
   it("follows a link without asking when nothing changed", async () => {
@@ -579,7 +605,7 @@ describe("unsaved changes guard", () => {
   it("asks the browser to confirm closing the page only while dirty", async () => {
     fakeSession(admin);
     fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     const clean = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(clean);
     expect(clean.defaultPrevented).toBe(false);
@@ -590,25 +616,29 @@ describe("unsaved changes guard", () => {
   });
 });
 
-describe("several forms on one page", () => {
+describe("several forms, one profile", () => {
   it("bases a save on the revision another form's save made, with no conflict", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), "!");
     await user.click(saveButton("identity"));
     expect(await screen.findByText("Identity saved.")).toBeVisible();
-    await user.type(screen.getByLabelText("Job title at employer 1"), "!");
+    await user.click(screen.getByRole("tab", { name: "Experience" }));
+    await user.type(
+      await screen.findByLabelText("Job title at employer 1"),
+      "!",
+    );
     await user.click(saveButton("experience"));
     expect(await screen.findByText("Experience saved.")).toBeVisible();
     expect(state.saves.map((one) => one.body.base_revision)).toEqual([6, 7]);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("saves the skills fields and Advanced matching one after the other, each keeping the other's part", async () => {
+  it("saves the skills fields and keeps the categories stored as regular expressions", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/about");
     const skills = await screen.findByRole("form", { name: "Skills" });
     const years = within(skills).getByLabelText("Years of experience");
     await user.clear(years);
@@ -619,36 +649,30 @@ describe("several forms on one page", () => {
     await waitFor(() => {
       expect(state.saves).toHaveLength(1);
     });
-    const matching = screen.getByRole("form", { name: "Advanced matching" });
-    await user.type(
-      within(matching).getByLabelText("New term for llm"),
-      "\\bgpt\\b{enter}",
-    );
-    await user.click(
-      within(matching).getByRole("button", { name: "Save advanced matching" }),
-    );
-    await waitFor(() => {
-      expect(state.saves).toHaveLength(2);
-    });
-    expect(state.saves.map((one) => one.body.base_revision)).toEqual([6, 7]);
-    const last = state.saves[1]!.body.data as Skills;
-    expect(last.years_experience).toBe(5);
-    expect(last.have[0]!.terms).toContain("\\bgpt\\b");
-    expect(last.have[1]).toEqual(haraldLike().skills.have[0]);
+    // Advanced matching is gone (owner, 2026-11-08): the expressions are kept as stored.
+    const sent = state.saves[0]!.body.data as Skills;
+    expect(sent.years_experience).toBe(5);
+    const stored = haraldLike().skills.have.filter((one) => one.advanced_regex);
+    expect(stored.length).toBeGreaterThan(0);
+    expect(sent.have.filter((one) => one.advanced_regex)).toEqual(stored);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("still asks when the same section was saved elsewhere meanwhile", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/contact");
     await user.type(screen.getByLabelText("Headline"), "!");
     await user.click(saveButton("identity"));
     expect(await screen.findByText("Identity saved.")).toBeVisible();
-    // Another tab changes the experience: this page's form still holds the old one.
+    // Another browser tab changes the experience: this page still holds the old one.
     state.sections.experience = { employers: [], education: [] };
     state.revision += 1;
-    await user.type(screen.getByLabelText("Job title at employer 1"), "!");
+    await user.click(screen.getByRole("tab", { name: "Experience" }));
+    await user.type(
+      await screen.findByLabelText("Job title at employer 1"),
+      "!",
+    );
     await user.click(saveButton("experience"));
     expect(
       await screen.findByRole("alertdialog", {
@@ -662,7 +686,7 @@ describe("experience and education", () => {
   it("adds an employer with a key made from the organisation, reorders and saves", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     expect(screen.getByLabelText("Organisation of employer 1")).toHaveValue(
       "Lumetra Group",
     );
@@ -720,7 +744,7 @@ describe("experience and education", () => {
   it("stops following the organisation once the key is edited by hand", async () => {
     fakeSession(admin);
     fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     await user.click(screen.getByRole("button", { name: "Add employer" }));
     await user.type(
       screen.getByLabelText("Organisation of employer 4"),
@@ -745,7 +769,7 @@ describe("experience and education", () => {
   it("validates dates, end before start, present, duplicate and malformed keys", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     await user.clear(screen.getByLabelText("Start of employer 3"));
     await user.type(screen.getByLabelText("Start of employer 3"), "2023-13");
     await user.clear(screen.getByLabelText("End of employer 3"));
@@ -784,7 +808,7 @@ describe("experience and education", () => {
   it("ticking present clears and disables the end and sends null", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     const end = screen.getByLabelText("End of employer 3");
     expect(end).toHaveValue("2024-06");
     await user.click(screen.getByLabelText("Present at employer 3"));
@@ -802,7 +826,7 @@ describe("experience and education", () => {
   it("takes a year alone, says how it reads it, and saves it as typed", async () => {
     fakeSession(member);
     const state = fakeProfile(null);
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     await user.click(screen.getByRole("button", { name: "Add employer" }));
     await user.type(
       screen.getByLabelText("Organisation of employer 1"),
@@ -851,7 +875,7 @@ describe("experience and education", () => {
       end: "2023",
     };
     const state = fakeProfile({ ...haraldLike(), experience });
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     const start = screen.getByLabelText("Start of employer 3");
     expect(start).toHaveValue("2021");
     expect(start).toHaveAccessibleDescription("Read as the year 2021.");
@@ -882,7 +906,7 @@ describe("experience and education", () => {
   it("refuses only an end that is certainly before the start", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     const start = screen.getByLabelText("Start of employer 3");
     const end = screen.getByLabelText("End of employer 3");
     await user.clear(start);
@@ -916,7 +940,7 @@ describe("experience and education", () => {
   it("with Present ticked a year alone start is saved and the end has no hint", async () => {
     fakeSession(member);
     const state = fakeProfile(null);
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     await user.click(screen.getByRole("button", { name: "Add employer" }));
     await user.type(
       screen.getByLabelText("Organisation of employer 1"),
@@ -951,7 +975,7 @@ describe("experience and education", () => {
         HttpResponse.json({ detail: answer }, { status: 422 }),
       ),
     );
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     await user.type(screen.getByLabelText("Location of school 2"), "Kervan");
     await user.click(saveButton("experience"));
     expect(
@@ -977,7 +1001,7 @@ describe("experience and education", () => {
   it("adds and removes schools", async () => {
     fakeSession(admin);
     const state = fakeProfile();
-    const { user } = await openProfile();
+    const { user } = await openProfile("/profile/experience");
     await user.click(screen.getByRole("button", { name: "Remove school 1" }));
     await user.click(screen.getByRole("button", { name: "Add school" }));
     await user.type(screen.getByLabelText("School 2"), "Lycée Exemple");

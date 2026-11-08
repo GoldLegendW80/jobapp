@@ -21,6 +21,8 @@ function fakeRules(initial: Partial<DocumentSettings> = {}) {
   const value: DocumentSettings = {
     no_dash_separators: false,
     banned_phrases: [],
+    starter_phrases: false,
+    starter_list: ["passionate about", "leveraged"],
     ...initial,
   };
   const state = {
@@ -85,10 +87,30 @@ describe("writing rules", () => {
     await user.click(dashes());
     await screen.findByText("Writing rules saved.");
     expect(rules.puts).toEqual([
-      { no_dash_separators: true, banned_phrases: ["synergy"] },
+      {
+        no_dash_separators: true,
+        banned_phrases: ["synergy"],
+        starter_phrases: false,
+      },
     ]);
     expect(dashes()).toBeChecked();
     expect(profile.saves).toHaveLength(0);
+  });
+
+  it("saves the starter list switch, which names its phrases", async () => {
+    const { user, rules } = await openRules();
+    const starter = screen.getByRole("switch", { name: "Common CV phrases" });
+    expect(starter).not.toBeChecked();
+    expect(starter).toHaveAccessibleDescription(
+      "Also bans the phrases recruiters read in every CV, unless your own CV uses them: passionate about, leveraged.",
+    );
+    await user.click(starter);
+    await screen.findByText("Writing rules saved.");
+    expect(rules.puts).toEqual([
+      { no_dash_separators: false, banned_phrases: [], starter_phrases: true },
+    ]);
+    expect(starter).toBeChecked();
+    expect(card().textContent).not.toMatch(DASHES);
   });
 
   it("toggles the dash switch from the keyboard, described by its sentence", async () => {
@@ -100,7 +122,7 @@ describe("writing rules", () => {
     await user.keyboard(" ");
     await screen.findByText("Writing rules saved.");
     expect(rules.puts).toEqual([
-      { no_dash_separators: true, banned_phrases: [] },
+      { no_dash_separators: true, banned_phrases: [], starter_phrases: false },
     ]);
     expect(dashes()).toBeChecked();
     expect(dashes()).toHaveFocus();
@@ -206,11 +228,20 @@ describe("writing rules", () => {
       expect(rules.value).toEqual({
         no_dash_separators: true,
         banned_phrases: ["synergy", "rockstar"],
+        starter_phrases: false,
       });
     });
     expect(rules.puts).toEqual([
-      { no_dash_separators: true, banned_phrases: ["synergy"] },
-      { no_dash_separators: true, banned_phrases: ["synergy", "rockstar"] },
+      {
+        no_dash_separators: true,
+        banned_phrases: ["synergy"],
+        starter_phrases: false,
+      },
+      {
+        no_dash_separators: true,
+        banned_phrases: ["synergy", "rockstar"],
+        starter_phrases: false,
+      },
     ]);
     await waitFor(() => {
       expect(card().querySelector('[aria-busy="true"]')).toBeNull();

@@ -107,6 +107,32 @@ export function runningRun() {
   });
 }
 
+/**
+ * Why some of the proposals of Camille's finished run were not kept, by section and rule, in the
+ * order the server gives them: a CV read in two columns, where the assistant gave every skill a
+ * field skills do not have and one date was written with two digits.
+ */
+export const CAMILLE_REFUSED: Review["refused"] = [
+  {
+    section: "experience",
+    rule: "two_digit_year",
+    count: 1,
+    sentence: "two digit year, not read",
+  },
+  {
+    section: "skills",
+    rule: "unknown_field",
+    count: 14,
+    sentence: "the value holds a field that this kind of item does not have",
+  },
+  {
+    section: "skills",
+    rule: "excerpt_too_short",
+    count: 2,
+    sentence: "excerpt under 20 characters",
+  },
+];
+
 /** The same run, finished, with what it proposes. */
 export function doneRun() {
   return fakeRun({
@@ -267,8 +293,14 @@ function counts(items: Item[]) {
   };
 }
 
-/** What the finished run proposes for Camille's profile, served for any run. */
-export function fakeCamilleProposals(items: Item[] = ITEMS) {
+/**
+ * What the finished run proposes for Camille's profile, served for any run, with why some of
+ * its proposals were not kept (`refused`, none by default).
+ */
+export function fakeCamilleProposals(
+  items: Item[] = ITEMS,
+  refused: Review["refused"] = [],
+) {
   const sections = [...new Set(items.map((one) => one.section))];
   const review: Review = {
     run_id: "r1",
@@ -282,6 +314,7 @@ export function fakeCamilleProposals(items: Item[] = ITEMS) {
       const mine = items.filter((one) => one.section === section);
       return { section, counts: counts(mine), items: mine };
     }),
+    refused,
   };
   server.use(
     http.get("*/api/ingestion/runs/:id/proposals", () =>

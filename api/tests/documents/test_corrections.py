@@ -418,3 +418,60 @@ def test_a_version_after_a_profile_term_loses_only_the_number() -> None:
         ("skills.0.items.0", "Kubernetes 2015", "Kubernetes", "version_removed", NUMBER),
         ("skills.0.items.1", "Terraform 1.5", "Terraform", "version_removed", NUMBER),
     ]
+
+
+@pytest.mark.parametrize(
+    ("path", "limit"),
+    [
+        ("summary", c.SUMMARY_MAX),
+        ("experience.0.bullets.1", c.BULLET_MAX),
+        ("skills.0.items.2", c.TERM_MAX),
+        ("paragraphs.3", c.PARAGRAPH_MAX),
+        ("target", c.LINE_MAX),
+        ("expected.1.question", c.LINE_MAX),
+        ("expected.1.why", c.PREP_TEXT_MAX),
+        ("gaps.2.gap", c.LINE_MAX),
+        ("gaps.0.answer", c.PREP_TEXT_MAX),
+        ("stories.0.title", c.LINE_MAX),
+        ("stories.3.result", c.PREP_TEXT_MAX),
+        ("ask.0", c.LINE_MAX),
+        ("clauses.0.title", c.LINE_MAX),
+        ("clauses.0.quote", c.BULLET_MAX),
+        ("clauses.11.plain", c.OFFER_PLAIN_MAX),
+        ("differences.4", c.BULLET_MAX),
+        ("questions.0", c.BULLET_MAX),
+    ],
+)
+def test_each_field_the_dash_rule_fixes_has_its_own_limit(path: str, limit: int) -> None:
+    assert corrections.field_max(path) == limit
+
+
+def test_every_field_a_preparation_shows_follows_the_dash_rule() -> None:
+    content = c.InterviewPrepContent(
+        target="Platform engineer — Lumen Example",
+        expected=[
+            c.ExpectedQuestion(
+                question="Why us — and why now?", why="The posting – its first line."
+            )
+        ],
+        gaps=[c.Gap(gap="Go — every day", answer="Python - not Go yet.")],
+        stories=[c.Story(title="Tools — support", action="I built the tools.")],
+        ask=["How big is the team — today?"],
+        debrief=[c.Debrief(asked="They asked — twice.")],
+    )
+    fixed, records = corrections.fix_separators(
+        "interview_prep", content, DocumentSettings(no_dash_separators=True)
+    )
+    assert isinstance(fixed, c.InterviewPrepContent)
+    assert not [path for path, text in fixed.shown_fields() if rules.separators(text)]
+    assert fixed.expected[0].question == "Why us, and why now?"
+    assert fixed.debrief[0].asked == "They asked — twice."  # the person's own words
+    assert [record.field_path for record in records] == [
+        "target",
+        "expected.0.question",
+        "expected.0.why",
+        "gaps.0.gap",
+        "gaps.0.answer",
+        "stories.0.title",
+        "ask.0",
+    ]

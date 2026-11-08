@@ -5,8 +5,12 @@ import {
   countOf,
   reusedDocuments,
 } from "@/features/ingestion/helpers/run-words";
+import { RunRefusals } from "../run-refusals";
 
-/** The figures of a run: steps or documents read, what was found, the tokens and the cost. */
+/**
+ * The figures of a run: steps or documents read, what was found, the tokens and the cost, and
+ * once it has ended why proposals were not kept.
+ */
 export function RunFigures({ run }: { run: Run }) {
   const active = isActive(run.status);
   const reused = reusedDocuments(run);
@@ -68,7 +72,9 @@ export function RunFigures({ run }: { run: Run }) {
           restarts during a step, the request it was making is not counted.
         </p>
       ) : null}
-      {!active && run.counts.two_digit_year > 0 ? (
+      {!active ? <RunRefusals refused={run.refused} /> : null}
+      {/* A run of a server that kept no reasons: its dates with two digit years, as before. */}
+      {!active && run.refused.length === 0 && run.counts.two_digit_year > 0 ? (
         <p>
           Dates written with two digit years were not read (
           {tokens(run.counts.two_digit_year)}).

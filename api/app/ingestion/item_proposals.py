@@ -6,7 +6,7 @@ with `target = "profile"`, `target_id = null`, `kind = "profile_item"`, `run_id 
 
     payload = {ingestion_run_id, section, key, action, value, value_hash, citations[],
                base_revision, base_hash, flags[], conflict?, depends_on?,
-               applied_revision?, undo?, undone_revision?}
+               applied_revision?, undo?, undone_revision?, picked?}
 
 `value` is the item's cleaned value and `value_hash` its hash: `propose` takes an `items.Item`,
 so nothing reaches the table that the section model has not validated. `base_revision` is the
@@ -33,7 +33,10 @@ What the words mean here:
 - **invalid**: the stored value no longer fits its section model. The proposal is marked
   `invalid` by the system, with the reason, and cannot be accepted.
 - **conflict** (a flag, with `payload.conflict`): two documents disagree. The user picks one
-  value, sent as `edited_value`; an accept without one is refused.
+  value, sent as `edited_value`; an accept without one is refused. Only `accept_many` with
+  `fill_empty` picks one itself, for an empty slot (`chosen`): recorded as `edited_value` with
+  `payload.picked`, so the values it left are not counted as turned down by the person and a
+  later reading may offer them again (owner, 2026-11-08: "Offer them later").
 - **undone**: an accepted item taken back by the user (`undo`). The profile returns to what it
   held at the item's key before the accept, as one revision, and only while it still holds
   there what the accept left: a later edit of the user at that key is never overwritten
@@ -249,7 +252,9 @@ def turned_down(db: Session, user_id: uuid.UUID, *, limit: int) -> list[Decision
     at most `limit`. Reads the section, the key and the hashes of each, never a whole payload
     (excerpts and values stay in the database)."""
     accepted_own = sa.and_(
-        Proposal.status == ProposalStatus.accepted, Proposal.edited_value.is_not(None)
+        Proposal.status == ProposalStatus.accepted,
+        Proposal.edited_value.is_not(None),
+        sa.not_(Proposal.payload.has_key("picked")),
     )
     rows = db.execute(
         sa.select(
@@ -390,7 +395,8 @@ def overwrites(section: str, current: Mapping[str, Any], item: items.Item) -> bo
     before = items.read(section, current, item.key)
     if before is None:
         return False
-    return _lost(before, items.read(section, items.apply(section, current, item), item.key))
+    landed = items.landed_key(section, current, item)
+    return _lost(before, items.read(section, items.apply(section, current, item), landed))
 
 
 def _hash_at(section: str, data: Mapping[str, Any], key: str) -> str:
@@ -418,7 +424,7 @@ def review(payload: Mapping[str, Any], section_data: Mapping[str, Any] | None) -
         return Review(before, None, False, stale, locked, PROFILE_CONFLICT, exc.message)
     noop = applied == current
     stale = stale and not noop
-    after = items.read(item.section, applied, item.key)
+    after = items.read(item.section, applied, items.landed_key(item.section, current, item))
     typed = not noop and before is not None and _lost(before, after)
     if locked and _known_lock(payload) and fills_empty(item.section, current, item.key):
         excluded = _unlocked_exclusion(payload)
@@ -840,7 +846,8 @@ def accept(
             raise proposals.StaleItemError(proposal, profile.revision)
         profile = profile_service.save_section(db, user_id, section, after, profile.revision, now)
         revision = profile.revision
-        record = _undo_record(section, current, after, item.key, target.key)
+        landed = items.landed_key(section, current, target, at=item.key)
+        record = _undo_record(section, current, after, item.key, landed)
     _accepted(proposal, now, revision, record)
     if edited is not None:
         proposal.edited_value = edited.value
@@ -953,12 +960,19 @@ def accept_many(
     proposal_ids: Sequence[uuid.UUID] | None = None,
     ingestion_run_id: uuid.UUID | None = None,
     section: str | None = None,
+    fill_empty: Sequence[str] | None = None,
 ) -> BulkResult:
     """ "Accept all": every pending profile item of the user (of one run, of one section, or the
     ids given, which must then also be of that run and section) except the locked and the
     flagged ones, in one profile revision per section. A locked fact that adds to an empty slot
     of the profile (`fills_empty`: nothing at its key, nor the same job or school under another
     year) is taken like any addition (owner, 2026-11-05).
+
+    `fill_empty` (the welcome wizard, owner 2026-11-08) is the run's document ids, the person's
+    CV first: an addition flagged `conflict` or `derived` and nothing else is then taken too
+    where it fills an empty slot, and a conflict with the value of the first of these documents
+    that cites one (`chosen`), recorded as an accept with that value would be (`edited_value`).
+    An item flagged `looks_like_instruction` or `transcribed` stays out whatever it is.
 
     Left out, each with its reason in `result.skipped`: an id that is not the user's pending
     profile item (`not_found`, `not_pending`), one of another run or section, a locked fact that
@@ -978,18 +992,22 @@ def accept_many(
     by_section: dict[str, list[Proposal]] = {}
     # Locked facts that may fill an empty slot: taken only if the profile holds nothing there.
     locked: set[uuid.UUID] = set()
+    filling: set[uuid.UUID] = set()  # conflicts and derived values, for an empty slot only
     for row in _selected(db, user_id, result, proposal_ids, ingestion_run_id, section):
         excluded = bulk_exclusion(row.payload)
         if excluded == LOCKED and _known_lock(row.payload):
             locked.add(row.id)
             excluded = _unlocked_exclusion(row.payload)
+        if excluded == FLAGGED and fill_empty is not None and _may_fill(row.payload):
+            filling.add(row.id)
+            excluded = None
         if excluded is not None:
             result.skipped[row.id] = excluded
         else:
             by_section.setdefault(row.payload["section"], []).append(row)
     for name in sorted(by_section):
         batch = sorted(by_section[name], key=lambda row: (row.created_at, row.id))
-        taken: list[tuple[Proposal, dict[str, Any] | None, bool]] = []
+        taken: list[tuple[Proposal, dict[str, Any] | None, bool, items.Item | None]] = []
         failure: SectionFailure | None = None
         try:
             current = _section(profile, name)
@@ -1012,23 +1030,34 @@ def accept_many(
                         continue
                 except items.ProfileConflict:
                     pass  # reported below, by the apply onto the batch
-            if row.id in locked and not (
-                fills_empty(name, current, item.key) and fills_empty(name, after, item.key)
-            ):
+            empty = fills_empty(name, current, item.key) and fills_empty(name, after, item.key)
+            if row.id in filling and not empty:
+                result.skipped[row.id] = FLAGGED
+                continue
+            if row.id in locked and not empty:
                 result.skipped[row.id] = LOCKED
                 continue
+            picked: items.Item | None = None
+            if row.id in filling and row.payload.get("conflict"):
+                picked = _picked(row.payload, fill_empty or ())
+                if picked is None:
+                    result.skipped[row.id] = FLAGGED
+                    continue
             try:
                 if overwrites(name, current, item):
                     result.skipped[row.id] = TYPED_BY_YOU
                     continue
             except items.ProfileConflict:
                 pass  # reported below, by the apply onto the batch
+            target = picked or item
             try:
-                step = items.apply(name, after, item)
+                step = items.apply(name, after, target, at=item.key)
+                landed = items.landed_key(name, after, target, at=item.key)
             except items.ProfileConflict as exc:
                 failure = SectionFailure(row.id, PROFILE_CONFLICT, exc.message)
                 break
-            taken.append((row, _undo_record(name, after, step, item.key, item.key), step != after))
+            record = _undo_record(name, after, step, item.key, landed)
+            taken.append((row, record, step != after, picked))
             after = step
         if failure is not None:
             result.failed[name] = failure
@@ -1040,11 +1069,61 @@ def accept_many(
         if after != current:
             profile = profile_service.save_section(db, user_id, name, after, profile.revision, now)
             revision = result.revisions[name] = profile.revision
-        for row, record, changed in taken:
+        for row, record, changed, picked in taken:
             _accepted(row, now, revision if changed else None, record)
+            if picked is not None:
+                row.edited_value = picked.value
+                row.payload = {**row.payload, "picked": True}
             result.done.append(row.id)
     db.flush()
     return result
+
+
+_FILLABLE = frozenset({items.FLAG_CONFLICT, items.FLAG_DERIVED})
+
+
+def _may_fill(payload: Mapping[str, Any]) -> bool:
+    """An addition flagged `conflict` or `derived` and nothing else, which `fill_empty` may take
+    where it fills an empty slot."""
+    flags = set(_flags(payload))
+    if payload.get("conflict"):
+        flags.add(items.FLAG_CONFLICT)
+    return bool(flags) and flags <= _FILLABLE and payload.get("action") == items.Action.add.value
+
+
+def chosen(payload: Mapping[str, Any], documents: Sequence[str]) -> Any:
+    """The value of a conflict that "fill empty" takes: the one cited by the first of
+    `documents` (the person's CV first, then the run's documents in their order) that cites
+    any, the item's own value on a tie or when none is cited by them."""
+    rank = {str(one): at for at, one in enumerate(documents)}
+    values = [(payload.get("value"), payload.get("citations"))]
+    values += [(one.get("value"), one.get("citations")) for one in payload.get("conflict") or ()]
+
+    def first_document(cited: Any) -> int:
+        places = [
+            rank.get(str(one.get("document_id")), len(rank))
+            for one in cited or ()
+            if isinstance(one, Mapping)
+        ]
+        return min(places, default=len(rank))
+
+    best = min(range(len(values)), key=lambda at: (first_document(values[at][1]), at))
+    return values[best][0]
+
+
+def _picked(payload: Mapping[str, Any], documents: Sequence[str]) -> items.Item | None:
+    """The chosen value of a conflict as the user's own value (`accept` with `edited_value`), or
+    None when it no longer fits its section model."""
+    try:
+        return items.build(
+            payload.get("section"),
+            payload.get("key"),
+            payload.get("action"),
+            chosen(payload, documents),
+            origin=items.Origin.user,
+        )
+    except items.ItemError:
+        return None
 
 
 def reject_many(

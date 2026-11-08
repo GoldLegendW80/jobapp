@@ -30,6 +30,9 @@ GET /api/jobs/{id}/files/{file_id}: the bytes with their stored type, `inline` f
 browser shows it) and `attachment` for anything else, `X-Content-Type-Options: nosniff`,
 `Cache-Control: private, no-cache` and a strong ETag (the SHA-256), 304 on If-None-Match.
 
+POST /api/jobs/{id}/check: "Check now", the posting's own address asked now (liveness_check.py,
+SPEC-jobs "Liveness"); the job as the check left it, closed when its page says so.
+
 GET /api/jobs/rescore/status: the rescore that follows a change of the skills section
 (app/jobs/rescore.py): idle, waiting or running, the revision asked for and the one done, and
 the counts of the last one.
@@ -57,7 +60,7 @@ from app.db import get_session, read_snapshot
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs import places, service
+from app.jobs import liveness_check, notices, places, service
 from app.jobs import rescore as auto_rescore
 from app.jobs import undo as undo_tokens
 from app.jobs.importer import kind
@@ -282,14 +285,18 @@ def import_jobs(
     responses={**_401, **_404},
     dependencies=[Depends(_no_store)],
 )
-def read_job(job_id: str, user: CurrentUser, db: Db) -> JobDetail:
-    """One of the caller's jobs: every field, the posting text, the files (without their bytes)
-    and the newest events."""
+def read_job(job_id: str, user: CurrentUser, request: Request, db: Db) -> JobDetail:
+    """One of the caller's jobs: every field, the posting text, the files (without their bytes),
+    the newest events and what to know before the click."""
     read_snapshot(db)  # the events and their count are one moment, with the job
-    return _detail(db, user, _job_or_404(db, user, job_id))
+    return _detail(db, user, _job_or_404(db, user, job_id), _today(request))
 
 
-def _detail(db: Session, user: User, job: Job) -> JobDetail:
+def _today(request: Request) -> date:
+    return notices.today_of(deps.clock(request))
+
+
+def _detail(db: Session, user: User, job: Job, today: date) -> JobDetail:
     files = service.list_files(db, user.id, job.id)
     events, events_total = service.recent_events(db, user.id, job.id, EVENTS_IN_DETAIL)
     item = _item(job, len(files))
@@ -300,7 +307,23 @@ def _detail(db: Session, user: User, job: Job) -> JobDetail:
         files=[FileOut.model_validate(f) for f in files],
         events=[EventOut.model_validate(e) for e in events],
         events_total=events_total,
+        notices=notices.notices_of(db, user.id, [job], today)[job.id],
     )
+
+
+@router.post(
+    "/{job_id}/check",
+    response_model=JobDetail,
+    responses={**_401, **_404},
+    dependencies=[Depends(_no_store)],
+)
+def check_job(job_id: str, user: CurrentUser, request: Request, db: Db) -> JobDetail:
+    """Is the posting still open: its own address asked now (SPEC-jobs, "Liveness"). The job as
+    the check left it: closed when its page says so, else with what the check found."""
+    target = _uuid_or_404(job_id, NOT_FOUND)
+    if liveness_check.check_now(request, user.id, target) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
+    return _detail(db, user, _job_or_404(db, user, job_id), _today(request))
 
 
 _UUID = re.compile(r"^[0-9a-fA-F]{8}-?([0-9a-fA-F]{4}-?){3}[0-9a-fA-F]{12}$")
@@ -446,7 +469,7 @@ def add_job(body: JobCreateIn, user: CurrentUser, request: Request, db: Db) -> A
         if existing is None:
             raise
         return _duplicate(existing)
-    return _detail(db, user, job)
+    return _detail(db, user, job, _today(request))
 
 
 @router.patch(
@@ -501,7 +524,7 @@ def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request,
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=DUPLICATE) from None
-    return _detail(db, user, job)
+    return _detail(db, user, job, _today(request))
 
 
 @router.post(

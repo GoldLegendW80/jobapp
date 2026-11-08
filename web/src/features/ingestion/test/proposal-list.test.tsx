@@ -366,6 +366,46 @@ describe("ProposalList", () => {
     show("run-1");
     expect(await screen.findByText(EMPTY_NOTE)).toBeInTheDocument();
     expect(screen.queryAllByTestId("proposal")).toHaveLength(0);
+    expect(screen.queryByTestId("run-refusals")).toBeNull();
+  });
+
+  it("says in its head why proposals were not kept, one line per section and rule", async () => {
+    fakeApi(
+      review(
+        {
+          skills: [
+            item("have:python", { name: "Python" }, { section: "skills" }),
+          ],
+        },
+        {
+          refused: [
+            {
+              section: "skills",
+              rule: "unknown_field",
+              count: 14,
+              sentence:
+                "the value holds a field that this kind of item does not have",
+            },
+            {
+              section: "facts",
+              rule: "excerpt_too_short",
+              count: 1,
+              sentence: "excerpt under 20 characters",
+            },
+          ],
+        },
+      ),
+    );
+    show("run-1");
+    const lines = within(
+      await screen.findByRole("list", { name: "What was not kept" }),
+    ).getAllByRole("listitem");
+    expect(lines.map((line) => line.textContent)).toEqual([
+      "14 skills were not kept: the assistant added a field this part of your profile does not have.",
+      "1 fact was not kept: the passage the assistant quoted was too short to be found in your document.",
+    ]);
+    // The sentence written for the assistant is never shown.
+    expect(screen.queryByText(/this kind of item/)).toBeNull();
   });
 
   it("shows a decided and a stale item as such", async () => {

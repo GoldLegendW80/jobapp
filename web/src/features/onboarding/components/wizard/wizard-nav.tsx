@@ -8,13 +8,14 @@ import type { Wizard } from "@/features/onboarding/api/use-wizard";
 import { ESSENTIAL, STEP_IDS } from "@/features/onboarding/helpers/steps";
 
 /** The bar under the step, kept in view: Back, "Skip this step" (not on the essential steps),
- * then Next, or Start on the summary. */
-export function WizardNav({ wizard }: { wizard: Wizard }) {
+ * then Next, or Start on the summary. `hold`: a step at work (Building your profile) keeps Next
+ * waiting; Skip still goes on. */
+export function WizardNav({ wizard, hold }: { wizard: Wizard; hold: boolean }) {
   const { step, index, busy } = wizard;
   return (
     <nav
       aria-label={WORDING.wizard}
-      className="sticky bottom-(--bottom-bar,0px) flex flex-wrap items-center justify-between gap-2 border-t bg-background py-3"
+      className="sticky bottom-(--bottom-bar,0px) flex flex-wrap items-center justify-between gap-2 bg-background py-3"
     >
       <Button
         variant="outline"
@@ -38,7 +39,7 @@ export function WizardNav({ wizard }: { wizard: Wizard }) {
             {WORDING.start}
           </Button>
         ) : (
-          <Button disabled={busy} onClick={wizard.next}>
+          <Button disabled={busy || hold} onClick={wizard.next}>
             {wizard.saving ? <Spinner aria-hidden="true" /> : null}
             {WORDING.next}
             <ArrowRight aria-hidden="true" />

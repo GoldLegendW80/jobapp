@@ -18,7 +18,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
-from app.apply import caps, full_auto, run, states, submit
+from app.apply import caps, followup_service, full_auto, run, states, submit
 from app.apply import email as application_email
 from app.apply import gate as apply_gate
 from app.apply.models import Application, Mode, State
@@ -117,20 +117,9 @@ def authorise_application(
 
 
 def issues(db: Session, draft: MailDraft, now: datetime) -> list[dict[str, Any]]:
-    profile = profile_service.get_profile(db, draft.user_id, now)
-    view = build(profile_service.sections_view(profile), profile.revision)
-    posting = (
-        db.get(Job, db.get(Application, draft.application_id).posting_id)
-        if draft.application_id
-        else None
-    )
-    sources = sources_for(
-        view,
-        None,
-        None,
-        PostingView(posting.company, posting.title) if posting else None,
-        kind="letter",
-    )
+    """The fact check of mail M9 on a draft: against the follow up's own sources for a draft
+    made from a follow up, else the profile and the application's posting."""
+    sources = followup_service.draft_sources(db, draft, now) or _sources(db, draft, now)
     sources = dataclasses.replace(
         sources,
         recipients=tuple([*draft.to_addrs, *draft.cc_addrs]),
@@ -143,6 +132,23 @@ def issues(db: Session, draft: MailDraft, now: datetime) -> list[dict[str, Any]]
         {**dataclasses.asdict(i), "id": f"{i.code}:{i.start}:{i.end}"}
         for i in factcheck_rules.check(draft.body, sources)
     ]
+
+
+def _sources(db: Session, draft: MailDraft, now: datetime) -> factcheck_rules.Sources:
+    profile = profile_service.get_profile(db, draft.user_id, now)
+    view = build(profile_service.sections_view(profile), profile.revision)
+    posting = (
+        db.get(Job, db.get(Application, draft.application_id).posting_id)
+        if draft.application_id
+        else None
+    )
+    return sources_for(
+        view,
+        None,
+        None,
+        PostingView(posting.company, posting.title) if posting else None,
+        kind="letter",
+    )
 
 
 def _limits(

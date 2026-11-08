@@ -31,18 +31,12 @@ const ALL_MISSING = {
   experience: ["employers", "education"],
   facts: ["blocks"],
   skills: ["years_experience", "have"],
-  search: [
-    "title_include",
-    "location",
-    "contract_types",
-    "remote_stance",
-    "interactive_sites",
-  ],
+  search: ["title_include", "location", "remote_stance", "interactive_sites"],
   answers: [
     "work_authorization",
     "notice_period",
     "earliest_start",
-    "salary_policy",
+    "salary",
     "motivation",
   ],
 };
@@ -68,11 +62,11 @@ describe("completenessOf matches the api", () => {
   it("Harald's real import is 100% everywhere but Search, which needs a ticked job website", () => {
     const result = completenessOf(owner.sections);
     // The engine files hold boards and no job website: searches run the websites alone.
-    expect(result.overall).toBe(97);
+    expect(result.overall).toBe(96);
     for (const [name, section] of Object.entries(result.sections))
       expect(section).toEqual(
         name === "search"
-          ? { percent: 80, missing: ["interactive_sites"] }
+          ? { percent: 75, missing: ["interactive_sites"] }
           : { percent: 100, missing: [] },
       );
   });
@@ -145,11 +139,42 @@ describe("completenessOf matches the api", () => {
       skills: { years_experience: 0 },
     });
     expect(result.sections.search).toEqual({
-      percent: 80,
+      percent: 75,
       missing: ["interactive_sites"],
     });
     expect(result.sections.skills).toEqual({ percent: 50, missing: ["have"] });
-    expect(result.overall).toBe(22);
+    expect(result.overall).toBe(21);
+  });
+
+  it("reads Anywhere as a place, and needs no contract type", () => {
+    const result = completenessOf({
+      search: { title_include: { terms: ["x"] }, remote_stance: "remote" },
+    });
+    expect(result.sections.search.missing).toEqual(["interactive_sites"]);
+    expect(
+      completenessOf({ search: { location: { terms: ["Lyon"] } } }).sections
+        .search.missing,
+    ).toEqual(["title_include", "remote_stance", "interactive_sites"]);
+  });
+
+  it.each([
+    [{}, false],
+    [{ salary_stance: "leave_blank" }, true],
+    [{ salary_stance: "range" }, false],
+    [
+      {
+        salary_stance: "range",
+        salary_ranges: [{ currency: "EUR", minimum: 600, period: "day" }],
+      },
+      true,
+    ],
+    [{ salary_stance: "sentence" }, false],
+    [{ salary_stance: "sentence", salary_policy: "Against the band." }, true],
+    [{ salary_policy: "Against the band." }, true],
+    [{ salary_ranges: [{ currency: "EUR", minimum: 50000 }] }, false],
+  ])("counts the salary of %j as answered: %s", (answers, answered) => {
+    const missing = completenessOf({ answers }).sections.answers.missing;
+    expect(missing.includes("salary")).toBe(!answered);
   });
 
   it("treats blank strings, null, wrong shapes and a non object section as empty", () => {

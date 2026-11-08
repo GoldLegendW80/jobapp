@@ -15,6 +15,7 @@ ROUTER_MODULES: tuple[str, ...] = (
     "router",  # O1: the deck, the Pass and its undo
     "onboarding_router",  # O5: the first login wizard
     "platforms_router",  # O7b: the platforms read with the person's opt in
+    "insights_router",  # your search in numbers (owner, 2026-11-07)
 )
 
 

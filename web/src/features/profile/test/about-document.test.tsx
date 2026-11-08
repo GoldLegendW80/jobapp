@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
-import { ABOUT_TEXT, aboutOf, fakeAbout } from "@/test/about";
+import { ABOUT_TEXT, aboutOf, aboutPartTitles, fakeAbout } from "@/test/about";
 import { fakeDocuments } from "@/test/documents";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
@@ -22,28 +22,21 @@ async function openPage(options: Parameters<typeof fakeAbout>[0] = {}) {
   fakeDocuments();
   const about = fakeAbout(options);
   const user = userEvent.setup();
-  const app = renderApp("/profile");
+  const app = renderApp("/profile/about");
   await screen.findByRole("heading", { level: 1, name: "Profile" });
-  await screen.findByRole("navigation", { name: "Parts of About you" });
+  await screen.findByRole("button", { name: "Add a part" });
   return { user, about, ...app };
 }
 
 const part = (name: string) => screen.getByRole("region", { name });
 
 describe("About you", () => {
-  it("renders skills, facts and answers, with a contents list and tables", async () => {
+  it("renders skills, facts and answers, with tables", async () => {
     await openPage();
-    const contents = screen.getByRole("navigation", {
-      name: "Parts of About you",
-    });
-    expect(
-      within(contents)
-        .getAllByRole("link")
-        .map((link) => link.textContent),
-    ).toEqual(["Skills", "Projects", "Answers"]);
-    expect(
-      within(contents).getByRole("link", { name: "Answers" }),
-    ).toHaveAttribute("href", "#about-part-2");
+    expect(aboutPartTitles()).toEqual(["Skills", "Projects", "Answers"]);
+    expect(document.getElementById("about-part-2")).toHaveTextContent(
+      "Answers",
+    );
     // An underscore inside a word stays a character.
     expect(
       within(part("Skills")).getByText("data_tools: Python, SQL, dbt"),
@@ -153,19 +146,12 @@ describe("About you", () => {
 
   it("without a model key shows Skills and Answers as fields, and keeps the fact parts as text", async () => {
     await openPage({ key: null });
-    // The fields stand where their parts are, and the contents list leads to them.
-    const contents = screen.getByRole("navigation", {
-      name: "Parts of About you",
-    });
-    expect(
-      within(contents)
-        .getAllByRole("link")
-        .map((link) => [link.textContent, link.getAttribute("href")]),
-    ).toEqual([
-      ["Skills", "#about-skills"],
-      ["Projects", "#about-part-1"],
-      ["Answers", "#about-answers"],
-    ]);
+    // The fields stand where their parts are, at the ids links point at.
+    expect(aboutPartTitles()).toEqual(["Skills", "Projects", "Answers"]);
+    expect(document.getElementById("about-skills")).toHaveTextContent("Skills");
+    expect(document.getElementById("about-answers")).toHaveTextContent(
+      "Answers",
+    );
     expect(screen.getByRole("form", { name: "Skills" })).toBeVisible();
     expect(screen.getByRole("form", { name: "Answers" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Edit Skills" })).toBeNull();
@@ -240,7 +226,7 @@ describe("About you", () => {
 });
 
 describe("the expressions About you leaves out", () => {
-  it("names them under the Skills part and links to Advanced matching", async () => {
+  it("says under the Skills part that they stay and keep counting", async () => {
     fakeSession(admin);
     fakeProfile();
     fakeDocuments();
@@ -250,18 +236,13 @@ describe("the expressions About you leaves out", () => {
         HttpResponse.json({ ...aboutOf(ABOUT_TEXT), advanced: 2 }),
       ),
     );
-    renderApp("/profile");
+    renderApp("/profile/about");
     const skills = await screen.findByRole("region", { name: "Skills" });
     expect(
       within(skills).getByText(
-        /^2 advanced categories \(regular expressions\) stay as they are\./,
+        "2 advanced categories (regular expressions) stay as they are and keep counting in the fit score.",
       ),
     ).toBeVisible();
-    expect(
-      within(skills).getByRole("link", {
-        name: "Edit them in Advanced matching",
-      }),
-    ).toHaveAttribute("href", "#advanced-matching");
-    expect(document.getElementById("advanced-matching")).not.toBeNull();
+    expect(within(skills).queryByRole("link")).toBeNull();
   });
 });

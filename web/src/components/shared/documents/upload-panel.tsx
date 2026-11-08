@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardTitle } from "@/components/ui/card";
@@ -40,7 +40,6 @@ export function UploadPanel({
 }) {
   const titleId = useId();
   const upload = useCvUpload();
-  const { consent, runConsent, profileRun, uploadId, cv, agree } = upload;
 
   return (
     <Card
@@ -57,6 +56,29 @@ export function UploadPanel({
       ) : null}
       <UploadDropZone busy={upload.busy} onFile={upload.take} />
 
+      <CvConversion upload={upload} openHref={openHref} />
+    </Card>
+  );
+}
+
+/**
+ * What follows a CV chosen for conversion: its reading, the consent of what is sent, the
+ * converted CV and, with `completeHere`, the start of the run that completes the profile from
+ * it. Nothing shows before a file is chosen. The upload panel draws it under its drop zone; a
+ * page that adds files its own way (the welcome wizard) draws it under them.
+ */
+export function CvConversion({
+  upload,
+  openHref,
+  completeHere = true,
+}: {
+  upload: ReturnType<typeof useCvUpload>;
+  openHref: (baseId: string) => string;
+  completeHere?: boolean;
+}): ReactNode {
+  const { consent, runConsent, profileRun, uploadId, cv, agree } = upload;
+  return (
+    <>
       {upload.problem !== undefined ? (
         <Alert variant="destructive">
           <AlertTitle>Your CV could not be converted</AlertTitle>
@@ -95,8 +117,8 @@ export function UploadPanel({
             upload.makeDefault.mutate(cv.id);
           }}
           complete={
-            uploadId === undefined ? null : profileRun.following !==
-              undefined ? (
+            uploadId === undefined ||
+            !completeHere ? null : profileRun.following !== undefined ? (
               <UploadStatus>{READING_FOR_PROFILE}</UploadStatus>
             ) : (
               <StartPanel
@@ -129,6 +151,6 @@ export function UploadPanel({
             : {})}
         />
       ) : null}
-    </Card>
+    </>
   );
 }

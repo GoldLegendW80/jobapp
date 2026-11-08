@@ -42,7 +42,7 @@ const STEPS: readonly Step[] = [
     id: "prompt",
     title: "Prepare",
     summary: "Let a coding assistant write about you",
-    heading: "Prepare a dossier with a coding assistant",
+    heading: "Analyze your computer with a coding assistant",
     ready: PROMPT_READY,
     Panel: StepPrompt,
   },

@@ -38,6 +38,7 @@ from app.agents import tools as app_tools
 from app.documents import content as c
 from app.documents import store, submit
 from app.documents.models import Kind
+from app.documents.settings import banned_phrases
 from app.profile.models import Profile
 
 READ_PROFILE_SECTION = "read_profile_section"
@@ -62,6 +63,18 @@ def _binding(scope: app_tools.Scope, key: str) -> uuid.UUID | None:
     return uuid.UUID(str(value)) if value else None
 
 
+def _own_cv(db: Any, scope: app_tools.Scope) -> list[str]:
+    """The printed text of the base CV the run writes from: a starter phrase it uses is allowed."""
+    base_id = _binding(scope, "base_document_id")
+    base = store.get(db, scope.user_id, base_id) if base_id is not None else None
+    if base is None:
+        return []
+    try:
+        return [text for _, text in c.text_fields(c.parse("base", base.draft))]
+    except c.ContentInvalidError:
+        return []
+
+
 def _section(scope: app_tools.Scope, section: str) -> str:
     with scope.sessions() as db:
         stored = db.scalar(sa.select(Profile.sections).where(Profile.user_id == scope.user_id))
@@ -70,7 +83,7 @@ def _section(scope: app_tools.Scope, section: str) -> str:
             rules = store.settings(db, scope.user_id)
             data["writing_settings"] = {
                 "no_dash_separators": rules.no_dash_separators,
-                "banned_phrases": list(rules.banned_phrases),
+                "banned_phrases": list(banned_phrases(rules, _own_cv(db, scope))),
             }
     if not data:
         return app_tools.EMPTY_SECTION.format(section=section)

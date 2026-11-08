@@ -25,7 +25,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction, undefer
 
 from app.agents.models import Proposal, ProposalDecider, ProposalStatus
-from app.jobs import scoring
+from app.jobs import scoring, signals
 from app.jobs import slug as slugs
 from app.jobs import undo as undo_tokens
 from app.jobs.models import (
@@ -252,6 +252,7 @@ def create_job(db: Session, user_id: uuid.UUID, new: NewJob, now: datetime) -> J
         description=new.description,
         posting_text=new.posting_text,
         published_on=new.published_on,
+        **signals.stored(new.posting_text),
         found_on=now.date(),
         notes=new.notes,
         legacy=new.legacy,
@@ -729,6 +730,7 @@ def _create_imported(
         slug=slug,
         **{name: getattr(item, name) for name in IMPORTED_FIELDS if name != "found_on"},
         **{name: getattr(item, name) for name in carried_fields(item)},
+        **signals.stored(item.posting_text),
         found_on=item.found_on or now.date(),
         fit_overridden=manual,
         created_at=now,
@@ -806,6 +808,11 @@ def _update_imported(
         data["files_replaced"] = replaced
     for name, value in changed.items():
         setattr(job, name, value)
+    if "url" in changed:
+        job.liveness = sa.null()  # SQL NULL: the last check read the old address
+    if "posting_text" in changed or job.signals is None:
+        for name, value in signals.stored(job.posting_text).items():
+            setattr(job, name, value)
     touch(job, now)
     add_event(db, job, JobEventKind.import_, data, now)
     summary.updated += 1
@@ -1249,6 +1256,8 @@ def edit_job(
     if edits:
         for name in edits:
             setattr(job, name, changes.fields[name])
+        if "url" in edits:
+            job.liveness = sa.null()  # SQL NULL: the last check read the old address
         add_event(db, job, JobEventKind.edit, {"changes": edits}, now)
         touch(job, now)
         db.flush()
@@ -1459,6 +1468,7 @@ def rescore_batch(
     outcome.last_id = looked[-1]
     search = user_search(db, user_id)  # the bonus (scoring.bonus); None gives none
     for job in jobs:
+        read_text(job, now)
         result = computed_score(job, skills, search)
         if result is None:
             outcome.skipped_no_text += 1
@@ -1482,6 +1492,18 @@ def rescore_batch(
             outcome.unchanged += 1
     db.flush()
     return len(looked)
+
+
+def read_text(job: Job, now: datetime) -> bool:
+    """Store what the job's text says (signals.stored) when it differs from what is stored, and
+    touch the job then. Returns whether it did."""
+    columns = signals.stored(job.posting_text)
+    if all(getattr(job, name) == value for name, value in columns.items()):
+        return False
+    for name, value in columns.items():
+        setattr(job, name, value)
+    touch(job, now)
+    return True
 
 
 def count_after(

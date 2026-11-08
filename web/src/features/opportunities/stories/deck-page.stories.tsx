@@ -209,3 +209,26 @@ export const DiscoverOnAPhone: Story = {
     fakeDeck(DECK);
   },
 };
+
+/** As a job seeker, I want to say in one tap why I passed, without slowing my swipes, so that my numbers later show which reasons come back. */
+export const GiveAReasonToAPass: Story = {
+  beforeEach: () => {
+    withPostingsAndSkills();
+    fakeDeck(DECK);
+    server.use(
+      http.put("*/api/postings/:id/pass/reason", async ({ params, request }) =>
+        HttpResponse.json({
+          id: params.id,
+          ...((await request.json()) as object),
+        }),
+      ),
+    );
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await userEvent.click(await page.findByRole("button", { name: "Pass" }));
+    await userEvent.click(
+      await page.findByRole("radio", { name: "Pay too low" }),
+    );
+  },
+};

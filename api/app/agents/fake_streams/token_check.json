@@ -1,0 +1,84 @@
+{
+ "description": "The check of a subscription token (app/agents/token_check.py): one turn, no tool, Claude answers.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [],
+    "mcp_servers": [],
+    "apiKeySource": "none",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 0.2
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_token_check_001",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "OK"
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 12,
+      "output_tokens": 2,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 900,
+    "duration_api_ms": 700,
+    "num_turns": 1,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "result": "OK",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.00001,
+    "usage": {
+     "input_tokens": 12,
+     "output_tokens": 2,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "modelUsage": {
+     "{model}": {
+      "inputTokens": 12,
+      "outputTokens": 2,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.00001,
+      "contextWindow": 200000
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

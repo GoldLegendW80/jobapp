@@ -16,7 +16,7 @@ import {
 const STEP_LABEL =
   "inline-flex min-h-8 w-full items-center gap-2 rounded-md px-2 leading-5 whitespace-nowrap";
 
-/** The bar above the step, at every width: its value is the step, 1 to 8. */
+/** The bar above the step, at every width: its value is the step, 1 to 10. */
 export function WizardBar({ current }: { current: number }) {
   const name = STEP_NAMES[STEP_IDS[current] ?? "profile"];
   return (
@@ -33,9 +33,9 @@ export function WizardBar({ current }: { current: number }) {
 }
 
 /**
- * The eight names in the side rail, once the page is wide enough for one: the current one
+ * The ten names in the side rail, once the page is wide enough for one: the current one
  * marked, a step already passed opens. Narrower, only the bar shows: the heading under it says
- * "Step N of 8: Name", and Back and the summary's Change open the steps passed.
+ * "Step N of 10: Name", and Back and the summary's Change open the steps passed.
  */
 export function WizardSteps({
   current,

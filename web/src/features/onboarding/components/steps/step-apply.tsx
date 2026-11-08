@@ -34,7 +34,7 @@ const MODE =
   "min-h-11 w-full items-start rounded-md border px-3 py-2 font-normal";
 
 /**
- * Step 7, How the app applies. Two choices, each kept in apply's own settings (A11, issue #738):
+ * Step 9, How the app applies. Two choices, each kept in apply's own settings (A11, issue #738):
  * the mode after a Like, and "Let me review each filled form before it is sent", which a click
  * on Apply follows. Full auto is only shown here: it is turned on in Application settings, with
  * its own checks. Then the documents' language and tone.

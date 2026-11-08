@@ -42,8 +42,15 @@ from app.profile.schemas import OptPeriod, Slug
 
 SCHEMA = 1
 
-Kind = Literal["cv", "letter", "base", "proposal"]
-KINDS: tuple[Kind, ...] = ("cv", "letter", "base", "proposal")
+Kind = Literal["cv", "letter", "base", "proposal", "interview_prep", "offer_notes"]
+KINDS: tuple[Kind, ...] = (
+    "cv",
+    "letter",
+    "base",
+    "proposal",
+    "interview_prep",
+    "offer_notes",
+)
 
 # Hard limits, refused beyond (the spec's "Limits per field").
 HEADLINE_MAX = 200
@@ -71,6 +78,7 @@ RENDER_MIN: dict[str, dict[str, int]] = {
     "base": {"highlights": 0, "competencies": 0, "skills": 0},
     "letter": {"paragraphs": 1},
     "proposal": {},
+    "interview_prep": {},
 }
 # Limits the spec leaves to the plan: one line, one term of a list, the notes.
 LINE_MAX = 200
@@ -298,13 +306,132 @@ class ProposalContent(_Content):
         return value
 
 
-Content = CvContent | LetterContent | ProposalContent  # BaseCvContent is a CvContent
+# An interview preparation (SPEC-documents.md, "Interview preparation"): text only, never
+# rendered. Its stories and the answers to its gaps are claims about the person, so the fact
+# check reads them; the expected questions quote the posting, and the debrief is the person's.
+PREP_MAX_BYTES = 40 * 1024
+PREP_TEXT_MAX = 400
+PREP_QUESTIONS_MAX = 12
+PREP_GAPS_MAX = 6
+PREP_STORIES_MAX = 8
+PREP_ASK_MAX = 6
+PREP_DEBRIEFS_MAX = 12
+DEBRIEF_MAX = 2_000
+
+
+class ExpectedQuestion(_Model):
+    question: _item(LINE_MAX)
+    # Where the question comes from: never "they asked", the app has no record of the company.
+    basis: Literal["posting", "hiring_panel"] = "posting"
+    round: Literal["recruiter", "hiring_manager", "peers"] = "hiring_manager"
+    why: _text(PREP_TEXT_MAX) = ""
+
+
+class Gap(_Model):
+    gap: _item(LINE_MAX)
+    answer: _text(PREP_TEXT_MAX, multiline=True) = ""
+
+
+class Story(_Model):
+    title: _text(LINE_MAX) = ""
+    situation: _text(PREP_TEXT_MAX, multiline=True) = ""
+    task: _text(PREP_TEXT_MAX, multiline=True) = ""
+    action: _text(PREP_TEXT_MAX, multiline=True) = ""
+    result: _text(PREP_TEXT_MAX, multiline=True) = ""
+
+
+class Debrief(_Model):
+    on: _text(LINE_MAX) = ""
+    asked: _item(DEBRIEF_MAX, multiline=True)
+    notes: _text(DEBRIEF_MAX, multiline=True) = ""
+
+
+class InterviewPrepContent(_Content):
+    target: _text(LINE_MAX) = ""
+    expected: Annotated[list[ExpectedQuestion], Field(max_length=PREP_QUESTIONS_MAX)] = Field(
+        default_factory=list
+    )
+    gaps: Annotated[list[Gap], Field(max_length=PREP_GAPS_MAX)] = Field(default_factory=list)
+    stories: Annotated[list[Story], Field(max_length=PREP_STORIES_MAX)] = Field(
+        default_factory=list
+    )
+    ask: Annotated[list[_item(LINE_MAX)], Field(max_length=PREP_ASK_MAX)] = Field(
+        default_factory=list
+    )
+    debrief: Annotated[list[Debrief], Field(max_length=PREP_DEBRIEFS_MAX)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _size(self) -> InterviewPrepContent:
+        size = len(canonical_json(self))
+        if size > PREP_MAX_BYTES:
+            raise PydanticCustomError(
+                "content_too_large",
+                "the content is {size} bytes, at most {limit} allowed",
+                {"size": size, "limit": PREP_MAX_BYTES},
+            )
+        return self
+
+    def checked_fields(self) -> list[tuple[str, str]]:
+        out = [(f"gaps.{i}.answer", gap.answer) for i, gap in enumerate(self.gaps)]
+        for i, story in enumerate(self.stories):
+            out += [
+                (f"stories.{i}.{name}", getattr(story, name))
+                for name in ("title", "situation", "task", "action", "result")
+            ]
+        return out
+
+    def shown_fields(self) -> list[tuple[str, str]]:
+        """Every field the writer writes and the person reads: the target, the expected
+        questions, the gaps and their answers, the stories and what to ask. The debrief is the
+        person's own words and is left out."""
+        out = [("target", self.target)]
+        for i, question in enumerate(self.expected):
+            out += [
+                (f"expected.{i}.question", question.question),
+                (f"expected.{i}.why", question.why),
+            ]
+        out += [(f"gaps.{i}.gap", gap.gap) for i, gap in enumerate(self.gaps)]
+        out += self.checked_fields()
+        return out + [(f"ask.{i}", text) for i, text in enumerate(self.ask)]
+
+
+# Notes on an offer letter (SPEC-documents.md, "Reading an offer"): no field holds a verdict or a
+# score, and a quote is the letter's own words.
+OFFER_CLAUSES_MAX = 30
+OFFER_PLAIN_MAX = 800
+OFFER_ITEMS_MAX = 15
+
+
+class OfferClause(_Model):
+    title: _item(LINE_MAX)
+    quote: _text(BULLET_MAX, multiline=True) = ""
+    plain: _item(OFFER_PLAIN_MAX, multiline=True)
+
+
+class OfferNotesContent(_Content):
+    summary: _text(SUMMARY_MAX, multiline=True) = ""
+    clauses: Annotated[list[OfferClause], Field(max_length=OFFER_CLAUSES_MAX)] = Field(
+        default_factory=list
+    )
+    differences: Annotated[
+        list[_item(BULLET_MAX, multiline=True)], Field(max_length=OFFER_ITEMS_MAX)
+    ] = Field(default_factory=list)
+    questions: Annotated[
+        list[_item(BULLET_MAX, multiline=True)], Field(max_length=OFFER_ITEMS_MAX)
+    ] = Field(default_factory=list)
+
+
+Content = CvContent | LetterContent | ProposalContent | OfferNotesContent
 
 MODELS: dict[str, type[_Content]] = {
     "cv": CvContent,
     "letter": LetterContent,
     "base": BaseCvContent,
     "proposal": ProposalContent,
+    "interview_prep": InterviewPrepContent,
+    "offer_notes": OfferNotesContent,
 }
 
 
@@ -407,10 +534,20 @@ def content_hash(kind: Kind, content: BaseModel) -> bytes:
 
 def text_fields(content: BaseModel) -> list[tuple[str, str]]:
     """Every printed text field as `(path, text)`, in the order a reader meets them. `target`,
-    `notes`, a proposal's `to` and the fixed facts are not written prose of the document and are
-    left out."""
+    `notes`, a proposal's `to`, the fixed facts and the letter's own words quoted in offer notes
+    are not written prose of the document and are left out; offer notes give each clause's title
+    then its plain words. An interview preparation gives its claims only (`checked_fields`): the
+    dash rule reads all it shows (`dash_fields`)."""
     if isinstance(content, ProposalContent):
         return [("subject", content.subject), ("body", content.body)]
+    if isinstance(content, InterviewPrepContent):
+        return content.checked_fields()
+    if isinstance(content, OfferNotesContent):
+        out = [("summary", content.summary)]
+        for i, clause in enumerate(content.clauses):
+            out += [(f"clauses.{i}.title", clause.title), (f"clauses.{i}.plain", clause.plain)]
+        out += [(f"differences.{i}", text) for i, text in enumerate(content.differences)]
+        return out + [(f"questions.{i}", text) for i, text in enumerate(content.questions)]
     if isinstance(content, LetterContent):
         out = [
             ("headline", content.headline),
@@ -434,6 +571,13 @@ def text_fields(content: BaseModel) -> list[tuple[str, str]]:
     return out
 
 
+def dash_fields(content: BaseModel) -> list[tuple[str, str]]:
+    """The fields the dash rule fixes: the printed ones, and all a preparation shows."""
+    if isinstance(content, InterviewPrepContent):
+        return content.shown_fields()
+    return text_fields(content)
+
+
 def kind_of(content: BaseModel) -> Kind:
     if isinstance(content, BaseCvContent):
         return "base"
@@ -441,4 +585,8 @@ def kind_of(content: BaseModel) -> Kind:
         return "letter"
     if isinstance(content, ProposalContent):
         return "proposal"
+    if isinstance(content, InterviewPrepContent):
+        return "interview_prep"
+    if isinstance(content, OfferNotesContent):
+        return "offer_notes"
     return "cv"

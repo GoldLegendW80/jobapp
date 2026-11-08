@@ -1268,6 +1268,12 @@ def resolve_web(root: Path, path: Path, spec: str) -> str | None:
         target = path.parent / spec
     else:
         return None
+    # A Vite asset import (`?url`, `?raw`, `?inline`: a Rive scene, a wasm): a file, not a module.
+    path_part, query, suffix = target.as_posix().partition("?")
+    if query:
+        if suffix in ("url", "raw", "inline") and Path(path_part).is_file():
+            return None
+        raise MappingError(f"unresolved TypeScript import {spec}")
     for candidate in (
         target,
         target.with_name(target.name + ".ts"),

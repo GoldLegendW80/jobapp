@@ -8,6 +8,7 @@ import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import type { Save } from "@/features/jobs/api/use-job-editor";
 import { payWords } from "@/features/jobs/helpers/pay-words";
 import { PayText } from "../badges";
+import { LivenessBadge } from "../liveness-badge";
 import { EditDetailsButton } from "../job-editor/edit-details-button";
 
 /**
@@ -79,6 +80,11 @@ function PostingSummary({ job }: { job: JobDetail }) {
         ) : null}
         <PayText job={job} className="font-medium text-foreground" />
       </span>
+      <LivenessBadge
+        liveness={job.liveness}
+        status={job.status}
+        className="ml-2"
+      />
     </>
   );
 }

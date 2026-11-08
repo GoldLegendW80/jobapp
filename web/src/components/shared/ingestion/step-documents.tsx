@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { PageBody } from "@/components/blocks/page";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -17,7 +19,9 @@ import {
   megabytes,
   type DocumentList as Documents,
   type IngestionDocument,
+  type StoredDocument,
 } from "@/features/ingestion/api/documents-api";
+import { isCvFile } from "@/features/documents/helpers/upload-cv";
 import {
   useDocumentsCache,
   useWatchedDocuments,
@@ -37,9 +41,21 @@ export const CANCEL_RECHECK_MS = 3000;
  * Step 2, "Documents": add files or paste a text, then see what the app keeps: each document
  * with its type, size and state, the preview of its text, and its deletion. On its page the
  * ways to add sit on one card and the documents beside them; `flat` stacks everything without a
- * card of its own, for a place that is already one (the welcome wizard).
+ * card of its own, for a place that is already one (the welcome wizard). With `onCv`, a PDF or
+ * Word file added in this visit offers "This is my CV", which hands its file over; `cvId` is
+ * the document already chosen. `autoCv` hands over the first one at once, while none is chosen.
  */
-export function StepDocuments({ flat = false }: { flat?: boolean }) {
+export function StepDocuments({
+  flat = false,
+  onCv,
+  cvId,
+  autoCv = false,
+}: {
+  flat?: boolean;
+  onCv?: (file: File) => void;
+  cvId?: string;
+  autoCv?: boolean;
+}) {
   const query = useWatchedDocuments();
   const cache = useDocumentsCache();
   const [previewing, setPreviewing] = useState<IngestionDocument>();
@@ -47,6 +63,26 @@ export function StepDocuments({ flat = false }: { flat?: boolean }) {
   const listHeading = useRef<HTMLHeadingElement>(null);
 
   const onStored = cache.stored;
+  // The files sent in this visit, by document: the CV conversion needs the file itself.
+  const [sent, setSent] = useState<ReadonlyMap<string, File>>(new Map());
+  // Read by the upload callback, which outlives a render.
+  const latest = useRef({ autoCv, onCv, cvId, taken: false });
+  useEffect(() => {
+    latest.current = { ...latest.current, autoCv, onCv, cvId };
+  }, [autoCv, onCv, cvId]);
+  const onSent = useCallback(
+    (stored: StoredDocument, file?: File) => {
+      onStored(stored);
+      if (!file || !isCvFile(file.name)) return;
+      setSent((before) => new Map(before).set(stored.id, file));
+      const now = latest.current;
+      if (now.autoCv && now.cvId === undefined && !now.taken && now.onCv) {
+        now.taken = true;
+        now.onCv(file);
+      }
+    },
+    [onStored],
+  );
   const recheck = useRef<number>();
   const onCancelled = useCallback(() => {
     cache.refresh();
@@ -60,7 +96,7 @@ export function StepDocuments({ flat = false }: { flat?: boolean }) {
     [],
   );
   const uploads = useUploads(
-    useMemo(() => ({ onStored, onCancelled }), [onStored, onCancelled]),
+    useMemo(() => ({ onStored: onSent, onCancelled }), [onSent, onCancelled]),
   );
   const limits = query.data?.limits ?? DEFAULT_LIMITS;
 
@@ -112,6 +148,27 @@ export function StepDocuments({ flat = false }: { flat?: boolean }) {
           flat={flat}
           onPreview={setPreviewing}
           onDelete={setDeleting}
+          action={
+            onCv
+              ? (document) => {
+                  if (document.id === cvId)
+                    return <Badge variant="secondary">Your CV</Badge>;
+                  const file = sent.get(document.id);
+                  return file ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`This is my CV: ${document.name}`}
+                      onClick={() => {
+                        onCv(file);
+                      }}
+                    >
+                      This is my CV
+                    </Button>
+                  ) : null;
+                }
+              : undefined
+          }
         />
       )}
     </section>

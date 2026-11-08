@@ -964,7 +964,10 @@ def test_completeness_of_an_empty_profile() -> None:
         "full_name", "headline", "email", "phone", "city", "country", "languages"
     ]  # fmt: skip
     assert result.sections["search"].missing == [
-        "title_include", "location", "contract_types", "remote_stance", "interactive_sites"
+        "title_include", "location", "remote_stance", "interactive_sites"
+    ]  # fmt: skip
+    assert result.sections["answers"].missing == [
+        "work_authorization", "notice_period", "earliest_start", "salary", "motivation"
     ]  # fmt: skip
 
 
@@ -1002,11 +1005,59 @@ def test_completeness_of_a_partial_profile() -> None:
     assert (by["facts"].percent, by["facts"].missing) == (100, [])
     assert by["skills"].percent == 0
     assert (by["search"].percent, by["search"].missing) == (
-        80,
+        75,
         ["interactive_sites"],
     )
     assert by["answers"].percent == 0
-    assert result.overall == round((43 + 50 + 100 + 0 + 80 + 0) / 6)
+    assert result.overall == round((43 + 50 + 100 + 0 + 75 + 0) / 6)
+
+
+def _search_missing(data: dict[str, Any]) -> list[str]:
+    return completeness({"search": validate_section("search", data)}).sections["search"].missing
+
+
+def test_completeness_reads_anywhere_as_a_location() -> None:
+    # The first login wizard's "Anywhere": no place, and a remote stance chosen.
+    assert "location" not in _search_missing({"remote_stance": "remote"})
+    assert "location" not in _search_missing({"location": {"terms": ["Lyon"]}})
+    assert _search_missing({})[:3] == ["title_include", "location", "remote_stance"]
+
+
+def test_completeness_needs_no_contract_type() -> None:
+    # An empty list is any contract: no search filters on it.
+    data = {**FULL["search"], "contract_types": []}
+    assert _search_missing(data) == []
+
+
+def _answers_missing(data: dict[str, Any]) -> list[str]:
+    stored = validate_section("answers", data)
+    return completeness({"answers": stored}).sections["answers"].missing
+
+
+@pytest.mark.parametrize(
+    ("answers", "answered"),
+    [
+        ({}, False),
+        ({"salary_stance": "leave_blank"}, True),
+        ({"salary_stance": "range"}, False),
+        (
+            {
+                "salary_stance": "range",
+                "salary_ranges": [{"currency": "EUR", "minimum": 600, "period": "day"}],
+            },
+            True,
+        ),
+        ({"salary_stance": "sentence"}, False),
+        ({"salary_stance": "sentence", "salary_policy": "Against the band."}, True),
+        ({"salary_policy": "Against the band."}, True),
+        # Ranges stored without a stance read as leave blank, which nobody chose.
+        ({"salary_ranges": [{"currency": "EUR", "minimum": 50000}]}, False),
+    ],
+)
+def test_completeness_counts_the_salary_as_answered_once_a_stance_is_chosen(
+    answers: dict[str, Any], answered: bool
+) -> None:
+    assert ("salary" not in _answers_missing(answers)) is answered
 
 
 def test_completeness_of_a_saved_but_empty_section() -> None:

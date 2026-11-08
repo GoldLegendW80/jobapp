@@ -29,6 +29,8 @@ a `DocumentSources` that carries what the documents' own rules read besides:
 - `entries`: each experience entry's employer key with its organisation and period, which alone
   source a year in that entry's bullets ("Built the platform in 2018" under an employer joined
   in 2021 is a claim, whatever other period holds 2018);
+- `own_cv`: the text of the person's own CV (the base CV's content and the file it was converted
+  from), which keeps a phrase of the starter list from being banned (`settings.banned_phrases`);
 - `years_experience`: the person's total, which sources any whole number of years at or below
   it ("8 years" for 8.5: rounded down is true, rounded up a claim).
 
@@ -45,6 +47,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.documents import content as c
+from app.documents import writing_rules
 from app.documents.profile_view import ProfileView
 from app.mail.factcheck_rules import Sources
 from app.profile.schemas import format_period
@@ -90,6 +93,7 @@ class DocumentSources(Sources):
     entries: tuple[tuple[str, str, str, str], ...] = ()
     # The person's total ("8.5"), the one entry: a whole number of years at or under it is true.
     years_experience: tuple[str, ...] = ()
+    own_cv: tuple[str, ...] = ()
 
 
 def _unique(texts: Iterable[str]) -> tuple[str, ...]:
@@ -178,7 +182,12 @@ def sources_for(
     *,
     kind: Literal["cv", "base", "letter", "proposal"] = "cv",
 ) -> DocumentSources:
-    profile = [f"{title}\n{body}" for title, body in view.facts_blocks]
+    # The person's writing rules are instructions to the writer, never a source of a claim.
+    profile = [
+        f"{title}\n{body}"
+        for title, body in view.facts_blocks
+        if title != writing_rules.BLOCK_TITLE
+    ]
     profile += [
         _dated(e.organisation, e.title, e.location, _period(e.start), _period(e.end))
         for e in view.employers
@@ -191,11 +200,13 @@ def sources_for(
     profile += view.skills_terms
     if view.years_experience is not None:
         profile.append(f"{view.years_experience:g} years of professional experience")
+    own_cv: list[str] = []
     if base is not None:
-        profile += [text for _, text in c.text_fields(base)]
-        profile += _fixed_texts(base.fixed)
+        own_cv += [text for _, text in c.text_fields(base)]
+        own_cv += _fixed_texts(base.fixed)
     if upload_text:
-        profile.append(upload_text)
+        own_cv.append(upload_text)
+    profile += own_cv
     titles = [e.title for e in view.employers]
     own_titles = [*titles, *(e.title for e in base.fixed.employers)] if base else list(titles)
     participants: list[str] = []
@@ -224,4 +235,5 @@ def sources_for(
         years_experience=(
             (f"{view.years_experience:g}",) if view.years_experience is not None else ()
         ),
+        own_cv=_unique(own_cv),
     )

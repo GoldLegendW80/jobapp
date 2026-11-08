@@ -22,12 +22,15 @@ import { ChatThread } from "@/components/shared/agents/chat/chat-thread";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 
-import { drawn } from "@/features/documents/helpers/chat-text";
+import {
+  drawn,
+  pendingGeneration,
+} from "@/features/documents/helpers/chat-text";
 import { ChatMessages } from "./chat-panel/chat-messages";
+import { KeepRule } from "./chat-panel/keep-rule";
 import { ConsentDialog } from "./consent-dialog";
 import type { PanelProps } from "./document-view";
 import { failureSentence } from "@/features/documents/api/documents-api";
-import { type Message } from "@/features/documents/api/chat-api";
 import {
   useGeneration,
   useMessages,
@@ -49,17 +52,6 @@ const EXAMPLES = [
   "Use the sidebar template",
   "Put my most relevant experience first",
 ];
-
-/** The generation of the newest message of the person while no answer names it. */
-function pendingGeneration(messages: Message[]): string | null {
-  const last = [...messages].reverse().find((one) => one.role === "user");
-  if (!last?.generation_id) return null;
-  const answered = messages.some(
-    (one) =>
-      one.role === "assistant" && one.generation_id === last.generation_id,
-  );
-  return answered ? null : last.generation_id;
-}
 
 export function ChatPanel({ document, generation }: PanelProps) {
   const composer = useRef<HTMLTextAreaElement>(null);
@@ -189,6 +181,11 @@ export function ChatPanel({ document, generation }: PanelProps) {
         ) : null}
       </ChatThread>
 
+      <KeepRule
+        documentId={document.id}
+        messages={shown}
+        answering={pending !== null}
+      />
       {noConsent ? (
         <Alert>
           <AlertDescription className="flex flex-col items-start gap-2">

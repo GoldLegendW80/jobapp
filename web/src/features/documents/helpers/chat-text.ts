@@ -1,3 +1,5 @@
+import type { Message } from "../api/chat-api";
+
 /** Unicode's Default_Ignorable_Code_Point ranges, as the api's `chat.visible` reads them. */
 const IGNORABLE: readonly (readonly [number, number])[] = [
   [0x00ad, 0x00ad],
@@ -30,4 +32,15 @@ export function drawn(text: string): boolean {
     return true;
   }
   return false;
+}
+
+/** The generation of the newest message of the person while no answer names it. */
+export function pendingGeneration(messages: Message[]): string | null {
+  const last = [...messages].reverse().find((one) => one.role === "user");
+  if (!last?.generation_id) return null;
+  const answered = messages.some(
+    (one) =>
+      one.role === "assistant" && one.generation_id === last.generation_id,
+  );
+  return answered ? null : last.generation_id;
 }

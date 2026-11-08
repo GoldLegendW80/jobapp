@@ -160,6 +160,8 @@ test("the writing rules are saved at once and read back after a reload", async (
   expect(await read.json()).toEqual({
     no_dash_separators: true,
     banned_phrases: ["passionate about"],
+    starter_phrases: false,
+    starter_list: expect.any(Array),
   });
   expect(errors).toEqual([]);
 });

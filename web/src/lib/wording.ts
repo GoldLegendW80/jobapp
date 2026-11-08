@@ -184,7 +184,9 @@ export const TONE_WORDS = {
   warm: "Warm",
 } as const;
 export const WIZARD_STEP_WORDS = {
+  access: "Model access",
   profile: "Your profile",
+  building: "Building your profile",
   looking: "What you are looking for",
   where: "Where",
   sites: "Websites to search",
@@ -240,6 +242,13 @@ export const WORDING = {
   ratherNotSay: "Rather not say",
   yearlySalary: "Yearly salary",
   dailyRateFreelance: "Daily rate (freelance)",
+  whyLooking: "Why you are looking",
+  noticePeriod: "Notice period",
+  earliestStart: "Earliest start",
+  workAuthorisation: "Work authorisation",
+  countryOrRegion: "Country or region",
+  mayWorkThere: "May you work there?",
+  needsSponsorship: "Do you need a visa sponsorship?",
   afterLike: "After a Like",
   whenYouClickApply: "When you click Apply on a posting",
   reviewEachForm: "Let me review each filled form before it is sent",
@@ -248,7 +257,6 @@ export const WORDING = {
   change: "Change",
   readProfile: "Read them into your profile",
   reviewProposals: "Review the proposals",
-  importOtherProfile: "Or add a LinkedIn data export (ZIP), or paste a text",
   added: "Added",
   remove: "Remove",
   addAll: "Add all",
@@ -261,6 +269,7 @@ export const WORDING = {
   termsOf: "Terms of",
   opensNewTab: "(opens in a new tab)",
   advanced: "Advanced",
+  analyzeYourComputer: "Analyze your computer",
   applicationSite: "Application site",
   findNewPostings: "Find new postings",
   rolesToNeverApplyFor: "Roles to never apply for",
@@ -295,7 +304,7 @@ export const WORDING = {
   anthropicConsole: "Anthropic Console",
   // The upload of a CV (documents/upload-panel.tsx): true with or without a model key.
   uploadCvHint:
-    "Drop a PDF or a Word document here, or choose it. The app keeps the file in your documents and reads its text. Turning it into a CV you can edit uses your Anthropic API key: until one is saved, that part waits.",
+    "Drop a PDF or a Word document here, or choose it. The app keeps the file in your documents and reads its text. Turning it into a CV you can edit uses the Claude access saved in Model access: until one is saved, that part waits.",
   applicationSettings: "Application settings",
   // The posting page: Apply and the documents first, the rest folded.
   yourApplication: "Your application",
@@ -337,7 +346,6 @@ export const WORDING = {
   letAssistantContinue: "Let the assistant continue",
   easyForHiringSoftware: "Easy for hiring software to read",
   // Profile, Skills: a gate is a requirement the person does not meet (api/app/jobs/scoring.py).
-  requirementsNotMet: "Requirements you do not meet",
   addRequirement: "Add a requirement",
   noneYet: "None yet.",
   pointsTakenOff: "Points taken off",

@@ -122,7 +122,7 @@ test.afterAll(async () => {
 test("an employer and a school with years only are saved and read back as entered", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile#experience");
+  await page.goto("/profile/experience");
   await expect(page.getByRole("form", { name: "Experience" })).toBeVisible();
 
   await page.getByRole("button", { name: "Add employer" }).click();
@@ -151,7 +151,7 @@ test("an employer and a school with years only are saved and read back as entere
   expect(await percent(page, "experience")).toBe(100);
 
   // After a reload: the four characters that were typed, no month made up for them.
-  await page.goto("/profile");
+  await page.goto("/profile/experience");
   await expect(field(page, "Start of employer 1")).toHaveValue("2021");
   await expect(field(page, "End of employer 1")).toHaveValue("2023");
   await expect(field(page, "Start of school 1")).toHaveValue("2019");
@@ -200,7 +200,7 @@ test("at 375 px, from the keyboard: the two refusals, then a year becomes a mont
   await retype(page, "End of employer 1", "2023");
   await save(page);
 
-  await page.goto("/profile");
+  await page.goto("/profile/experience");
   await expect(field(page, "Start of employer 1")).toHaveValue("2021-03");
   await expect(field(page, "End of employer 1")).toHaveValue("2023");
   await expect(field(page, "Start of school 1")).toHaveValue("2019");
@@ -280,7 +280,7 @@ test("export, change, import the export back: the year alone comes back as writt
   await expect(page.getByText("Profile imported.")).toBeVisible();
   await expect(dialog).toBeHidden();
 
-  await page.goto("/profile");
+  await page.goto("/profile/experience");
   await expect(field(page, "Start of employer 1")).toHaveValue("2021-03");
   await expect(field(page, "End of employer 1")).toHaveValue("2023");
   await expect(field(page, "Start of school 1")).toHaveValue("2019");

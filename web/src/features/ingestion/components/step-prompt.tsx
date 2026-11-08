@@ -1,68 +1,23 @@
-import { ArrowRight, Check, Copy, Info } from "lucide-react";
-import { useRef, useState } from "react";
-import { toast } from "sonner";
+import { ArrowRight, Info } from "lucide-react";
 
 import { PageBody } from "@/components/blocks/page";
+import { AssistantPrompt } from "@/components/shared/ingestion/assistant-prompt";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { LoadError } from "@/components/blocks/load-error";
-import { loadFailureSentence } from "@/features/ingestion/api/documents-api";
 
-import { usePrompt } from "../api/use-prompt";
 import type { StepProps } from "../helpers/steps";
 
 /**
  * Step 1, "Prepare": a prompt the user copies and runs with Claude Code or Codex on their own
- * computer. That assistant looks through the folders the user names and writes one file, the
- * dossier, which the user reads and then adds in step 2. The app never reads the computer:
+ * computer. That assistant looks through the home folder and answers with the profile, which the
+ * user reads, copies and pastes in step 2. The app never reads the computer:
  * this step only shows text (GET /api/ingestion/prompt, api/app/ingestion/prompt_router.py).
  *
  * PROMPT_READY is what the page shell reads: the step is listed and can be opened.
  */
 export const PROMPT_READY = true;
 
-const ASSISTANTS = [
-  { id: "claude_code", name: "Claude Code", command: "claude" },
-  { id: "codex", name: "Codex", command: "codex" },
-] as const;
-type AssistantId = (typeof ASSISTANTS)[number]["id"];
-
-const isAssistantId = (value: string): value is AssistantId =>
-  ASSISTANTS.some((assistant) => assistant.id === value);
-
-/** What the last press of Copy did, and for which assistant's prompt. */
-interface CopyResult {
-  assistant: AssistantId;
-  outcome: "copied" | "failed";
-}
-
 export function StepPrompt({ goTo }: StepProps) {
-  const query = usePrompt();
-  const [assistant, setAssistant] = useState<AssistantId>("claude_code");
-  const [copy, setCopy] = useState<CopyResult>();
-  const text = useRef<HTMLTextAreaElement>(null);
-
-  const onCopy = async (id: AssistantId, prompt: string) => {
-    try {
-      // Missing outside a secure context (plain http on another host than localhost).
-      const clipboard = navigator.clipboard as Clipboard | undefined;
-      if (!clipboard) throw new Error("no clipboard");
-      await clipboard.writeText(prompt);
-      setCopy({ assistant: id, outcome: "copied" });
-      toast.success("Prompt copied.");
-    } catch {
-      setCopy({ assistant: id, outcome: "failed" });
-      // The way that always works: the whole text selected, the user copies it.
-      text.current?.focus();
-      text.current?.select();
-    }
-  };
-
   return (
     <PageBody
       aside={
@@ -77,7 +32,7 @@ export function StepPrompt({ goTo }: StepProps) {
               <p>
                 Claude Code or Codex sends what it reads to its own model
                 provider, under your own account. This app never reads your
-                computer: it only gets the file you add in the next step.
+                computer: it only gets the answer you paste in the next step.
               </p>
             </AlertDescription>
           </Alert>
@@ -97,9 +52,9 @@ export function StepPrompt({ goTo }: StepProps) {
     >
       <div className="flex max-w-prose flex-col gap-2 text-sm text-muted-foreground">
         <p>
-          If you use Claude Code or Codex on your own computer, it can write a
-          dossier about your work. It looks through the folders you name and
-          writes one file, which you read and then add here in step 2.
+          If you use Claude Code or Codex on your own computer, it can look
+          through it and answer with everything about your work, which you read,
+          copy and paste here in step 2.
         </p>
         <p>
           This step is optional. If you would rather add a CV or your own notes,
@@ -107,124 +62,7 @@ export function StepPrompt({ goTo }: StepProps) {
         </p>
       </div>
 
-      {query.isPending ? (
-        <div role="status" aria-live="polite">
-          <span className="sr-only">Loading the prompt</span>
-          <Skeleton aria-hidden="true" className="h-96" />
-        </div>
-      ) : query.isError ? (
-        <LoadError query={query} reason={loadFailureSentence(query.error)}>
-          The prompt could not be loaded.
-        </LoadError>
-      ) : (
-        <Card>
-          <CardContent>
-            <Tabs
-              value={assistant}
-              onValueChange={(value) => {
-                if (isAssistantId(value)) setAssistant(value);
-              }}
-            >
-              <TabsList aria-label="Your coding assistant">
-                {ASSISTANTS.map(({ id, name }) => (
-                  <TabsTrigger key={id} value={id} className="flex-1">
-                    {name}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-              {ASSISTANTS.map(({ id, name, command }) => {
-                const prompt = query.data[id];
-                const outcome =
-                  copy?.assistant === id ? copy.outcome : undefined;
-                return (
-                  <TabsContent
-                    key={id}
-                    value={id}
-                    className="flex flex-col gap-4"
-                  >
-                    <ol className="flex list-decimal flex-col gap-1.5 pl-5 text-sm">
-                      <li>Copy the prompt below.</li>
-                      <li>
-                        Open a terminal on your computer and start {name} by
-                        typing{" "}
-                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs">
-                          {command}
-                        </code>
-                        .
-                      </li>
-                      <li>
-                        Paste the prompt, replace the two folder lines near the
-                        top with the folders that hold your work, then send it.
-                      </li>
-                      <li>
-                        Read the file it writes,{" "}
-                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs break-words">
-                          {query.data.output_folder}/dossier.md
-                        </code>
-                        , then add it in step 2.
-                      </li>
-                    </ol>
-
-                    <div className="flex flex-col gap-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <Label htmlFor={`prompt-${id}`}>
-                          Prompt for {name}
-                        </Label>
-                        <Button
-                          type="button"
-                          onClick={() => void onCopy(id, prompt)}
-                          aria-describedby={`prompt-copy-${id}`}
-                        >
-                          {outcome === "copied" ? (
-                            <Check aria-hidden="true" />
-                          ) : (
-                            <Copy aria-hidden="true" />
-                          )}
-                          {outcome === "copied" ? "Copied" : "Copy the prompt"}
-                        </Button>
-                      </div>
-                      <Textarea
-                        ref={text}
-                        id={`prompt-${id}`}
-                        readOnly
-                        rows={14}
-                        spellCheck={false}
-                        value={prompt}
-                        aria-describedby={`prompt-version-${id}`}
-                        // The prompt is long: its 14 rows scroll, they do not grow with the text.
-                        className="resize-y bg-muted/40 p-3 font-mono text-xs leading-relaxed field-sizing-fixed md:text-xs dark:bg-muted/40"
-                      />
-                      <p
-                        id={`prompt-copy-${id}`}
-                        role="status"
-                        className={
-                          outcome === "failed"
-                            ? "text-sm font-medium text-destructive"
-                            : "text-sm text-muted-foreground"
-                        }
-                      >
-                        {outcome === "failed"
-                          ? "This browser blocked copying. The prompt is selected: copy it as you usually do, or select the text and copy it."
-                          : outcome === "copied"
-                            ? "The prompt is on your clipboard."
-                            : ""}
-                      </p>
-                      <p
-                        id={`prompt-version-${id}`}
-                        className="text-xs text-muted-foreground"
-                      >
-                        Prompt version {query.data.version}. Read it before you
-                        run it: it lists what the assistant may read and what it
-                        must leave alone.
-                      </p>
-                    </div>
-                  </TabsContent>
-                );
-              })}
-            </Tabs>
-          </CardContent>
-        </Card>
-      )}
+      <AssistantPrompt addIt="paste it in step 2, under Or paste a text" />
     </PageBody>
   );
 }

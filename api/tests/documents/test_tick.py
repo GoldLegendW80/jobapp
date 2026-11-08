@@ -432,10 +432,15 @@ def test_a_click_after_a_cancelled_automatic_base_cv_builds_that_base_cv_first(
     click(who, posting)
     found = who.generations()
     base = [g for g in found if g["mode"] is GenerationMode.base_profile]
-    assert [(g["document_id"], g["trigger"], g["status"]) for g in base] == [
-        (document, GenerationTrigger.auto, GenerationStatus.cancelled),
-        (document, GenerationTrigger.click, GenerationStatus.queued),
-    ]
+    # Both were made at the test's one fixed time: their order is the database's to choose.
+    made = sorted(((g["document_id"], g["trigger"], g["status"]) for g in base), key=str)
+    assert made == sorted(
+        [
+            (document, GenerationTrigger.auto, GenerationStatus.cancelled),
+            (document, GenerationTrigger.click, GenerationStatus.queued),
+        ],
+        key=str,
+    )
     [cv] = posting_cv(found)
     assert (cv["status"], cv["wait_reason"]) == (GenerationStatus.waiting, GenerationWait.base_cv)
     with who.factory() as db:

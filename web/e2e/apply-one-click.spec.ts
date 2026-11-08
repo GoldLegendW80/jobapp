@@ -395,7 +395,8 @@ test("Apply to the selected postings: one confirmation, each sent once, one left
     "The assistant fills each form and sends it. Your click approves exactly the postings listed here.",
   );
   const listed = dialog.getByRole("list", { name: "Postings to apply to" });
-  await expect(listed.getByRole("listitem")).toHaveCount(2);
+  // Each item holds its own list of what to know (the posting applied to, at the same company).
+  await expect(listed.locator(":scope > li")).toHaveCount(2);
   for (const title of titles.slice(0, 2))
     await expect(listed).toContainText(
       `${company}, ${title}CV and letter ready.`,

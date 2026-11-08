@@ -356,7 +356,7 @@ class Checker:
     def __init__(self) -> None:
         self.handed: list[str] = []
 
-    def check(self, kind: CredentialKind, secret: str) -> agents_verify.Result:
+    def check(self, secret: str) -> agents_verify.Result:
         self.handed.append(secret)
         return agents_verify.Result(agents_verify.Outcome.verified)
 

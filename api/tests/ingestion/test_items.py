@@ -197,7 +197,6 @@ GATE = {"name": "phd", "terms": ["phd"]}
         ("search", "browser_sources", {"kind": "linkedin", "accepted_at": None}),
         ("search", "min_fit", 80),
         ("search", "days", 3),
-        ("skills", "years_experience", 4),
         ("skills", "gates", {**GATE, "penalty": 90}),
         ("skills", "have", {**GATE, "advanced_regex": True}),
         ("search", "title_include", {"terms": ["ai"], "advanced_regex": True}),
@@ -235,7 +234,10 @@ def test_the_photo_and_what_is_not_a_section_have_no_key(section: Any, key: Any,
     assert refusal(section, key, "x").rule == rule
 
 
-def test_the_years_of_experience_are_derived_or_typed_by_the_user() -> None:
+def test_the_years_of_experience_are_stated_derived_or_typed_by_the_user() -> None:
+    # An agent proposes the figure a document states (merge rule 7, owner 2026-11-08).
+    assert build("skills", "years_experience", 3.5).value == 3.5
+    assert refusal("skills", "years_experience", None, "remove").rule == items.SETTING
     assert build("skills", "years_experience", 4, origin=Origin.derived).value == 4
     assert build("skills", "years_experience", 4.5, origin=Origin.user).value == 4.5
     assert refusal("identity", "full_name", "Ada", origin=Origin.derived).rule == items.UNKNOWN_KEY
@@ -471,12 +473,13 @@ def test_a_stored_item_is_read_again_by_todays_model() -> None:
     assert renamed.key == "languages:german"  # the stored key says where it applies
     years = build("skills", "years_experience", 4, "replace", origin=Origin.derived)
     assert items.from_payload({**payload_of(years), "flags": [items.FLAG_DERIVED]}) == years
+    # without the flag, a figure a document states (merge rule 7): read as the agent's
+    assert items.from_payload({**payload_of(years), "flags": []}) == years
     for broken in (
         {**stored, "section": "nowhere"},
         {**stored, "key": "nothing"},
         {**stored, "action": "merge"},
         {**stored, "value": {"name": "French", "evil": 1}},
-        {**payload_of(years), "flags": []},
         {},
     ):
         with pytest.raises(ItemError):
@@ -1040,6 +1043,7 @@ def test_no_proposed_value_holds_a_number_left_empty() -> None:
         for path in _numbers(model, name)
         if items.FIELD_TYPES.get(path) is not FieldType.SETTING
     ]
-    assert numbers == []
+    # The years a document states (2026-11-08) are the number the derived years already were.
+    assert numbers == ["skills.years_experience"]
     with pytest.raises(ItemError):
         items.build("skills", "years_experience", "add", None, origin=Origin.derived)

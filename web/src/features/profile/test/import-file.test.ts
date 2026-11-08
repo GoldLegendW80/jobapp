@@ -200,7 +200,7 @@ describe("checkImportFile accepts an export", () => {
     ]);
     expect(result.summary.photo).toBe(false);
     // Search needs a job website ticked in Find jobs, which the file does not hold.
-    expect(result.summary.completeness.overall).toBe(97);
+    expect(result.summary.completeness.overall).toBe(96);
   });
 
   it("reads an export with a ticked job website and no instructions as unchanged", () => {

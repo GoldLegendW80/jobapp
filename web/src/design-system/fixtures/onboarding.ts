@@ -1,8 +1,15 @@
 import { delay, http, HttpResponse } from "msw";
 
 import type { OnboardingState } from "@/features/onboarding/api/onboarding-api";
-import { EMPTY, type Search } from "@/features/profile/api/profile-api";
+import {
+  EMPTY,
+  type Answers,
+  type Identity,
+  type Search,
+} from "@/features/profile/api/profile-api";
 import { fakeDocuments } from "@/test/documents";
+import { fakeDocuments as fakeFiles, fakePrompt } from "@/test/ingestion";
+import { fakeRuns } from "@/test/ingestion-runs";
 import { fakeProfile } from "@/test/profile";
 import { defaultApplySettings, server } from "@/test/server";
 
@@ -53,6 +60,10 @@ export const savedSearch: Search = {
   location: { advanced_regex: false, terms: ["Lyon", "Remote Europe"] },
   remote_stance: "hybrid",
   contract_types: ["CDI", "Freelance"],
+  compensation: {
+    salary: { min: 55000, max: 65000, currency: "EUR" },
+    daily_rate: null,
+  },
   interactive_sites: [
     {
       platform: "welcome_to_the_jungle",
@@ -69,6 +80,25 @@ export const savedSearch: Search = {
   ],
 };
 
+/** The answers application forms ask, as an invented person gave them in the wizard. */
+export const savedAnswers: Answers = {
+  ...EMPTY.answers,
+  motivation:
+    "I want to build data platforms that a small team can run and trust.",
+  notice_period: "1 month",
+  earliest_start: "As soon as possible",
+  work_authorization: [
+    { country: "France", answer: "Yes", needs_sponsorship: false },
+  ],
+  salary_stance: "range",
+  salary_ranges: [
+    { currency: "EUR", minimum: 55000, maximum: 65000, period: "year" },
+  ],
+};
+
+/** The identity a reading of a CV gives: the country the Work step offers. */
+export const readIdentity: Identity = { ...EMPTY.identity, country: "France" };
+
 /** A website's permission as the api answers it: shown with its risk sentence, never given yet. */
 const permission = {
   enabled: false,
@@ -81,15 +111,30 @@ const permission = {
 };
 
 /**
- * The wizard's api for one person: their profile (none, or only `search` answered), their wizard
+ * The wizard's api for one person: their profile (none, or the sections given), their wizard
  * state, and apply's settings. Steps passed, Skip for now and Start answer as the api does.
  */
 export function fakeWizard({
   state = firstSignIn,
   search,
-}: { state?: OnboardingState; search?: Search } = {}) {
-  fakeProfile(search ? { search } : null);
+  answers,
+  identity,
+}: {
+  state?: OnboardingState;
+  search?: Search;
+  answers?: Answers;
+  identity?: Identity;
+} = {}) {
+  const sections = {
+    ...(identity ? { identity } : {}),
+    ...(search ? { search } : {}),
+    ...(answers ? { answers } : {}),
+  };
+  fakeProfile(Object.keys(sections).length ? sections : null);
   fakeDocuments();
+  fakeFiles();
+  fakePrompt();
+  fakeRuns();
   let current = { ...state };
   let settings: Record<string, unknown> = { ...defaultApplySettings };
   server.use(
@@ -151,3 +196,82 @@ export function failWizardProfile(how: "error" | "pending") {
     }),
   );
 }
+
+/** One proposal of a reading, as GET /api/ingestion/runs/{id}/proposals lists it. */
+const proposal = (id: string, section: string, more: object = {}) => ({
+  id,
+  status: "pending",
+  section,
+  key: id,
+  slot: id,
+  action: "add",
+  value: "Data engineer",
+  before: null,
+  after: "Data engineer",
+  noop: false,
+  stale: false,
+  stale_reason: null,
+  locked: false,
+  bulk: null,
+  problem: null,
+  flags: [],
+  free_text: false,
+  citations: [],
+  conflict: [],
+  depends_on: [],
+  base_revision: 0,
+  applied_revision: null,
+  ...more,
+});
+
+const builtCounts = {
+  total: 3,
+  pending: 3,
+  accepted: 0,
+  rejected: 0,
+  superseded: 0,
+  invalid: 0,
+  undone: 0,
+};
+
+/**
+ * What the reading of an invented CV proposes: a role to add, years two files disagree on (an
+ * empty place, so the wizard's fill_empty takes one), and a headline that would replace one.
+ */
+export const builtReview = {
+  run_id: "r1",
+  status: "done",
+  partial: false,
+  profile_revision: 0,
+  counts: builtCounts,
+  documents: [],
+  sections: [
+    {
+      section: "search",
+      counts: builtCounts,
+      items: [
+        proposal("p-role", "search"),
+        proposal("p-years", "skills", {
+          value: 6,
+          after: 6,
+          bulk: "flagged",
+          flags: ["conflict"],
+        }),
+        proposal("p-headline", "identity", {
+          action: "replace",
+          bulk: "replace",
+          value: "Data engineer",
+          before: "Engineer",
+        }),
+      ],
+    },
+  ],
+};
+
+/** What accept-additions answers for `builtReview` with fill_empty: the headline waits. */
+export const builtAdditions = {
+  decided: ["p-role", "p-years"],
+  skipped: [{ id: "p-headline", reason: "replace" }],
+  stopped: [],
+  pending: 1,
+};

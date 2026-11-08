@@ -602,6 +602,12 @@ def post(
     if found.posting_id is not None:
         store.lock_posting(db, user_id, found.posting_id)
     document = store.lock_document(db, user_id, document_id)
+    if document.kind == Kind.offer_notes:
+        from app.documents import offer_notes  # offer_notes imports this module
+
+        return offer_notes.post_message(
+            db, document, stored, at=at, script=script, settings=settings
+        )
     if kind_of(document) not in KINDS:
         raise ChatRefusedError("kind")  # an outreach proposal: edited by hand, no chat
     reason = writer_base.wait_reason(db, user_id)

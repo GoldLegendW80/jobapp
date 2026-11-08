@@ -36,8 +36,8 @@ ever deleted: the step row outlives it.
 
 The CHECK constraints are backstops (counts not negative, a range in order, the shapes of the two
 kinds of step, hash lengths). The rules themselves live in `tools.py` (G9) and in the engine (G10).
-Migration: alembic/versions/0012_ingestion_runs.py, which must stay in step with this file
-(`alembic check` in the tests compares them).
+Migration: alembic/versions/0012_ingestion_runs.py, and 0046 for the `refusals` of a step, which
+must stay in step with this file (`alembic check` in the tests compares them).
 """
 
 import enum
@@ -61,6 +61,7 @@ RUN_DOCUMENTS_MAX = 30  # documents of one run (SPEC-ingestion.md, Limits)
 SECTION_MAX_CHARS = 64
 KEY_MAX_CHARS = 400  # items.KEY_MAX
 ACTIONS = ("add", "replace", "remove")  # items.Action
+REFUSALS_CHECK = "jsonb_typeof(refusals) = 'object'"  # migration 0046
 
 
 class RunStatus(enum.StrEnum):
@@ -241,6 +242,7 @@ class IngestionRunStep(Base):
             "AND refused_count >= 0 AND two_digit_year_count >= 0 AND items_count >= 0",
             name="counts_not_negative",
         ),
+        sa.CheckConstraint(REFUSALS_CHECK, name="refusals_is_object"),
         sa.Index("ix_ingestion_run_steps_agent_run_id", "agent_run_id"),
         sa.Index("ix_ingestion_run_steps_document_id", "document_id"),
     )
@@ -290,6 +292,10 @@ class IngestionRunStep(Base):
     )
     # Rows of ingestion_items this step stored.
     items_count: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
+    # `{section: {rule: count}}`, the refused proposals not stored afterwards (`refusals.py`).
+    refusals: Mapped[dict[str, dict[str, int]]] = mapped_column(
+        pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
+    )
     # Set when the step's document is deleted while it runs: its events are deleted again once
     # its agent run has ended (G15).
     purge_events: Mapped[bool] = mapped_column(

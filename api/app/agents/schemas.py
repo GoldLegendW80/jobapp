@@ -30,6 +30,16 @@ class CredentialIn(BaseModel):
     secret: SecretStr = Field(max_length=SECRET_BODY_MAX)
 
 
+CheckState = Literal["checking", "verified", "invalid", "busy", "unavailable"]
+
+
+class CheckOut(BaseModel):
+    """Where the worker's check of a subscription token stands (app/agents/token_check.py)."""
+
+    state: CheckState
+    message: str
+
+
 class CredentialOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -37,12 +47,15 @@ class CredentialOut(BaseModel):
     last4: str
     verified_at: datetime | None
     updated_at: datetime
+    # The last worker check of the subscription token as saved now (same updated_at). Null for
+    # an API key, whose check answers at once, and until a token's first check is queued.
+    check: CheckOut | None = None
 
 
 class VerifyOut(BaseModel):
-    # verified: the API accepted the key just now. unverified: a subscription token, which the
-    # server cannot check without running Claude Code; the first agent run checks it.
-    result: Literal["verified", "unverified"]
+    # verified: the API accepted the key just now. checking: a subscription token, whose check
+    # by Claude Code is queued in the worker; GET reads its outcome in `credential.check`.
+    result: Literal["verified", "checking"]
     message: str
     credential: CredentialOut
 

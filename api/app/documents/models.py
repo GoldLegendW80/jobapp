@@ -57,6 +57,8 @@ class Kind(enum.StrEnum):
     cv = "cv"
     letter = "letter"
     proposal = "proposal"  # an outreach proposal (issue #485, migration 0022): text only
+    interview_prep = "interview_prep"  # an interview preparation (migration 0043): text only
+    offer_notes = "offer_notes"  # notes on an offer letter (migration 0045): text only
 
 
 # The kinds a template prints and the renderer draws; a proposal is text only.
@@ -148,6 +150,7 @@ class GenerationOutcome(enum.StrEnum):
 class Channel(enum.StrEnum):
     content = "content"
     design = "design"
+    practice = "practice"  # the Practice chat of an interview preparation (migration 0043)
 
 
 class Role(enum.StrEnum):
@@ -453,6 +456,9 @@ class DocumentSettingsRow(Base):
     )
     banned_phrases: Mapped[list[str]] = mapped_column(
         pg.ARRAY(sa.Text), nullable=False, default=list, server_default=sa.text("'{}'::text[]")
+    )
+    starter_phrases: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
     updated_at: Mapped[datetime] = _now()
 

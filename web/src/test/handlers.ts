@@ -115,6 +115,15 @@ export const emptyAbout = {
   text_max: 300000,
 };
 
+/** A posting not prepared for an interview yet (job detail's Interview section). */
+export const NO_INTERVIEW_PREP = {
+  document: null,
+  writing: null,
+  practice: [],
+  practice_open: false,
+  stories_proposal: null,
+};
+
 export const handlers = [
   // The profile's About you document (profile/about-document.tsx), before the profile's own
   // routes: /api/profile/about is not a section.
@@ -182,6 +191,13 @@ export const handlers = [
   http.get("*/api/jobs/:id/documents", () =>
     HttpResponse.json({ documents: [] }),
   ),
+  http.get("*/api/jobs/:id/interview-prep", () =>
+    HttpResponse.json(NO_INTERVIEW_PREP),
+  ),
+  // Never assessed (job detail's Assess this posting).
+  http.get("*/api/jobs/:id/assessment", () =>
+    HttpResponse.json({ run: null, assessment: null }),
+  ),
   http.get("*/api/documents/base-cvs", () =>
     HttpResponse.json({
       base_cvs: [
@@ -202,9 +218,26 @@ export const handlers = [
       max: 10,
     }),
   ),
+  // No offer letter read for a posting (the posting page's Offer section).
+  http.get("*/api/documents/offer-notes/:id", () =>
+    HttpResponse.json({
+      document_id: null,
+      language: null,
+      notes: null,
+      version: null,
+      reading: null,
+      busy: false,
+      letter: null,
+      pay: { posting: { pay: null }, pay_sought: [] },
+    }),
+  ),
   // No hiring panel read the document yet (documents D29).
   http.get("*/api/documents/:id/panel", () =>
     HttpResponse.json({ panel: null, input_tokens: 0, output_tokens: 0 }),
+  ),
+  // Every requirement term of the posting in the CV, or no posting to compare (the coverage line).
+  http.get("*/api/documents/:id/coverage", () =>
+    HttpResponse.json({ draft_revision: 1, terms: [], missing: [] }),
   ),
   // No skills change rescored yet (the line after Save skills).
   http.get("*/api/jobs/rescore/status", () =>
@@ -218,13 +251,22 @@ export const handlers = [
   ),
   // No writing rule yet, the default of a new user (the Search tab's Writing rules card).
   http.get("*/api/documents/settings", () =>
-    HttpResponse.json({ no_dash_separators: false, banned_phrases: [] }),
+    HttpResponse.json({
+      no_dash_separators: false,
+      banned_phrases: [],
+      starter_phrases: false,
+      starter_list: ["passionate about", "proven track record", "leveraged"],
+    }),
   ),
   // No application started for a posting (job detail's Apply section).
   http.get("*/api/applications", () => HttpResponse.json({ items: [] })),
   // A new account's apply settings (the job page's Apply line): the review box unticked.
   http.get("*/api/apply/settings", () =>
     HttpResponse.json(defaultApplySettings),
+  ),
+  // No follow up yet, the switch on (Applications and the job page's follow up line).
+  http.get("*/api/apply/followups", () =>
+    HttpResponse.json({ enabled: true, today: "2026-11-07", items: [] }),
   ),
   // Nothing waits in the review queue (the app shell's Applications count).
   http.get("*/api/apply/queue/count", () =>

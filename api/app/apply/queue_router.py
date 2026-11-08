@@ -2,8 +2,9 @@
 
 - POST /api/postings/{posting_id}/like: `likes.on_like`, the Like of the jobs list until the swipe
   deck (#74) calls it. 201 with the application and the documents asked; 409 `{detail, code,
-  application_id}` for a refusal (A2's codes and `same_role_live`), 409 `busy` past a lock
-  timeout; 404 for a posting that is not the person's.
+  application_id}` for a refusal (A2's codes and `same_role_live`; `posting_closed` with the
+  page's own sentence when the posting's address, read first, says it is closed), 409 `busy`
+  past a lock timeout; 404 for a posting that is not the person's.
 - GET /api/apply/queue: the person's applications the queue shows, those waiting for the person
   first (`ready`, `needs_person`, `refused_by_site`, `submit_unknown`), then those under way
   (`queued`, `filling`, `approved`, `held`, `submitting`), oldest first within each; Apply myself
@@ -62,6 +63,7 @@ from app.documents import store as documents_store
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
+from app.jobs import liveness_check
 from app.jobs import service as jobs_service
 from app.jobs.models import Job, JobStatus
 
@@ -163,6 +165,9 @@ def _refused(db: Session, code: str, detail: str, application_id: uuid.UUID | No
 )
 def like(posting_id: str, request: Request, user: CurrentUser, db: Db) -> LikedOut | JSONResponse:
     """The person's Like: the application itself, created at once, or why not."""
+    closed = liveness_check.click_refusal(request, user.id, _uuid_or_404(posting_id, NOT_FOUND))
+    if closed is not None:
+        return _refused(db, "posting_closed", closed)
     try:
         liked = likes.on_like(
             db,

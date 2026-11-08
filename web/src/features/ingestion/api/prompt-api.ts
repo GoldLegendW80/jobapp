@@ -11,7 +11,7 @@ export const promptSchema = z.object({
   /** PROMPT_VERSION of the template the two texts were filled from. */
   version: z.number(),
   sha256: z.string(),
-  /** The folder the prompt has the dossier written in. */
+  /** Where version 1 of the prompt had the answer written; unused since. */
   output_folder: z.string().min(1),
   claude_code: z.string().min(1),
   codex: z.string().min(1),

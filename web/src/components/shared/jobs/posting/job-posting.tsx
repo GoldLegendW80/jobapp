@@ -9,13 +9,18 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { JobAssessment } from "@/components/shared/agents/job-assessment";
 import { ApplySection } from "@/components/shared/apply/apply-section";
+import { FollowUpLine } from "@/components/shared/apply/follow-up-line";
 import { PostingDocumentsSection } from "@/components/shared/documents/posting-documents";
+import { InterviewPrepSection } from "@/components/shared/documents/interview-prep/interview-prep-section";
+import { OfferNotesSection } from "@/components/shared/documents/offer-notes/offer-notes-section";
 import { isApiError } from "@/lib/api";
 
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { useJob } from "@/features/jobs/api/use-job";
 import { useJobEditor } from "@/features/jobs/api/use-job-editor";
 import { safeHttpUrl } from "@/features/jobs/helpers/text";
+import { AssessSection } from "../assess/assess-section";
+import { AssessmentDetails } from "../assess/assessment-details";
 import { FilesSection } from "../files-section";
 import { NotesEditor } from "../job-editor/notes-editor";
 import { StatusAndFit } from "../job-editor/status-and-fit";
@@ -24,6 +29,8 @@ import { PostingContent } from "./posting-content";
 import { PostingFacts } from "./posting-facts";
 import { PostingHeader } from "./posting-header";
 import { PostingHistory } from "./posting-history";
+import { PostingLiveness } from "./posting-liveness";
+import { PostingNotices } from "./posting-notices";
 
 /** The rhythm of Page between the header and the body, for the pane that has no Page. */
 const RHYTHM = "flex flex-col gap-6 sm:gap-8";
@@ -68,8 +75,8 @@ export function JobPosting({
 }
 
 /**
- * The posting in the main column: its text, competencies and gaps, then the person's notes, its
- * files and its history. The side rail holds what the person acts with: the application first,
+ * The posting in the main column: its text, competencies and gaps, the offer from the interview
+ * on, then the person's notes, its files and its history. The side rail holds what the person acts with: the application first,
  * the documents, the status and fit, the assessment, then the dates and sources.
  */
 function JobDetailView({
@@ -97,18 +104,25 @@ function JobDetailView({
         trail={trail}
         actions={actions}
       />
+      <PostingNotices notices={job.notices} />
       <PageBody
         lead={<ApplySection job={job} />}
         aside={
           <>
+            <FollowUpLine jobId={job.id} />
             <PostingDocumentsSection job={job} />
+            <AssessSection job={job} />
+            <InterviewPrepSection job={job} />
             <StatusAndFit job={job} save={save} />
             <JobAssessment job={job} />
             <PostingFacts job={job} link={link} />
+            <PostingLiveness job={job} />
           </>
         }
       >
         <PostingContent job={job} link={link} />
+        <AssessmentDetails job={job} />
+        <OfferNotesSection job={job} />
         <NotesEditor key={job.id} job={job} save={save} />
         <FilesSection jobId={job.id} files={job.files} />
         <PostingHistory job={job} />

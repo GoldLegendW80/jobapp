@@ -10,7 +10,6 @@ export const ABOUT_WORDS = {
     "Your skills, your answers to application forms and the facts about your work. Write a fact part in your own words and click Done: it is saved as written. With a model key your skills and answers are text too, and the app shows what it would change in your profile.",
   loading: "Loading your document",
   notLoaded: "Your document could not be loaded",
-  contents: "Parts of About you",
   kinds: {
     skills: "What the fit of a posting reads.",
     answers:
@@ -62,8 +61,7 @@ export const ABOUT_WORDS = {
     "Your profile changed since this part was written, for example in Fill my profile. Done would replace those changes. Rewrite the part from your profile first.",
   rewrite: "Rewrite from my profile",
   advanced: (count: number) =>
-    `${plural(count, "advanced category", "advanced categories")} (regular expressions) stay as they are.`,
-  advancedLink: "Edit them in Advanced matching",
+    `${plural(count, "advanced category", "advanced categories")} (regular expressions) ${count === 1 ? "stays as it is and keeps" : "stay as they are and keep"} counting in the fit score.`,
   newPart: "New part",
   addPart: "Add a part",
   missing: (count: number) =>

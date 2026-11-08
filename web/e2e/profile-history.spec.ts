@@ -128,7 +128,7 @@ test.afterAll(async () => {
 test("a new account fills its profile from empty to 100%", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
-  await page.goto("/profile");
+  await page.goto("/profile/contact");
   await expect(completeness(page)).toHaveText("0% complete");
 
   // Identity
@@ -143,6 +143,7 @@ test("a new account fills its profile from empty to 100%", async () => {
   await save(page, "Identity");
 
   // Experience
+  await page.getByRole("tab", { name: "Experience" }).click();
   await page.getByRole("button", { name: "Add employer" }).click();
   await page
     .getByLabel("Organisation of employer 1", { exact: true })
@@ -158,6 +159,7 @@ test("a new account fills its profile from empty to 100%", async () => {
   await save(page, "Experience");
 
   // Facts: a part of About you, saved to the profile at Done without a model.
+  await page.getByRole("tab", { name: "About you" }).click();
   await page.getByRole("button", { name: "Add a part" }).click();
   await part(page, "New part")
     .getByLabel("Heading", { exact: true })
@@ -216,7 +218,7 @@ test("a new account fills its profile from empty to 100%", async () => {
   expect((await stored(page)).completeness.sections.search?.percent).toBe(100);
 
   // Answers: like the skills, fields of About you without a model key.
-  await page.goto("/profile");
+  await page.goto("/profile/about");
   const answers = page.getByRole("form", { name: "Answers" });
   await answers.getByRole("button", { name: /^Work authorisation,/ }).click();
   await answers.getByRole("button", { name: "Add country" }).click();
@@ -246,6 +248,7 @@ test("a new account fills its profile from empty to 100%", async () => {
 });
 
 test("edit a section twice, compare in History, restore the first version", async () => {
+  await page.getByRole("tab", { name: "Contact" }).click();
   const headline = page.getByLabel("Headline", { exact: true });
   await headline.fill(SECOND);
   await page.getByLabel("City", { exact: true }).fill("Paris");
@@ -290,6 +293,7 @@ test("edit a section twice, compare in History, restore the first version", asyn
   );
 
   // The fact base compares line by line.
+  await page.getByRole("tab", { name: "About you" }).click();
   const rules = part(page, "HARD RULES");
   await rules.getByRole("button", { name: "Edit HARD RULES" }).click();
   await rules
@@ -316,7 +320,7 @@ test("edit a section twice, compare in History, restore the first version", asyn
   await expect(factsDrawer).toBeHidden();
 
   // After a reload the restored version is still there.
-  await page.goto("/profile");
+  await page.goto("/profile/contact");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(FIRST);
   expect(errors).toEqual([]);
 });
@@ -404,7 +408,7 @@ test("export, change, import the export back: data and completeness restored", a
   );
 
   // Persisted: a reload shows the imported data, and the history records the import.
-  await page.goto("/profile");
+  await page.goto("/profile/contact");
   await expect(page.getByLabel("City", { exact: true })).toHaveValue(
     "Bordeaux",
   );

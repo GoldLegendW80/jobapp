@@ -71,7 +71,8 @@ def test_save_then_read_back_without_the_secret(
     response = put(api, alice)
     assert response.status_code == 200, response.text
     body = response.json()
-    assert set(body) == {"kind", "last4", "verified_at", "updated_at"}
+    assert set(body) == {"kind", "last4", "verified_at", "updated_at", "check"}
+    assert body["check"] is None
     assert body["kind"] == "anthropic_api_key"
     assert body["last4"] == API_KEY[-4:]
     assert body["verified_at"] is None
@@ -356,6 +357,8 @@ def test_verify_accepted_key(
     assert body["message"] == agents_router.VERIFIED
     assert body["credential"]["last4"] == API_KEY[-4:]
     assert body["credential"]["verified_at"] is not None
+    # A key's check answers at once: no worker check to report.
+    assert body["credential"]["check"] is None
     assert API_KEY not in response.text
     row = stored(factory, ALICE)
     assert row is not None
@@ -368,7 +371,9 @@ def test_verify_accepted_key(
     assert sent.url.host == "api.anthropic.com"
     assert sent.headers["x-api-key"] == API_KEY
     assert "authorization" not in sent.headers
-    assert api.get(PATH, token=alice).json()["verified_at"] is not None
+    read = api.get(PATH, token=alice).json()
+    assert read["verified_at"] is not None
+    assert read["check"] is None
 
 
 def test_verify_hides_the_credential_it_decrypted_from_the_logs(
@@ -386,10 +391,10 @@ def test_verify_hides_the_credential_it_decrypted_from_the_logs(
     seen: list[str] = []
 
     class Loud:
-        def check(self, kind: CredentialKind, secret: str) -> agents_verify.Result:
+        def check(self, secret: str) -> agents_verify.Result:
             logging.getLogger("httpx").error("HTTP Request x-api-key=%s", secret)
             seen.append(logging_config.clean_text(secret))
-            return agents_verify.Result(agents_verify.Outcome.unverified)
+            return agents_verify.Result(agents_verify.Outcome.verified)
 
     app.state.model_verifier = Loud()
     out = io.StringIO()
@@ -406,19 +411,6 @@ def test_verify_hides_the_credential_it_decrypted_from_the_logs(
     assert API_KEY not in out.getvalue()
     assert "x-api-key=[redacted]" in out.getvalue()
     assert logging_config.clean_text(API_KEY) == API_KEY  # and nothing stays hidden after
-
-
-def test_subscription_token_is_stored_unverified_without_any_call(
-    api: Api, alice: str, anthropic_api: FakeAnthropic
-) -> None:
-    put(api, alice, kind="claude_subscription", secret=OAUTH)
-    response = api.post(VERIFY, token=alice)
-    assert response.status_code == 200
-    body = response.json()
-    assert body["result"] == "unverified"
-    assert body["message"] == agents_router.UNVERIFIED
-    assert body["credential"]["verified_at"] is None
-    assert anthropic_api.requests == []
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -764,7 +756,7 @@ def test_unhandled_error_logs_no_secret(
     put(api, alice)
 
     class Broken:
-        def check(self, kind: CredentialKind, secret: str) -> None:
+        def check(self, secret: str) -> None:
             raise RuntimeError(f"boom {secret}")
 
     app.state.model_verifier = Broken()

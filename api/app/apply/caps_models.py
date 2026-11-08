@@ -116,4 +116,8 @@ class ApplySettings(Base):
     review_before_send: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
     )
+    # Follow ups of sent applications (migration 0040, SPEC-apply "Follow ups"): on by default.
+    follow_ups: Mapped[bool] = mapped_column(
+        sa.Boolean, nullable=False, default=True, server_default=sa.true()
+    )
     updated_at: Mapped[datetime] = _now()

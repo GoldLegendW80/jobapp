@@ -74,6 +74,9 @@ ENV_KEEP = frozenset(
         "TZ",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
+        # Claude Code's own extra trust, set only behind a TLS inspecting proxy
+        # (compose.extra-ca-run.yml); a path, never a secret.
+        "NODE_EXTRA_CA_CERTS",
         "HTTPS_PROXY",
         "HTTP_PROXY",
         "NO_PROXY",

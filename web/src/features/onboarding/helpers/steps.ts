@@ -2,25 +2,30 @@ import { WIZARD_STEP_WORDS } from "@/lib/wording";
 import {
   CURRENCIES,
   PAY_MAX,
+  type Answers,
   type COMPANY_TYPES,
   type DOCUMENTS_LANGUAGES,
   type DOCUMENTS_TONES,
   type PayRange,
   type Preferences,
   type REMOTE_STANCES,
+  type SalaryRange,
   type Search,
   type SectionData,
   type SENIORITIES,
   type TermList,
 } from "@/features/profile/api/profile-api";
+import { SALARY_RANGES_MAX } from "@/features/profile/helpers/forms";
 
 /**
- * The eight steps of /welcome (SPEC-opportunities, "The first login wizard"), the answers the
+ * The ten steps of /welcome (SPEC-opportunities, "The first login wizard"), the answers the
  * person types (the draft, kept while they go back and forth), and how the draft reads from and
  * writes to the profile. Pure: the wizard's hook (use-wizard.ts) does the saving.
  */
 export const STEP_IDS = [
+  "access",
   "profile",
+  "building",
   "looking",
   "where",
   "sites",
@@ -34,11 +39,17 @@ export type StepId = (typeof STEP_IDS)[number];
 export const STEP_NAMES: Record<StepId, string> = WIZARD_STEP_WORDS;
 
 /**
- * Steps the onboarding api does not keep among the steps passed: "Websites to search" (added on
- * 2026-11-04) is answered by the list itself, so it is never sent to the api, and a release
- * before it never reads a step it does not know. It counts as passed once a later step is.
+ * Steps the onboarding api does not keep among the steps passed: "Model access" (2026-11-07) is
+ * answered by the credential saved, "Building your profile" (2026-11-07) by the profile it
+ * fills, and "Websites to search" (2026-11-04) by the list itself, so none is sent to the api,
+ * and a release before them never reads a step it does not know. Each counts as passed once a
+ * later step is.
  */
-export const UNSTORED: ReadonlySet<StepId> = new Set(["sites"]);
+export const UNSTORED: ReadonlySet<StepId> = new Set([
+  "access",
+  "building",
+  "sites",
+]);
 
 /** Steps that cannot be skipped: the roles, and the summary that ends the wizard. */
 export const ESSENTIAL: ReadonlySet<StepId> = new Set(["looking", "summary"]);
@@ -50,6 +61,19 @@ export interface PayDraft {
   min: string;
   max: string;
   currency: string;
+}
+
+export type YesNo = "yes" | "no";
+
+/** The first country of `answers.work_authorization`, the one the wizard asks about. */
+export interface AuthorizationDraft {
+  country: string;
+  /** "May you work there?"; null while not chosen */
+  allowed: YesNo | null;
+  sponsorship: YesNo | null;
+  /** The stored answer of that country, kept while `allowed` stays what it says (unchosen when
+   * it is more than yes or no). */
+  kept: string;
 }
 
 export interface Draft {
@@ -64,6 +88,11 @@ export interface Draft {
   salary: PayDraft;
   daily: PayDraft;
   ratherNotSay: boolean;
+  /** answers.motivation, answers.notice_period and answers.earliest_start as typed */
+  motivation: string;
+  notice: string;
+  start: string;
+  authorization: AuthorizationDraft;
   language: (typeof DOCUMENTS_LANGUAGES)[number];
   tone: (typeof DOCUMENTS_TONES)[number];
   /** The mode after a Like the person picked here; null keeps apply's setting untouched. */
@@ -117,9 +146,37 @@ const payDraft = (range: PayRange | null, fallback: string): PayDraft =>
       }
     : { min: "", max: "", currency: fallback };
 
+/** "Yes" or "No" when an answer starts with that word, else null. */
+export function yesNoOf(answer: string): YesNo | null {
+  const word = /^\s*(yes|no)\b/i.exec(answer)?.[1]?.toLowerCase();
+  return word === "yes" || word === "no" ? word : null;
+}
+
+const yesNo = (value: boolean | null): YesNo | null =>
+  value === null ? null : value ? "yes" : "no";
+
+function authorizationDraft(answers: Answers): AuthorizationDraft {
+  const first = answers.work_authorization[0];
+  if (!first)
+    return { country: "", allowed: null, sponsorship: null, kept: "" };
+  return {
+    country: first.country,
+    allowed: yesNoOf(first.answer),
+    sponsorship: yesNo(first.needs_sponsorship),
+    kept: first.answer,
+  };
+}
+
+/** "Rather not say" as the Pay step shows it: the stance chosen for forms, and no pay saved. */
+const notSaid = (sections: SectionData): boolean =>
+  sections.answers.salary_stance === "leave_blank" &&
+  sections.search.compensation.salary === null &&
+  sections.search.compensation.daily_rate === null;
+
 export function draftOf(sections: SectionData): Draft {
   const search = sections.search;
   const prefs = sections.preferences;
+  const answers = sections.answers;
   return {
     roles: join(search.title_include),
     seniority: [...search.seniority],
@@ -132,7 +189,11 @@ export function draftOf(sections: SectionData): Draft {
     contracts: [...search.contract_types],
     salary: payDraft(search.compensation.salary, "EUR"),
     daily: payDraft(search.compensation.daily_rate, "EUR"),
-    ratherNotSay: false,
+    ratherNotSay: notSaid(sections),
+    motivation: answers.motivation ?? "",
+    notice: answers.notice_period ?? "",
+    start: answers.earliest_start ?? "",
+    authorization: authorizationDraft(answers),
     language: prefs.documents_language,
     tone: prefs.documents_tone,
     mode: null,
@@ -175,6 +236,13 @@ export function stepProblem(step: StepId, draft: Draft): string | null {
       return 'Name at least one place, or choose "Anywhere".';
     if (draft.remote === null) return "Choose remote, hybrid, on site or any.";
   }
+  if (step === "work") {
+    const { country, allowed, sponsorship, kept } = draft.authorization;
+    if (!country.trim() && (allowed !== null || sponsorship !== null))
+      return "Name the country or region where you may work, for example France.";
+    if (country.trim() && allowed === null && !kept)
+      return `Say whether you may work in ${country.trim()}.`;
+  }
   if (step === "pay" && !draft.ratherNotSay) {
     for (const [name, pay] of [
       ["salary", draft.salary],
@@ -206,19 +274,141 @@ export function searchWith(step: StepId, stored: Search, draft: Draft): Search {
       };
     case "work":
       return { ...stored, contract_types: draft.contracts };
-    case "pay": {
-      if (draft.ratherNotSay)
-        return { ...stored, compensation: { salary: null, daily_rate: null } };
-      const salary = readPay(draft.salary);
-      const daily = readPay(draft.daily);
+    case "pay":
+      return { ...stored, compensation: compensationOf(draft) };
+    default:
+      return stored;
+  }
+}
+
+type Compensation = Search["compensation"];
+
+function compensationOf(draft: Draft): Compensation {
+  if (draft.ratherNotSay) return { salary: null, daily_rate: null };
+  const salary = readPay(draft.salary);
+  const daily = readPay(draft.daily);
+  return {
+    salary: "range" in salary ? salary.range : null,
+    daily_rate: "range" in daily ? daily.range : null,
+  };
+}
+
+/**
+ * The ranges forms get for a pay: the yearly salary, then the daily rate. Apply reads one range
+ * per currency, so a daily rate in the salary's currency stays on the cards only.
+ */
+export function rangesOf(pay: Compensation): SalaryRange[] {
+  const ranges: SalaryRange[] = [];
+  for (const [range, period] of [
+    [pay.salary, "year"],
+    [pay.daily_rate, "day"],
+  ] as const) {
+    if (range && !ranges.some((one) => one.currency === range.currency))
+      ranges.push({
+        currency: range.currency,
+        minimum: range.min,
+        maximum: range.max,
+        period,
+      });
+  }
+  return ranges;
+}
+
+const sameRange = (a: SalaryRange, b: SalaryRange) =>
+  a.currency === b.currency &&
+  a.minimum === b.minimum &&
+  a.maximum === b.maximum &&
+  a.period === b.period;
+
+/**
+ * The salary forms get, from the Pay step: "Rather not say" leaves it blank; a pay given is its
+ * ranges, replacing the ones this step wrote from the pay saved before (`before`) and those of
+ * the same currency, every other range kept. Unticking "Rather not say" with no figure clears
+ * the stance it showed.
+ */
+function salaryWith(stored: Answers, draft: Draft, before: Compensation) {
+  if (draft.ratherNotSay)
+    return { ...stored, salary_stance: "leave_blank" as const };
+  const fresh = rangesOf(compensationOf(draft));
+  const old = rangesOf(before);
+  const kept = stored.salary_ranges.filter(
+    (range) =>
+      !old.some((one) => sameRange(one, range)) &&
+      !fresh.some((one) => one.currency === range.currency),
+  );
+  const ranges = [...fresh, ...kept].slice(0, SALARY_RANGES_MAX);
+  const shown =
+    stored.salary_stance === "leave_blank" &&
+    before.salary === null &&
+    before.daily_rate === null;
+  const stance = fresh.length
+    ? "range"
+    : shown || (stored.salary_stance === "range" && ranges.length === 0)
+      ? null
+      : stored.salary_stance;
+  return { ...stored, salary_stance: stance, salary_ranges: ranges };
+}
+
+/**
+ * The first country of the work authorisation as typed, the others kept (each country once).
+ * Nothing typed leaves the list as stored; stepProblem refuses a choice without its country.
+ */
+function authorizationsWith(
+  stored: Answers["work_authorization"],
+  draft: AuthorizationDraft,
+): Answers["work_authorization"] {
+  const country = draft.country.trim();
+  if (!country) return stored;
+  const answer =
+    draft.allowed === null
+      ? draft.kept
+      : yesNoOf(draft.kept) === draft.allowed
+        ? draft.kept
+        : draft.allowed === "yes"
+          ? "Yes"
+          : "No";
+  const key = country.toLocaleLowerCase();
+  return [
+    {
+      country,
+      answer,
+      needs_sponsorship:
+        draft.sponsorship === null ? null : draft.sponsorship === "yes",
+    },
+    ...stored
+      .slice(1)
+      .filter((one) => one.country.trim().toLocaleLowerCase() !== key),
+  ];
+}
+
+const textOrNull = (text: string): string | null => text.trim() || null;
+
+/**
+ * The answers section with this step's answers in it, from `stored`; every other answer kept.
+ * Looking writes the motivation, Work the notice, the start and the work authorisation, Pay the
+ * salary forms get (`before`: the pay saved before this step).
+ */
+export function answersWith(
+  step: StepId,
+  stored: Answers,
+  draft: Draft,
+  before: Compensation,
+): Answers {
+  switch (step) {
+    case "looking":
+      return { ...stored, motivation: textOrNull(draft.motivation) };
+    case "work":
       return {
         ...stored,
-        compensation: {
-          salary: "range" in salary ? salary.range : null,
-          daily_rate: "range" in daily ? daily.range : null,
-        },
+        notice_period: textOrNull(draft.notice),
+        earliest_start: textOrNull(draft.start),
+        work_authorization: authorizationsWith(
+          stored.work_authorization,
+          draft.authorization,
+        ),
       };
-    }
+    case "pay":
+      return salaryWith(stored, draft, before);
     default:
       return stored;
   }
@@ -286,18 +476,6 @@ export function openStep(
   )
     return first;
   return requested;
-}
-
-/**
- * What the summary shows: the answers as saved (the stored profile and apply's settings), never
- * what was typed and then skipped. Only "Rather not say" comes from what was typed, since it
- * saves as no figures at all.
- */
-export function savedDraft(sections: SectionData, typed: Draft): Draft {
-  const stored = draftOf(sections);
-  const pay = sections.search.compensation;
-  const nothingStored = pay.salary === null && pay.daily_rate === null;
-  return { ...stored, ratherNotSay: typed.ratherNotSay && nothingStored };
 }
 
 /** Where "Start" leads: the deck. */

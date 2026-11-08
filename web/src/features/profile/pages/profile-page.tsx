@@ -1,20 +1,22 @@
 /**
- * /profile, the one place the profile is edited (product audit, chapter 2, analysis B6 and B7;
- * the tabbed classic editor is gone, owner 2026-11-06). The main column, top to bottom: Your CVs
- * and Upload your CV; Experience and education (its form); About you (the skills, the answers
- * and the facts, as text; without a model key the skills and the answers are forms); Advanced
- * matching (the skills written as regular expressions, which About you leaves out, and Try a
- * posting); Contact and links (the identity form, with the languages and the photo). The side rail is the person at a glance and what the profile is
- * Ready for. History, Export and Import are under More actions. The search is in Settings,
- * Search. Each form saves on its own; leaving the page with one unsaved asks first.
+ * /profile, the one place the profile is edited (product audit, chapter 2, analysis B6 and B7),
+ * in tabs, each its own address (owner, 2026-11-07: "I don't want too much scroll, you can put
+ * tab"; helpers/anchors.ts): CVs (Your CVs and Upload your CV), Experience (experience and
+ * education), About you (the skills, the answers and the facts, as text; without a model key the
+ * skills and the answers are forms), Contact (the identity form, with the languages and the
+ * photo). Advanced matching is gone (owner, 2026-11-08): skills stored as regular expressions
+ * keep scoring, and About you says they stay. The side rail is the person at a glance and what the
+ * profile is Ready for. History, Export and Import are under More actions. The search is in Settings, Search. Each
+ * form saves on its own; leaving a tab or the page with one unsaved asks first.
  */
 import { FileUp } from "lucide-react";
 import { useCallback, useMemo, useState, type ReactNode } from "react";
-import { Link, Navigate, useSearchParams } from "react-router";
+import { Link, Navigate, useLocation, useSearchParams } from "react-router";
 
 import { LoadError } from "@/components/blocks/load-error";
 import { Page, PageBody } from "@/components/blocks/page";
 import { PageHeader } from "@/components/blocks/page-header";
+import { PageTabs } from "@/components/blocks/page-tabs";
 import { Section } from "@/components/blocks/section";
 import { UnsavedGuard } from "@/components/shared/profile/unsaved-guard";
 import { Button } from "@/components/ui/button";
@@ -24,7 +26,6 @@ import { useTitle } from "@/hooks/use-title";
 import type { SectionName } from "../api/profile-api";
 import { useProfile } from "../api/use-profile";
 import { AboutDocument } from "../components/about-document";
-import { AdvancedMatching } from "../components/advanced-matching";
 import { ExperienceForm } from "../components/experience-form";
 import { IdentityForm } from "../components/identity-form";
 import { ProfileMenu } from "../components/profile-menu";
@@ -32,9 +33,12 @@ import { ProfileRail } from "../components/profile-rail";
 import { YourCvs } from "../components/your-cvs";
 import { ABOUT_WORDS } from "../helpers/about-words";
 import {
-  anchorOfTab,
   fallbackAnchor,
+  pathOfAnchor,
+  pathOfFormerTab,
   PROFILE_ANCHORS,
+  PROFILE_TABS,
+  tabOf,
 } from "../helpers/anchors";
 import { useScrollToAnchor } from "../hooks/use-scroll-to-anchor";
 
@@ -47,7 +51,6 @@ const FORMS = {
   experience: { section: "experience", label: "Experience and education" },
   skills: { section: "skills", label: "Skills" },
   answers: { section: "answers", label: "Answers" },
-  matching: { section: "skills", label: "Advanced matching" },
   identity: { section: "identity", label: "Contact and links" },
 } as const satisfies Record<string, { section: SectionName; label: string }>;
 type FormName = keyof typeof FORMS;
@@ -59,22 +62,26 @@ const counts = (value: number) =>
   >;
 
 /**
- * The addresses of the former tabs keep working: `?tab=search` goes to Settings, Search, and the
- * other tabs land on the section of this page that holds what they showed.
+ * The older addresses keep working: `?tab=search` goes to Settings, Search, the other former
+ * tabs and the places of the former one page (`/profile#contact`) to the tab that holds them.
  */
 export function ProfilePage() {
   const [params] = useSearchParams();
+  const { pathname, hash } = useLocation();
   const tab = params.get("tab");
   if (tab === "search") return <Navigate to="/settings/search" replace />;
-  if (tab !== null)
-    return (
-      <Navigate to={{ pathname: "/profile", hash: anchorOfTab(tab) }} replace />
-    );
+  if (tab !== null) return <Navigate to={pathOfFormerTab(tab)} replace />;
+  const moved =
+    pathname === "/profile" ? pathOfAnchor(hash.slice(1)) : undefined;
+  if (moved) return <Navigate to={moved} replace />;
   return <OneProfilePage />;
 }
 
+const TABS = PROFILE_TABS.map((tab) => ({ to: tab.path, label: tab.label }));
+
 function OneProfilePage() {
   useTitle(TITLE);
+  const tab = tabOf(useLocation().pathname);
   useScrollToAnchor(fallbackAnchor);
   const query = useProfile();
   // The forms with unsaved changes, in the order they were changed.
@@ -147,50 +154,47 @@ function OneProfilePage() {
         }
       />
       <PageBody aside={<ProfileRail profile={profile} />}>
-        <Anchor id={PROFILE_ANCHORS.cvs}>
-          <YourCvs />
-        </Anchor>
-        <Anchor id={PROFILE_ANCHORS.experience}>
-          <Section
-            title="Experience and education"
-            description="Your jobs and schools, with their dates, as every CV prints them."
-          >
-            <ExperienceForm
-              key={keys.experience}
-              profile={profile}
-              onDirtyChange={onDirty.experience}
-            />
-          </Section>
-        </Anchor>
-        <Anchor id={PROFILE_ANCHORS.about}>
-          <Section title={ABOUT_WORDS.title} description={ABOUT_WORDS.intro}>
-            <AboutDocument profile={profile} forms={plainForms} />
-          </Section>
-        </Anchor>
-        <Anchor id={PROFILE_ANCHORS.matching}>
-          <Section
-            title="Advanced matching"
-            description="Skill categories and requirements written as regular expressions, which About you leaves out, and a posting tried against all your skills."
-          >
-            <AdvancedMatching
-              key={keys.matching}
-              profile={profile}
-              onDirtyChange={onDirty.matching}
-            />
-          </Section>
-        </Anchor>
-        <Anchor id={PROFILE_ANCHORS.contact}>
-          <Section
-            title="Contact and links"
-            description="Your name, contact details, links, languages and photo, as every document shows them."
-          >
-            <IdentityForm
-              key={keys.identity}
-              profile={profile}
-              onDirtyChange={onDirty.identity}
-            />
-          </Section>
-        </Anchor>
+        <PageTabs label="Parts of your profile" tabs={TABS}>
+          {tab === "cvs" ? (
+            <Anchor id={PROFILE_ANCHORS.cvs}>
+              <YourCvs />
+            </Anchor>
+          ) : null}
+          {tab === "experience" ? (
+            <Section
+              title="Experience and education"
+              description="Your jobs and schools, with their dates, as every CV prints them."
+            >
+              <ExperienceForm
+                key={keys.experience}
+                profile={profile}
+                onDirtyChange={onDirty.experience}
+              />
+            </Section>
+          ) : null}
+          {tab === "about" ? (
+            <Anchor id={PROFILE_ANCHORS.about}>
+              <Section
+                title={ABOUT_WORDS.title}
+                description={ABOUT_WORDS.intro}
+              >
+                <AboutDocument profile={profile} forms={plainForms} />
+              </Section>
+            </Anchor>
+          ) : null}
+          {tab === "contact" ? (
+            <Section
+              title="Contact and links"
+              description="Your name, contact details, links, languages and photo, as every document shows them."
+            >
+              <IdentityForm
+                key={keys.identity}
+                profile={profile}
+                onDirtyChange={onDirty.identity}
+              />
+            </Section>
+          ) : null}
+        </PageTabs>
       </PageBody>
       <UnsavedGuard
         dirty={unsaved.length > 0}

@@ -146,7 +146,9 @@ def test_a_text_document_is_one_extraction_step_per_part() -> None:
     ]
     assert planned.refused == ()
     assert planned.planned_documents == (uuid.UUID(int=1), uuid.UUID(int=2))
-    assert planned.steps[0].identity == Identity(f"{1:064x}", "extract", (0,), 1, OPUS)
+    assert planned.steps[0].identity == Identity(
+        f"{1:064x}", "extract", (0,), plan.EXTRACTOR_VERSION, OPUS
+    )
 
 
 def test_the_parts_of_a_cut_text_keep_their_offsets() -> None:
@@ -178,7 +180,9 @@ def test_transcription_steps_come_first_then_the_extractions() -> None:
         (StepKind.extract, 3, 0),
     ]
     second = planned.steps[2]
-    assert second.identity == Identity(f"{3:064x}", "transcribe", (8,), 1, OPUS)
+    assert second.identity == Identity(
+        f"{3:064x}", "transcribe", (8,), plan.EXTRACTOR_VERSION, OPUS
+    )
     # An image is counted at 3,000 characters for its later extraction (A10).
     assert [(s.characters, s.predicted) for s in planned.steps[3:]] == [
         (1_000, False),
@@ -216,7 +220,9 @@ def test_the_model_and_the_extractor_version_are_part_of_the_identity() -> None:
     documents = [doc(1, 10)]
     finished = {step.identity for step in plan.build(documents, model=OPUS).steps}
     assert not plan.build(documents, model=SONNET, finished=finished).steps[0].reused
-    newer = plan.build(documents, model=OPUS, finished=finished, extractor_version=2)
+    newer = plan.build(
+        documents, model=OPUS, finished=finished, extractor_version=plan.EXTRACTOR_VERSION + 1
+    )
     assert not newer.steps[0].reused
     other_file = [Document(uuid.UUID(int=1), "ab" * 32, 10)]
     assert not plan.build(other_file, model=OPUS, finished=finished).steps[0].reused

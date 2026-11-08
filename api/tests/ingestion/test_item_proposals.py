@@ -394,11 +394,11 @@ def test_create_takes_a_profile_item_as_a_payload(
     assert found.payload["key"] == f"languages:{MARKER.casefold()}"
     assert found.payload["flags"] == [items.FLAG_CONFLICT]
     years = {"section": "skills", "key": "years_experience", "action": "replace", "value": 4}
-    with pytest.raises(proposals.InvalidValueError, match="setting"):
-        create(factory, alice, years)
-    # whose value it is comes from the calling code, never from the payload a model wrote
-    with pytest.raises(proposals.InvalidValueError, match="setting"):
-        create(factory, alice, {**years, "flags": [items.FLAG_DERIVED]})
+    # A figure a document states is the agent's (merge rule 7, 2026-11-08); whose value it is
+    # comes from the calling code, never from the payload a model wrote.
+    assert row(factory, create(factory, alice, years)).payload["flags"] == []
+    forged = create(factory, alice, {**years, "value": 5, "flags": [items.FLAG_DERIVED]})
+    assert row(factory, forged).payload["flags"] == []
     derived = create(factory, alice, years, derived=True)
     assert row(factory, derived).payload["flags"] == [items.FLAG_DERIVED]
     for broken in (
@@ -1319,10 +1319,14 @@ def test_the_derived_origin_is_an_argument_and_never_read_from_the_payload(
     save_all(factory, alice)
     years = {"section": "skills", "key": "years_experience", "action": "replace", "value": 40}
     forged = {**years, "flags": [items.FLAG_DERIVED], "citations": [cite()]}
-    with pytest.raises(proposals.InvalidValueError, match="setting"):
-        create(factory, alice, forged)
-    with factory() as db, pytest.raises(proposals.InvalidValueError, match="setting"):
-        ip.propose_payload(db, alice, forged, tick())
+    # Since 2026-11-08 an agent may propose the years a document states (merge rule 7): the
+    # forged flag is dropped, so the figure is never labelled as computed.
+    assert row(factory, create(factory, alice, forged)).payload["flags"] == []
+    with factory() as db:
+        outcome = ip.propose_payload(db, alice, forged, tick())
+        assert outcome.proposal is not None
+        assert outcome.proposal.payload["flags"] == []
+        db.rollback()
     # on an ordinary item the forged flag is dropped: nothing is labelled as computed
     german = {"section": "identity", "key": "languages", "action": "add", "value": GERMAN}
     labelled = create(factory, alice, {**german, "flags": [items.FLAG_DERIVED]})

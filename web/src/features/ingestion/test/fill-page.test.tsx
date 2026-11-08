@@ -51,7 +51,7 @@ describe("/profile/fill", () => {
     expect(
       screen.getByRole("heading", {
         level: 2,
-        name: "Step 1: Prepare a dossier with a coding assistant",
+        name: "Step 1: Analyze your computer with a coding assistant",
       }),
     ).toBeVisible();
     expect(
@@ -81,7 +81,7 @@ describe("/profile/fill", () => {
     expect(
       screen.getByRole("heading", {
         level: 2,
-        name: "Step 1: Prepare a dossier with a coding assistant",
+        name: "Step 1: Analyze your computer with a coding assistant",
       }),
     ).toBeVisible();
     expect(app.location()).toBe("/profile/fill?step=prompt");
@@ -101,7 +101,7 @@ describe("/profile/fill", () => {
     expect(
       await screen.findByRole(
         "heading",
-        { level: 2, name: /Prepare a dossier/ },
+        { level: 2, name: /Analyze your computer/ },
         { timeout: 10_000 },
       ),
     ).toBeVisible();
@@ -111,7 +111,7 @@ describe("/profile/fill", () => {
   it("an address that names a step is kept, documents or not", async () => {
     const app = await open("/profile/fill?step=prompt", [fakeDocument()]);
     expect(
-      screen.getByRole("heading", { level: 2, name: /Prepare a dossier/ }),
+      screen.getByRole("heading", { level: 2, name: /Analyze your computer/ }),
     ).toBeVisible();
     expect(app.location()).toBe("/profile/fill?step=prompt");
   });
@@ -130,13 +130,16 @@ describe("/profile/fill", () => {
     async (step) => {
       await open(`/profile/fill?step=${step}`);
       expect(
-        screen.getByRole("heading", { level: 2, name: /Prepare a dossier/ }),
+        screen.getByRole("heading", {
+          level: 2,
+          name: /Analyze your computer/,
+        }),
       ).toBeVisible();
     },
   );
 
   it.each([
-    ["prompt", "Step 1: Prepare a dossier with a coding assistant"],
+    ["prompt", "Step 1: Analyze your computer with a coding assistant"],
     ["documents", "Step 2: Add your documents"],
     ["review", "Step 3: Review what the agent proposes"],
   ])("opens the step named by ?step=%s", async (step, heading) => {

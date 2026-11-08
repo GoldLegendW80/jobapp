@@ -21,12 +21,12 @@ async function shots(page: Page, name: string, fullPage = true) {
 }
 
 /**
- * The fact parts of About you, Advanced matching and Settings, Search against the real stack
+ * The fact parts of About you, the Skills fields and Settings, Search against the real stack
  * through Caddy, no mocks: a fresh account gets a made up profile through the operator CLI (never
  * Harald's data), then the journey writes a fact part in Markdown and saves it to the profile,
- * moves it up (the fact base keeps the order, owner 2026-11-07), edits the regular expression
- * categories (refused in the browser, then by the server), tries a posting against all the
- * skills, saves and sees the rescore, changes the years in the Skills fields (no model key),
+ * moves it up (the fact base keeps the order, owner 2026-11-07), changes the years in the Skills
+ * fields (no model key) and keeps the categories stored as regular expressions (Advanced matching
+ * is gone, owner 2026-11-08),
  * toggles a contract in Search, reloads and finds every change. Search shows no company boards and the profile holds none
  * (owner, 2026-10-28: the board engine is deleted).
  *
@@ -161,24 +161,22 @@ function importProfile(email: string) {
   return cliImportProfile(email, fakeExport());
 }
 
-/** The profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
-async function visit(page: Page, where: "profile" | "search") {
+/** A tab of the profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
+async function visit(page: Page, where: "about" | "search") {
   if (where === "search") {
     await page.goto("/settings/search");
     await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
     return;
   }
-  if (!new URL(page.url()).pathname.endsWith("/profile"))
-    await page.goto("/profile");
+  if (new URL(page.url()).pathname !== `/profile/${where}`)
+    await page.goto(`/profile/${where}`);
   await expect(
-    page.getByRole("form", { name: "Advanced matching" }),
+    page.getByRole("heading", { level: 1, name: "Profile" }),
   ).toBeVisible();
 }
 
 const part = (page: Page, name: string) =>
   page.getByRole("region", { name, exact: true });
-const matching = (page: Page) =>
-  page.getByRole("form", { name: "Advanced matching" });
 
 /** The fact blocks the api holds now. */
 async function factBlocks(page: Page) {
@@ -217,14 +215,14 @@ test("a new account gets a made up profile through the CLI", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   expect(importProfile(EMAIL)).toMatch(/revision/i);
-  await visit(page, "profile");
+  await visit(page, "about");
   await expect(page.getByTestId("profile-completeness")).toHaveText(
     "100% complete",
   );
 });
 
 test("Facts: write a Markdown part, preview it, save it to the profile", async () => {
-  await visit(page, "profile");
+  await visit(page, "about");
   await expect(part(page, "HARD RULES")).toContainText(
     "Every claim traces to this base.",
   );
@@ -277,7 +275,7 @@ test("Facts: write a Markdown part, preview it, save it to the profile", async (
 });
 
 test("Facts: a part moves up, the fact base keeps the order, the meter says its size", async () => {
-  await visit(page, "profile");
+  await visit(page, "about");
   await expect(
     page.getByRole("meter", { name: "Fact base size" }),
   ).toHaveAttribute("aria-valuetext", / of 200 KB$/);
@@ -291,95 +289,8 @@ test("Facts: a part moves up, the fact base keeps the order, the meter says its 
   expect(errors).toEqual([]);
 });
 
-test("Advanced matching: add a regular expression, errors from the browser and the server, Try a posting", async () => {
-  await visit(page, "profile");
-  const form = matching(page);
-  // Only the categories written as regular expressions are here; the others are About you's.
-  await expect(form.getByRole("list", { name: "Terms of llm" })).toContainText(
-    "\\bllms?\\b",
-  );
-  await expect(form.getByRole("list", { name: "Terms of agents" })).toHaveCount(
-    0,
-  );
-  await form
-    .getByRole("button", { name: "Add category to competencies you have" })
-    .click();
-  await form
-    .getByLabel("Name of have category 2", { exact: true })
-    .fill("crews");
-  await form
-    .getByLabel("New term for crews", { exact: true })
-    .fill("\\bcrewai\\b");
-  await page.keyboard.press("Enter");
-  await expect(
-    form.getByRole("list", { name: "Terms of crews" }),
-  ).toContainText("\\bcrewai\\b");
-
-  // Refused in the browser: nested quantifiers.
-  const llm = form.getByLabel("New term for llm", { exact: true });
-  await llm.fill("(a+)+");
-  await page.keyboard.press("Enter");
-  await expect(
-    form.getByText(
-      "Nested quantifiers such as (a+)+ are not allowed: they can make matching hang.",
-    ),
-  ).toBeVisible();
-  // Accepted by the browser, refused by Python: the server's message lands under the chip.
-  await llm.fill("(?<n>a)");
-  await page.keyboard.press("Enter");
-  await form.getByRole("button", { name: "Save advanced matching" }).click();
-  const terms = form.getByRole("list", { name: "Terms of llm" });
-  await expect(terms.getByRole("alert")).toContainText(
-    /Invalid regular expression at position \d+/,
-  );
-  await shots(page, "skills-regex-error", false);
-  await form.getByRole("button", { name: "Remove (?<n>a)" }).click();
-
-  // Try a posting reads the skills in words of About you and the expressions being edited.
-  await page
-    .getByLabel("Posting text", { exact: true })
-    .fill(
-      "We are hiring an Applied AI Engineer to build agents with LangGraph and CrewAI on top of LLMs. Python and FastAPI. PyTorch is a plus. A PhD is not required.",
-    );
-  const results = page.getByRole("region", { name: "Matches" });
-  const have = results.getByRole("list", {
-    name: "Competencies you have results",
-  });
-  await expect(have).toContainText("agentsmatches agents, langgraph");
-  await expect(have).toContainText("llmmatches llms");
-  await expect(have).toContainText("crewsmatches crewai");
-  await expect(
-    results.getByRole("list", { name: "Requirements you do not meet results" }),
-  ).toContainText("phdmatches phd");
-  await expect(
-    results.getByRole("list", { name: "Competencies you lack results" }),
-  ).toContainText("researchmatches pytorch");
-  await shots(page, "skills");
-  await form.getByRole("button", { name: "Save advanced matching" }).click();
-  await expect(page.getByText("Skills saved.").first()).toBeVisible();
-  // Owner, 2026-11-05: the postings are rescored by themselves after a skills change; the
-  // worker's tick runs it within seconds and the line beside Save says what changed.
-  const rescored = page.getByTestId("rescore-line");
-  await expect(rescored).toContainText(
-    /more postings? now fits? you at \d+ or more|Rescored: no new posting reaches a fit of \d+/,
-    { timeout: 60_000 },
-  );
-  await expect(rescored).not.toContainText(/[–—]| - /);
-  // The categories in words were kept by the save.
-  const stored = (await (await page.request.get("/api/profile")).json()) as {
-    sections: { skills: { have: { name: string }[] } };
-  };
-  expect(stored.sections.skills.have.map((one) => one.name).sort()).toEqual([
-    "agents",
-    "crews",
-    "llm",
-    "python",
-  ]);
-  expect(errors).toEqual([]);
-});
-
 test("Skills without a model key: the years change by hand, the expressions are kept", async () => {
-  await visit(page, "profile");
+  await visit(page, "about");
   const skills = page.getByRole("form", { name: "Skills" });
   await expect(
     skills.getByRole("button", { name: "What I have, agents, python" }),
@@ -394,7 +305,6 @@ test("Skills without a model key: the years change by hand, the expressions are 
   expect(stored.sections.skills.years_experience).toBe(5);
   expect(stored.sections.skills.have.map((one) => one.name).sort()).toEqual([
     "agents",
-    "crews",
     "llm",
     "python",
   ]);
@@ -435,20 +345,12 @@ async function holdsBoards(page: Page): Promise<boolean> {
 }
 
 test("a reload shows every saved change", async () => {
-  await page.goto("/profile");
+  await page.goto("/profile/about");
   await expect(
     part(page, "POSITIONING").getByRole("heading", {
       name: "Lead with the business",
     }),
   ).toBeVisible();
-  const form = matching(page);
-  await expect(
-    form.getByRole("list", { name: "Terms of crews" }),
-  ).toContainText("\\bcrewai\\b");
-  await expect(
-    form.getByRole("list", { name: "Terms of llm" }),
-  ).not.toContainText("(?<n>a)");
-
   await visit(page, "search");
   await expect(page.getByRole("button", { name: "VIE" })).toHaveAttribute(
     "aria-pressed",

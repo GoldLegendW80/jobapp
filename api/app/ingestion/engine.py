@@ -637,6 +637,7 @@ def _next(
     # A retry counts its refusals afresh (G9: the counters add up over the attempts).
     step.refused_count = 0
     step.two_digit_year_count = 0
+    step.refusals = {}
     run.waiting = None
     return Moved(run.status, created.id)
 

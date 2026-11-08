@@ -146,7 +146,7 @@ test("a signed out visitor is sent to sign in", async ({ browser }) => {
   );
   // The form of the redirected page, which keeps `next` (stack.ts signIn opens /login afresh).
   await visitor.getByLabel("Email").fill(ADMIN);
-  await visitor.getByLabel("Password").fill(PASSWORD);
+  await visitor.getByLabel("Password", { exact: true }).fill(PASSWORD);
   await visitor.getByRole("button", { name: "Sign in" }).click();
   await expect(visitor).toHaveURL(/\/admin\/agents\/browser_discovery$/);
   await expect(

@@ -1,0 +1,11 @@
+# The Rive scene of the first login wizard's "Building your profile" step, in RML. building.rml is
+# written by gen.py (its keyframes are computed): from web/, python3 rive/building/gen.py
+# rive/building/building.rml, then rive rive/building --once (writes the unsigned
+# src/features/onboarding/assets/building.riv the page loads).
+name: building
+main: Building
+output:
+  dir: ../../src/features/onboarding/assets
+logs:
+  file: build/rive.log
+  problems: build/problems.log

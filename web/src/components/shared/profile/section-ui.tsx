@@ -260,7 +260,11 @@ export function FormErrorAlert({ message }: { message: string | undefined }) {
   );
 }
 
-/** Sticky at the bottom of the tab, so Save is reachable on a phone without scrolling back. */
+/**
+ * The form's Save. With unsaved changes it floats at the bottom of the screen, so Save is
+ * reachable without scrolling back; with none it is a quiet line at the form's end, so it never
+ * covers the next section.
+ */
 export function SaveBar({
   label,
   saving,
@@ -273,8 +277,16 @@ export function SaveBar({
   /** A line beside the button: what the save will start, or what the last one did. */
   note?: ReactNode;
 }) {
+  const floating = dirty || saving;
   return (
-    <div className="sticky bottom-(--bottom-bar,0px) z-10 -mx-4 flex flex-wrap items-center justify-end gap-x-3 gap-y-2 border-t bg-card/95 px-4 py-3 shadow-md backdrop-blur sm:mx-0 sm:rounded-xl sm:border-t-0">
+    <div
+      data-floating={floating}
+      className={cn(
+        "flex flex-wrap items-center justify-end gap-x-3 gap-y-2",
+        floating &&
+          "sticky bottom-(--bottom-bar,0px) z-10 -mx-4 border-t bg-card/95 px-4 py-3 shadow-md backdrop-blur sm:mx-0 sm:rounded-xl sm:border-t-0",
+      )}
+    >
       {note ? (
         <div className="min-w-0 basis-full text-sm empty:hidden sm:flex-1 sm:basis-auto">
           {note}
@@ -286,7 +298,12 @@ export function SaveBar({
       >
         {dirty ? "Unsaved changes" : "All changes saved"}
       </span>
-      <Button type="submit" disabled={saving} aria-busy={saving}>
+      <Button
+        type="submit"
+        variant={floating ? "default" : "outline"}
+        disabled={saving}
+        aria-busy={saving}
+      >
         {saving ? <Spinner aria-hidden="true" /> : <Save aria-hidden="true" />}
         {saving ? "Saving" : `Save ${label.toLowerCase()}`}
       </Button>

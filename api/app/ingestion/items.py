@@ -95,10 +95,11 @@ document supports: a gate's `penalty`, every `advanced_regex`, `search.min_fit`,
 `answers` (EEO, salary stance and ranges, consents, preferred name and the like). They are typed
 `setting` in `FIELD_TYPES`, and `build` refuses them for an agent whatever is cited.
 `search.seniority` (a CV shows the levels held) and `search.industries` (a CV names the sectors
-worked in) may be proposed. The photo is not a section and has no key. `skills.years_experience` is
-computed by the merge, never read by the agent: only `Origin.derived` may build it. A user's edit
-(`Origin.user`) is validated by the section model alone and may set a setting inside the entry it
-edits.
+worked in) may be proposed. The photo is not a section and has no key. `skills.years_experience`
+is the figure a document states (typed `years`: the citation checker finds it written as a number
+of years), proposed by the agent, or computed by the merge from the employers when no document
+states one (`Origin.derived`); the agent never removes it. A user's edit (`Origin.user`) is
+validated by the section model alone and may set a setting inside the entry it edits.
 
 **What is stored of a hostile value.** A value comes from a model that read a hostile document.
 Before the section model reads it: at most `VALUE_NODES_MAX` parts, `VALUE_CHARS_MAX` characters
@@ -151,6 +152,7 @@ __all__ = [
     "held",
     "held_hash",
     "is_locked",
+    "landed_key",
     "parse_key",
     "read",
     "restore",
@@ -304,7 +306,7 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "experience.education[].details": _T.TEXT,
         "facts.blocks[].title": _T.TEXT,
         "facts.blocks[].body": _T.TEXT,
-        "skills.years_experience": _T.SETTING,
+        "skills.years_experience": _T.YEARS,
         **{
             path: kind
             for bucket in ("have", "adjacent", "none")
@@ -452,7 +454,7 @@ class Slot:
     name: str
     kind: SlotKind
     locked: bool = False  # a locked fact of SPEC-profile: accepted one by one, never in bulk
-    derived: bool = False  # built by the merge only (and edited by the user)
+    derived: bool = False  # the merge may compute it when no document states it
 
     @property
     def keyed(self) -> bool:
@@ -953,11 +955,13 @@ def build(
     slot = SLOTS[section].get(key.partition(":")[0])
     if slot is None:
         raise ItemError(UNKNOWN_KEY, "key")
-    if slot.kind is SlotKind.setting or (slot.derived and origin is Origin.agent):
+    if slot.kind is SlotKind.setting:
         raise ItemError(SETTING, "key")
     if origin is Origin.derived and not slot.derived:
         raise ItemError(UNKNOWN_KEY, "key")
     if action is Action.remove:
+        if slot.derived and origin is Origin.agent:
+            raise ItemError(SETTING, "key")
         if value is not None:
             raise ItemError(VALUE_NOT_EXPECTED)
         _, whole = parse_key(section, key)
@@ -966,7 +970,7 @@ def build(
         raise ItemError(VALUE_EMPTY)
     by_user = origin is Origin.user
     relative = slot.field_types
-    raw = _bounded(value, None if by_user or slot.derived else relative)
+    raw = _bounded(value, None if by_user or origin is Origin.derived else relative)
     cleaned = _validated(slot, raw)
     if cleaned is None or cleaned == "":
         raise ItemError(VALUE_EMPTY)
@@ -1149,6 +1153,7 @@ def apply(
         after[slot.name] = _merged(slot, after[slot.name], value, exact)
     else:
         entries = list(after[slot.name])
+        landed = _written_key(slot, entries, key, value, exact)
         found = _matches(slot, entries, key)
         if slot.kind is SlotKind.lines:
             if not found:
@@ -1162,13 +1167,39 @@ def apply(
             if slot.name == "employers" and "key" not in entry:
                 entry["key"] = _unused_key(entries, _identity(slot, entry))
             _insert(slot, entries, entry)
-        if item.key != key and len(_matches(slot, entries, item.key)) > 1:
-            raise ProfileConflict(TAKEN_KEY)  # an edit renamed it onto another entry's key
+        for written in {item.key, landed}:
+            if written != key and len(_matches(slot, entries, written)) > 1:
+                raise ProfileConflict(TAKEN_KEY)  # it renamed the entry onto another one's key
         after[slot.name] = entries
     try:
         return schemas.validate_section(section, after)
     except ValidationError as exc:
         raise ProfileConflict(schemas.describe_validation_error(exc)) from None
+
+
+def _written_key(slot: Slot, entries: list[Any], key: str, value: Any, exact: bool) -> str:
+    if slot.kind is not SlotKind.entries:
+        return key
+    found = _matches(slot, entries, key)
+    if len(found) != 1:
+        return entry_key(slot, value)
+    try:
+        return entry_key(slot, _merged(slot, entries[found[0]], value, exact))
+    except ProfileConflict:
+        return key
+
+
+def landed_key(
+    section: str, data: Mapping[str, Any] | None, item: Item, *, at: str | None = None
+) -> str:
+    """The key of what `apply` leaves for the item in a canonical section: the item's key (or
+    `at`), unless the value renames the entry it writes (a school whose start the value fills, a
+    name the merge matched under the entry's own key). What a reader of the result looks up."""
+    slot, key = parse_key(section, item.key if at is None else at)
+    if item.action is Action.remove:
+        return key
+    before = list((data or {}).get(slot.name) or []) if slot.keyed else []
+    return _written_key(slot, before, key, item.value, item.action is Action.replace)
 
 
 # --- taking an item back --------------------------------------------------------------------------

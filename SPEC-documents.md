@@ -150,7 +150,7 @@ documents(id uuid pk, user_id uuid not null fk users on delete cascade,
           name text null, is_default bool not null default false,          -- base CVs only
           base_source enum base_source(profile, built, uploaded) null,     -- base CVs only
           base_document_id uuid null fk documents on delete set null,      -- a posting's CV: the base CV it was written from
-          kind enum document_kind(cv, letter, proposal) not null,       -- proposal: migration 0022 (issue #485)
+          kind enum document_kind(cv, letter, proposal, offer_notes) not null,  -- proposal: 0022 (issue #485); offer_notes: 0045
           language enum document_language(en, fr) not null,
           template_slug text not null,                          -- a bundled slug, or a user template's slug (upload-xxxxxxxx)
           draft jsonb not null, draft_schema int not null, draft_revision int not null default 1,
@@ -210,7 +210,9 @@ document_consents(user_id uuid fk users on delete cascade, text_version int, acc
           primary key (user_id, text_version))
 
 document_settings(user_id uuid pk fk users on delete cascade,
-          no_dash_separators bool not null default false, banned_phrases text[] not null default '{}', updated_at)
+          no_dash_separators bool not null default false, banned_phrases text[] not null default '{}',
+          starter_phrases bool not null default false,          -- migration 0042: the starter list switch
+          updated_at)
 
 document_user_templates(id uuid pk, user_id uuid not null fk users on delete cascade,
           slug text not null,                                   -- upload-xxxxxxxx; unique (user_id, slug)
@@ -302,6 +304,83 @@ shows it. Correct, never block: a reviewer that fails is recorded missing; a fai
 rebuild keeps the first version and says so. The apply module waits for a running panel as for a
 writing (`freeze.current`), within its own grace. Logs carry ids and counts only.
 
+## Interview preparation (owner, 2026-11-07, "build all" of the career-ops analysis)
+
+As a person invited to an interview, I click "Prepare for the interview" on the posting page (the
+first action of its Interview section once the status is `interview`, on demand before) and get,
+in about a minute, the questions the posting implies, the lines of my CV a hiring manager would
+push on, my stories with my own figures and questions to ask; I rehearse in Practice and write
+down afterwards what was asked. The shape follows career-ops's interview modes (MIT, NOTICE),
+without their web research.
+
+- **The document.** Kind `interview_prep` (migration 0043), one per posting, text only like a
+  proposal: its draft, versions, hand edits and restores are the routes above; nothing renders
+  it, and the posting's CV and letter list leaves it out. Its content: `expected` (questions with
+  their round and their basis, `posting` or `hiring_panel`: always inferred, never "they asked",
+  since the app reads no company record), `gaps` (what the posting asks that the profile does not
+  show, with an honest answer), `stories` (five to eight STAR stories), `ask` and `debrief`. It
+  holds up to 40 KB.
+- **Prepare** (`POST /api/jobs/{id}/interview-prep`, `interview_prep.start`): on the person's
+  click only (D29), with the consent and a credential, else 409 and nothing stored; a `posting`
+  generation of trigger `click` running `documents_interview_prep` (Admin, Agents, Documents).
+  It reads the posting and its brief, the profile's facts, experience, skills and answers, the CV
+  and letter as they were sent (the frozen version, else the latest), and the hiring panel's
+  stored record of them (the hiring manager's questions and weakest lines, the screen's reasons,
+  the merged mistakes): the panel is read, never run again. It submits through D7's
+  `submit.handle`: the stories and the answers to the gaps are claims, checked against the
+  profile, the base CV and the posting's title and company, so a figure the profile does not
+  state is corrected and recorded (Decision 4). Every field it shows (the target, the questions
+  and why, the gaps and their answers, the stories, the questions to ask) follows the dash rule,
+  whatever the person's own documents use; the debrief is the person's words and is left as
+  written. A new preparation keeps the person's debrief.
+- **Practice** (`POST /api/documents/{id}/practice`): a chat of channel `practice`; each message
+  starts `documents_interview_practice`, which reads the preparation and the practice so far and
+  answers through a strict tool with feedback on the last answer and one next question. Code
+  writes the answer, its dashes used as separators replaced, at most 2,102 characters whatever
+  the chat's own message limit (`interview_prep.PRACTICE_ANSWER_MAX`); a run that fails says
+  so, and a turn whose hook was lost is closed by the next read.
+- **Debrief**: what was asked, appended by hand to the draft (a version).
+- **Kept stories** (`POST /api/documents/{id}/stories`): the stories the person ticks become one
+  pending proposal of the profile's facts block "Interview stories" (appended to it, never
+  replacing it), written only when the person accepts it on the page (`/api/proposals/{id}`);
+  the next preparation reads that block. A second Keep before that answer adds to the pending
+  proposal, which keeps the stories of the first; the page of a posting shows a pending proposal
+  only when it holds stories of that posting's preparation.
+- **Page** `/jobs/:id/interview`: the questions, gaps, stories (Keep in my profile, then Accept or
+  Reject), questions to ask and the Debrief in the main column, Practice in the side rail,
+  Prepare again in the header.
+
+## Reading an offer
+
+The owner, 2026-11-07, "build all" of the career-ops analysis (item 12, the posture of its
+`offer-prep` mode: a clause walk in plain words, the deltas against the posting's pay, questions
+for a lawyer, never "safe to sign", never a score, no web research). From the interview on (the
+status `interview`, or the later `rejected` and `closed`; no new status), the posting page shows
+"Offer" with "Read an offer". The person uploads the letter or contract they received through
+ingestion's upload (`POST /api/ingestion/documents`, PDF or DOCX, its parser sandbox, its secret
+check), so the file keeps ingestion's retention and deletion: deleting it there leaves the notes,
+unlinked. Their click (`POST /api/documents/offer-notes/{posting_id}`, `offer_notes.read`) runs
+`documents_offer_read` once, under ingestion's consent and the person's own credential (409 for
+either missing, nothing stored), and writes the posting's document of kind `offer_notes`
+(migration 0045, text only, `source_document_id` the letter): a summary, each clause (its title,
+its own words quoted, what it means in plain words), what differs from the posting's stated pay
+(`opportunities/pay.py`) and from the person's `search.compensation`, and questions for a
+lawyer. The notes are in the letter's own language (`upload.language_of`, French or English); a
+quote stays word for word, every other field (a clause's title included) follows the dash rule.
+The agents read the letter's first 30,000 characters (`writer_base.UPLOAD_MAX_CHARS`): for a
+longer letter `get_offer_text` answers `truncated` with the characters read and the letter's
+own, the prompt has the summary say that only its beginning was read, and the section shows
+"Only the first 30,000 characters of the letter were read." No field holds a verdict or a
+score, the prompt forbids both and any outside fact, and a submit that tells the person to sign
+or calls signing safe is refused back to the agent (`offer_notes.VERDICT`, English and French;
+wording outside that list rests on the prompt). The page says the notes are not legal advice.
+Their chat is the documents chat (`chat.post` hands the message to `offer_notes.post_message`:
+the agent `documents_chat_offer_notes`, the same consent as the reading; a version of origin
+`chat` per change). `GET /api/documents/offer-notes/{posting_id}` answers the notes, the newest
+reading, the letter's name, what they were compared with and `truncated` (with `read_chars`);
+it settles first a chat change whose run ended without its hook (`chat.recover`), so the notes
+do not stay busy. `GET /api/jobs/{id}/documents` leaves the notes out.
+
 ## The writers
 
 Five agents, registered by the module with `definitions.register`, each with its prompt under `api/app/documents/prompts/` (versioned with the code, never containing anyone's data):
@@ -339,7 +418,24 @@ The writer is careful by construction (the prompt above, the fixed facts out of 
 
 **The corrections record.** Each correction is stored on the version it produced: `{field_path, before, after, code, by: "writer" | "code", reason}`, where `after` is empty for a removal and `reason` is a sentence of a fixed list ("Not in your profile", "A number your profile does not state", "A dash used as a separator", "A phrase you banned"). The document page shows "Corrected by the fact check" with the count, and each entry with its before and after. A claim that was removed but is true goes into the profile, and the next generation or a chat may use it; the person may also type it back by hand.
 
+**The starter list** (owner, 2026-11-07, "build all" of the career-ops analysis; Decision 9). Beside the person's own banned phrases, Settings, Documents has a switch, off by default, for a starter list of common CV phrases ("passionate about", "proven track record", "leveraged", "spearheaded", ..., `settings.STARTER_PHRASES`, taken from career-ops's `cv-voice.mjs`, MIT, NOTICE). When it is on, each starter phrase joins the banned phrases of step 3 and the writers' `writing_settings`, except one that the person's own CV already uses (the base CV's content and the file it was converted from, `DocumentSources.own_cv`): their words stay theirs.
+
 M9 stays owned by mail; its false issues on CV style text (technology names, version numbers, dates of education) are measured by D2 on invented fixtures, and the module passes known terms rather than loosening M9.
+
+## Keyword coverage
+
+Owner, 2026-11-07 ("build all" of the career-ops analysis, adapted from its `keyword-match.mjs`, MIT, NOTICE). A posting's CV shows, under its page, one line with the terms the posting asks for that the CV does not print: "Kubernetes and Airflow, named by the posting, are not in this CV. Add one only if it is true of you." Code, no model (`coverage.py`), read again at every revision of the draft, so after every hand save and every write; a diagnostic, never a block (Decision 4), and the writers' instruction to use the posting's vocabulary stays.
+
+- The posting's side is its requirement text only: its bulleted lines but those under a heading of the company, the benefits, the pay or the contract, and the parts under a requirements or a responsibilities heading (`brief.py`). A posting with none of them shows nothing, never "every term is there".
+- The terms are the person's own words, so the line is about the document, not the person (the Gap line of the job page names what the profile lacks): the plain terms of the skills categories `have` and `adjacent` (never `none`, never a gate, never a category written as regular expressions), then the competencies and skills items of the base CV the CV is written from. A term matches as whole words, its plural too, case and accents folded, the longer of two overlapping terms first; it is named as the posting writes it.
+- The CV's side is its printed text: its printed fields and the fixed facts the template prints (titles, organisations, schools, degrees, languages), each field apart.
+- A letter, a base CV and a proposal have no line.
+
+## The chat, and keeping a rule
+
+Owner, 2026-11-07 ("build all" of the career-ops analysis, after its `modes/retro.md`, MIT, NOTICE). When a message of the person in a document's chat corrects the wording ("Never say leveraged", "Shorter summary", "Évite le jargon"), the chat offers, once the answer is written, "Keep as a rule": the message itself as a rule, which the person reads, may edit, and keeps or not. Nothing is written before Keep. Keep appends the rule as one line of the block "Writing rules" of the profile's `facts` section (made when absent), the place of the person's writing rules ("What does not move"), through a `profile_item` proposal of SPEC-agents accepted by that click: one profile revision, recorded and undoable as every accepted item. The same rule twice is kept once.
+
+A fact is never a rule: the writers read the facts section as the source of claims, so a fact kept there as a rule would make it pass. The offer (`writing_rules.offer`, code, no model, English and French) fails closed. It comes only for a message that states no fact and whose every clause has a shape the code recognises: never, avoid, stop or do not, then a verb and a quoted or short phrase ("Never say leveraged", "N'écris jamais « passionné »"); words of style only (tone, length, formality, bullets, dashes: "Shorter summary", "Le ton est trop formel"); quoted words swapped ("Use 'built' instead of 'developed'"); a quoted word to avoid ("'Synergy' is banned"). A fact (`writing_rules.is_fact`) is a message that names the person (you, your, yourself, me, my, I, we, tu, te, ton, votre, je, mon and the like), holds a number in digits or in words, or has a verb that puts words in the document (say, write, mention, call, add, include, replace, dire, écrire, ajouter, remplacer and the like) not negated and followed by more than quoted words and words of style ("Always mention Kubernetes", "Replace developer with architect"). What it does not recognise gets no offer, and the person can still write a rule in the profile by hand. Keep takes only what the offer would take: a fact is refused (422, "A writing rule says how to write, not what is true of you"), and so is a message of another shape (422, "Keep takes a rule on the wording only, ...").
 
 ## Templates
 
@@ -403,7 +499,9 @@ The command line's hard rule 9 says the PDF of an `applied` row is never regener
 | GET /api/documents/consent ; POST /api/documents/consent `{version}` | the consent text with its estimates; record it |
 | POST /api/documents/spend/skills `{skills}` | what saving this draft of the skills section would start: the open postings of the window it brings to the threshold with no CV yet (`newly`, scored as a rescore would, nothing stored), their estimate, and `writes` |
 | GET /api/documents/spend `?min_fit=` | today against the safety ceiling, waiting, tokens and cost today and over 30 days, and how many postings of the last 30 days sit at or above the threshold asked (the current one by default) |
-| GET and PUT /api/documents/settings | the writing rules of Decision 9 |
+| GET and PUT /api/documents/settings | the writing rules of Decision 9, with the starter list switch; GET also answers the starter list (`starter_list`, never saved) |
+| GET /api/documents/{id}/coverage | the keyword coverage of a posting's CV draft: `terms` and `missing`, at `draft_revision`; empty lists for any other document ("Keyword coverage") |
+| POST /api/documents/{id}/messages/{message_id}/rule `{text}` | keep a rule from one of the person's own messages of that document's chat: `{rule, kept}`, `kept` false when the writing rules held it; 422 empty, over 300 characters, or a fact; 409 when the facts section cannot take it. A message of the person carries `rule`, the rule offered, in GET messages ("The chat, and keeping a rule") |
 
 The automatic generation setting is saved with the profile's own `PUT /api/profile/search`. Every route is scoped to the signed in user (another user's id answers 404), every write carries the app's CSRF header rule, and `{kind}` is `cv` or `letter`. A posting document row is created when its first generation or edit starts, so a posting without documents costs nothing.
 
@@ -412,12 +510,13 @@ The automatic generation setting is saved with the profile's own `PUT /api/profi
 Mobile friendly. Text shown to users uses no dashes as separators.
 
 - **Profile page, a new first tab "CV".** The list of base CVs (name, source: from the profile, built in the app, uploaded; template; the default marked), "New CV" (from my profile, or a copy of another), "Upload your CV" (drag and drop a PDF or DOCX, through ingestion's upload), "Make default", rename, delete. With an empty list and a profile with experience: "Your first CV is being built from your profile", after the consent the first time. Opening a base CV shows the document view below; an uploaded one also has "Complete my profile from this CV" (one click, Decision 18), "Compare with the original" and "Try the design again". A line says that documents are written for new postings with a fit of N or more, linking to the setting. The upload component is built so that the onboarding wizard (issue #76, not yet specified) can embed it; there is no onboarding in the app today, so the CV tab of the profile is where the upload lives until then.
-- **Profile page, Search options tab:** the card "Documents for new postings": a switch "Write documents automatically", the sentence "For postings with a fit of 70 or more", today's count and the waiting count, the spend. Under **Advanced**: the fit score threshold (with how many postings of the last 30 days sit at or above it, and the estimated tokens of those that would newly qualify when it is lowered), the safety ceiling per day (with the line "Protects you from a broken sweep. The threshold is what limits spend."), and a link to the gallery. The card "Writing rules": the dash switch and banned phrases.
+- **Profile page, Search options tab:** the card "Documents for new postings": a switch "Write documents automatically", the sentence "For postings with a fit of 70 or more", today's count and the waiting count, the spend. Under **Advanced**: the fit score threshold (with how many postings of the last 30 days sit at or above it, and the estimated tokens of those that would newly qualify when it is lowered), the safety ceiling per day (with the line "Protects you from a broken sweep. The threshold is what limits spend."), and a link to the gallery. The card "Writing rules": the dash switch, the starter list switch with its phrases, and banned phrases.
 - **Job detail page, a "Documents" section:** two cards, CV and Letter, each with its state (not written, under your threshold, waiting with its reason, writing, ready on one page, overflow, sent on a date), the page 1 preview, Open, Download PDF, and "Write now" when not written, under the threshold, failed, or waiting on the safety ceiling or a base CV (a click waits on the consent and the credential too, so the card shows only the link that settles them). The CV card says "Based on: <name of the base CV>" with a selector and "Write it again from this CV". A posting under the threshold says "Fit 58 is under your threshold of 70" with the button.
 - **The document view,** the same component for a base CV (`/profile/cv/:id`) and for a posting's CV or letter (`/jobs/:id/documents/:kind`), with five views:
   - **See:** the PDF inline (page 1 image and a download link on a phone), one page or overflow, "Corrected by the fact check" with its entries, the version history (number, origin, date, template, one page or overflow, approved, sent; open, restore, approve, mark as sent).
   - **Edit:** the structured form (fixed facts read only with a link to the profile; for the base CV, its `fixed` block editable), a counter per field with the template's soft limit, notes under fields, autosave 1 second after typing stops with `If-Match`, a 409 opening "This document changed in another tab" with both texts; a render 2 seconds after a save that changed the content; the language switch.
-  - **Chat:** a panel with the document's conversation (the agents module's chat components); each answer names what changed and what the fact check corrected; a new version follows.
+  - **Chat:** a panel with the document's conversation (the agents module's chat components); each answer names what changed and what the fact check corrected; a new version follows. Under it, once answered, a correction of the wording is offered as a writing rule ("Keep as a rule", "Not now"; see "The chat, and keeping a rule").
+  - **Keyword coverage:** under a posting's CV, the line of "Keyword coverage" when a requirement term is missing.
   - **Template:** the picker, a strip of the bundled thumbnails (and the person's own template first, "From your CV", when there is one) with the current one marked, "See all" opening the gallery.
   - **Compare** (an uploaded base CV): the original's page 1 and the converted version's page 1 side by side, page 2 on a switch, the list of what does not carry over, "Looks right", "Try again", "Fix with the chat", "Use one of the bundled templates instead". A DOCX shows the converted version and the styles read, and the advice to upload a PDF for a closer match.
 - **The gallery, `/documents/templates`:** the bundled thumbnails (CV, and the letter on hover or tap), the person's own templates under "From your CV", names, descriptions and tags, filters (photo, columns, ats friendly), "Use for this document" when opened from one.

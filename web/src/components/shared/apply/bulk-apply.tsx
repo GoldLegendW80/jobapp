@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
+import { PostingNotices } from "@/components/shared/jobs/posting/posting-notices";
 import { plural } from "@/features/jobs/helpers/selection";
 import { describeError } from "@/lib/api";
 
@@ -215,6 +216,7 @@ function Lists({ shown }: { shown: BulkPreview }) {
               <span className="text-muted-foreground">
                 {documentsLine(item)}
               </span>
+              <PostingNotices notices={item.notices} compact className="mt-1" />
             </li>
           ))}
         </ul>

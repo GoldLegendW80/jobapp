@@ -9,7 +9,6 @@ import {
   cleanTerms,
   compileTerms,
   escapeTerm,
-  findMatches,
   globalFlags,
   groupNames,
   hasNestedQuantifier,
@@ -141,14 +140,10 @@ describe("pyToJs", () => {
   });
 });
 
-describe("compileTerms and findMatches", () => {
-  it("counts every occurrence, as findall does", () => {
-    const compiled = compileTerms(["agent", "llm"], false);
-    expect(compiled.kind).toBe("ok");
-    if (compiled.kind !== "ok") return;
-    expect(
-      findMatches(compiled.regex, "Agents, an agent, LLMs; agentic no."),
-    ).toEqual(["Agents", "agent", "LLMs"]);
+describe("compileTerms", () => {
+  it("matches whole words in any case, with an optional plural", () => {
+    expect(matches(["agent", "llm"], false, "Two LLMs here")).toBe(true);
+    expect(matches(["agent"], false, "agentic only")).toBe(false);
   });
 
   it("reports empty, unsupported and invalid lists", () => {
@@ -158,12 +153,6 @@ describe("compileTerms and findMatches", () => {
     expect(invalid.kind).toBe("invalid");
     expect(matches(["(a"], true, "a")).toBeUndefined();
     expect(matches(["a++"], true, "aa")).toBeUndefined();
-  });
-
-  it("stops after a thousand matches", () => {
-    const compiled = compileTerms(["a"], true);
-    if (compiled.kind !== "ok") throw new Error("expected ok");
-    expect(findMatches(compiled.regex, "a".repeat(5000))).toHaveLength(1000);
   });
 
   it("escapes every metacharacter of a plain term", () => {

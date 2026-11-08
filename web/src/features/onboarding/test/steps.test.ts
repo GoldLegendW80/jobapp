@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { EMPTY, type Search } from "@/features/profile/api/profile-api";
+import {
+  EMPTY,
+  type Answers,
+  type Search,
+} from "@/features/profile/api/profile-api";
 
 import {
+  answersWith,
   draftOf,
   nextPage,
   openStep,
   passedOf,
   readPay,
+  rangesOf,
   resumeStep,
-  savedDraft,
   searchWith,
   splitTerms,
   stepProblem,
@@ -116,6 +121,41 @@ describe("stepProblem", () => {
     for (const step of ["profile", "work", "apply", "summary"] as const)
       expect(stepProblem(step, draft())).toBeNull();
   });
+  it("asks for the country of a work authorisation, and whether the person may work there", () => {
+    const authorization = {
+      country: "",
+      allowed: null,
+      sponsorship: null,
+      kept: "",
+    };
+    expect(
+      stepProblem(
+        "work",
+        draft({ authorization: { ...authorization, allowed: "yes" } }),
+      ),
+    ).toBe(
+      "Name the country or region where you may work, for example France.",
+    );
+    expect(
+      stepProblem(
+        "work",
+        draft({ authorization: { ...authorization, country: " France " } }),
+      ),
+    ).toBe("Say whether you may work in France.");
+    // A stored answer that says more than yes or no is kept as it is.
+    expect(
+      stepProblem(
+        "work",
+        draft({
+          authorization: {
+            ...authorization,
+            country: "France",
+            kept: "EU citizen",
+          },
+        }),
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("searchWith", () => {
@@ -177,13 +217,25 @@ describe("searchWith", () => {
 
 describe("progress", () => {
   it("resumes at the first step neither done nor passed", () => {
-    expect(resumeStep([], [])).toBe("profile");
-    expect(resumeStep([], ["profile", "looking", "where"])).toBe("sites");
+    expect(resumeStep([], [])).toBe("access");
+    // Model access is done once a credential is saved.
+    expect(resumeStep(["access"], [])).toBe("profile");
+    expect(
+      resumeStep([], ["access", "profile", "building", "looking", "where"]),
+    ).toBe("sites");
     // "Websites to search" is done once the list holds a place to search.
-    expect(resumeStep(["looking", "where", "work"], ["profile"])).toBe("sites");
-    expect(resumeStep(["looking", "where", "sites", "work"], ["profile"])).toBe(
-      "pay",
-    );
+    expect(
+      resumeStep(
+        ["looking", "where", "work"],
+        ["access", "profile", "building"],
+      ),
+    ).toBe("sites");
+    expect(
+      resumeStep(
+        ["looking", "where", "sites", "work"],
+        ["access", "profile", "building"],
+      ),
+    ).toBe("pay");
     expect(
       resumeStep(
         [],
@@ -193,59 +245,284 @@ describe("progress", () => {
   });
   it("reads the steps passed from the profile, each once, in order", () => {
     expect(passedOf(["where", "nope", "profile", "where"])).toEqual([
+      "access",
       "profile",
+      "building",
       "where",
     ]);
   });
-  it("counts Websites to search as passed once a later step is, never sent to the api", () => {
+  it("counts Model access, Building your profile and Websites to search as passed once a later step is, never sent to the api", () => {
+    expect(passedOf(["profile"])).not.toContain("building");
     expect(passedOf(["profile", "looking", "where"])).not.toContain("sites");
-    expect(passedOf(["where", "work"])).toEqual(["where", "sites", "work"]);
+    expect(passedOf(["where", "work"])).toEqual([
+      "access",
+      "building",
+      "where",
+      "sites",
+      "work",
+    ]);
+    expect(UNSTORED.has("access")).toBe(true);
+    expect(UNSTORED.has("building")).toBe(true);
     expect(UNSTORED.has("sites")).toBe(true);
   });
   it("opens the step asked for, never one after the roles while none is saved", () => {
     expect(openStep("pay", ["looking"], [])).toBe("pay");
-    expect(openStep(null, [], ["profile"])).toBe("looking");
+    expect(openStep(null, [], ["access", "profile", "building"])).toBe(
+      "looking",
+    );
     // typed in the address, with no role saved: the first step left instead
-    expect(openStep("summary", [], ["profile"])).toBe("looking");
-    expect(openStep("apply", [], [])).toBe("profile");
+    expect(openStep("summary", [], ["access", "profile", "building"])).toBe(
+      "looking",
+    );
+    expect(openStep("apply", [], [])).toBe("access");
     // a role removed since: passing it once is not enough
     expect(
-      openStep("summary", ["where"], ["profile", "looking", "where"]),
+      openStep(
+        "summary",
+        ["where"],
+        ["access", "profile", "building", "looking", "where"],
+      ),
     ).toBe("looking");
     expect(openStep("profile", [], [])).toBe("profile");
-    expect(openStep("nowhere", ["looking"], ["profile"])).toBe("where");
+    expect(
+      openStep("nowhere", ["looking"], ["access", "profile", "building"]),
+    ).toBe("where");
   });
 });
 
-describe("savedDraft", () => {
-  it("shows what was saved, not what was typed then skipped", () => {
-    const typed = draft({
-      roles: "Typed role",
-      locations: "Lyon",
-      salary: { min: "50000", max: "60000", currency: "EUR" },
-    });
-    const shown = savedDraft(EMPTY, typed);
-    expect(shown.roles).toBe("");
-    expect(shown.locations).toBe("");
-    expect(shown.salary.min).toBe("");
-  });
-  it("keeps Rather not say only while no figure is stored", () => {
-    expect(savedDraft(EMPTY, draft({ ratherNotSay: true })).ratherNotSay).toBe(
-      true,
+const withAnswers = (patch: Partial<Answers>, search = EMPTY.search) => ({
+  ...EMPTY,
+  search,
+  answers: { ...EMPTY.answers, ...patch },
+});
+const paid: Search = {
+  ...EMPTY.search,
+  compensation: {
+    salary: { min: 50000, max: 60000, currency: "EUR" },
+    daily_rate: { min: 500, max: 600, currency: "EUR" },
+  },
+};
+
+describe("draftOf", () => {
+  it("reads the answers the wizard asks from the stored answers", () => {
+    const read = draftOf(
+      withAnswers({
+        motivation: "Shipping agents.",
+        notice_period: "1 month",
+        earliest_start: "January 2027",
+        work_authorization: [
+          { country: "France", answer: "Yes", needs_sponsorship: false },
+          { country: "Canada", answer: "No", needs_sponsorship: true },
+        ],
+      }),
     );
-    const paid = {
-      ...EMPTY,
-      search: {
-        ...EMPTY.search,
-        compensation: {
-          salary: { min: 1, max: 2, currency: "EUR" },
-          daily_rate: null,
-        },
+    expect(read).toMatchObject({
+      motivation: "Shipping agents.",
+      notice: "1 month",
+      start: "January 2027",
+      authorization: {
+        country: "France",
+        allowed: "yes",
+        sponsorship: "no",
+        kept: "Yes",
       },
-    };
-    expect(savedDraft(paid, draft({ ratherNotSay: true })).ratherNotSay).toBe(
-      false,
+    });
+    const empty = draftOf(EMPTY);
+    expect(empty).toMatchObject({ motivation: "", notice: "", start: "" });
+    expect(empty.authorization).toEqual({
+      country: "",
+      allowed: null,
+      sponsorship: null,
+      kept: "",
+    });
+  });
+  it("reads Rather not say from the stance, only while no pay is saved", () => {
+    const blank = { salary_stance: "leave_blank" } as const;
+    expect(draftOf(withAnswers(blank)).ratherNotSay).toBe(true);
+    expect(draftOf(withAnswers(blank, paid)).ratherNotSay).toBe(false);
+    expect(draftOf(EMPTY).ratherNotSay).toBe(false);
+  });
+});
+
+describe("answersWith", () => {
+  const stored: Answers = {
+    ...EMPTY.answers,
+    eeo_policy: "stored",
+    eeo_answers: [{ topic: "gender", answer: "Woman" }],
+    relocation: "Open to Lyon.",
+    work_authorization: [
+      {
+        country: "France",
+        answer: "Yes, EU citizen.",
+        needs_sponsorship: false,
+      },
+      { country: "Canada", answer: "No", needs_sponsorship: true },
+    ],
+    salary_stance: "sentence",
+    salary_policy: "Against the band.",
+    salary_ranges: [
+      { currency: "USD", minimum: 90000, maximum: null, period: "year" },
+    ],
+  };
+  const typed = (patch: Partial<Draft> = {}) => ({
+    ...draftOf({ ...EMPTY, answers: stored }),
+    ...patch,
+  });
+  const none = EMPTY.search.compensation;
+
+  it("writes the motivation on Looking and keeps every other answer", () => {
+    const saved = answersWith(
+      "looking",
+      stored,
+      typed({ motivation: "  Shipping agents.  " }),
+      none,
     );
+    expect(saved).toEqual({ ...stored, motivation: "Shipping agents." });
+    expect(
+      answersWith("looking", stored, typed({ motivation: " " }), none)
+        .motivation,
+    ).toBeNull();
+  });
+  it("writes the notice, the start and the first country on Work, the others kept", () => {
+    const saved = answersWith(
+      "work",
+      stored,
+      typed({
+        notice: "1 month",
+        start: "As soon as possible",
+        authorization: {
+          country: "Germany",
+          allowed: "yes",
+          sponsorship: "no",
+          kept: "",
+        },
+      }),
+      none,
+    );
+    expect(saved).toEqual({
+      ...stored,
+      notice_period: "1 month",
+      earliest_start: "As soon as possible",
+      work_authorization: [
+        { country: "Germany", answer: "Yes", needs_sponsorship: false },
+        { country: "Canada", answer: "No", needs_sponsorship: true },
+      ],
+    });
+  });
+  it("keeps the stored words of a country while its yes or no is unchanged", () => {
+    const same = answersWith("work", stored, typed(), none);
+    expect(same.work_authorization).toEqual(stored.work_authorization);
+    const changed = answersWith(
+      "work",
+      stored,
+      typed({
+        authorization: { ...typed().authorization, allowed: "no" },
+      }),
+      none,
+    );
+    expect(changed.work_authorization[0]).toEqual({
+      country: "France",
+      answer: "No",
+      needs_sponsorship: false,
+    });
+  });
+  it("names each country once, and leaves the list alone when none is typed", () => {
+    const moved = answersWith(
+      "work",
+      stored,
+      typed({
+        authorization: {
+          country: "canada",
+          allowed: "yes",
+          sponsorship: null,
+          kept: "",
+        },
+      }),
+      none,
+    );
+    expect(moved.work_authorization).toEqual([
+      { country: "canada", answer: "Yes", needs_sponsorship: null },
+    ]);
+    const untouched = answersWith(
+      "work",
+      stored,
+      typed({
+        authorization: {
+          country: " ",
+          allowed: null,
+          sponsorship: null,
+          kept: "",
+        },
+      }),
+      none,
+    );
+    expect(untouched.work_authorization).toBe(stored.work_authorization);
+  });
+  it("gives forms the pay as ranges, one per currency, the yearly one first", () => {
+    expect(rangesOf(paid.compensation)).toEqual([
+      { currency: "EUR", minimum: 50000, maximum: 60000, period: "year" },
+    ]);
+    const saved = answersWith(
+      "pay",
+      stored,
+      typed({
+        salary: { min: "50000", max: "60000", currency: "EUR" },
+        daily: { min: "500", max: "600", currency: "CHF" },
+      }),
+      none,
+    );
+    expect(saved.salary_stance).toBe("range");
+    expect(saved.salary_ranges).toEqual([
+      { currency: "EUR", minimum: 50000, maximum: 60000, period: "year" },
+      { currency: "CHF", minimum: 500, maximum: 600, period: "day" },
+      { currency: "USD", minimum: 90000, maximum: null, period: "year" },
+    ]);
+    expect(saved.salary_policy).toBe("Against the band.");
+  });
+  it("replaces the ranges it wrote before, and keeps the person's own", () => {
+    const before = {
+      salary: { min: 40000, max: 45000, currency: "GBP" },
+      daily_rate: null,
+    };
+    const saved = answersWith(
+      "pay",
+      {
+        ...stored,
+        salary_stance: "range",
+        salary_ranges: [
+          { currency: "GBP", minimum: 40000, maximum: 45000, period: "year" },
+          ...stored.salary_ranges,
+        ],
+      },
+      typed({ salary: { min: "50000", max: "55000", currency: "EUR" } }),
+      before,
+    );
+    expect(saved.salary_ranges).toEqual([
+      { currency: "EUR", minimum: 50000, maximum: 55000, period: "year" },
+      { currency: "USD", minimum: 90000, maximum: null, period: "year" },
+    ]);
+  });
+  it("leaves the salary blank on Rather not say, every range kept", () => {
+    const saved = answersWith(
+      "pay",
+      stored,
+      typed({ ratherNotSay: true }),
+      none,
+    );
+    expect(saved).toEqual({ ...stored, salary_stance: "leave_blank" });
+  });
+  it("clears the stance Rather not say showed once unticked with no figure, and keeps another", () => {
+    const blank = { ...stored, salary_stance: "leave_blank" as const };
+    expect(
+      answersWith("pay", blank, typed({ ratherNotSay: false }), none)
+        .salary_stance,
+    ).toBeNull();
+    expect(
+      answersWith("pay", stored, typed({ ratherNotSay: false }), none),
+    ).toEqual(stored);
+  });
+  it("leaves the answers alone on the other steps", () => {
+    expect(answersWith("where", stored, typed(), none)).toBe(stored);
   });
 });
 

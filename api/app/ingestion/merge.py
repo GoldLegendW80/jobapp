@@ -11,8 +11,11 @@ The rules, in the order they apply:
    (the one condition every reader applies). The rows of those steps that fail it cite a text
    that is no longer stored: they are deleted here, in the same transaction, and never proposed.
    A row that removes an entry, a line or a whole list (`items.removes_a_list`) is dropped: the
-   extraction refuses such a removal since PR #398, and a step finished before it is reused
-   without being read again (`plan.EXTRACTOR_VERSION` stays 1, owner, 2026-10-21, #408).
+   extraction refuses such a removal since PR #398, and a step finished before it was reused
+   without being read again while `plan.EXTRACTOR_VERSION` stayed 1 (owner, 2026-10-21, #408).
+   It is 2 since the extraction prompt changed (owner, 2026-11-08: the fields of a skill
+   category, the years a document states), so a step of version 1 is read again on the next
+   reading; the drop stays as a guard.
 2. **Older proposals.** Every pending profile item of the user that belongs to another run is
    superseded, in id order, before anything is proposed. So the pending items after a merge are
    exactly this run's, and the proposals are a function of the items, the profile and the user's
@@ -22,20 +25,43 @@ The rules, in the order they apply:
    citation, in the order the documents were selected, then by place. A removal at a key
    where a document gives a value is dropped: a value with a checked citation wins over the
    absence of one.
+   - **One entry under two keys** (`alike.same_entry`, rule B): the entries of a job, a school,
+     a language or a skill category that are one entry written two ways ("NOVACARE" and "NOVACARE
+     GIE" over the same dates, "English" and "Anglais", "React Native" and "react-native")
+     form one group, in which every two entries are one entry: a school without years that
+     is like two degrees of that school joins neither. A group that matches an entry the
+     profile holds takes that entry's key, so it updates that entry or is dropped, never adds
+     a second one; an item like two entries that are not one entry (two of the profile among
+     them) is left under its own key, and so are the items like an entry of the profile that
+     are not one entry with each other. The key format of `items.entry_key` is unchanged.
+   - **Values that agree** (`alike.combine`, rule A): the values of one group that agree field
+     by field (the same text but for its capitals, dashes or accents, one field empty, word
+     lists joined, one phone number written two ways, an organisation inside the other's name)
+     become one value, built again by the section model (`items.build`) and hashed as such,
+     that carries every citation. Only additions combine; a value combines only when every
+     field does, else the group goes on to rule 5 with the values as the documents gave them.
 4. **Against the profile.** A value the profile already holds at that key is dropped, and so is
-   a value the user rejected before at that key, or turned down by writing their own (an edit at
-   accept, or the other values of a conflict they settled). This is decided here, by applying the
-   item to the stored section in code (`items.apply`), and again by `propose`.
+   a value the user rejected before at that key (or at the key the item had before rule B), or
+   turned down by writing their own (an edit at accept, or the other values of a conflict they
+   settled). A value that agrees with what the profile holds (rule A, the profile's wording
+   kept) is held already; one that adds to it is proposed as the profile's entry with what it
+   adds. This is decided here, by applying the item to the stored section in code
+   (`items.apply`), and again by `propose`.
 5. **Conflicts.** When several different values are left at one key, they become one proposal
    flagged `conflict`: the first value by hash order as the item, the others beside it, each with
    its own citations. A year alone and a month of that year are different values, so a conflict.
-   Nothing picks for the user: an item with a conflict is accepted only with the value chosen.
+   Nothing picks for the user: an item with a conflict is accepted only with the value chosen
+   (or by "Accept all additions" with `fill_empty`, which picks the CV's value for an empty slot;
+   the values it leaves are not turned down, so a later run may offer them again).
 6. **Flags.** `looks_like_instruction` is carried from the stored rows (a hint, never a safety
    control), `transcribed` is set on a citation into a page a model wrote from an image, and
    `derived` and `conflict` are set by this code only: no flag of a stored row can set them.
-7. **The derived years.** `skills.years_experience` is computed here (see `years_of`) from the
-   employers of the profile with this run's employer items applied, and proposed with the origin
-   `derived` and `depends_on` naming those items, only when the profile has no value yet.
+7. **The years of experience.** A figure a document states (`skills.years_experience`, cited
+   and checked as a number of years) is proposed like any other value. Only when no document
+   states one, the years are computed here (see `years_of`: the union of the periods, an overlap
+   counted once) from the employers of the profile with this run's employer items applied, and
+   proposed with the origin `derived` and `depends_on` naming those items, only when the profile
+   has no value yet.
 
 An item this code cannot propose (its section model changed since it was stored, the stored
 section no longer fits its form) is left out and counted: one bad row never fails the merge,
@@ -45,9 +71,10 @@ This module is imported by the api, whose image holds no Claude Agent SDK: it im
 `stored_items`, never `tools`.
 """
 
+import dataclasses
 import logging
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -58,7 +85,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import proposals
 from app.agents.models import Proposal
-from app.ingestion import item_proposals, items, reuse, stored_items
+from app.ingestion import alike, item_proposals, items, reuse, stored_items
 from app.ingestion.models import IngestionDocument, TextSource
 from app.ingestion.runs_models import IngestionItem, IngestionRun
 from app.profile import schemas
@@ -72,6 +99,7 @@ EMPLOYERS_SECTION = "experience"
 EMPLOYERS_SLOT = "employers"
 PAGE_BREAK = "\f"
 DECIDED_MAX = 20_000  # the newest values the user turned down, read to drop them again
+SAME_ENTRY_MAX = 400  # entries of one slot compared two by two (rule B): past that, keys alone
 
 _REFUSED = (items.ItemError, items.ProfileConflict, proposals.InvalidValueError, ValueError)
 
@@ -83,6 +111,19 @@ class Variant:
     item: items.Item
     citations: list[dict[str, Any]] = field(default_factory=list)
     flags: set[str] = field(default_factory=set)
+    place: tuple[Any, ...] = ()  # where its first row stands: document order, then the text
+
+
+@dataclass
+class Group:
+    """The values of one fact: `key` is where it is proposed, None while the values of a group
+    that rule B joined from several keys decide it; `natural` are the keys its items carry."""
+
+    section: str
+    key: str | None
+    variants: list[Variant]
+    removal: Variant | None = None
+    natural: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -215,7 +256,7 @@ def _variants(
     # The item kept for a value is the first in document order (the order the user selected
     # the documents, then the place in the text), not the first row written.
     built.sort(key=lambda one: one[0])
-    for _, row, item in built:
+    for place, row, item in built:
         removal = item.action is items.Action.remove
         variants = groups.setdefault((item.section, item.key), {})
         name = "" if removal else item.value_hash
@@ -224,7 +265,8 @@ def _variants(
             variant.item.action is not items.Action.add and item.action is items.Action.add
         ):
             # the same value proposed as `add` and as `replace`: `add` keeps what it does not name
-            variant = Variant(item, *((variant.citations, variant.flags) if variant else ()))
+            kept = (variant.citations, variant.flags, variant.place) if variant else ((), (), place)
+            variant = Variant(item, list(kept[0]), set(kept[1]), kept[2])
             variants[name] = variant
         for citation in stored_items.as_citations(row):
             if _is_transcribed(marks, citation):
@@ -253,6 +295,165 @@ def _holds(section_data: Mapping[str, Any], item: items.Item) -> bool:
         return bool(items.apply(item.section, dict(section_data), item) == section_data)
     except items.ProfileConflict:
         return False  # it does not fit today: the user sees it and decides
+
+
+# --- rule B: one entry under two keys -------------------------------------------------------------
+
+
+def _groups(
+    by_key: Mapping[tuple[str, str], Mapping[str, Variant]],
+    section_of: Callable[[str], dict[str, Any] | None],
+) -> list[Group]:
+    """The items grouped by fact: by key, and for the slots rule B reads, by entry."""
+    groups: list[Group] = []
+    entries: dict[tuple[str, str], list[tuple[str, list[Variant]]]] = {}
+    for (section, key), variants in by_key.items():
+        slot = items.SLOTS[section][key.partition(":")[0]]
+        valued = sorted((one for name, one in variants.items() if name), key=lambda v: v.place)
+        if alike.matched(slot) and valued and section_of(section) is not None:
+            entries.setdefault((section, slot.name), []).append((key, valued))
+        else:
+            groups.append(Group(section, key, valued, variants.get(""), (key,)))
+    for (section, name), found in entries.items():
+        groups.extend(_entries(items.SLOTS[section][name], found, section_of(section) or {}))
+    return sorted(groups, key=lambda one: (one.section, one.key or min(one.natural)))
+
+
+def _entries(
+    slot: items.Slot, found: Sequence[tuple[str, list[Variant]]], current: Mapping[str, Any]
+) -> list[Group]:
+    """The groups of one slot: the keys of its items joined by rule B, with each other and with
+    the entries the profile holds, only where every two keys of a group are one entry (rule B
+    is not transitive). A key like two keys that are not one entry joins nothing."""
+    nodes: list[tuple[str, list[Any], bool]] = []  # key, its values, an entry of the profile
+    index: dict[str, int] = {}
+    for entry in current.get(slot.name) or []:
+        key = items.entry_key(slot, entry)
+        if key not in index:
+            index[key] = len(nodes)
+            nodes.append((key, [], True))
+        nodes[index[key]][1].append(entry)
+    members: dict[int, list[Variant]] = {}
+    for key, valued in found:
+        if key not in index:
+            index[key] = len(nodes)
+            nodes.append((key, [], False))
+        nodes[index[key]][1].extend(one.item.value for one in valued)
+        members.setdefault(index[key], []).extend(valued)
+    parent = list(range(len(nodes)))
+    held = [key if stored else None for key, _, stored in nodes]
+    together: dict[int, set[int]] = {at: {at} for at in range(len(nodes))}
+
+    def root(at: int) -> int:
+        while parent[at] != at:
+            parent[at] = parent[parent[at]]
+            at = parent[at]
+        return at
+
+    if len(nodes) <= SAME_ENTRY_MAX:
+        shapes = [[alike.shape(slot, value) for value in values] for _, values, _ in nodes]
+
+        def same(first: int, second: int) -> bool:
+            return any(
+                alike.same_entry(slot, one, other)
+                for one in shapes[first]
+                for other in shapes[second]
+            )
+
+        # Pairs that may share a group: one entry, and never two entries of the profile.
+        like: list[set[int]] = [set() for _ in nodes]
+        for at in sorted(members):
+            for other in range(len(nodes)):
+                if other == at or (other in members and other < at):
+                    continue
+                if nodes[at][2] and nodes[other][2]:
+                    continue
+                if same(at, other):
+                    like[at].add(other)
+                    like[other].add(at)
+        torn = {
+            at
+            for at, near in enumerate(like)
+            if not all(near - {other} <= like[other] for other in near)
+        }
+        for at in sorted(set(members) - torn):
+            for other in sorted(like[at] - torn):
+                first, second = root(at), root(other)
+                if first == second:
+                    continue
+                if not all(like[one] >= together[second] for one in together[first]):
+                    continue
+                parent[second] = first
+                together[first] |= together.pop(second)
+                held[first] = held[first] or held[second]
+    clusters: dict[int, list[int]] = {}
+    for at in sorted(members):
+        clusters.setdefault(root(at), []).append(at)
+    groups = []
+    for top, joined in clusters.items():
+        variants = sorted((one for at in joined for one in members[at]), key=lambda v: v.place)
+        natural = tuple(nodes[at][0] for at in joined)
+        key = held[top] or (natural[0] if len(natural) == 1 else None)
+        groups.append(Group(slot.section, key, variants, None, natural))
+    return groups
+
+
+# --- rule A: values that agree --------------------------------------------------------------------
+
+
+def _rekeyed(variant: Variant, key: str) -> Variant:
+    if variant.item.key == key:
+        return variant
+    return dataclasses.replace(variant, item=dataclasses.replace(variant.item, key=key))
+
+
+def _without_settings(slot: items.Slot, value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return value
+    return {name: one for name, one in value.items() if name not in slot.setting_fields}
+
+
+def _agrees_with(slot: items.Slot, held: Any, variant: Variant) -> bool:
+    """Whether the profile holds this value already, in its own wording (rule A with the
+    profile first)."""
+    if held is None or variant.item.action is not items.Action.add:
+        return False
+    return bool(alike.combine(slot, [held, variant.item.value], base=True) == held)
+
+
+def _combined(
+    section: str, held: Any, kept: Sequence[Variant], order: Mapping[str, int]
+) -> Variant | None:
+    """One value for every value kept (rule A), what the profile holds first, or None when
+    they disagree. A single value with nothing held is itself."""
+    slot = kept[0].item.slot
+    if any(one.item.action is not items.Action.add for one in kept):
+        return kept[0] if len(kept) == 1 else None
+    if len(kept) == 1 and held is None:
+        return kept[0]
+    values = (
+        [held, *(one.item.value for one in kept)]
+        if held is not None
+        else [one.item.value for one in kept]
+    )
+    value = alike.combine(slot, values, base=held is not None)
+    if value is None:
+        return None
+    try:
+        item = items.build(section, slot.name, items.Action.add, _without_settings(slot, value))
+    except items.ItemError:
+        return None
+    citations = sorted(
+        (citation for one in kept for citation in one.citations),
+        key=lambda one: (
+            order.get(one["document_id"], len(order)),
+            one["document_id"],
+            one["start"],
+            one["end"],
+        ),
+    )
+    flags = set().union(*(one.flags for one in kept))
+    return Variant(item, citations, flags, kept[0].place)
 
 
 def count_of_run(db: Session, user_id: uuid.UUID, run_id: uuid.UUID) -> int:
@@ -303,7 +504,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
     marks = _transcribed_pages(db, (row.document_id for row in rows))
     # citations in the order the user selected the documents, then by place in the text
     order = {str(one): index for index, one in enumerate(ingestion_run.document_ids or ())}
-    groups, left_out, refused_removals = _variants(rows, marks, order)
+    by_key, left_out, refused_removals = _variants(rows, marks, order)
 
     profile = profile_service.get_profile(db, user_id, now)
     stored: dict[str, dict[str, Any] | None] = {}
@@ -323,30 +524,56 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
     refused: set[tuple[Any, Any, Any]] = set()
     for one in item_proposals.turned_down(db, user_id, limit=DECIDED_MAX):
         refused.update((one.section, one.key, h) for h in one.hashes if h != one.kept)
+
+    def turned_down(group: Group, variant: Variant) -> bool:
+        keys = {variant.item.key, *group.natural, *([group.key] if group.key else [])}
+        return any((group.section, key, variant.item.value_hash) in refused for key in keys)
+
     written = conflicts = equal = rejected = removals = 0
     employers: list[tuple[items.Item, list[dict[str, Any]]]] = []
-    for (section, key), variants in sorted(groups.items()):
+    stated = False
+    for group in _groups(by_key, section_of):
+        section = group.section
         current = section_of(section)
         if current is None:
-            left_out += len(variants)
+            left_out += len(group.variants) + (group.removal is not None)
             continue
-        valued = [variants[name] for name in sorted(variants) if name]
-        if valued and "" in variants:
+        if (section, group.key) == (YEARS_SECTION, YEARS_KEY) and group.variants:
+            stated = True
+        if group.variants and group.removal is not None:
             removals += 1
-        candidates = valued or list(variants.values())
+        candidates = group.variants or [group.removal]
+        slot = candidates[0].item.slot
+        held = items.read(section, current, group.key) if group.key else None
         kept: list[Variant] = []
         for variant in candidates:
-            if _holds(current, variant.item):
+            placed = _rekeyed(variant, group.key) if group.key else variant
+            if _holds(current, placed.item) or _agrees_with(slot, held, variant):
                 equal += 1
-            elif (section, key, variant.item.value_hash) in refused:
+            elif turned_down(group, variant):
                 rejected += 1
             else:
                 kept.append(variant)
         if not kept:
             continue
-        first, others = kept[0], kept[1 : 1 + item_proposals.CONFLICT_MAX]
-        left_out += len(kept) - 1 - len(others)
-        flags = set().union(*(one.flags for one in kept))
+        one = _combined(section, held, kept, order)
+        others: list[Variant] = []
+        if one is not None:
+            key = group.key or one.item.key
+            first = _rekeyed(one, key)
+            if one is not kept[0] and _holds(current, first.item):
+                equal += 1
+                continue
+            if one is not kept[0] and turned_down(group, one):
+                rejected += 1
+                continue
+        else:
+            by_hash = sorted(kept, key=lambda v: v.item.value_hash)
+            key = group.key or by_hash[0].item.key
+            first = _rekeyed(by_hash[0], key)
+            others = [_rekeyed(v, key) for v in by_hash[1 : 1 + item_proposals.CONFLICT_MAX]]
+            left_out += len(kept) - 1 - len(others)
+        flags = set().union(*(v.flags for v in (kept if one is None else [first])))
         try:
             outcome = item_proposals.propose(
                 db,
@@ -356,7 +583,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
                 ingestion_run_id=run_id,
                 citations=first.citations,
                 flags=sorted(flags),
-                conflict=[(one.item, one.citations) for one in others] or None,
+                conflict=[(v.item, v.citations) for v in others] or None,
             )
         except _REFUSED as exc:
             left_out += 1
@@ -373,7 +600,7 @@ def merge(db: Session, ingestion_run: IngestionRun, now: datetime) -> Merged:
             if section == EMPLOYERS_SECTION and key.startswith(f"{EMPLOYERS_SLOT}:") and not others:
                 employers.append((first.item, first.citations))
 
-    derived = _propose_years(db, ingestion_run, now, section_of, employers)
+    derived = 0 if stated else _propose_years(db, ingestion_run, now, section_of, employers)
     result = Merged(
         proposals=written + derived,
         conflicts=conflicts,

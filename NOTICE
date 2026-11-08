@@ -26,3 +26,63 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+career-ops (https://github.com/career-ops-hq/career-ops)
+The interview preparation of the documents module (api/app/documents/interview_prep.py and the
+prompts api/app/documents/prompts/interview_*.md) follows the shape of its interview modes
+(interview-prep, practice, debrief and the story bank), without their web research.
+
+The keyword coverage of a written CV (api/app/documents/coverage.py) is adapted from its
+keyword-match.mjs; the starter list of banned phrases (api/app/documents/settings.py) is taken
+from its cv-voice.mjs; keeping a chat correction as a writing rule
+(api/app/documents/writing_rules.py) follows its modes/retro.md.
+
+Reading an offer (api/app/documents/offer_notes.py and the prompts
+api/app/documents/prompts/offer_notes*.md) follows the posture of its offer-prep mode: a clause
+walk in plain words, the deltas against the posting's pay and questions for a lawyer, never a
+verdict or a score, without its web research.
+
+Your search in numbers (api/app/opportunities/insights.py, web/src/features/jobs/helpers/insights.ts)
+takes its floors, its silent window and its two dated benchmarks from calibrate.mjs,
+funnel-velocity.mjs, analyze-patterns.mjs, close-stale.mjs and templates/benchmarks.yml; the reasons
+of a Pass (api/app/opportunities/passes.py, web/src/features/opportunities/helpers/deck/pass-reasons.ts)
+from templates/discard-reasons.yml.
+
+What a posting says before the click (api/app/jobs/signals.py and api/app/jobs/notices.py)
+adapts its rules: the eligibility and Block G signals of modes/oferta.md, the closing date
+markers and the unambiguous date rule of closing-soon.mjs, the cross-listing check of
+docs/FAQ.md section 5 (a 64-bit SimHash, different companies, at most 5 of 64 bits apart) and
+the company history of company-history.mjs.
+
+Assess this posting (api/app/jobs/assess.py and api/app/jobs/role_clarity.py) is adapted from
+its evaluation mode (modes/oferta.md: the requirement table, the culture screen, the text
+signals, the verdict) and from role-clarity.mjs.
+
+The follow up cadence and the rules of the follow up draft of the apply module
+(api/app/apply/followups.py and api/app/apply/prompts/followup.md) are adapted from its
+followup-cadence.mjs and modes/followup.md.
+
+The closure sentences, their tiers and guards of the jobs module's posting check
+(api/app/jobs/liveness.py) are adapted from its liveness-core.mjs.
+
+MIT License
+
+Copyright (c) 2026 Santiago Fernández de Valderrama
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -687,3 +687,20 @@ def test_the_opener_rule_is_verbose_and_reads_the_tables_as_before() -> None:
     assert agent._OPEN.search("motivation:")
     assert not agent._OPEN.search("favourite colour")
     assert not agent._OPEN.search("was motiviert sie?")
+
+
+def test_a_writing_rule_is_never_a_source_of_an_answer() -> None:
+    from app.documents import writing_rules
+
+    facts = {
+        "blocks": [
+            {"title": "Projects", "body": "Built the planner of Example Robotics."},
+            {
+                "title": writing_rules.BLOCK_TITLE,
+                "body": "- Use 'architect' instead of 'developer'.",
+            },
+        ]
+    }
+    sources = agent.sources_of({"facts": facts}, "Engineer", "Example Robotics")
+    assert any("planner" in text for text in sources.profile)
+    assert not any("architect" in text for text in sources.profile)

@@ -66,9 +66,29 @@ def test_a_line_is_matched_by_its_text_once_and_not_at_all_below_the_ratio() -> 
                                                     (LINES[1].text, LINES[1].text)]  # fmt: skip
 
 
+def _by_text(lines: list[fidelity.Line]) -> dict[str, fidelity.Line]:
+    """The lines by their text with the spaces left out: the PDFium build of a platform may
+    read a gap between two glyphs as a space ("sof tware" on macOS), which `match` tolerates."""
+    by_words = {line.text.replace(" ", ""): line for line in lines}
+    return {
+        text: by_words[text.replace(" ", "")]
+        for text in _TEXTS
+        if text.replace(" ", "") in by_words
+    }
+
+
+_TEXTS = (
+    "ALEX EXAMPLE",
+    "EXPERIENCE",
+    "Planned the robots of Example",
+    "Wrote their software",
+    "Measured everything twice",
+)
+
+
 def test_the_lines_of_a_pdf_are_read_with_their_baselines_and_sizes() -> None:
     lines = fidelity.candidate_lines(fx.measured())
-    by_text = {line.text: line for line in lines}
+    by_text = _by_text(lines)
     assert by_text["ALEX EXAMPLE"].y == pytest.approx(842 - 760, abs=0.2)
     assert by_text["ALEX EXAMPLE"].size == pytest.approx(20)
     assert by_text["Wrote their software"].x == pytest.approx(72, abs=0.2)
@@ -79,7 +99,7 @@ def test_the_lines_of_a_pdf_are_read_with_their_baselines_and_sizes() -> None:
 # #757 round 1 (B3): Chromium sets its text through a 0.75 matrix; the font size alone read
 # every rendered line 4/3 of its size, and those phantom sizes ranked first.
 def test_the_size_of_a_line_is_read_through_its_text_matrix() -> None:
-    by_text = {line.text: line for line in fidelity.candidate_lines(fx.scaled())}
+    by_text = _by_text(fidelity.candidate_lines(fx.scaled()))
     assert by_text["ALEX EXAMPLE"].size == pytest.approx(18, abs=0.05)
     assert by_text["EXPERIENCE"].size == pytest.approx(12, abs=0.05)
     assert by_text["Wrote their software"].size == pytest.approx(10, abs=0.05)

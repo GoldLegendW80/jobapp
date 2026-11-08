@@ -27,14 +27,19 @@ function pastedSentence(stored: StoredDocument): string {
 
 /**
  * Paste a text instead of a file: something copied from a web page, a message, a note. It
- * becomes a document like any other. The count shown is the one the server enforces.
+ * becomes a document like any other. The count shown is the one the server enforces. `label`
+ * and `placeholder` name what is pasted where a page asks for one text (an assistant's answer).
  */
 export function PasteBox({
   limits,
   onStored,
+  label = "Or paste a text",
+  placeholder = "For example the About section of your LinkedIn page, or notes on a project.",
 }: {
   limits: Limits;
   onStored: (stored: StoredDocument) => void;
+  label?: string;
+  placeholder?: string;
 }) {
   const [text, setText] = useState("");
   const [outcome, setOutcome] = useState<{ ok: boolean; message: string }>();
@@ -65,12 +70,12 @@ export function PasteBox({
       }}
     >
       <Field className="gap-2" data-invalid={tooLong || undefined}>
-        <FieldLabel htmlFor={fieldId}>Or paste a text</FieldLabel>
+        <FieldLabel htmlFor={fieldId}>{label}</FieldLabel>
         <Textarea
           id={fieldId}
           rows={5}
           value={text}
-          placeholder="For example the About section of your LinkedIn page, or notes on a project."
+          placeholder={placeholder}
           aria-describedby={countId}
           aria-invalid={tooLong || undefined}
           className="max-h-72"

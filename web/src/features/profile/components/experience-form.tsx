@@ -155,7 +155,7 @@ export function ExperienceForm({
                           onRemove={education.remove}
                         />
                       </div>
-                      <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                      <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-4">
                         <TextField
                           control={control}
                           name={`education.${index}.school`}
@@ -252,8 +252,9 @@ function EmployerFields({
           onRemove={onRemove}
         />
       </div>
-      {/* items-start: a field with a description below it never stretches its neighbour. */}
-      <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      {/* items-start: a field with a description below it never stretches its neighbour. Four
+          columns on a wide screen: who and where, then when and the short name. */}
+      <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <FormField
           control={control}
           name={`employers.${index}.organisation`}
@@ -289,6 +290,12 @@ function EmployerFields({
           name={`employers.${index}.title`}
           label="Job title"
           srSuffix={`at employer ${n}`}
+        />
+        <TextField
+          control={control}
+          name={`employers.${index}.location`}
+          label="Location"
+          srSuffix={`of employer ${n}`}
         />
         <FormField
           control={control}
@@ -355,12 +362,6 @@ function EmployerFields({
             )}
           />
         </div>
-        <TextField
-          control={control}
-          name={`employers.${index}.location`}
-          label="Location"
-          srSuffix={`of employer ${n}`}
-        />
         <FormField
           control={control}
           name={`employers.${index}.key`}
@@ -382,8 +383,7 @@ function EmployerFields({
                 />
               </FormControl>
               <FormDescription>
-                A short name documents use for this employer, made from the
-                organisation until you change it.
+                The short name documents use for it.
               </FormDescription>
               <FormMessage />
             </FormItem>

@@ -6,7 +6,7 @@ import { missingLabel } from "./labels";
 export interface Readiness {
   name: string;
   ready: boolean;
-  /** the one button that fixes it: a place on the page (#...) or another page */
+  /** the one button that fixes it: the tab of the profile page that does, or another page */
   fix?: { label: string; href: string };
   /** the required fields still empty, in words */
   missing: string[];
@@ -23,7 +23,11 @@ export function readiness(profile: Profile): Readiness[] {
     return found ? { label: found[1], href: found[2] } : undefined;
   };
   const scoring = first(
-    [missing("skills").length > 0, "Add your skills", "#about-skills"],
+    [
+      missing("skills").length > 0,
+      "Add your skills",
+      "/profile/about#about-skills",
+    ],
     [
       missing("search").includes("title_include"),
       "Add a job title in Settings, Search",
@@ -31,12 +35,28 @@ export function readiness(profile: Profile): Readiness[] {
     ],
   );
   const writing = first(
-    [missing("experience").length > 0, "Add your experience", "#experience"],
-    [missing("facts").length > 0, "Add facts about your work", "#about-you"],
+    [
+      missing("experience").length > 0,
+      "Add your experience",
+      "/profile/experience",
+    ],
+    [
+      missing("facts").length > 0,
+      "Add facts about your work",
+      "/profile/about",
+    ],
   );
   const filling = first(
-    [missing("identity").length > 0, "Add your contact details", "#contact"],
-    [missing("answers").length > 0, "Add your answers", "#about-answers"],
+    [
+      missing("identity").length > 0,
+      "Add your contact details",
+      "/profile/contact",
+    ],
+    [
+      missing("answers").length > 0,
+      "Add your answers",
+      "/profile/about#about-answers",
+    ],
   );
   return [
     {

@@ -141,6 +141,14 @@ def test_a_profile_with_steps_left_sees_the_card_but_no_redirect(
         ({"search": {"remote_stance": None}}, []),
         ({"search": {"contract_types": []}}, []),
         ({"search": {"contract_types": ["Freelance"]}}, ["work"]),
+        # Any contract: an answer once the step was passed (owner, 2026-11-08).
+        (
+            {
+                "search": {"contract_types": []},
+                "preferences": {"onboarding": {"steps_passed": ["profile", "work"]}},
+            },
+            ["work"],
+        ),
         ({"search": {"compensation": {"salary": None, "daily_rate": None}}}, []),
         (
             {"search": {"compensation": {"salary": {"min": 1, "max": 2, "currency": "EUR"}}}},

@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { useLocation, useSearchParams } from "react-router";
 import { z } from "zod";
 
+import { PasswordField } from "@/components/shared/auth/password-field";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
@@ -141,22 +142,11 @@ export function LoginPage() {
                   </FormItem>
                 )}
               />
-              <FormField
+              <PasswordField
                 control={form.control}
                 name="password"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Password</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="password"
-                        autoComplete="current-password"
-                        {...field}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
+                label="Password"
+                autoComplete="current-password"
               />
             </CardContent>
             <CardFooter className="mt-6 flex flex-col items-stretch gap-4">

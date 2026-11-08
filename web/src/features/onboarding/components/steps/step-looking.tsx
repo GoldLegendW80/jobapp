@@ -2,7 +2,10 @@ import { useId } from "react";
 import { Link } from "react-router";
 
 import { AdvancedSection } from "@/components/blocks/advanced-section";
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
+import { Textarea } from "@/components/ui/textarea";
 import { COMPANY_TYPES, SENIORITIES } from "@/features/profile/api/profile-api";
+import { LONG_MAX } from "@/features/profile/helpers/forms";
 import { TitleSuggestions } from "@/components/shared/profile/title-suggestions";
 import { WORDING } from "@/lib/wording";
 
@@ -15,11 +18,13 @@ import {
   SENIORITY_WORDS,
 } from "@/features/onboarding/helpers/words";
 import { Choices } from "./choice-cards";
-import { TextAnswer } from "./text-answer";
+import { TextAnswer, TIGHT } from "./text-answer";
 
-/** Step 2, What you are looking for: the roles, and the rest of the targeting under Advanced. */
+/** Step 4, What you are looking for: the roles and why the person looks, and the rest of the
+ * targeting under Advanced. */
 export function StepLooking({ draft, change, patterns, problem }: PanelProps) {
   const rolesId = useId();
+  const whyId = useId();
   const roles = (
     <TextAnswer
       fieldId={rolesId}
@@ -52,6 +57,25 @@ export function StepLooking({ draft, change, patterns, problem }: PanelProps) {
           />
         </div>
       )}
+      <Field className="gap-1.5">
+        <FieldLabel htmlFor={whyId} className={TIGHT}>
+          {WORDING.whyLooking}
+        </FieldLabel>
+        <Textarea
+          id={whyId}
+          rows={3}
+          maxLength={LONG_MAX}
+          aria-describedby={`${whyId}-hint`}
+          value={draft.motivation}
+          onChange={(event) => {
+            change({ motivation: event.target.value });
+          }}
+        />
+        <FieldDescription id={`${whyId}-hint`} className="text-xs">
+          A sentence or two, in your words. Your letters and the answers to
+          application forms start from it.
+        </FieldDescription>
+      </Field>
       <AdvancedSection
         pageKey="welcome-looking"
         errorFieldId={

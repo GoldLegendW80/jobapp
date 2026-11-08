@@ -53,8 +53,10 @@ GROUP_MAX_IMAGES = 8
 IMAGE_TEXT_CHARS = 3_000
 
 # Part of every step identity: raised when the prompt, the tools or the cut change in a way that
-# makes an earlier result stale, so that no finished step is reused across the change.
-EXTRACTOR_VERSION = 1
+# makes an earlier result stale, so that no finished step is reused across the change. 2: the
+# extraction prompt names a skill category's fields and asks for the years a document states
+# (owner, 2026-11-08).
+EXTRACTOR_VERSION = 2
 
 # Decision 5: a subscription runs on the default model, an API key on the second one. The two
 # ingestion agents carry the same mapping as `model_by_credential` (G9, G14).

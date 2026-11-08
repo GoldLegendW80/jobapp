@@ -60,7 +60,7 @@ async function openHistory(section = "identity", path?: string) {
   // The search is in Settings, Search (owner, 2026-11-05), with its History button.
   const settings = section === "search";
   fakeDocuments();
-  renderApp(path ?? (settings ? "/settings/search" : "/profile"));
+  renderApp(path ?? (settings ? "/settings/search" : "/profile/contact"));
   await screen.findByRole("heading", {
     level: 1,
     name: settings ? "Settings" : "Profile",
@@ -375,7 +375,7 @@ describe("restore", () => {
     const state = twoIdentitySaves();
     const user = userEvent.setup();
     fakeDocuments();
-    renderApp("/profile");
+    renderApp("/profile/contact");
     await screen.findByRole("heading", { level: 1, name: "Profile" });
     const field = screen.getByLabelText("Headline");
     await user.clear(field);

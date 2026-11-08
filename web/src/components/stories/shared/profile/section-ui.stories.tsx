@@ -158,7 +158,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The parts every form of the profile is built from: a titled group of fields on a card, text, multi line and date fields bound to the form, the move and remove buttons of an item, the error above the form, the save bar and the dialog of a save made elsewhere. The profile page's Experience, Advanced matching and Contact forms, Settings, Search and the first login wizard use them.",
+          "The parts every form of the profile is built from: a titled group of fields on a card, text, multi line and date fields bound to the form, the move and remove buttons of an item, the error above the form, the save bar and the dialog of a save made elsewhere. The profile page's Experience and Contact forms, Settings, Search and the first login wizard use them.",
       },
     },
   },

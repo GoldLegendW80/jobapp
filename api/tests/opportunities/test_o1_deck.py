@@ -2,6 +2,7 @@
 cards) and the Pass with its undo, through the routes, for two people A and B."""
 
 import base64
+import json
 import uuid
 from datetime import date, timedelta
 from typing import Any
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import guardrails
 from app.apply.models import Application, Mode, State
+from app.jobs import notices
 from app.jobs import service as jobs_service
 from app.jobs.models import ContractType, Job, JobStatus
 from app.jobs.sweep import NeverApplyRule
@@ -19,7 +21,7 @@ from app.opportunities import deck as decks
 from app.opportunities import passes
 from app.profile.models import Profile
 from tests.apply.test_a2_guardrails import KEPT_BY_OWNER, REFUSED_BY_OWNER
-from tests.identity.api_helpers import Api
+from tests.identity.api_helpers import Api, Clock
 from tests.jobs.sweep_helpers import finding, set_profile
 from tests.jobs.test_status_lock import join_all, run_in_thread, wait_until_blocked
 from tests.opportunities.conftest import (
@@ -96,6 +98,8 @@ def test_a_deck_of_one_card_with_its_fields(
             },
             "pay": None,
             "work_mode": None,
+            "notices": [],
+            "liveness": None,
         }
     ]
 
@@ -326,6 +330,62 @@ def test_a_damaged_cursor_is_a_422(api: Api, person_a: Person, cursor: str) -> N
         assert response.status_code == 200  # no cursor: the first page
     else:
         assert response.status_code == 422, cursor
+
+
+def test_a_posting_closing_within_seven_days_comes_first_the_soonest_first(
+    api: Api, person_a: Person, factory: sessionmaker[Session], clock: Clock
+) -> None:
+    today = notices.today_of(clock())
+    best = add_posting(factory, person_a, fit=95)
+    later = add_posting(factory, person_a, fit=90, closes_on=today + timedelta(days=8))
+    passed = add_posting(factory, person_a, fit=85, closes_on=today - timedelta(days=1))
+    soon = add_posting(factory, person_a, fit=70, closes_on=today + timedelta(days=7))
+    sooner = add_posting(factory, person_a, fit=72, closes_on=today)
+    text = "We do not sponsor visas.\nClosing date: 2030-01-01."
+    told = add_posting(factory, person_a, fit=60, posting_text=text, closes_on=None)
+    set_profile(factory, person_a.user_id, deck_search(min_fit=60))
+    body = get_deck(api, person_a).json()
+    assert [card["id"] for card in body["cards"]] == [
+        str(i) for i in (sooner, soon, best, later, passed, told)
+    ]
+    # What the card says before the click, read from a text never read since it was stored.
+    (refusal, closing) = body["cards"][-1]["notices"]
+    assert (refusal["code"], refusal["quote"]) == ("no_sponsorship", "We do not sponsor visas.")
+    assert closing["text"] == "This posting closes on 1 January 2030."
+
+
+def test_the_cursor_keeps_the_order_of_the_day_its_walk_began(
+    person_a: Person, factory: sessionmaker[Session]
+) -> None:
+    today = AT.date()
+    expected = _forty_five(factory, person_a)
+    soon = add_posting(factory, person_a, fit=70, closes_on=today + timedelta(days=2))
+    later = today + timedelta(days=30)  # the closing date is past then: a new walk differs
+    with factory() as session:
+        first = decks.deck(session, person_a.user_id, today=today)
+        assert first.cards[0].posting.id == soon
+        seen = [card.posting.id for card in first.cards]
+        cursor = first.next_cursor
+        while cursor is not None:
+            page = decks.deck(session, person_a.user_id, today=later, cursor=cursor)
+            seen += [card.posting.id for card in page.cards]
+            cursor = page.next_cursor
+        anew = decks.deck(session, person_a.user_id, today=later, limit=decks.LIMIT_MAX)
+    assert [str(i) for i in seen] == [str(soon), *expected]
+    assert anew.cards[0].posting.id != soon
+
+
+def test_a_cursor_written_before_the_closing_order_still_reads() -> None:
+    old = decks.encode_cursor(70, FOUND_ON, uuid.UUID(int=1))
+    assert decks.decode_cursor(old) == (decks.sort_key(70, FOUND_ON, uuid.UUID(int=1)), None)
+    today = date(2026, 10, 8)
+    new = decks.encode_cursor(70, FOUND_ON, uuid.UUID(int=1), today, today)
+    key, began = decks.decode_cursor(new)
+    assert (began, key[:2]) == (today, (False, today.toordinal()))
+    for broken in ([70, "2026-10-07", str(uuid.UUID(int=1)), None], [70, "2026-10-07"]):
+        raw = base64.urlsafe_b64encode(json.dumps(broken).encode()).decode()
+        with pytest.raises(decks.InvalidCursorError):
+            decks.decode_cursor(raw)
 
 
 def test_a_cursor_with_a_fit_out_of_range_is_refused() -> None:
@@ -694,7 +754,7 @@ def _whole_deck(factory: sessionmaker[Session], owner: Person) -> set[uuid.UUID]
     cursor = None
     with factory() as session:
         while True:
-            page = decks.deck(session, owner.user_id, cursor=cursor)
+            page = decks.deck(session, owner.user_id, today=AT.date(), cursor=cursor)
             ids.extend(card.posting.id for card in page.cards)
             if page.next_cursor is None:
                 break

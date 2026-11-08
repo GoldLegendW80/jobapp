@@ -160,7 +160,7 @@ test("a new user opens Fill my profile on the prompt, filled with their name", a
   await expect(
     page.getByRole("heading", {
       level: 2,
-      name: "Step 1: Prepare a dossier with a coding assistant",
+      name: "Step 1: Analyze your computer with a coding assistant",
     }),
   ).toBeVisible();
   await expect(
@@ -287,9 +287,9 @@ test("signed out, the prompt is not served", async ({ browser }) => {
   }
 });
 
-test("a dossier written the way the prompt asks is pasted in step 2, then deleted", async () => {
+test("an answer written the way the prompt asks is pasted in step 2, then deleted", async () => {
   const dossier = dossierFrom(prompt.claude_code);
-  expect(dossier.startsWith(`dossier-format: ${prompt.version}\n`)).toBe(true);
+  expect(dossier.startsWith(`profile-format: ${prompt.version}\n`)).toBe(true);
   for (const [heading, written] of Object.entries(SECTIONS))
     expect(dossier).toContain(`## ${heading}\n\n${written}`);
 

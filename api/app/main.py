@@ -15,7 +15,7 @@ from sqlalchemy.exc import DBAPIError
 
 from app import health
 from app.agents import admin_router as agents_admin_router
-from app.agents import chat_router, proposals_router
+from app.agents import chat_router, proposals_router, token_check
 from app.agents import router as agents_router
 from app.agents import runs_router as agent_runs_router
 from app.agents.crypto import Keyring
@@ -39,6 +39,7 @@ from app.ingestion.routers import no_store as ingestion_no_store
 from app.ingestion.routers import private as ingestion_private
 from app.ingestion.routers import routers as ingestion_routers
 from app.jobs import service as jobs_service
+from app.jobs.assess_router import router as jobs_assess_router
 from app.jobs.boards.router import router as boards_router
 from app.jobs.feeds.router import router as job_feeds_router
 from app.jobs.router import router as jobs_router
@@ -151,6 +152,8 @@ def create_app(
     if app.state.credentials_keyring is None:
         logger.warning("CREDENTIALS_KEY is not set: saving model credentials is disabled")
     app.state.model_verifier = Verifier(base_url=settings.model_api_base_url)
+    # Where the worker's check of a subscription token stands (Redis, app/agents/token_check.py).
+    app.state.token_checks = token_check.Store(app.state.queue.pool)
     # Mail (mail M4): the one Google client of this process (None without an OAuth client, then
     # Gmail cannot be connected), the key that signs the OAuth state, and where the PKCE
     # verifier waits between the start and the callback (Redis, read once).
@@ -317,6 +320,7 @@ def create_app(
     app.include_router(boards_router)
     app.include_router(job_feeds_router)
     app.include_router(jobs_router)
+    app.include_router(jobs_assess_router)
     app.include_router(agents_router.router)
     app.include_router(agent_runs_router.router)
     app.include_router(proposals_router.router)

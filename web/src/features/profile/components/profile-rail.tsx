@@ -7,13 +7,12 @@ import { Card, CardContent } from "@/components/ui/card";
 
 import { photoUrl } from "../api/photo-api";
 import type { Profile } from "../api/profile-api";
-import { PROFILE_ANCHORS } from "../helpers/anchors";
 import { readiness, type Readiness } from "../helpers/readiness";
 
 /**
- * The side rail of the profile page, the person at a glance: photo, name and headline, how
- * complete the profile is, and "Ready for" (three uses of the profile, each with what it still
- * lacks and the one button that fixes it).
+ * The side rail of the profile page, kept in view on a wide screen: the person at a glance
+ * (photo, name and headline), how complete the profile is, and "Ready for" (three uses of the
+ * profile, each with what it still lacks and the one button that opens the tab that fixes it).
  */
 export function ProfileRail({ profile }: { profile: Profile }) {
   const identity = profile.sections.identity;
@@ -26,7 +25,7 @@ export function ProfileRail({ profile }: { profile: Profile }) {
       .slice(0, 2)
       .toUpperCase() || "?";
   return (
-    <>
+    <div className="flex flex-col gap-4 @4xl:sticky @4xl:top-24">
       <Card role="region" aria-label="You">
         <CardContent className="flex flex-col gap-6">
           <div className="flex items-center gap-4">
@@ -43,12 +42,12 @@ export function ProfileRail({ profile }: { profile: Profile }) {
                   {identity.headline}
                 </p>
               ) : (
-                <a
-                  href={`#${PROFILE_ANCHORS.contact}`}
+                <Link
+                  to="/profile/contact"
                   className="text-sm text-muted-foreground underline underline-offset-4"
                 >
                   Add a headline
-                </a>
+                </Link>
               )}
             </div>
           </div>
@@ -72,7 +71,7 @@ export function ProfileRail({ profile }: { profile: Profile }) {
           </div>
         </CardContent>
       </Card>
-      <p className="text-sm text-muted-foreground">
+      <p className="px-3 text-sm text-muted-foreground">
         What the search looks for is in{" "}
         <Link
           to="/settings/search"
@@ -82,7 +81,7 @@ export function ProfileRail({ profile }: { profile: Profile }) {
         </Link>
         .
       </p>
-    </>
+    </div>
   );
 }
 
@@ -112,11 +111,7 @@ function ReadyLine({ line }: { line: Readiness }) {
       ) : null}
       {line.fix ? (
         <Button asChild variant="outline" size="sm" className="ml-6">
-          {line.fix.href.startsWith("#") ? (
-            <a href={line.fix.href}>{line.fix.label}</a>
-          ) : (
-            <Link to={line.fix.href}>{line.fix.label}</Link>
-          )}
+          <Link to={line.fix.href}>{line.fix.label}</Link>
         </Button>
       ) : null}
     </li>

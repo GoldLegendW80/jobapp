@@ -207,3 +207,18 @@ export const CardStack: Story = {
     );
   },
 };
+
+/** Its page may say it is closed (the last check): the card says so before the Like. */
+export const MayBeClosed: Story = {
+  name: "May be closed",
+  args: {
+    card: makeCard(5, {
+      liveness: {
+        verdict: "may_be_closed",
+        reason: "page_hints",
+        sentence: "Job expired",
+        checked_at: "2026-11-07T09:30:00Z",
+      },
+    }),
+  },
+};

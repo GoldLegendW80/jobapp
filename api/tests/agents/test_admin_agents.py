@@ -712,7 +712,16 @@ def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
     # profile_titles and profile_interpret are each their own job on the agents queue, with the
     # queue's timeout.
     assert all(
-        name in ("echo", "job_chat", "profile_interpret", "profile_titles", "triage")
+        name
+        in (
+            "apply_followup",
+            "echo",
+            "job_chat",
+            "jobs_assess",
+            "profile_interpret",
+            "profile_titles",
+            "triage",
+        )
         or name.startswith("documents_")
         for name in own
     )
@@ -1058,6 +1067,9 @@ def test_the_page_names_environment_variables_never_their_values(
 def test_the_worker_publishes_the_tools_and_the_page_shows_them(
     api: Api, admin: str, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The table outlives each test: a worker test run before this one on its database published.
+    with factory() as db, db.begin():
+        db.execute(sa.text("DELETE FROM agent_tools"))
     before = api.get(f"{AGENTS}/triage", token=admin).json()["tools"]
     assert all(tool["description"] is None for tool in before)  # nothing published yet
     monkeypatch.setattr(catalog, "_published", frozenset())

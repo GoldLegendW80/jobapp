@@ -208,7 +208,7 @@ def test_minimal_sources_convert_to_a_complete_profile(tmp_path: Path) -> None:
     result = completeness(out)
     assert result.sections["search"].missing == ["interactive_sites"]
     assert all(not s.missing for name, s in result.sections.items() if name != "search")
-    assert result.overall == 97
+    assert result.overall == 96
 
 
 def test_skills_conversion(tmp_path: Path) -> None:
@@ -268,9 +268,9 @@ def test_missing_optional_files_give_empty_sections(tmp_path: Path) -> None:
     assert search["never_apply"] == [
         "No cybersecurity roles: cyber, security, pentest, threat (Harald, 2026-10-06)"
     ]
+    # No place but a remote stance: "Anywhere", as the first login wizard stores it.
     assert completeness(out["sections"]).sections["search"].missing == [
         "title_include",
-        "location",
         "interactive_sites",
     ]
 

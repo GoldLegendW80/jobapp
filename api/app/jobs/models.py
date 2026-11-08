@@ -55,6 +55,10 @@ PAY_CHECK = (
 )
 
 
+# The last check of a posting's address (migration 0039): an object or nothing.
+LIVENESS_CHECK = "liveness IS NULL OR jsonb_typeof(liveness) = 'object'"
+
+
 class ContractType(enum.StrEnum):
     CDI = "CDI"
     CDD = "CDD"
@@ -172,6 +176,7 @@ class Job(Base):
         sa.CheckConstraint("url IS NULL OR url <> ''", name="url_not_empty"),
         sa.CheckConstraint("jsonb_typeof(legacy) = 'object'", name="legacy_is_object"),
         sa.CheckConstraint(PAY_CHECK, name="pay_complete"),
+        sa.CheckConstraint(LIVENESS_CHECK, name="liveness_is_object"),
         sa.Index(
             "ix_jobs_user_id_url", "user_id", "url", unique=True, postgresql_where="url IS NOT NULL"
         ),
@@ -220,6 +225,11 @@ class Job(Base):
     pay_currency: Mapped[str | None] = mapped_column(sa.CHAR(3))
     pay_period: Mapped[PayPeriod | None] = mapped_column(PAY_PERIOD_ENUM)
     work_mode: Mapped[WorkMode | None] = mapped_column(WORK_MODE_ENUM)
+    # What the posting's text says before the click (app/jobs/signals.py, migration 0038), read
+    # at store and at rescore; null on a row never read since.
+    signals: Mapped[list[dict[str, Any]] | None] = mapped_column(pg.JSONB)
+    text_fingerprint: Mapped[int | None] = mapped_column(sa.BigInteger)
+    closes_on: Mapped[date | None] = mapped_column(sa.Date)
     found_on: Mapped[date] = mapped_column(
         sa.Date, nullable=False, server_default=sa.text("CURRENT_DATE")
     )
@@ -228,6 +238,9 @@ class Job(Base):
     legacy: Mapped[dict[str, Any]] = mapped_column(
         pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
     )
+    # What the last check of the posting's own address found (app/jobs/liveness_check.py,
+    # migration 0039): {verdict, reason, sentence, checked_at}; null until a check ran.
+    liveness: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
     search: Mapped[Any] = mapped_column(
         pg.TSVECTOR, sa.Computed(SEARCH_EXPRESSION, persisted=True), deferred=True
     )

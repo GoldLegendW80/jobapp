@@ -80,7 +80,7 @@ from app.documents.models import (
     RenderState,
     Scope,
 )
-from app.documents.settings import DocumentSettings
+from app.documents.settings import STARTER_PHRASES, DocumentSettings
 from app.identity import deps
 from app.identity.models import User
 from app.jobs.models import Job
@@ -504,6 +504,10 @@ def posting_documents(job_id: uuid.UUID, user: CurrentUser, db: Db) -> PostingDo
         raise _error(status.HTTP_404_NOT_FOUND, POSTING_NOT_FOUND)
     out = []
     for document in store.posting_documents(db, user.id, job_id):
+        if document.kind is Kind.interview_prep:  # its own route: interview_prep_router.py
+            continue
+        if document.kind == Kind.offer_notes:
+            continue  # read through /api/documents/offer-notes
         found = store.versions(db, user.id, document.id)
         approved = [v.number for v in found if v.approved_at is not None]
         generation = store.open_generation(db, user.id, document.id) or _failed_generation(
@@ -769,16 +773,21 @@ def approve_version(
 # --- settings -----------------------------------------------------------------------------------
 
 
-@settings_router.get("/settings", response_model=DocumentSettings)
-def read_settings(user: CurrentUser, db: Db) -> DocumentSettings:
+class SettingsOut(DocumentSettings):
+    # What the starter list switch adds, shown beside it; never part of a save.
+    starter_list: tuple[str, ...] = STARTER_PHRASES
+
+
+@settings_router.get("/settings", response_model=SettingsOut)
+def read_settings(user: CurrentUser, db: Db) -> SettingsOut:
     """The writing rules of Decision 9."""
-    return store.settings(db, user.id)
+    return SettingsOut(**store.settings(db, user.id).model_dump())
 
 
-@settings_router.put("/settings", response_model=DocumentSettings)
+@settings_router.put("/settings", response_model=SettingsOut)
 def save_settings(
     body: Annotated[dict[str, Any], Body()], user: CurrentUser, request: Request, db: Db
-) -> DocumentSettings:
+) -> SettingsOut:
     try:
         value = DocumentSettings.model_validate(body)
     except ValidationError as invalid:
@@ -788,7 +797,7 @@ def save_settings(
         ) from None
     saved = store.save_settings(db, user.id, value, deps.clock(request))
     store.commit(db)
-    return saved
+    return SettingsOut(**saved.model_dump())
 
 
 # --- templates ----------------------------------------------------------------------------------

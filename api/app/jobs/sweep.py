@@ -95,7 +95,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
 from app.identity.models import User
-from app.jobs import schedule, scoring, service
+from app.jobs import schedule, scoring, service, signals
 from app.jobs import slug as slugs
 from app.jobs.boards import catalog as boards
 from app.jobs.importer import kind
@@ -617,6 +617,7 @@ def _new_job(
         "pay_currency": pay.currency if pay else None,
         "pay_period": pay.period if pay else None,
         "work_mode": work_mode,
+        **signals.stored(text),
         "found_on": now.astimezone(SWEEP_TZ).date(),
         "notes": rule.text if rule is not None else "",
         "legacy": {},

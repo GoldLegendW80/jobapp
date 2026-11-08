@@ -1,66 +1,52 @@
-import { Link } from "react-router";
-
 import { AdvancedSection } from "@/components/blocks/advanced-section";
-import { UploadPanel } from "@/components/shared/documents/upload-panel";
-import { RunProgress } from "@/components/shared/ingestion/run-progress";
-import { RunStart } from "@/components/shared/ingestion/run-start";
+import { CvConversion } from "@/components/shared/documents/upload-panel";
+import { AssistantPrompt } from "@/components/shared/ingestion/assistant-prompt";
 import { StepDocuments } from "@/components/shared/ingestion/step-documents";
+import type { useCvUpload } from "@/features/documents/api/use-cv-upload";
 import { WORDING } from "@/lib/wording";
 
-/** Step 1, Your profile: the CV upload, and the reading of other documents under Advanced. */
-export function StepProfile() {
-  // The run part asks the api only once the person opens the disclosure.
+/**
+ * Step 2, Your profile: one place to add every file (the first PDF or Word file is the CV, or the
+ * one marked with "This is my CV": it becomes the base CV with its look), and under Advanced the
+ * analysis of the computer by Claude Code or Codex, whose answer is pasted with the rest. Step 3
+ * reads them all into the profile. `cv` is the wizard's, so its conversion outlives the step.
+ */
+export function StepProfile({ cv }: { cv: ReturnType<typeof useCvUpload> }) {
   return (
     <div className="flex flex-col gap-6">
-      <p className="text-sm text-muted-foreground">
-        Upload your CV: the app keeps it as your base CV, and can fill your
-        profile from it. You review every proposal before it is written. The
-        reading goes on while you answer the next steps.
+      <p className="max-w-prose text-sm text-muted-foreground">
+        Add your CV and any other file about your work. The first PDF or Word
+        file you add becomes your CV in the app, with its look: the CVs the app
+        writes for you keep it. Another file is your CV? Click This is my CV
+        beside it. Turning it into a CV you can edit uses the Claude access
+        saved in Model access: until one is saved, that part waits. The next
+        step reads them all into your profile.
       </p>
-      {/* Already inside the wizard's card: no second frame around it. */}
-      <UploadPanel
-        className="p-0 sm:p-0"
-        openHref={(id) => `/profile/cv/${id}`}
-      />
-      <p className="text-sm text-muted-foreground">
-        {WORDING.importOtherProfile}
-      </p>
-      <AdvancedSection pageKey="welcome-profile">
-        <div className="flex flex-col gap-6 pt-4">
-          <StepDocuments flat />
-          <section
-            aria-labelledby="welcome-read"
-            className="flex flex-col gap-4"
-          >
-            <div className="flex flex-col gap-1">
-              <h3
-                id="welcome-read"
-                className="text-base font-semibold tracking-tight"
-              >
-                {WORDING.readProfile}
-              </h3>
-              <p className="text-sm text-muted-foreground">
-                Choose the documents, see the estimate, and start. The reading
-                goes on while you answer the next steps.
-              </p>
-            </div>
-            <RunStart flat />
-            <RunProgress flat />
-          </section>
+      <StepDocuments flat autoCv onCv={cv.take} cvId={cv.uploadId} />
+      <div className="flex flex-col gap-3 empty:hidden">
+        <CvConversion
+          upload={cv}
+          openHref={(id) => `/profile/cv/${id}`}
+          completeHere={false}
+        />
+      </div>
+      <AdvancedSection title={WORDING.advanced} pageKey="welcome-analyze">
+        <div className="flex flex-col gap-4 pt-4">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold tracking-tight">
+              {WORDING.analyzeYourComputer}
+            </h3>
+            <p className="max-w-prose text-sm text-muted-foreground">
+              If you use Claude Code or Codex on your computer, it can look
+              through it and answer with everything about your work. It sends
+              what it reads to its own model provider, under your own account.
+              This app never reads your computer: it only gets the answer you
+              paste.
+            </p>
+          </div>
+          <AssistantPrompt flat addIt="paste it above, in Or paste a text" />
         </div>
       </AdvancedSection>
-      <p className="text-sm">
-        <Link
-          className="underline underline-offset-4"
-          to="/profile/fill?step=review"
-        >
-          {WORDING.reviewProposals}
-        </Link>{" "}
-        <span className="text-muted-foreground">
-          (opens Fill my profile once the reading is done; come back to this
-          page after)
-        </span>
-      </p>
     </div>
   );
 }

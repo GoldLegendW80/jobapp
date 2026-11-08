@@ -10,7 +10,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.jobs import service
+from app.jobs import service, signals
 from app.jobs.models import (
     ContractType,
     FileOrigin,
@@ -322,3 +322,48 @@ def test_unicode_and_long_values(db: Session, alice: uuid.UUID) -> None:
         ).unchanged
         == 1
     )
+
+
+def test_an_imported_text_is_read_when_created_and_when_it_changes(
+    db: Session, alice: uuid.UUID
+) -> None:
+    first = "We do not sponsor visas.\nClosing date: 20 November 2026.\n" + "Build agents. " * 40
+    run(db, alice, [item(posting_text=first)])
+    (job,) = jobs(db, alice)
+    assert [s["code"] for s in job.signals] == ["no_sponsorship", "closing"]
+    assert job.closes_on == date(2026, 11, 20)
+    assert job.text_fingerprint == signals.fingerprint(first)
+    second = "This is an unpaid internship.\n" + "Train models. " * 40
+    run(db, alice, [item(posting_text=second)], later=5)
+    db.expire_all()
+    (job,) = jobs(db, alice)
+    assert [s["code"] for s in job.signals] == ["unpaid"]
+    assert job.closes_on is None
+    assert job.text_fingerprint == signals.fingerprint(second)
+    assert job.updated_at == NOW + timedelta(minutes=5)
+
+
+def test_an_import_reads_a_row_never_read_when_it_changes_it(db: Session, alice: uuid.UUID) -> None:
+    text = "This is an unpaid internship."
+    service.create_job(db, alice, NewJob("Acme", "AI Engineer", "Paris"), NOW)
+    db.execute(sa.update(Job).values(posting_text=text, signals=None))
+    db.commit()
+    run(db, alice, [item("other-slug", posting_text=text, notes="seen")], later=5)
+    db.expire_all()
+    (job,) = jobs(db, alice)
+    assert [s["code"] for s in job.signals] == ["unpaid"]
+
+
+def test_an_imported_address_drops_the_last_check_of_the_old_one(
+    db: Session, alice: uuid.UUID
+) -> None:
+    checked = {"verdict": "open", "reason": "ok", "sentence": None, "checked_at": NOW.isoformat()}
+    run(db, alice, [item()])
+    db.execute(sa.update(Job).values(liveness=checked))
+    db.commit()
+    run(db, alice, [item(notes="kept")], later=5)
+    db.expire_all()
+    assert jobs(db, alice)[0].liveness == checked
+    run(db, alice, [item(notes="kept", url="https://jobs.example/moved")], later=10)
+    db.expire_all()
+    assert jobs(db, alice)[0].liveness is None

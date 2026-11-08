@@ -36,10 +36,12 @@ import { useFollowProfileRun } from "./use-follow-profile-run";
 
 /**
  * An uploaded CV on its way to a base CV: the file is sent to ingestion, which reads its text;
- * once read, and once what is sent is agreed to, it is converted, once. `problem` is the sentence
- * of the last failure; a new file starts over.
+ * once read, and once what is sent is agreed to, it is converted, once. `eager` (the welcome
+ * wizard) converts it as soon as it is read: the server holds the conversion until the consent,
+ * which the dialog still asks for. `problem` is the sentence of the last failure; a new file
+ * starts over.
  */
-export function useCvUpload() {
+export function useCvUpload({ eager = false }: { eager?: boolean } = {}) {
   const client = useQueryClient();
   const [problem, setProblem] = useState<string>();
   const [uploadId, setUploadId] = useState<string>();
@@ -51,6 +53,7 @@ export function useCvUpload() {
   const consent = useQuery({
     queryKey: consentKey,
     queryFn: ({ signal }) => getConsent(signal),
+    enabled: uploadId !== undefined,
   });
   // Asked once a file is sent: the consent dialog may show it beside the documents consent.
   const runConsent = useQuery({
@@ -162,13 +165,14 @@ export function useCvUpload() {
   const read = isRead(file);
   const accepted = consent.data?.accepted;
   const convertNow = convert.mutate;
-  // The text is read and what is sent agreed to: convert it, once.
+  // The text is read and what is sent agreed to (or `eager`): convert it, once.
   useEffect(() => {
-    if (!read || uploadId === undefined || accepted !== true) return;
+    if (!read || uploadId === undefined || (!eager && accepted !== true))
+      return;
     if (started.current === uploadId) return;
     started.current = uploadId;
     convertNow(uploadId);
-  }, [read, uploadId, accepted, convertNow]);
+  }, [read, uploadId, accepted, eager, convertNow]);
 
   return {
     problem,
@@ -195,6 +199,10 @@ export function useCvUpload() {
     take,
     busy: send.isPending || convert.isPending,
     /** The consent dialog is due: the text is read and what is sent is not agreed to yet. */
-    asking: read && accepted === false && !declined && baseId === undefined,
+    asking:
+      read &&
+      accepted === false &&
+      !declined &&
+      (eager || baseId === undefined),
   };
 }

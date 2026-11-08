@@ -1,0 +1,166 @@
+{
+ "description": "The chat of offer notes: the agent reads the conversation and the notes, then adds a question for a lawyer.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__get_offer_text",
+     "mcp__app__get_pay_context",
+     "mcp__app__get_draft",
+     "mcp__app__get_conversation",
+     "mcp__app__submit_offer_notes"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000002",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_offer_chat_002",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read the request and the notes."
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_offer_chat_002_0_get_conversation",
+       "name": "mcp__app__get_conversation",
+       "input": {}
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_offer_chat_002_1_get_draft",
+       "name": "mcp__app__get_draft",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1500,
+      "output_tokens": 300
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000003",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_offer_chat_003",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_offer_chat_003_0_submit_offer_notes",
+       "name": "mcp__app__submit_offer_notes",
+       "input": {
+        "summary": "Lumen Example offers you the role of Senior Platform Engineer on a permanent contract, starting on 1 December 2026, for 4,500 EUR gross a month.",
+        "clauses": [
+         {
+          "title": "Trial period",
+          "quote": "The trial period is four months, renewable once.",
+          "plain": "For the first four months, you or the employer can end the contract quickly. The employer may renew it once; the letter does not say for how long."
+         },
+         {
+          "title": "Pay",
+          "quote": "Your gross monthly salary will be 4,500 EUR, paid over twelve months.",
+          "plain": "You are paid 4,500 EUR gross each month, twelve times a year. The letter names no bonus."
+         },
+         {
+          "title": "Non-compete",
+          "quote": "For twelve months after you leave, you will not work for a competitor in France.",
+          "plain": "For a year after you leave, you agree not to work for a company the employer calls a competitor, in France. The letter does not say whether you are paid during that year."
+         }
+        ],
+        "differences": [
+         "The letter states 4,500 EUR gross a month; the posting stated 55,000 to 65,000 EUR a year.",
+         "You seek 60,000 to 70,000 EUR a year; the letter states a monthly figure only."
+        ],
+        "questions": [
+         "Trial period: how long can the renewal last, and what notice applies during it?",
+         "Non-compete: is a payment owed for the twelve months, and which companies count as competitors?",
+         "Pay: is the 4,500 EUR paid before or after the trial period ends?"
+        ]
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 1500,
+      "output_tokens": 300
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000004",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_offer_chat_004",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "One question added."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 1500,
+      "output_tokens": 300
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 10,
+    "duration_api_ms": 5,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "result": "One question added.",
+    "total_cost_usd": 0.05,
+    "usage": {
+     "input_tokens": 4500,
+     "output_tokens": 900
+    },
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}
