@@ -18,9 +18,9 @@ export function StepProfile({ cv }: { cv: ReturnType<typeof useCvUpload> }) {
         Add your CV and any other file about your work. The first PDF or Word
         file you add becomes your CV in the app, with its look: the CVs the app
         writes for you keep it. Another file is your CV? Click This is my CV
-        beside it. Turning it into a CV you can edit uses your Anthropic API
-        key: until one is saved, that part waits. The next step reads them all
-        into your profile.
+        beside it. Turning it into a CV you can edit uses the Claude access
+        saved in Model access: until one is saved, that part waits. The next
+        step reads them all into your profile.
       </p>
       <StepDocuments flat autoCv onCv={cv.take} cvId={cv.uploadId} />
       <div className="flex flex-col gap-3 empty:hidden">
