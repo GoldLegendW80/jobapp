@@ -10,5 +10,7 @@ export const livenessSchema = z.object({
   reason: z.string(),
   sentence: z.string().nullable().optional(),
   checked_at: z.string(),
+  /** This check moved the posting to Closed; absent on a check stored before the field. */
+  moved: z.boolean().optional(),
 });
 export type Liveness = z.infer<typeof livenessSchema>;

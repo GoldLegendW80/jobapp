@@ -25,11 +25,7 @@ CLOSED_PAGES = [
     "This job posting has expired.",
     "This role is closed",
     "THIS POSITION IS NO LONGER ACCEPTING APPLICATIONS",
-    "No longer accepting applications",
     "We are no longer accepting applications for this role.",
-    "Applications are closed.",
-    "Applications closed",
-    "The application deadline has passed.",
     "Unfortunately, the position you applied for has been filled.",
     "Job not found",
     "Page not found",
@@ -43,8 +39,6 @@ CLOSED_PAGES = [
     "L\u2019offre que vous recherchez n\u2019est plus en ligne.",
     "Cette annonce a \u00e9t\u00e9 pourvue.",
     "Ce poste a d\u00e9j\u00e0 \u00e9t\u00e9 pourvu.",
-    "Les candidatures sont closes.",
-    "Candidatures cl\u00f4tur\u00e9es",
     "Le recrutement est termin\u00e9 pour ce poste.",
     "Nous n'acceptons plus de candidatures pour cette offre.",
     "Leider ist diese Stelle bereits besetzt.",
@@ -56,11 +50,26 @@ CLOSED_PAGES = [
     "We accepteren geen sollicitaties meer.",
     "Esta oferta ya no est\u00e1 disponible.",
     "La oferta ha expirado.",
-    "Oferta cerrada el 15/12/2025",
     "Ya no se aceptan candidaturas para esta oferta.",
     "Og\u0142oszenie wygas\u0142o",
     "To og\u0142oszenie jest ju\u017c nieaktualne.",
     "Pracodawca zako\u0144czy\u0142 zbieranie zg\u0142osze\u0144 na to stanowisko.",
+    # A closure with no subject, scoped to this posting.
+    "Applications closed for this role.",
+    "Applications for this position are now closed.",
+    "We are not accepting applications.",
+    "We're no longer accepting candidates for this role.",
+    "Not accepting applications for this job.",
+    "Les candidatures sont closes pour ce poste.",
+    "Ya no se admiten candidaturas para este puesto.",
+    "Rekrutacja na to stanowisko zosta\u0142a zako\u0144czona.",
+    # A 404 next to its word; a soft 404 by its sentence.
+    "Error 404",
+    "404 Not Found",
+    "404 error",
+    "404 page",
+    "Error 404: page not found",
+    "Page not found",
     # Folded before matching: hidden characters, lookalike spaces, full width letters.
     "Cette\u00a0offre n\u2019est\u200b plus disponible.",
     "\uff34his job is no longer available.",
@@ -81,6 +90,26 @@ PROPOSED_PAGES = [
     "Our team: the role is no longer open to external candidates.",
     "Cette annonce n'est plus disponible depuis la refonte de notre site carri\u00e8re.",
     "Die Anzeige ist abgelaufen und wird bald entfernt.",
+    # A whole closure clause that names nothing: this posting's badge, or another's in a list.
+    "No longer accepting applications",
+    "Not accepting applications",
+    "Applications are closed.",
+    "Sorry, applications are closed.",
+    "Applications closed",
+    "The application deadline has passed.",
+    "The recruitment process is closed.",
+    "Les candidatures sont closes.",
+    "Candidatures cl\u00f4tur\u00e9es",
+    "Le recrutement est termin\u00e9.",
+    "Es werden keine Bewerbungen mehr angenommen.",
+    "Die Bewerbungsfrist ist abgelaufen.",
+    "Sollicitaties gesloten",
+    "De sollicitatietermijn is verstreken.",
+    "Ya no se aceptan candidaturas.",
+    "Oferta cerrada el 15/12/2025",
+    "Kandydaci nie s\u0105 ju\u017c akceptowani",
+    "Rekrutacja zako\u0144czona",
+    "Similar jobs: Robotics Engineer \u00b7 Example Corp \u00b7 Applications closed",
     "12 jobs found",
     "3 offres trouv\u00e9es",
     "Search for jobs page is loaded",
@@ -115,6 +144,20 @@ OPEN_PAGES = [
     "We work on closed-source and open-source projects.",
     "The page you are reading describes the role.",
     "404 Robotics Street, Paris",
+    # A number that is not an error: an area code, a room, a count.
+    "For accommodations during the hiring process call (404) 555-0100.",
+    "Tel. +1 (404) 555 0100",
+    "(404) 555-0100",
+    "Tel: 404",
+    "Call us: 404 555 0100",
+    "Contact: 404",
+    "Room 404",
+    "Office: 404",
+    "Interviews take place in room 404.",
+    "We are not accepting applications from recruitment agencies.",
+    "Not accepting applications by e-mail: use the form below.",
+    "Jobs not found? Search again.",
+    "Diese Stelle ist nicht mehr besetzt.",
     "Job type: full time. Expiry date: 2027-01-31.",
     "Applications reviewed on a rolling basis.",
     "Positions are filled quickly, so apply early.",
@@ -308,3 +351,10 @@ def test_a_page_of_repeated_guarded_closure_words_is_read_whole() -> None:
     assert found.verdict == NO_CLOSURE
     stated = " ".join(["job expired"] * 20_000)
     assert judge(200, page(stated), POSTING, POSTING).verdict == MAY_BE_CLOSED
+
+
+def test_the_declared_residue_of_a_reading_without_regions() -> None:
+    # SPEC-jobs, "Liveness": another posting's card that names its posting still closes this one.
+    similar = "Similar jobs\nRobotics Engineer, Example Corp\nThis job is no longer available."
+    assert judge(200, page(similar), POSTING, POSTING).verdict == CLOSED
+    assert judge(200, page("This offer has expired."), POSTING, POSTING).verdict == CLOSED

@@ -9,30 +9,35 @@ that would spend on a closed posting.
 - What: a plain GET of the posting's own address (`jobs.url`): no cookie, no proxy from the
   environment, a User-Agent naming the app, at most REDIRECTS_MAX redirects, the first BODY_MAX
   bytes of the page (gzip and deflate decoded within that bound, another coding `unreadable`),
-  BUDGET_S in all, the pacing included. A LinkedIn posting is never asked (`linkedin`): LinkedIn
-  answers a plain GET with a sign in wall, and its requests belong to the LinkedIn checkbox, its
-  pause and its cooldown (browser B10).
+  BUDGET_S in all, the pacing included. A LinkedIn posting is never asked, nor a redirect to
+  LinkedIn followed (`linkedin`): LinkedIn answers a plain GET with a sign in wall, and its
+  requests belong to the LinkedIn checkbox, its pause and its cooldown (browser B10).
 - Where to: http or https on a port of PORTS and a host as `browser.address.check_address` reads
   it, whose every address is public unicast (`address_allowed`, the rule of browserd's egress
-  proxy, browser/browserd/proxy.py); the connection goes to the address checked, the Host header
-  and the TLS name staying the host's, so a DNS answer that changes in between cannot send it to
-  the app's own services. Every redirect is checked the same way.
+  proxy, browser/browserd/proxy.py); the connection goes to an address checked (the next one
+  when one cannot be reached within CONNECT_S), the Host header and the TLS name staying the
+  host's, so a DNS answer that changes in between cannot send it to the app's own services.
+  Every redirect is checked the same way.
 - Pace: the browser's shared per host pacer (`sources.Pacer`, in Redis across the api and the
-  workers), keyed by `platform_policy.pace_key`: one request or page of a host at a time, PAUSE_S
-  after the previous one ended.
-- Stored: {verdict, reason, sentence, checked_at} in `jobs.liveness`, without moving `updated_at`
+  workers), keyed by `platform_policy.pace_key` of each request's host, redirects included: one
+  request or page of a host at a time, PAUSE_S after the previous one ended.
+- Stored: {verdict, reason, sentence, checked_at, moved} in `jobs.liveness` (`moved`: this check
+  moved the posting to closed), without moving `updated_at`
   (a check is not an edit, so it never makes the person's open edit stale). A `closed` finding
   moves a posting that is found, shortlisted, ready or staged to closed (`set_status`, `via`
   "liveness"), unless the app moved it to closed once before and it is open again: the person
-  reopened it, and that stays (later findings only propose). Nothing is ever deleted.
-- Failures: a refused address, the network, the time, the pacer's store, a lock held past its
-  timeout are an `unconfirmed` finding, or no finding at all: a click is never refused because
-  a check could not be made.
+  reopened it, and that stays (later findings only propose). Nothing is ever deleted. A finding
+  whose address is no longer the posting's (its url changed while the check ran) is dropped.
+- Failures: a refused address, the network, the time, the pacer's store, a page it cannot read
+  (`unreadable`), any other error of the check (`check_failed`), a lock held past its timeout are
+  an `unconfirmed` finding, or no finding at all: a click is never refused because a check could
+  not be made.
 
 Logs carry ids and codes, never an address or a page's text.
 """
 
 import asyncio
+import codecs
 import contextlib
 import ipaddress
 import logging
@@ -49,7 +54,6 @@ import anyio.from_thread
 import httpx
 import sqlalchemy as sa
 from fastapi import Request
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser.address import check_address
@@ -69,6 +73,8 @@ HEADERS = {
     "Accept-Encoding": "identity",
 }
 BUDGET_S = 8.0
+# One address's connection, so that the next address of the host still fits in BUDGET_S.
+CONNECT_S = 3.0
 BULK_BUDGET_S = 20.0
 BODY_MAX = 2 * 1024 * 1024
 TEXT_MAX = 200_000
@@ -156,7 +162,7 @@ class Hop:
     url: str
     parts: SplitResult
     host: str
-    address: str
+    addresses: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -207,32 +213,40 @@ class Checker:
     sleep: Callable[[float], Awaitable[None]] = field(default=asyncio.sleep)
 
     async def check(self, url: str | None) -> Finding:
-        """What the posting's address says now; never raises for the network."""
+        """What the posting's address says now; never raises."""
+        try:
+            return await self._check(url)
+        except Exception as exc:
+            logger.warning("jobs.liveness.check_failed", extra={"error": type(exc).__name__})
+            return Finding(UNCONFIRMED, "check_failed")
+
+    async def _check(self, url: str | None) -> Finding:
         if not url:
             return Finding(UNCONFIRMED, "no_address")
-        # Imported here: importing it registers the browser finder's day-long agent at import.
-        from app.browser import platform_policy
-
-        if platform_policy.platform_of(url) == "linkedin":
+        if _linkedin(url):
             return Finding(UNCONFIRMED, "linkedin")
         try:
             async with asyncio.timeout(BUDGET_S):
-                answer = await self._get(url)
+                answer = await self._follow(await self._checked(url))
         except TimeoutError:
             return Finding(UNCONFIRMED, "timeout")
         except _UnconfirmedError as exc:
             return Finding(UNCONFIRMED, exc.reason)
-        return await asyncio.to_thread(read, url, answer)
+        try:
+            return await asyncio.to_thread(read, url, answer)
+        except Exception as exc:
+            logger.warning("jobs.liveness.unreadable", extra={"error": type(exc).__name__})
+            return Finding(UNCONFIRMED, "unreadable")
 
-    async def _get(self, url: str) -> Answer:
-        from app.browser import platform_policy  # as in check()
+    async def _paced(self, client: httpx.AsyncClient, hop: Hop) -> Answer:
+        """One request in its host's turn."""
+        from app.browser import platform_policy  # as in _linkedin()
 
-        hop = await self._checked(url)
-        key = platform_policy.pace_key(platform_policy.platform_of(url), hop.host)
+        key = platform_policy.pace_key(platform_policy.platform_of(hop.url), hop.host)
         holder = uuid.uuid4().hex
         try:
             await self._take(key, holder)
-            return await self._follow(hop)
+            return await self._fetch(client, hop)
         finally:
             # A store that refuses leaves the hold to end after the pacer's PACE_HOLD_S.
             with contextlib.suppress(StoreUnavailableError):
@@ -262,18 +276,19 @@ class Checker:
             raise _UnconfirmedError("network") from None
         if not found or not all(address_allowed(address) for address in found):
             raise _UnconfirmedError("address_refused")
-        return Hop(urlunsplit(parts._replace(scheme=scheme, fragment="")), parts, host, found[0])
+        url = urlunsplit(parts._replace(scheme=scheme, fragment=""))
+        return Hop(url, parts, host, tuple(dict.fromkeys(found)))
 
     async def _follow(self, hop: Hop) -> Answer:
         async with httpx.AsyncClient(
             transport=self.transport,
-            timeout=httpx.Timeout(BUDGET_S),
+            timeout=httpx.Timeout(BUDGET_S, connect=CONNECT_S),
             follow_redirects=False,
             trust_env=False,
             headers=HEADERS,
         ) as client:
             for _ in range(REDIRECTS_MAX + 1):
-                answer = await self._fetch(client, hop)
+                answer = await self._paced(client, hop)
                 if answer.status not in REDIRECTS:
                     return answer
                 if not answer.location:
@@ -282,27 +297,37 @@ class Checker:
                     target = urljoin(hop.url, answer.location)
                 except ValueError:
                     raise _UnconfirmedError("address_refused") from None
+                if _linkedin(target):
+                    raise _UnconfirmedError("linkedin")
                 hop = await self._checked(target)
         raise _UnconfirmedError("too_many_redirects")
 
     async def _fetch(self, client: httpx.AsyncClient, hop: Hop) -> Answer:
-        """One GET sent to the address checked, as the host's own name."""
-        address = f"[{hop.address}]" if ":" in hop.address else hop.address
-        netloc = f"{address}:{hop.parts.port}" if hop.parts.port else address
-        pinned = urlunsplit(
-            (hop.parts.scheme.lower(), netloc, hop.parts.path or "/", hop.parts.query, "")
-        )
+        """One GET sent to an address checked, as the host's own name: the next address when
+        one cannot be reached."""
         https = hop.parts.scheme.lower() == "https"
-        request = client.build_request(
-            "GET",
-            pinned,
-            headers={"Host": hop.parts.netloc},
-            extensions={"sni_hostname": hop.host} if https else {},
-        )
-        try:
-            response = await client.send(request, stream=True)
-        except httpx.HTTPError:
-            raise _UnconfirmedError("network") from None
+        for address in hop.addresses:
+            shown = f"[{address}]" if ":" in address else address
+            netloc = f"{shown}:{hop.parts.port}" if hop.parts.port else shown
+            pinned = urlunsplit(
+                (hop.parts.scheme.lower(), netloc, hop.parts.path or "/", hop.parts.query, "")
+            )
+            request = client.build_request(
+                "GET",
+                pinned,
+                headers={"Host": hop.parts.netloc},
+                extensions={"sni_hostname": hop.host} if https else {},
+            )
+            try:
+                response = await client.send(request, stream=True)
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                continue
+            except httpx.HTTPError:
+                raise _UnconfirmedError("network") from None
+            return await self._answer(response, hop)
+        raise _UnconfirmedError("network")
+
+    async def _answer(self, response: httpx.Response, hop: Hop) -> Answer:
         try:
             status = response.status_code
             if status in REDIRECTS:
@@ -317,19 +342,34 @@ class Checker:
             await response.aclose()
 
 
+def _linkedin(url: str) -> bool:
+    # Imported here: importing it registers the browser finder's day-long agent at import.
+    from app.browser import platform_policy
+
+    return platform_policy.platform_of(url) == "linkedin"
+
+
 def _media(content_type: str) -> str:
     return content_type.split(";", 1)[0].strip().casefold()
 
 
-def _text(answer: Answer) -> str:
-    charset = "utf-8"
-    for param in answer.content_type.split(";")[1:]:
+def _charset(content_type: str) -> str:
+    for param in content_type.split(";")[1:]:
         name, _, value = param.partition("=")
         if name.strip().casefold() == "charset" and value.strip(" \"'"):
-            charset = value.strip(" \"'")
+            return value.strip(" \"'")
+    return "utf-8"
+
+
+def _text(answer: Answer) -> str:
+    """The page as text: in its charset when that is a text encoding that reads it, else in
+    UTF-8 ("undefined", "idna" and "base64" name codecs that raise or are not text)."""
+    charset = _charset(answer.content_type)
     try:
+        if not getattr(codecs.lookup(charset), "_is_text_encoding", False):
+            raise LookupError(charset)
         decoded = answer.body.decode(charset, "replace")
-    except LookupError:
+    except (LookupError, UnicodeError, ValueError):
         decoded = answer.body.decode("utf-8", "replace")
     if _media(answer.content_type) == "text/plain":
         return decoded[:TEXT_MAX]
@@ -381,25 +421,37 @@ def _closed_by_the_app_before(db: Session, job: Job) -> bool:
 
 
 def record(
-    db: Session, user_id: uuid.UUID, job_id: uuid.UUID, finding: Finding, now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    job_id: uuid.UUID,
+    finding: Finding,
+    now: datetime,
+    checked: str | None,
 ) -> Outcome | None:
     """Store the finding on the posting under its row lock, and move it to closed when the
-    finding says so (module docstring). Commits. None when the posting is gone."""
+    finding says so (module docstring), while `checked` is still the posting's address; else
+    the posting as it is, the finding dropped. Commits. None when the posting is gone."""
     job = jobs_service.lock_job(db, user_id, job_id)
     if job is None:
         db.rollback()
         return None
-    stored = {
-        "verdict": finding.verdict,
-        "reason": finding.reason,
-        "sentence": finding.sentence,
-        "checked_at": now.isoformat(),
-    }
+    if job.url != checked:
+        outcome = Outcome(job.status, job.liveness)
+        db.rollback()
+        logger.info("jobs.liveness.dropped", extra={"job_id": str(job_id)})
+        return outcome
     moved = (
         finding.verdict == CLOSED
         and job.status in AUTO_CLOSE_FROM
         and not _closed_by_the_app_before(db, job)
     )
+    stored = {
+        "verdict": finding.verdict,
+        "reason": finding.reason,
+        "sentence": finding.sentence,
+        "checked_at": now.isoformat(),
+        "moved": moved,
+    }
     if moved:
         jobs_service.set_status(
             db, job, JobStatus.closed, now, via="liveness", extra={"check": finding.reason}
@@ -450,7 +502,7 @@ async def ensure(
         return Outcome(found.status, found.liveness)
     finding = await checker.check(found.url)
     return await asyncio.to_thread(
-        _in_db, sessions, lambda db: record(db, user_id, job_id, finding, now)
+        _in_db, sessions, lambda db: record(db, user_id, job_id, finding, now, found.url)
     )
 
 
@@ -496,14 +548,17 @@ def for_worker(ctx: dict[str, Any]) -> Checker:
 def click_refusal(request: Request, user_id: uuid.UUID, job_id: uuid.UUID) -> str | None:
     """Before a click that writes documents or applies, from a sync route: the sentence of the
     409 when the posting is closed, now or by this check; None to go on, also when the check
-    could not be made."""
+    could not be made, whatever stopped it."""
     state = request.app.state
     try:
         outcome = anyio.from_thread.run(
             ensure, for_app(state), state.sessionmaker, user_id, job_id, state.clock()
         )
-    except (jobs_service.JobBusyError, DBAPIError):
-        logger.warning("jobs.liveness.not_checked", extra={"job_id": str(job_id)})
+    except Exception as exc:
+        logger.warning(
+            "jobs.liveness.not_checked",
+            extra={"job_id": str(job_id), "error": type(exc).__name__},
+        )
         return None
     if outcome is None or outcome.status is not JobStatus.closed:
         return None
@@ -527,8 +582,10 @@ def check_all(request: Request, user_id: uuid.UUID, job_ids: Sequence[uuid.UUID]
         for task in pending:
             task.cancel()
         for task in done:
-            if task.exception() is not None:
-                logger.warning("jobs.liveness.not_checked", extra={"jobs": 1})
+            if (error := task.exception()) is not None:
+                logger.warning(
+                    "jobs.liveness.not_checked", extra={"jobs": 1, "error": type(error).__name__}
+                )
 
     anyio.from_thread.run(run)
 

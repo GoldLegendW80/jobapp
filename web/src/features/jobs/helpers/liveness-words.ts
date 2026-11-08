@@ -33,12 +33,13 @@ const UNREAD: Record<string, string> = {
   server_error: "the site had an error",
   sign_in: "the site asks to sign in first",
   bot_check: "the site showed a robot check",
-  unreadable: "its page is drawn by a script the check does not run",
+  unreadable: "its page shows too little text, or text the check cannot decode",
   not_a_page: "the address is not a web page",
   address_refused: "its address cannot be checked",
   network: "the site did not answer",
   timeout: "the site did not answer in time",
-  busy: "another check of the same site was running",
+  busy: "the app could not pace its requests to the site just now",
+  check_failed: "the check itself failed",
   too_many_redirects: "the address redirects too many times",
   unexpected_answer: "the site gave an unexpected answer",
 };
@@ -56,7 +57,7 @@ export function checkWords(liveness: Liveness, status: string): string {
       const said = gone
         ? "its page no longer exists"
         : "its page says it is closed";
-      return status === "closed"
+      return status === "closed" && liveness.moved
         ? `${when}: ${said}, so it moved to Closed.`
         : `${when}: ${said}.`;
     }

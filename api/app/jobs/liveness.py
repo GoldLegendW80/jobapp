@@ -5,14 +5,17 @@ answer's status and its page as text and returns a `Finding`; app/jobs/liveness_
 the request and stores the finding on the posting.
 
 - `closed`, the one verdict that moves a posting to closed by itself: the posting's own address
-  answered 404 or 410, or one clause of its own page says, whole, that this posting is closed
-  ("This job is no longer available.", "Sorry, applications are closed.", "Cette offre n'est
-  plus disponible.", "Diese Stelle ist bereits besetzt."). The address's own page: no redirect,
-  or redirects on the same host that keep the posting's id (or its path, when it has none).
+  answered 404 or 410, or one clause of its own page says, whole, that this posting is closed,
+  naming the posting, the page asked for or the employer ("This job is no longer available.",
+  "We are no longer accepting applications.", "Cette offre n'est plus disponible.", "Diese
+  Stelle ist bereits besetzt.", "Error 404"). The address's own page: no redirect, or redirects
+  on the same host that keep the posting's id (or its path, when it has none).
 - `may_be_closed`, a proposal the person confirms with one click: such a clause on a page the
-  address redirected to; closure words inside a longer clause that no time or condition word
-  opens ("Apply before the position has been filled" is not one); a short badge ("Job expired",
-  "Poste pourvu"); a listing page ("12 jobs found"); an address that now leads to another page.
+  address redirected to; a whole closure clause that names nothing ("Applications closed", "No
+  longer accepting applications"), which a "Similar jobs" list may carry for another posting;
+  closure words inside a longer clause that no time or condition word opens ("Apply before the
+  position has been filled" is not one); a short badge ("Job expired", "Poste pourvu"); a
+  listing page ("12 jobs found"); an address that now leads to another page.
 - `unconfirmed`: any other status (401, 403, 429, 451, 5xx), a bot check, a sign in page, or too
   little text to tell (a page its script draws). Never a closure.
 - `no_closure`: a page with text that says none of the above.
@@ -169,7 +172,7 @@ _DE_NOUN = (
     r"jobanzeige|stellenangebot|job)"
 )
 _DE_STATE = (
-    r"(?:nicht mehr (?:verfugbar|aktiv|online|vakant|ausgeschrieben|besetzt|offen|gultig)|"
+    r"(?:nicht mehr (?:verfugbar|aktiv|online|vakant|ausgeschrieben|offen|gultig)|"
     r"besetzt|vergeben|abgelaufen|geschlossen|deaktiviert|entfernt|archiviert)"
 )
 _NL_NOUN = r"(?:vacature|functie|positie|baan)"
@@ -184,35 +187,43 @@ _ES_STATE = (
     r"ha (?:caducado|expirado|finalizado|vencido)|"
     r"esta (?:cerrada|cerrado|cubierta|cubierto|caducada|expirada|vencida|finalizada|inactiva))"
 )
+_ES_NOT_TAKING = (
+    r"(?:ya )?no (?:se )?(?:aceptan|admiten|reciben) (?:mas )?(?:candidaturas|solicitudes|"
+    r"postulaciones|aplicaciones)"
+)
+_EN_NOT_TAKING = (
+    r"(?:no longer|not) (?:accepting|taking|receiving|considering) (?:any )?(?:new )?"
+    r"(?:applications|applicants|candidates)"
+)
+_EN_FOR = rf" for (?:this|the) {_EN_NOUN}"
 
 _CLOSURES = (
     # English
     rf"{_EN_SUBJECT} {_EN_STATE}",
-    rf"(?:{_EN_NOUN}|page)s? not found",
+    rf"(?:{_EN_NOUN}|page) not found",
     r"(?:the )?page you (?:are |were |re )?(?:looking for|requested|trying to (?:reach|access|"
     r"view)) (?:does not exist|doesn't exist|no longer exists|could not be found|cannot be "
     r"found|can't be found|was not found|is not available|is no longer available|is "
     r"unavailable)",
-    r"(?:error )?404(?: error)?(?: page)?(?: not found)?",
-    rf"(?:we are |we're |we have |we've |this employer is |the employer is )?"
-    rf"(?:no longer|not) (?:accepting|taking|receiving|considering) (?:any )?(?:new )?"
-    rf"(?:applications|applicants|candidates)(?: for (?:this|the) {_EN_NOUN})?",
-    rf"(?:the )?applications? (?:for (?:this|the) {_EN_NOUN} )?(?:are|is|have|has) (?:now )?"
-    r"(?:been )?closed",
-    rf"applications? (?:now )?closed(?: for (?:this|the) {_EN_NOUN})?",
+    # The number with its word: a bare "404" is a phone number's area code as often.
+    r"error 404(?: error)?(?: page)?(?: not found)?|404 (?:error(?: page)?|page)(?: not found)?"
+    r"|404 not found",
+    rf"(?:we are |we're |we have |we've |this employer is |the employer is ){_EN_NOT_TAKING}"
+    rf"(?:{_EN_FOR})?",
+    rf"{_EN_NOT_TAKING}{_EN_FOR}",
+    rf"(?:the )?applications? {_EN_FOR.strip()} (?:are|is|have|has) (?:now )?(?:been )?closed",
+    rf"applications? (?:now )?closed{_EN_FOR}",
     r"(?:the )?(?:application|applications|recruitment|hiring) (?:period|window|process) "
-    r"(?:for (?:this|the) (?:job|position|role) )?(?:is (?:now )?(?:closed|over)|has "
+    r"for (?:this|the) (?:job|position|role) (?:is (?:now )?(?:closed|over)|has "
     r"(?:now )?(?:closed|ended|expired))",
-    r"(?:the )?(?:application|closing) (?:deadline|date) (?:has )?(?:passed|expired)",
     rf"you can't view this {_EN_NOUN} because it's (?:no longer|not) available",
     # French
     rf"{_FR_SUBJECT} {_FR_STATE}",
     r"(?:ce |le )?poste(?: que vous recherchez)? (?:n'est plus (?:disponible|a pourvoir|"
     r"ouvert|vacant|d'actualite)|(?:a (?:deja )?ete|est) (?:deja )?(?:pourvu|clos|ferme|supprime))",
     r"(?:les )?candidatures (?:sont )?(?:closes|cloturees|fermees|terminees)"
-    r"(?: pour (?:cette offre|ce poste))?",
-    r"(?:le )?recrutement (?:est )?(?:termine|cloture|clos|ferme)(?: pour (?:cette offre|ce "
-    r"poste))?",
+    r" pour (?:cette offre|ce poste)",
+    r"(?:le )?recrutement (?:est )?(?:termine|cloture|clos|ferme) pour (?:cette offre|ce poste)",
     r"(?:nous )?n'acceptons plus (?:de )?candidatures(?: pour (?:cette offre|ce poste))?",
     r"(?:cette offre|ce poste|l'offre) n'accepte plus (?:de )?candidatures",
     r"(?:la )?page (?:que vous (?:recherchez|cherchez) |demandee )?(?:n'existe pas|n'existe "
@@ -222,22 +233,18 @@ _CLOSURES = (
     rf"(?:diese|die) {_DE_NOUN} (?:ist|wurde) (?:leider )?(?:bereits |schon )?{_DE_STATE}",
     rf"ist (?:diese|die) {_DE_NOUN} (?:leider )?(?:bereits |schon )?{_DE_STATE}",
     rf"(?:diese|die) {_DE_NOUN} existiert nicht mehr",
-    r"(?:wir nehmen|es werden) (?:leider )?keine (?:weiteren )?bewerbungen mehr "
-    r"(?:an|entgegen|angenommen)(?: fur diese stelle)?",
-    r"(?:die )?bewerbungsfrist ist (?:abgelaufen|beendet|vorbei)",
+    r"wir nehmen (?:leider )?keine (?:weiteren )?bewerbungen mehr (?:an|entgegen)"
+    r"(?: fur diese stelle)?",
+    r"es werden (?:leider )?keine (?:weiteren )?bewerbungen mehr angenommen fur diese stelle",
     rf"(?:{_DE_NOUN}|seite) nicht gefunden",
     # Dutch
     rf"(?:deze|de) {_NL_NOUN} is (?:niet meer (?:gepubliceerd|beschikbaar|actief|online|open|"
     r"geldig)|(?:al )?(?:gesloten|vervuld|verlopen|ingevuld|vervallen|verwijderd))",
     rf"(?:deze|de) {_NL_NOUN} bestaat niet meer",
     r"(?:we|wij) (?:accepteren|nemen) geen (?:nieuwe )?sollicitaties meer(?: aan)?",
-    r"(?:de )?sollicitatietermijn is (?:verstreken|verlopen|gesloten)",
-    r"(?:sollicitaties|reacties) (?:zijn )?gesloten",
     # Spanish
     rf"(?:esta|la|este|el) {_ES_NOUN} {_ES_STATE}",
-    r"(?:ya )?no (?:se )?(?:aceptan|admiten|reciben) (?:mas )?(?:candidaturas|solicitudes|"
-    r"postulaciones|aplicaciones)(?: para (?:esta oferta|este puesto|esta vacante))?",
-    r"oferta cerrada el \d{1,2} \d{1,2} \d{2,4}",
+    rf"{_ES_NOT_TAKING} para (?:esta oferta|este puesto|esta vacante)",
     r"(?:la )?pagina (?:que buscas |solicitada )?no existe",
     r"(?:pagina|oferta) no encontrada",
     # Polish
@@ -246,11 +253,39 @@ _CLOSURES = (
     r"(?:to |ta )?(?:ogloszenie|oferta) (?:jest )?(?:juz )?(?:nieaktualn[ae]|archiwaln[ae]|"
     r"wygasl[ao])",
     r"pracodawca zakonczyl zbieranie zgloszen(?: na to stanowisko)?",
-    r"kandydaci nie sa juz akceptowani",
-    r"rekrutacja (?:zostala )?(?:zakonczona|zamknieta)",
+    r"rekrutacja na to stanowisko (?:zostala )?(?:zakonczona|zamknieta)",
+    r"rekrutacja (?:zostala )?(?:zakonczona|zamknieta) na to stanowisko",
     r"(?:oferta|strona|ogloszenie) nie (?:zostala|zostalo) znalezion[ao]",
 )
 _CLOSURE = re.compile(rf"{_LEAD}(?:{'|'.join(_CLOSURES)}){_TAIL}")
+
+# The same clauses naming nothing: on the posting's own page they are its badge as often as the
+# badge of another posting in a "Similar jobs" list, so whole, they only propose.
+_UNSCOPED = (
+    # English
+    _EN_NOT_TAKING,
+    r"(?:the )?applications? (?:are|is|have|has) (?:now )?(?:been )?closed",
+    r"applications? (?:now )?closed",
+    r"(?:the )?(?:application|applications|recruitment|hiring) (?:period|window|process) "
+    r"(?:is (?:now )?(?:closed|over)|has (?:now )?(?:closed|ended|expired))",
+    r"(?:the )?(?:application|closing) (?:deadline|date) (?:has )?(?:passed|expired)",
+    # French
+    r"(?:les )?candidatures (?:sont )?(?:closes|cloturees|fermees|terminees)",
+    r"(?:le )?recrutement (?:est )?(?:termine|cloture|clos|ferme)",
+    # German
+    r"es werden (?:leider )?keine (?:weiteren )?bewerbungen mehr angenommen",
+    r"(?:die )?bewerbungsfrist ist (?:abgelaufen|beendet|vorbei)",
+    # Dutch
+    r"(?:de )?sollicitatietermijn is (?:verstreken|verlopen|gesloten)",
+    r"(?:sollicitaties|reacties) (?:zijn )?gesloten",
+    # Spanish
+    _ES_NOT_TAKING,
+    r"oferta cerrada el \d{1,2} \d{1,2} \d{2,4}",
+    # Polish
+    r"kandydaci nie sa juz akceptowani",
+    r"rekrutacja (?:zostala )?(?:zakonczona|zamknieta)",
+)
+_UNSCOPED_CLOSURE = re.compile(rf"{_LEAD}(?:{'|'.join(_UNSCOPED)}){_TAIL}")
 
 
 # --- closure words inside a longer clause, and badges: proposals only ----------------------------
@@ -410,7 +445,7 @@ def judge(status: int, text: str, requested: str, final: str) -> Finding:
     if not own and _EXPIRED_ADDRESS.search(final):
         return Finding(MAY_BE_CLOSED, "redirected")
     for shown, clauses in found:
-        if any(_stated(clause) for clause in clauses):
+        if any(_UNSCOPED_CLOSURE.fullmatch(clause) or _stated(clause) for clause in clauses):
             return Finding(MAY_BE_CLOSED, "page_hints", quote(shown))
     if not own:
         return Finding(MAY_BE_CLOSED, "redirected")

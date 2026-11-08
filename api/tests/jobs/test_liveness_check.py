@@ -306,6 +306,133 @@ def test_a_page_in_another_charset_is_read() -> None:
     assert check(Site({HOST + PATH: answer})).verdict == CLOSED
 
 
+# Codecs that raise on a page ("undefined", "idna"), are not text ("base64", "rot13") or do not
+# exist: the page is read as UTF-8, never a raise out of the check.
+UNUSABLE_CHARSETS = ["undefined", "idna", "base64", "rot13", "hex", "no-such-charset"]
+
+
+@pytest.mark.parametrize("charset", UNUSABLE_CHARSETS)
+def test_a_charset_the_check_cannot_use_reads_the_page_as_utf8(charset: str) -> None:
+    for text, verdict in ((OPEN_PAGE, NO_CLOSURE), (CLOSED_PAGE, CLOSED)):
+        answer = Page(200, text.encode(), {"content-type": f"text/html; charset={charset}"})
+        assert check(Site({HOST + PATH: answer})).verdict == verdict, charset
+
+
+def test_a_page_the_reader_fails_on_is_unconfirmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fails(*args: Any) -> Finding:
+        raise UnicodeError("label too long")
+
+    monkeypatch.setattr(liveness_check.liveness, "judge", fails)
+    found = check(Site({HOST + PATH: html(OPEN_PAGE)}))
+    assert found == Finding(UNCONFIRMED, "unreadable")
+
+
+def test_any_other_error_of_the_check_is_unconfirmed() -> None:
+    def breaks() -> httpx.Response:
+        raise RuntimeError("a bug of the transport")
+
+    assert check(Site({HOST + PATH: breaks})) == Finding(UNCONFIRMED, "check_failed")
+
+
+class HangingSite:
+    """A site that takes the request and never answers."""
+
+    def __init__(self) -> None:
+        self.seen: list[httpx.Request] = []
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.seen.append(request)
+        await asyncio.Event().wait()
+        raise AssertionError("never answered")
+
+
+def test_a_site_that_never_answers_ends_at_the_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(liveness_check, "BUDGET_S", 0.05)
+    site = HangingSite()
+    assert check(site) == Finding(UNCONFIRMED, "timeout")  # type: ignore[arg-type]
+    assert len(site.seen) == 1
+
+
+@pytest.mark.parametrize(
+    "location",
+    [
+        "https://www.linkedin.com/jobs/view/4012345678/",
+        "https://fr.linkedin.com/jobs/view/4012345678/",
+        "https://LINKEDIN.COM/jobs/view/4012345678",
+    ],
+)
+def test_a_redirect_to_linkedin_is_never_followed(location: str) -> None:
+    site = Site({HOST + PATH: redirect(location)})
+    assert check(site) == Finding(UNCONFIRMED, "linkedin")
+    assert len(site.seen) == 1
+
+
+def test_each_request_of_a_redirect_takes_its_own_hosts_turn() -> None:
+    other = "careers.example-two.example"
+    pacer = Pacer([0.0, 0.0])
+    site = Site(
+        {
+            HOST + PATH: redirect(f"https://{other}/jobs/4012345"),
+            other + "/jobs/4012345": html(OPEN_PAGE),
+        }
+    )
+    assert check(site, pacer=pacer).verdict == MAY_BE_CLOSED  # another host: redirected
+    assert [call[:2] for call in pacer.calls] == [
+        ("reserve", HOST),
+        ("release", HOST),
+        ("reserve", other),
+        ("release", other),
+    ]
+
+
+SECOND = "203.0.114.11"
+
+
+def test_the_next_address_is_tried_when_the_first_cannot_be_reached() -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.host == PUBLIC:
+            raise httpx.ConnectError("unreachable")
+        return httpx.Response(
+            200, headers={"content-type": "text/html"}, stream=httpx.ByteStream(OPEN_PAGE.encode())
+        )
+
+    seen: list[str] = []
+
+    def recorded(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        return answer(request)
+
+    made = Checker(
+        MemoryPacer(),
+        transport=httpx.MockTransport(recorded),
+        resolve=resolver({HOST: [PUBLIC, SECOND, PUBLIC]}),
+        sleep=instant,
+    )
+    assert anyio.run(made.check, POSTING) == Finding(NO_CLOSURE, "none")
+    assert seen == [PUBLIC, SECOND]
+
+
+@pytest.mark.parametrize(
+    "error", [httpx.ConnectError("refused"), httpx.ConnectTimeout("slow"), httpx.ReadError("x")]
+)
+def test_no_address_reached_is_the_network(error: Exception) -> None:
+    seen: list[str] = []
+
+    def fails(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.host)
+        raise error
+
+    made = Checker(
+        MemoryPacer(),
+        transport=httpx.MockTransport(fails),
+        resolve=resolver({HOST: [PUBLIC, SECOND]}),
+        sleep=instant,
+    )
+    assert anyio.run(made.check, POSTING) == Finding(UNCONFIRMED, "network")
+    # Only an address that could not be reached gives its turn to the next one.
+    assert seen == ([PUBLIC] if isinstance(error, httpx.ReadError) else [PUBLIC, SECOND])
+
+
 # --- the pace -----------------------------------------------------------------------------------
 
 
@@ -416,6 +543,7 @@ def test_a_closed_page_moves_an_open_posting_to_closed(
         "reason": "page_says",
         "sentence": "Cette offre n\u2019est plus disponible.",
         "checked_at": clock().isoformat(),
+        "moved": True,
     }
     assert status_events(factory, job_id) == [
         {"from": "found", "to": "closed", "via": "liveness", "check": "page_says"}
@@ -434,6 +562,7 @@ def test_anything_else_is_stored_and_moves_nothing(
     assert after.updated_at == before.updated_at  # a check is not an edit
     assert after.liveness is not None
     assert after.liveness["verdict"] == (MAY_BE_CLOSED if page == HINT_PAGE else NO_CLOSURE)
+    assert after.liveness["moved"] is False
     assert status_events(factory, job_id) == []
 
 
@@ -449,6 +578,7 @@ def test_a_posting_past_applying_or_passed_keeps_its_status(
     assert stored.status is status
     assert stored.liveness is not None
     assert stored.liveness["verdict"] == CLOSED
+    assert stored.liveness["moved"] is False
 
 
 def test_a_posting_the_person_reopened_is_never_closed_again_by_the_app(
@@ -467,6 +597,33 @@ def test_a_posting_the_person_reopened_is_never_closed_again_by_the_app(
     assert outcome is not None
     assert outcome.status is JobStatus.shortlisted
     assert row(factory, job_id).liveness["verdict"] == CLOSED  # shown as a proposal
+    assert row(factory, job_id).liveness["moved"] is False
+
+
+def test_a_finding_for_an_address_the_posting_no_longer_has_is_dropped(
+    factory: sessionmaker[Session], alice: Signed, clock: Clock
+) -> None:
+    job_id = posting(factory, alice.id)
+    moved_to = f"https://{HOST}/careers/4099999-robotics-engineer"
+
+    def url_changed_meanwhile() -> httpx.Response:
+        # The person's edit lands while the request is in flight; the jobs edit clears the check.
+        with factory() as db:
+            db.execute(sa.update(Job).where(Job.id == job_id).values(url=moved_to))
+            db.commit()
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            stream=httpx.ByteStream(CLOSED_PAGE.encode()),
+        )
+
+    site = Site({HOST + PATH: url_changed_meanwhile})
+    outcome = ensure(factory, site, alice.id, job_id, clock, force=True)
+    assert outcome == liveness_check.Outcome(JobStatus.found, None)
+    stored = row(factory, job_id)
+    assert (stored.url, stored.status, stored.liveness) == (moved_to, JobStatus.found, None)
+    assert status_events(factory, job_id) == []
+    assert len(site.seen) == 1
 
 
 def test_a_recent_check_is_reused_and_an_old_one_asked_again(
@@ -637,6 +794,77 @@ def test_a_click_goes_on_when_the_check_cannot_tell(
     assert len(refused.seen) == 1
 
 
+CLICKS = [
+    ("/api/postings/{id}/like", None),
+    ("/api/postings/{id}/applications", {"mode": "apply"}),
+    ("/api/jobs/{id}/documents/write", {"kinds": ["cv"]}),
+]
+
+
+def goes_on(api: Api, token: str, path: str, body: Any, job_id: uuid.UUID) -> None:
+    response = api.request("POST", path.format(id=job_id), token=token, json=body)
+    assert response.status_code < 500, response.text
+    assert response.json().get("code") != "posting_closed", response.text
+
+
+@pytest.mark.parametrize(("path", "body"), CLICKS)
+@pytest.mark.parametrize("charset", ["undefined", "idna"])
+def test_a_click_goes_on_on_a_page_whose_charset_the_check_cannot_use(
+    api: Api, app: FastAPI, factory: sessionmaker[Session], alice: Signed, path: str, body: Any,
+    charset: str,
+) -> None:  # fmt: skip
+    page = Page(200, OPEN_PAGE.encode(), {"content-type": f"text/html; charset={charset}"})
+    found = Site({HOST + PATH: page})
+    app.state.liveness = checker(found)
+    job_id = posting(factory, alice.id)
+    goes_on(api, alice.token, path, body, job_id)
+    assert row(factory, job_id).liveness["verdict"] == NO_CLOSURE
+    assert len(found.seen) == 1
+
+
+@pytest.mark.parametrize(("path", "body"), CLICKS)
+def test_a_click_goes_on_when_the_page_cannot_be_read(
+    api: Api, app: FastAPI, factory: sessionmaker[Session], alice: Signed, path: str, body: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    def fails(*args: Any) -> Finding:
+        raise UnicodeError("label too long")
+
+    monkeypatch.setattr(liveness_check.liveness, "judge", fails)
+    app.state.liveness = checker(Site({HOST + PATH: html(CLOSED_PAGE)}))
+    job_id = posting(factory, alice.id)
+    goes_on(api, alice.token, path, body, job_id)
+    assert row(factory, job_id).liveness["reason"] == "unreadable"
+    assert row(factory, job_id).status is JobStatus.found
+
+
+@pytest.mark.parametrize(("path", "body"), CLICKS)
+def test_a_click_goes_on_whatever_stops_the_check(
+    api: Api, factory: sessionmaker[Session], alice: Signed, site: Site, path: str, body: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    async def breaks(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("a bug of the check")
+
+    monkeypatch.setattr(liveness_check, "ensure", breaks)
+    job_id = posting(factory, alice.id)
+    goes_on(api, alice.token, path, body, job_id)
+    assert site.seen == []
+
+
+def test_a_click_goes_on_when_the_site_never_answers(
+    api: Api, app: FastAPI, factory: sessionmaker[Session], alice: Signed,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:  # fmt: skip
+    monkeypatch.setattr(liveness_check, "BUDGET_S", 0.05)
+    hanging = HangingSite()
+    app.state.liveness = checker(hanging)  # type: ignore[arg-type]
+    job_id = posting(factory, alice.id)
+    goes_on(api, alice.token, "/api/postings/{id}/like", None, job_id)
+    assert row(factory, job_id).liveness["reason"] == "timeout"
+    assert len(hanging.seen) == 1
+
+
 def test_apply_to_the_selected_checks_each_posting_first(
     app: FastAPI, factory: sessionmaker[Session], alice: Signed, clock: Clock
 ) -> None:
@@ -691,3 +919,44 @@ def test_only_an_object_is_stored_and_a_bad_date_is_never_fresh(
     assert liveness_check.fresh(
         {"checked_at": (clock() - timedelta(minutes=5)).isoformat()}, clock()
     )
+
+
+def test_apply_to_the_selected_returns_at_its_budget_and_one_failure_fails_alone(
+    app: FastAPI, factory: sessionmaker[Session], alice: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(liveness_check, "BULK_BUDGET_S", 0.2)
+    hangs, raises, answers = (
+        posting(factory, alice.id, slug=f"job-{n}", url=f"https://{HOST}/careers/40{n}0000")
+        for n in (1, 2, 3)
+    )
+    asked: list[str] = []
+
+    class Mixed:
+        """One posting's site never answers, one check raises, the third answers."""
+
+        async def check(self, url: str | None) -> Finding:
+            asked.append(str(url))
+            if url == f"https://{HOST}/careers/4010000":
+                await asyncio.Event().wait()
+            if url == f"https://{HOST}/careers/4020000":
+                raise RuntimeError("a bug of the check")
+            return Finding(NO_CLOSURE, "none")
+
+    app.state.liveness = Mixed()
+
+    class Request:
+        pass
+
+    request = Request()
+    request.app = app  # type: ignore[attr-defined]
+
+    async def run() -> None:
+        await anyio.to_thread.run_sync(
+            liveness_check.check_all, request, alice.id, [hangs, raises, answers]
+        )
+
+    anyio.run(run)
+    assert len(asked) == 3
+    assert row(factory, hangs).liveness is None
+    assert row(factory, raises).liveness is None
+    assert row(factory, answers).liveness["verdict"] == NO_CLOSURE

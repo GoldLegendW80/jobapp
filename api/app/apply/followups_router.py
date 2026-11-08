@@ -5,7 +5,8 @@
 - PUT /api/apply/followups/settings `{enabled}`: the switch, on by default.
 - POST /api/apply/followups/{posting_id}/draft: Write a draft, the person's click (D29): 202
   once the follow up agent is queued.
-- PUT /api/apply/followups/{posting_id}/draft `{subject, body}`: the person's own text.
+- PUT /api/apply/followups/{posting_id}/draft `{subject, body}`: the person's own text, refused
+  as Write a draft is (the switch off, `cold`, `answered`, `done`), as is Gmail below.
 - POST /api/apply/followups/{posting_id}/sent: "I sent it", from the person's own mail.
 - POST /api/apply/followups/{posting_id}/gmail `{to}`: the draft as a Gmail draft, which the
   person sends with POST /api/mail/drafts/{id}/send, the mail gate's own route and rules.
@@ -21,6 +22,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
+import anyio.from_thread
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
@@ -154,7 +156,7 @@ def put_settings(body: SettingsIn, request: Request, user: CurrentUser, db: Db) 
 
 
 @router.post("/api/apply/followups/{posting_id}/draft")
-async def write(posting_id: str, request: Request, user: CurrentUser, db: Db) -> JSONResponse:
+def write(posting_id: str, request: Request, user: CurrentUser, db: Db) -> JSONResponse:
     wanted, now = _posting(posting_id), _now(request)
     if wanted is None:
         return _refusal("not_followed")
@@ -164,12 +166,15 @@ async def write(posting_id: str, request: Request, user: CurrentUser, db: Db) ->
         db.rollback()
         return _refusal(refused.code)
     db.commit()
+    queue = request.app.state.queue
     try:
-        await request.app.state.queue.enqueue(
-            "run_agent",
-            str(run_id),
-            queue=queues.AGENTS,
-            job_id=queues.agent_run_job_id(run_id),
+        anyio.from_thread.run(
+            lambda: queue.enqueue(
+                "run_agent",
+                str(run_id),
+                queue=queues.AGENTS,
+                job_id=queues.agent_run_job_id(run_id),
+            )
         )
     except queues.QueueUnavailableError:
         logger.warning("apply.followup.run_not_queued", extra={"run_id": str(run_id)})
@@ -221,7 +226,6 @@ def gmail(
     if wanted is None:
         return _refusal("not_followed")
     try:
-        service.entry(db, user.id, wanted, _now(request))
         draft = service.to_gmail(db, user.id, wanted, body.to, _now(request))
     except service.RefusedError as refused:
         db.rollback()

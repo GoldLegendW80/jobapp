@@ -6,6 +6,8 @@ A and B, with invented postings at "Example Robotics"; every account is `e2e-*@e
 
 from __future__ import annotations
 
+import dataclasses
+import inspect
 import json
 import uuid
 from datetime import timedelta
@@ -18,9 +20,12 @@ from app import queue as queues
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind, RunStatus
-from app.apply import followup_agent, followup_service
+from app.apply import followup_agent, followup_service, followups, followups_router
+from app.apply import gate as apply_gate
 from app.apply.followup_models import FollowUp
 from app.documents import consent
+from app.mail import drafts
+from app.mail import gate as mail_gate
 from app.mail.draft_models import MailDraft, MailSend
 from app.mail.google import SCOPE_READONLY, SCOPE_SEND
 from app.mail.models import AccountStatus, MailAccount
@@ -39,6 +44,7 @@ from tests.apply.test_start import (
     migrated_url,
     posting,
 )
+from tests.conftest import make_settings
 from tests.profile.conftest import full
 
 __all__ = ["a", "api", "app", "b", "engine", "factory", "migrated_url"]
@@ -315,16 +321,11 @@ def test_the_persons_own_text_is_kept_with_what_the_check_found(api, factory, a)
     assert api.request("PUT", f"{PATH}/{job}/draft", token=token, json=two_lines).status_code == 422
 
 
-def test_gmail_makes_a_draft_that_only_the_persons_send_can_send(api, factory, a):
-    token = api.login_token(USER_A)
-    job = applied(factory, a, 9)
-    text = {"subject": "Following up", "body": "Hello, I applied last week."}
-    no_text = api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "jobs@example.org"})
-    assert no_text.json()["code"] == "not_connected"
+def connect_gmail(factory: sessionmaker[Session], user_id: uuid.UUID) -> None:
     with factory() as db:
         db.add(
             MailAccount(
-                user_id=a,
+                user_id=user_id,
                 email="e2e-apply-a2-a@example.org",
                 google_sub=uuid.uuid4().hex,
                 refresh_token_encrypted=b"sealed",
@@ -335,6 +336,15 @@ def test_gmail_makes_a_draft_that_only_the_persons_send_can_send(api, factory, a
             )
         )
         db.commit()
+
+
+def test_gmail_makes_a_draft_that_only_the_persons_send_can_send(api, factory, a):
+    token = api.login_token(USER_A)
+    job = applied(factory, a, 9)
+    text = {"subject": "Following up", "body": "Hello, I applied last week."}
+    no_text = api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "jobs@example.org"})
+    assert no_text.json()["code"] == "not_connected"
+    connect_gmail(factory, a)
     assert api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "x"}).status_code == 422
     assert (
         api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "jobs@example.org"}).json()["code"]
@@ -363,3 +373,157 @@ def test_an_unknown_posting_is_not_followed(api, a, bad):
     refused = api.post(f"{PATH}/{bad}/sent", token=token)
     assert refused.status_code == 404
     assert refused.json()["code"] == "not_followed"
+
+
+def test_the_writer_reads_only_the_answers_a_follow_up_may_say(factory, a):
+    job = applied(factory, a, 9)
+    ready_to_write(factory, a)
+    marks = {name: f"mark{uuid.uuid4().hex[:12]}" for name in ("pronouns", "eeo", "why")}
+    with factory() as db:
+        profile = profile_service.get_profile(db, a, AT)
+        answers = {
+            **full("answers"),
+            "pronouns": marks["pronouns"],
+            "motivation": f"I build robots {marks['why']}",
+            "eeo_policy": "stored",
+            "eeo_answers": [{"topic": "gender", "answer": marks["eeo"]}],
+            "salary_stance": "range",
+            "salary_ranges": [{"currency": "EUR", "minimum": 73519, "maximum": 81937}],
+            "background_check_consent": True,
+        }
+        profile_service.save_section(db, a, "answers", answers, profile.revision, AT)
+        db.commit()
+    _, binding = _bound_run(factory, a, job)
+    with factory() as db:
+        data = json.loads(followup_agent.context(db, a, binding, AT))
+    shown = data["person_profile"]["answers"]
+    assert set(shown) <= set(followup_agent.ANSWER_FIELDS)
+    assert marks["why"] in shown["motivation"]
+    text = json.dumps(data)
+    for kept_out in (marks["pronouns"], marks["eeo"], "73519", "81937", "background_check"):
+        assert kept_out not in text
+
+
+def test_write_a_draft_runs_off_the_event_loop():
+    # Its SELECT ... FOR UPDATE is sync work: an async route would hold the event loop.
+    routes = [followups_router.read, followups_router.write, followups_router.save]
+    routes += [followups_router.sent, followups_router.gmail, followups_router.put_settings]
+    assert not any(inspect.iscoroutinefunction(route) for route in routes)
+
+
+TEXT = {"subject": "Following up", "body": "Hello, I applied last week."}
+
+
+def test_the_text_and_gmail_are_refused_while_follow_ups_are_off(api, factory, a):
+    token = api.login_token(USER_A)
+    job = applied(factory, a, 9)
+    connect_gmail(factory, a)
+    api.request("PUT", f"{PATH}/settings", token=token, json={"enabled": False})
+    saved = api.request("PUT", f"{PATH}/{job}/draft", token=token, json=TEXT)
+    sent = api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "jobs@example.org"})
+    for refused in (saved, sent):
+        assert (refused.status_code, refused.json()["code"]) == (409, "off"), refused.text
+    with factory() as db:
+        assert db.scalar(sa.select(sa.func.count()).select_from(FollowUp)) == 0
+        assert db.scalar(sa.select(sa.func.count()).select_from(MailDraft)) == 0
+
+
+@pytest.mark.parametrize("urgency", ["cold", "answered", "done"])
+def test_the_text_and_gmail_are_refused_when_no_follow_up_is_asked(
+    api, factory, a, monkeypatch, urgency
+):
+    token = api.login_token(USER_A)
+    job = applied(factory, a, 9)
+    connect_gmail(factory, a)
+    api.request("PUT", f"{PATH}/{job}/draft", token=token, json=TEXT)
+    real = followups.cadence
+
+    def ended(track, today):
+        return dataclasses.replace(real(track, today), urgency=urgency, next_on=None)
+
+    monkeypatch.setattr(followups, "cadence", ended)
+    changed = {**TEXT, "body": "Hello again."}
+    saved = api.request("PUT", f"{PATH}/{job}/draft", token=token, json=changed)
+    sent = api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "jobs@example.org"})
+    for refused in (saved, sent):
+        assert refused.status_code == 409, refused.text
+        assert refused.json() == {
+            "detail": followups_router.SENTENCES[urgency][1],
+            "code": urgency,
+        }
+    with factory() as db:
+        assert db.scalar(sa.select(FollowUp.body).where(FollowUp.posting_id == job)) == TEXT["body"]
+        assert db.scalar(sa.select(sa.func.count()).select_from(MailDraft)) == 0
+
+
+def test_another_persons_posting_is_not_followed_by_any_click(api, factory, a, b):
+    token = api.login_token(USER_A)
+    theirs = applied(factory, b, 9)
+    ready_to_write(factory, a)
+    connect_gmail(factory, a)
+    clicks = [
+        api.post(f"{PATH}/{theirs}/draft", token=token),
+        api.request("PUT", f"{PATH}/{theirs}/draft", token=token, json=TEXT),
+        api.post(f"{PATH}/{theirs}/gmail", token=token, json={"to": "jobs@example.org"}),
+    ]
+    for refused in clicks:
+        assert (refused.status_code, refused.json()["code"]) == (404, "not_followed")
+    with factory() as db:
+        assert db.scalar(sa.select(sa.func.count()).select_from(FollowUp)) == 0
+        assert db.scalar(sa.select(sa.func.count()).select_from(AgentRun)) == 0
+
+
+def test_the_assistants_follow_up_passes_the_gates_fact_check_on_its_own_sources(api, factory, a):
+    token = api.login_token(USER_A)
+    job = applied(factory, a, 9, title="Data Engineer")
+    ready_to_write(factory, a)
+    with_profile(factory, a)
+    connect_gmail(factory, a)
+    run_id, binding = _bound_run(factory, a, job)
+    day = TODAY - timedelta(days=9)
+    body = (
+        f"Hello,\n\nI applied for the Data Engineer role at Example Robotics on {day.day} "
+        f"{day:%B %Y}. I am still very interested and would be glad to talk.\n\nBest regards"
+    )
+    raw = {"subject": "Data Engineer: following up", "body": body}
+    with factory() as db:
+        stored = followup_agent.submit(db, a, run_id, binding, raw, AT)
+        followup_agent.finish(db, run_id, RunStatus.done, None)
+        db.commit()
+    assert stored == (followup_agent.STORED, False)
+    made = api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "jobs@example.org"})
+    assert made.status_code == 200, made.text
+    with factory() as db:
+        draft = db.get(MailDraft, uuid.UUID(made.json()["draft_id"]))
+        assert (draft.written_by, draft.application_id) == ("agent", None)
+        assert mail_gate.issues(db, draft, AT) == []
+        auth = mail_gate.authorise_click(
+            a, draft.id, drafts.content_hash(draft), list(draft.to_addrs), [], AT
+        )
+        settings = make_settings(
+            "postgresql+psycopg://unused@invalid/unused", mail_send_key="k" * 40
+        )
+        switches = apply_gate.Switches(enabled=True, paused=False)
+        row, sending, _, _ = mail_gate._decide(db, auth, AT, settings, switches)
+        assert row.refusal_code is None
+        assert (row.result, sending.status) == ("pending", "sending")
+        db.rollback()
+
+
+def test_a_follow_up_claim_no_source_states_is_still_refused_by_the_gate(api, factory, a):
+    token = api.login_token(USER_A)
+    job = applied(factory, a, 9, title="Data Engineer")
+    ready_to_write(factory, a)
+    connect_gmail(factory, a)
+    run_id, binding = _bound_run(factory, a, job)
+    raw = {"subject": "Following up", "body": "Hello,\n\nI applied on 3 March 2026."}
+    with factory() as db:
+        followup_agent.submit(db, a, run_id, binding, raw, AT)
+        assert followup_agent.submit(db, a, run_id, binding, raw, AT)[1] is False  # stored
+        followup_agent.finish(db, run_id, RunStatus.done, None)
+        db.commit()
+    made = api.post(f"{PATH}/{job}/gmail", token=token, json={"to": "jobs@example.org"})
+    with factory() as db:
+        draft = db.get(MailDraft, uuid.UUID(made.json()["draft_id"]))
+        found = mail_gate.issues(db, draft, AT)
+        assert [issue["code"] for issue in found] == ["date_not_in_sources"]

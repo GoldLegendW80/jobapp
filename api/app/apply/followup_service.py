@@ -252,25 +252,60 @@ def _dated(label: str, day: date) -> str:
     return f"{label} {day.day} {day:%B %Y} ({day.isoformat()})"
 
 
-def issues(db: Session, user_id: uuid.UUID, found: Entry, body: str, now: datetime) -> list[dict]:
-    """The fact check of mail M9 on a follow up's text: what it claims that neither the profile,
-    the posting's company and title, nor the dates of this application state."""
+def _sources(
+    db: Session, user_id: uuid.UUID, posting: Job, found: Entry | None, now: datetime
+) -> factcheck_rules.Sources:
+    """The profile, the posting's company and title, and the dates of this application."""
     profile = profile_service.get_profile(db, user_id, now)
     view = build(profile_service.sections_view(profile), profile.revision)
-    posting = found.posting
     sources = sources_for(
         view, None, None, PostingView(posting.company, posting.title), kind="letter"
     )
+    if found is None:
+        return sources
     known = [_dated("Applied on", found.applied_on)]
     known += [_dated("Followed up on", day) for day in found.sent]
-    sources = dataclasses.replace(sources, instructions=(*sources.instructions, *known))
+    return dataclasses.replace(sources, instructions=(*sources.instructions, *known))
+
+
+def issues(db: Session, user_id: uuid.UUID, found: Entry, body: str, now: datetime) -> list[dict]:
+    """The fact check of mail M9 on a follow up's text: what it claims that neither the profile,
+    the posting's company and title, nor the dates of this application state."""
+    sources = _sources(db, user_id, found.posting, found, now)
     return [
         {**dataclasses.asdict(issue), "id": f"{issue.code}:{issue.start}:{issue.end}"}
         for issue in factcheck_rules.check(body, sources)
     ]
 
 
+def draft_sources(db: Session, draft: MailDraft, now: datetime) -> factcheck_rules.Sources | None:
+    """The sources of a Gmail draft made from a follow up (`to_gmail`), for the mail gate's fact
+    check: the follow up's own, the dates left out once the posting is no longer followed. None
+    for a draft no follow up of its person names."""
+    posting = db.scalar(
+        sa.select(Job)
+        .join(FollowUp, sa.and_(FollowUp.posting_id == Job.id, FollowUp.user_id == Job.user_id))
+        .where(FollowUp.user_id == draft.user_id, FollowUp.mail_draft_id == draft.id)
+        .limit(1)
+    )
+    if posting is None:
+        return None
+    found = entries(db, draft.user_id, now, posting.id)
+    return _sources(db, draft.user_id, posting, found[0] if found else None, now)
+
+
 # --- the person's acts --------------------------------------------------------------------------
+
+
+def _open_to_write(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, now: datetime) -> Entry:
+    """The posting's entry while its draft may still be written: the switch on, the posting
+    followed, a follow up due or waiting."""
+    if not enabled(db, user_id):
+        raise RefusedError("off")
+    found = entry(db, user_id, posting_id, now)
+    if not followups.can_draft(found.cadence):
+        raise RefusedError(found.cadence.urgency)
+    return found
 
 
 def _open_row(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, now: datetime) -> FollowUp:
@@ -321,8 +356,9 @@ def save_text(
     db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, subject: str, body: str, now: datetime
 ) -> FollowUp:
     """The person's own text for the draft: the dash rule and the fact check as for the agent's,
-    shown, never a refusal of what they wrote."""
-    found = entry(db, user_id, posting_id, now)
+    shown, never a refusal of what they wrote (refused only as Write a draft is: the switch off,
+    or no follow up to write)."""
+    found = _open_to_write(db, user_id, posting_id, now)
     row = _open_row(db, user_id, posting_id, now)
     if _writing(db, row):
         raise RefusedError("running")
@@ -336,11 +372,7 @@ def save_text(
 def start_draft(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, now: datetime) -> uuid.UUID:
     """The person's click on Write a draft: a queued run of the follow up agent bound to the
     posting's open draft (D29: never without a click). The caller commits, then queues it."""
-    if not enabled(db, user_id):
-        raise RefusedError("off")
-    found = entry(db, user_id, posting_id, now)
-    if not followups.can_draft(found.cadence):
-        raise RefusedError(found.cadence.urgency)
+    found = _open_to_write(db, user_id, posting_id, now)
     rules = _rules(db, user_id)
     posting = found.posting
     swept = guardrails.swept_never_apply(db, user_id, posting.id)
@@ -434,7 +466,9 @@ def to_gmail(
 ) -> MailDraft:
     """The draft's text as a Gmail draft to `to`, in the posting's thread when there is one: a
     `reply` of the mail module, which the person sends by their own click on Send (the gate's
-    `user_click`, its recipient, fact check and every other rule as for any draft)."""
+    `user_click`, its recipient, fact check and every other rule as for any draft). Refused as
+    Write a draft is: the switch off, or no follow up to write."""
+    _open_to_write(db, user_id, posting_id, now)
     code = apply_email.account_code(db, user_id)
     if code is not None:
         raise RefusedError(code)
