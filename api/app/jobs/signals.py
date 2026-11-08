@@ -253,8 +253,11 @@ _NO_RIGHT = re.compile(
 )
 # The employer gives the permit: a right it sponsors, handles or arranges is not asked of anyone.
 _COMPANY = (
-    r"(?:we|we ll|we d|we re|nous|the company|our company|the employer|our employer"
-    r"|the business|our client|the client|our team|the team|our hr team|our people team)"
+    r"(?:we|we ll|we d|we re|nous|(?:the|our) (?:company|employer|business|client|firm"
+    r"|organization|organisation|team|hr team|people team|hiring team|recruiting team|agency"
+    r"|group)|l entreprise|la societe|l employeur|le client|l equipe|le cabinet|l agence"
+    r"|le groupe|notre (?:entreprise|societe|equipe|equipe rh|cabinet|agence|groupe|client)"
+    r"|nos equipes)"
 )
 _COMPANY_GAP = (
     r"(?: (?:will|can|could|would|may|shall|do|does|also|gladly|happily|fully|then|always|are"
@@ -271,7 +274,7 @@ _GIVE = (
     r"|parrainons|parraine|sponsoriser|sponsorisons|sponsorise|fournir|fournissons|fournit"
     r"|offrir|offrons|offre|proposer|proposons|propose|gerer|gerons|gere|organiser|organisons"
     r"|organise|occupons|occupe|occuper|assurer|assurons|assure|obtenir|obtenons|faire|faisons"
-    r"|fait|obtain|obtains|obtaining)"
+    r"|fait|obtain|obtains|obtaining|sort|sorts|sorting)"
 )
 _GIVEN_GAP = (
     r"(?: (?:a|an|the|your|our|their|any|all|full|every|necessary|for|you|with|both|and|uk|us|eu"
@@ -302,16 +305,17 @@ _GIVES = re.compile(
 _GIVEN_ELSEWHERE = re.compile(
     rf"\b{_COMPANY}{_COMPANY_GAP}{{0,4}} {_GIVE}(?: (?:it|them|this|that|one))?(?: for you)?$"
     rf"|\b{_COMPANY}{_COMPANY_GAP}{{0,4}} {_GIVE} (?:it|them|this|that|one)\b"
-    rf"|\b(?:nous|l entreprise|la societe|l employeur){_COMPANY_GAP}{{0,4}}"
-    r" (?:le|la|les|l|en|nous en|en)(?: (?:nous|vous))? (?:chargeons|charge|occupons|occupe"
-    r"|prenons en charge|prend en charge|fournissons|fournit|parrainons|parraine|gerons|gere"
-    r"|organisons|organise)\b"
+    rf"|\b{_COMPANY}{_COMPANY_GAP}{{0,4}}"
+    r" (?:le|la|les|l|en|nous en|s en|vous en)(?: (?:nous|vous))? (?:chargeons|charge|chargera"
+    r"|chargent|occupons|occupe|occupera|occupent|prenons en charge|prend en charge"
+    r"|prendra en charge|fournissons|fournit|fournira|parrainons|parraine|gerons|gere|gerera"
+    r"|organisons|organise|organisera)\b"
     rf"|\b(?:which|that|qui|que|qu)(?: {_COMPANY}| our [a-z]+ team| our [a-z]+){_COMPANY_GAP}"
     rf"{{0,4}} {_GIVE}\b"
     r"|\b(?:sponsored|provided|arranged|handled|covered|organised|organized|obtained|secured"
     r"|processed|managed|offered|paid for|taken care of|pris en charge|prise en charge|fourni"
     r"|fournie|fournis|fournies|parraine|parrainee|parraines|parrainees|organise|organisee"
-    r"|gere|geree|assure|assuree) (?:by|par)"
+    r"|gere|geree|assure|assuree|obtenu|obtenue|obtenus|obtenues|sorted out) (?:by|par)"
     r" (?!(?:you|yourself|the candidate|candidate|the candidates|candidates|the applicant"
     r"|applicant|the applicants|applicants|the employee|employees|the hire|vous|le candidat"
     r"|la candidate|les candidats|vos soins|toi)\b)"
