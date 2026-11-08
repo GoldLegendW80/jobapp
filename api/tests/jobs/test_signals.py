@@ -112,6 +112,13 @@ def test_near_misses_say_nothing_of_sponsorship(text: str) -> None:
 # --- the right to work ---------------------------------------------------------------------------
 
 WORK_PERMIT = [
+    # A requirement stays one: the person provides it, or nobody is named.
+    ("Proof of right to work in the UK must be provided.", "United Kingdom"),
+    ("A work permit for Germany must be provided by the candidate.", "Germany"),
+    ("Le permis de travail pour l'Allemagne doit être fourni par le candidat.", "Germany"),
+    ("A work permit for Germany is required, which candidates must obtain.", "Germany"),
+    ("Applicants must obtain a work permit for Germany before they start.", "Germany"),
+    ("Vous devez obtenir un permis de travail pour l'Allemagne.", "Germany"),
     ("You must have the right to work in the UK.", "United Kingdom"),
     ("Right to work in the United Kingdom", "United Kingdom"),
     ("Applicants must be eligible to work in the EU.", "European Union"),
@@ -163,6 +170,24 @@ WORK_PERMIT_LISTS = [
     ("Vous devez être autorisé à travailler en France ou en Suisse.", ["France", "Switzerland"]),
 ]
 WORK_PERMIT_SILENT = [
+    # The employer gives the right it names, in every shape (review of #762, round 3).
+    "A work permit for Germany is required and will be sponsored by the company.",
+    "A work permit for Germany is required and is provided by the employer.",
+    "Work permit for Germany required (sponsored by the company).",
+    "A work permit for Germany is required, which we can provide.",
+    "You will need a work permit for Germany, which we arrange.",
+    "A work permit in Germany is required, which our HR team obtains for you.",
+    "Work permit for Germany required, we arrange it.",
+    "A work permit for Germany is required; the company arranges it.",
+    "You will need a work permit for Germany; we will arrange it.",
+    "You will need a work permit for Germany, and we will handle it for you.",
+    "A WORK PERMIT FOR GERMANY IS REQUIRED,  WHICH WE CAN PROVIDE.",
+    "A work permit for Germany is required, that the company will arrange.",
+    "Un permis de travail pour l'Allemagne est requis et sera pris en charge par l'entreprise.",
+    "Un permis de travail pour l'Allemagne est requis, que nous fournissons.",
+    "Un permis de travail pour l'Allemagne est requis, nous nous en chargeons.",
+    "Un permis de travail pour l'Allemagne est requis, nous le prenons en charge.",
+    "Un permis de travail pour l'Allemagne est requis (fourni par l'employeur).",
     "We help you obtain a work permit in Germany.",
     "We support work permit applications for the Netherlands.",
     "A work permit in Spain is not required.",

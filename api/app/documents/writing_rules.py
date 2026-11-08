@@ -253,7 +253,22 @@ def _puts_words(clause: tuple[str, ...]) -> bool:
     return False
 
 
+# A removal verb said not to happen asks to always include what follows: "Never omit X" is a fact.
+_REMOVE = frozenset(
+    {"omit", "omits", "forget", "forgets", "drop", "drops", "remove", "removes", "skip", "skips",
+     "cut", "cuts", "delete", "deletes", "exclude", "excludes", "leave", "oublier", "oublie",
+     "oublies", "oubliez", "omettre", "omets", "omet", "omettez", "retirer", "retire", "retirez",
+     "enlever", "enleve", "enlevez", "supprimer", "supprime", "supprimez"}
+)  # fmt: skip
+
+
+def _keeps_in(clause: tuple[str, ...]) -> bool:
+    return any(w in _REMOVE and _negated(clause, i) for i, w in enumerate(clause))
+
+
 def _states_fact(reading: _Reading) -> bool:
+    if any(_keeps_in(clause) for clause in reading.clauses):
+        return True
     words = reading.words
     for i, word in enumerate(words):
         parts = {word, *word.split("-")}

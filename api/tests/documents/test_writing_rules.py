@@ -88,6 +88,13 @@ ACCEPTED = [
 # a number, or has a verb that puts words in the document followed by more than quoted words and
 # words of style; a shape is a message the code does not recognise as a rule on the wording.
 REFUSED = [
+    # "Never omit X" asks to always include X: a fact (review of #762, round 3).
+    ("Never omit the Rust project", "fact"),
+    ("Never forget Kubernetes", "fact"),
+    ("Never drop the AWS certification", "fact"),
+    ("Don't leave out the AWS certification", "fact"),
+    ("Ne jamais oublier Kubernetes", "fact"),
+    ("N'omets jamais le projet Rust", "fact"),
     ("Always mention you hold a security clearance", "fact"),
     ("Always say you are fluent in German", "fact"),
     ("Always say you\u2019re a lead", "fact"),

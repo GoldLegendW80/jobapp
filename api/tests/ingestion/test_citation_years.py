@@ -8,6 +8,7 @@ from app.ingestion import citations, items
 from app.ingestion.citations import FieldType, Rule
 
 STATED = [
+    ("Il a 5 ans d'expérience", 5),  # "a" is the verb, not "à"
     ("3.5 years of software engineering", 3.5),
     ("3,5 ans d'expérience en développement", 3.5),
     ("trois ans et demi d'ingénierie logicielle", 3.5),
@@ -61,6 +62,13 @@ STATED = [
     ("10 years in the field, 3 of them in robotics", 10),
 ]
 NOT_STATED = [
+    # Round 3 of the review of #762: a French age with "à", and a bound after a comma.
+    ("j'ai rejoint la société à 25 ans comme stagiaire", 25),
+    ("À 22 ans, premier poste en alternance", 22),
+    ("5 years experience, at most", 5),
+    ("5 years of experience (at most)", 5),
+    ("5 ans d'expérience, au plus", 5),
+    ("3 years of Python, or less", 3),
     ("less than 2 years of experience", 2),
     ("fewer than 3 years", 3),
     ("up to 5 years", 5),

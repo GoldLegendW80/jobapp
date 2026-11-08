@@ -2063,6 +2063,18 @@ def _after(tokens: Sequence[str], at: int, size: int = 6) -> tuple[str, ...]:
     return tuple(words)
 
 
+def _rest_of_sentence(tokens: Sequence[str], at: int, size: int = 12) -> tuple[str, ...]:
+    """The next `size` words of the sentence from `at`, read through its commas and brackets."""
+    words: list[str] = []
+    while at < len(tokens) and len(words) < size:
+        if tokens[at] in _MARKS or tokens[at] in ("\n", ";", "!", "?"):
+            break
+        if tokens[at] not in _STOPS:
+            words.append(tokens[at])
+        at += 1
+    return tuple(words)
+
+
 def _ends(words: tuple[str, ...], phrases: frozenset[tuple[str, ...]]) -> bool:
     sizes = range(1, min(len(words), _PHRASE_MAX) + 1)
     return any(words[len(words) - size :] in phrases for size in sizes)
@@ -2095,7 +2107,7 @@ def _held(tokens: Sequence[str], start: int, end: int) -> bool:
     if _ends_a_range(tokens, start):
         return False
     after = _after(tokens, end)
-    if _starts(after, _NOT_HELD_AFTER) or _holds(after, _BOUND_AFTER):
+    if _starts(after, _NOT_HELD_AFTER) or _holds(_rest_of_sentence(tokens, end), _BOUND_AFTER):
         return False
     if len(after) > 1 and after[0] in _RANGE and _number(after, 1) is not None:
         return False  # the start of a range: "3 years to 5 years"
@@ -2116,9 +2128,13 @@ def years_of(text: str) -> frozenset[float]:
     read: a figure under a bound above, before it or after it ("at most", "pas plus de",
     "5 ans maximum"), after a negation or a guess ("not", "almost", "près de"), in a range
     ("3 to 5", "between 3 and 5", "entre 3 et 5"), a point in time or an age ("5 years ago",
-    "il y a 5 ans", "25 years old", "aged 25", "Jean Exemple, 25 ans"), a number written with
-    a thousands separator ("1,000"). `text` is N(text)."""
+    "il y a 5 ans", "25 years old", "aged 25", "Jean Exemple, 25 ans", "à 25 ans"), a number
+    written with a thousands separator ("1,000"). A bound after the years counts anywhere in
+    the rest of their sentence, commas included ("5 years experience, at most"). `text` is
+    N(text)."""
     tokens = _years_tokens(text)
+    # Before unaccenting: "à 25 ans" is an age, "a 5 ans" (has 5 years) is not.
+    raw = [found.group() for found in _YEARS_TOKEN.finditer(text)]
     found: set[float] = set()
     at = 0
     while at < len(tokens):
@@ -2142,6 +2158,8 @@ def years_of(text: str) -> frozenset[float]:
             months = _number(tokens, end + 1)
             if months is not None and months[0] is not None and months[0] < 12:
                 value, end = value + months[0] / 12, end + 3
+        if start and raw[start - 1].casefold() == "à":
+            continue  # an age: "à 25 ans comme stagiaire"
         if 0 < value <= YEARS_MAX and _held(tokens, start, end):
             found.update({value, int(value * 10) / 10})
     return frozenset(found)

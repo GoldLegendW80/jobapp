@@ -271,7 +271,7 @@ _GIVE = (
     r"|parrainons|parraine|sponsoriser|sponsorisons|sponsorise|fournir|fournissons|fournit"
     r"|offrir|offrons|offre|proposer|proposons|propose|gerer|gerons|gere|organiser|organisons"
     r"|organise|occupons|occupe|occuper|assurer|assurons|assure|obtenir|obtenons|faire|faisons"
-    r"|fait)"
+    r"|fait|obtain|obtains|obtaining)"
 )
 _GIVEN_GAP = (
     r"(?: (?:a|an|the|your|our|their|any|all|full|every|necessary|for|you|with|both|and|uk|us|eu"
@@ -296,6 +296,25 @@ _GIVES = re.compile(
     rf"|\b(?:sponsored|company sponsored|employer sponsored) (?:{_RIGHT_THING}|visa|visas)\b"
     r"|\b(?:parrainage|sponsoring|sponsorisation|prise en charge) (?:(?:de|du|d|des|votre|vos"
     rf"|un|une) ){{0,3}}(?:{_RIGHT_THING}|visa|visas)\b"
+)
+# Elsewhere in the sentence, the employer gives the right it names: "we arrange it", "which we
+# can provide", "sponsored by the company" (a person as the agent is a requirement).
+_GIVEN_ELSEWHERE = re.compile(
+    rf"\b{_COMPANY}{_COMPANY_GAP}{{0,4}} {_GIVE}(?: (?:it|them|this|that|one))?(?: for you)?$"
+    rf"|\b{_COMPANY}{_COMPANY_GAP}{{0,4}} {_GIVE} (?:it|them|this|that|one)\b"
+    rf"|\b(?:nous|l entreprise|la societe|l employeur){_COMPANY_GAP}{{0,4}}"
+    r" (?:le|la|les|l|en|nous en|en)(?: (?:nous|vous))? (?:chargeons|charge|occupons|occupe"
+    r"|prenons en charge|prend en charge|fournissons|fournit|parrainons|parraine|gerons|gere"
+    r"|organisons|organise)\b"
+    rf"|\b(?:which|that|qui|que|qu)(?: {_COMPANY}| our [a-z]+ team| our [a-z]+){_COMPANY_GAP}"
+    rf"{{0,4}} {_GIVE}\b"
+    r"|\b(?:sponsored|provided|arranged|handled|covered|organised|organized|obtained|secured"
+    r"|processed|managed|offered|paid for|taken care of|pris en charge|prise en charge|fourni"
+    r"|fournie|fournis|fournies|parraine|parrainee|parraines|parrainees|organise|organisee"
+    r"|gere|geree|assure|assuree) (?:by|par)"
+    r" (?!(?:you|yourself|the candidate|candidate|the candidates|candidates|the applicant"
+    r"|applicant|the applicants|applicants|the employee|employees|the hire|vous|le candidat"
+    r"|la candidate|les candidats|vos soins|toi)\b)"
 )
 # Right after the place: "Work permit for Germany provided."
 _GIVEN = re.compile(
@@ -384,10 +403,10 @@ _NEGATED = re.compile(
     r"\b(?:not|no|never|cannot|without|unable|ne|n|pas|aucun|aucune|sans|non|jamais|t)\b"
 )
 # Help to get a permit, or a degree that is only a plus, is not a requirement.
+# The employer helps: "obtain" alone is what a requirement asks ("candidates must obtain it").
 _HELPED = re.compile(
-    r"\b(?:help|helps|helping|assist|assists|assisting|assistance|obtain|obtaining|support"
-    r"|supports|supporting|guidance|aider|aidons|aidera|obtenir|obtention|accompagner"
-    r"|accompagnons|accompagnement|demarches)\b"
+    r"\b(?:help|helps|helping|assist|assists|assisting|assistance|support|supports|supporting"
+    r"|guidance|aider|aidons|aidera|accompagner|accompagnons|accompagnement|demarches)\b"
 )
 _PREFERRED = re.compile(
     r"\b(?:a plus|is a plus|preferred|preferable|nice to have|bonus|ideally|souhaite|souhaitee"
@@ -437,7 +456,9 @@ def _rights(said: str, refused: bool) -> list[str]:
     when the sentence reads as sponsorship (unless it refuses sponsorship)."""
     if _NOT_ASKED.search(said) or _NO_RIGHT.search(said) or _HELPED.search(said):
         return []
-    if not refused and (_GIVES.search(said) or _any(_SPONSORSHIP, said)):
+    if not refused and (
+        _GIVES.search(said) or _GIVEN_ELSEWHERE.search(said) or _any(_SPONSORSHIP, said)
+    ):
         return []
     required = bool(_REQUIRED.search(said) or _HOLDS.search(said))
     bare = _BARE.match(said)
