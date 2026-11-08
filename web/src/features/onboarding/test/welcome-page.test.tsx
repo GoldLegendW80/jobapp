@@ -1231,6 +1231,21 @@ describe("the wizard", () => {
     },
   );
 
+  it("offers the reading again when the wizard's own reading cannot be read any more", async () => {
+    fakeSession(member);
+    fakeProfile(null);
+    fakeOnboarding();
+    fakeDocuments([fakeDocument({ id: "d1", name: "cv.md" })]);
+    const runs = fakeRuns();
+    startedByWizard("r7");
+    renderApp("/welcome?step=building");
+    expect(
+      await screen.findByRole("button", { name: "Build my profile" }),
+    ).toBeVisible();
+    expect(runs.sent("GET", "/api/ingestion/runs/r7")).toHaveLength(1);
+    expect(next()).toBeEnabled();
+  });
+
   it("explains a Like, and keeps the Apply click's review box in apply's settings", async () => {
     fakeSession(member);
     const profile = fakeProfile(null);
