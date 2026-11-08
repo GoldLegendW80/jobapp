@@ -26,7 +26,8 @@ that would spend on a closed posting.
   (a check is not an edit, so it never makes the person's open edit stale). A `closed` finding
   moves a posting that is found, shortlisted, ready or staged to closed (`set_status`, `via`
   "liveness"), unless the app moved it to closed once before and it is open again: the person
-  reopened it, and that stays (later findings only propose). Nothing is ever deleted.
+  reopened it, and that stays (later findings only propose). Nothing is ever deleted. A finding
+  whose address is no longer the posting's (its url changed while the check ran) is dropped.
 - Failures: a refused address, the network, the time, the pacer's store, a page it cannot read
   (`unreadable`), any other error of the check (`check_failed`), a lock held past its timeout are
   an `unconfirmed` finding, or no finding at all: a click is never refused because a check could
@@ -420,14 +421,25 @@ def _closed_by_the_app_before(db: Session, job: Job) -> bool:
 
 
 def record(
-    db: Session, user_id: uuid.UUID, job_id: uuid.UUID, finding: Finding, now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    job_id: uuid.UUID,
+    finding: Finding,
+    now: datetime,
+    checked: str | None,
 ) -> Outcome | None:
     """Store the finding on the posting under its row lock, and move it to closed when the
-    finding says so (module docstring). Commits. None when the posting is gone."""
+    finding says so (module docstring), while `checked` is still the posting's address; else
+    the posting as it is, the finding dropped. Commits. None when the posting is gone."""
     job = jobs_service.lock_job(db, user_id, job_id)
     if job is None:
         db.rollback()
         return None
+    if job.url != checked:
+        outcome = Outcome(job.status, job.liveness)
+        db.rollback()
+        logger.info("jobs.liveness.dropped", extra={"job_id": str(job_id)})
+        return outcome
     moved = (
         finding.verdict == CLOSED
         and job.status in AUTO_CLOSE_FROM
@@ -490,7 +502,7 @@ async def ensure(
         return Outcome(found.status, found.liveness)
     finding = await checker.check(found.url)
     return await asyncio.to_thread(
-        _in_db, sessions, lambda db: record(db, user_id, job_id, finding, now)
+        _in_db, sessions, lambda db: record(db, user_id, job_id, finding, now, found.url)
     )
 
 

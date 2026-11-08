@@ -600,6 +600,32 @@ def test_a_posting_the_person_reopened_is_never_closed_again_by_the_app(
     assert row(factory, job_id).liveness["moved"] is False
 
 
+def test_a_finding_for_an_address_the_posting_no_longer_has_is_dropped(
+    factory: sessionmaker[Session], alice: Signed, clock: Clock
+) -> None:
+    job_id = posting(factory, alice.id)
+    moved_to = f"https://{HOST}/careers/4099999-robotics-engineer"
+
+    def url_changed_meanwhile() -> httpx.Response:
+        # The person's edit lands while the request is in flight; the jobs edit clears the check.
+        with factory() as db:
+            db.execute(sa.update(Job).where(Job.id == job_id).values(url=moved_to))
+            db.commit()
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            stream=httpx.ByteStream(CLOSED_PAGE.encode()),
+        )
+
+    site = Site({HOST + PATH: url_changed_meanwhile})
+    outcome = ensure(factory, site, alice.id, job_id, clock, force=True)
+    assert outcome == liveness_check.Outcome(JobStatus.found, None)
+    stored = row(factory, job_id)
+    assert (stored.url, stored.status, stored.liveness) == (moved_to, JobStatus.found, None)
+    assert status_events(factory, job_id) == []
+    assert len(site.seen) == 1
+
+
 def test_a_recent_check_is_reused_and_an_old_one_asked_again(
     factory: sessionmaker[Session], alice: Signed, clock: Clock
 ) -> None:
