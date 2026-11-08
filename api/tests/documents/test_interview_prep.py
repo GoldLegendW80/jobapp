@@ -39,6 +39,8 @@ from tests.documents.store_support import (
     factory,
     migrated_url,
 )
+from tests.documents.test_store import _wait_until_blocked
+from tests.documents.two_sessions import in_thread
 from tests.documents.writer_support import Person, execute, generation_row, person, versions
 
 __all__ = ["db", "engine", "factory", "migrated_url"]
@@ -393,6 +395,36 @@ def test_a_second_keep_before_the_accept_keeps_the_stories_of_both(alex: Person)
         agent_proposals.accept(db, alex.user, second.id, AT)
         db.commit()
     body = _block(alex)
+    assert interview_prep.story_text(stories[0]) in body
+    assert interview_prep.story_text(stories[1]) in body
+
+
+def test_two_keeps_at_once_keep_the_stories_of_both(alex: Person, engine: sa.Engine) -> None:
+    started = prepare(alex)
+    execute(alex, started.run_id)
+    document_id = started.document.id
+    stories = c.parse("interview_prep", draft(alex, document_id)).stories  # type: ignore[union-attr]
+    outcome: dict[str, Any] = {}
+    with alex.factory() as first, alex.factory() as second:
+        assert interview_prep.keep_stories(first, alex.user, document_id, [0], AT) is not None
+        pid = second.execute(sa.text("SELECT pg_backend_pid()")).scalar_one()
+
+        def other_keep() -> Any:
+            made = interview_prep.keep_stories(second, alex.user, document_id, [1], AT)
+            second.commit()
+            return made
+
+        thread = in_thread(other_keep, outcome)
+        _wait_until_blocked(engine, pid, thread)
+        assert thread.is_alive()  # it waits for the profile, before it reads the pending one
+        first.commit()
+        thread.join(20)
+    assert "error" not in outcome
+    with alex.factory() as db:
+        pending = interview_prep.pending_stories(db, alex.user)
+        assert pending is not None
+        assert pending.id == outcome["result"].id
+        body = pending.payload["value"]["body"]
     assert interview_prep.story_text(stories[0]) in body
     assert interview_prep.story_text(stories[1]) in body
 
