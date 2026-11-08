@@ -1,9 +1,10 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { fakeAbout } from "@/test/about";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeDocuments } from "@/test/documents";
 import { fakeProfile, haraldLike } from "@/test/profile";
@@ -39,23 +40,32 @@ function spend(overrides: Record<string, unknown> = {}) {
   return asked;
 }
 
+/** The Skills fields of About you, shown as a form while no model key is saved. */
 async function openSkills() {
   fakeSession(admin);
   const state = fakeProfile(haraldLike());
   fakeDocuments();
+  fakeAbout({ key: null });
   const user = userEvent.setup();
-  renderApp("/profile/matching");
-  await screen.findByRole("form", { name: "Advanced matching" });
+  renderApp("/profile/about");
+  await screen.findByRole("form", { name: "Skills" });
   return { user, state };
 }
 
-/** A term added to the regular expressions of "llm", in Advanced matching. */
-async function addTerm(user: ReturnType<typeof userEvent.setup>, term: string) {
-  await user.type(screen.getByLabelText("New term for llm"), `${term}{enter}`);
+const skills = () => screen.getByRole("form", { name: "Skills" });
+
+/** The years of experience typed again, `years` a figure the stored one is not. */
+async function setYears(
+  user: ReturnType<typeof userEvent.setup>,
+  years: string,
+) {
+  const field = within(skills()).getByLabelText("Years of experience");
+  await user.clear(field);
+  await user.type(field, years);
 }
 
 const save = () =>
-  screen.getByRole("button", { name: "Save advanced matching" });
+  within(skills()).getByRole("button", { name: "Save skills" });
 
 describe("the rescore after the save", () => {
   function status(answers: Record<string, unknown>[]) {
@@ -95,7 +105,7 @@ describe("the rescore after the save", () => {
       },
     ]);
     const { user, state } = await openSkills();
-    await addTerm(user, "\\bclaude\\b");
+    await setYears(user, "9");
     await user.click(save());
     expect(state.saves).toHaveLength(1);
     expect(await screen.findByText("Rescoring your postings")).toBeVisible();
@@ -114,7 +124,7 @@ describe("the rescore after the save", () => {
     spend({ newly: 0 });
     status([{ wanted_revision: 5, done_revision: 5 }]);
     const { user } = await openSkills();
-    await addTerm(user, "\\bclaude\\b");
+    await setYears(user, "9");
     await user.click(save());
     await screen.findByText("Skills saved.");
     expect(screen.queryByTestId("rescore-line")).not.toBeInTheDocument();
@@ -124,7 +134,7 @@ describe("the rescore after the save", () => {
     spend({ newly: 0 });
     status([{ wanted_revision: 7, done_revision: 7, outcome: null }]);
     const { user } = await openSkills();
-    await addTerm(user, "\\bclaude\\b");
+    await setYears(user, "9");
     await user.click(save());
     await screen.findByTestId("rescore-line", {}, WAIT);
     status([
@@ -142,7 +152,7 @@ describe("the rescore after the save", () => {
         },
       },
     ]);
-    await addTerm(user, "\\bgpt\\b");
+    await setYears(user, "10");
     await user.click(save());
     expect(
       await screen.findByText(

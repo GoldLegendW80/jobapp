@@ -12,7 +12,7 @@ import { TermChips } from "@/components/shared/profile/term-chips";
 
 /**
  * One category of a skills list: its name, its place in the list and its terms. `where` names it
- * for screen readers ("have category 2"); without `regexSwitch` its terms are words only.
+ * for screen readers ("have category 2"); its terms are words.
  */
 export function CategoryFields({
   form,
@@ -20,7 +20,6 @@ export function CategoryFields({
   index,
   count,
   where,
-  regexSwitch,
   onMove,
   onRemove,
 }: {
@@ -29,7 +28,6 @@ export function CategoryFields({
   index: number;
   count: number;
   where: string;
-  regexSwitch: boolean;
   onMove: (from: number, to: number) => void;
   onRemove: (index: number) => void;
 }) {
@@ -62,7 +60,7 @@ export function CategoryFields({
         label={name.trim() || where}
         title="Terms"
         compact
-        regexSwitch={regexSwitch}
+        regexSwitch={false}
       />
     </div>
   );

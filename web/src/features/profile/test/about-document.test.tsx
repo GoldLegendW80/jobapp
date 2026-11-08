@@ -226,7 +226,7 @@ describe("About you", () => {
 });
 
 describe("the expressions About you leaves out", () => {
-  it("names them under the Skills part and links to Advanced matching", async () => {
+  it("says under the Skills part that they stay and keep counting", async () => {
     fakeSession(admin);
     fakeProfile();
     fakeDocuments();
@@ -240,13 +240,9 @@ describe("the expressions About you leaves out", () => {
     const skills = await screen.findByRole("region", { name: "Skills" });
     expect(
       within(skills).getByText(
-        /^2 advanced categories \(regular expressions\) stay as they are\./,
+        "2 advanced categories (regular expressions) stay as they are and keep counting in the fit score.",
       ),
     ).toBeVisible();
-    expect(
-      within(skills).getByRole("link", {
-        name: "Edit them in Advanced matching",
-      }),
-    ).toHaveAttribute("href", "/profile/matching");
+    expect(within(skills).queryByRole("link")).toBeNull();
   });
 });

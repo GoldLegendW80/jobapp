@@ -9,7 +9,6 @@ export const PROFILE_TABS = [
   { key: "experience", path: "/profile/experience", label: "Experience" },
   { key: "about", path: "/profile/about", label: "About you" },
   { key: "contact", path: "/profile/contact", label: "Contact" },
-  { key: "matching", path: "/profile/matching", label: "Advanced matching" },
 ] as const;
 export type ProfileTab = (typeof PROFILE_TABS)[number]["key"];
 
@@ -24,12 +23,14 @@ export const PROFILE_ANCHORS = {
   cvs: "your-cv",
   experience: "experience",
   about: "about-you",
-  matching: "advanced-matching",
   contact: "contact",
 } as const;
 
 /** The list of CVs, where a link to "the CVs" lands and where a deleted CV sends the person. */
 export const CVS_PATH = `/profile#${PROFILE_ANCHORS.cvs}`;
+
+/** Where the former Advanced matching tab lands: the skills of About you. */
+export const SKILLS_PATH = "/profile/about#about-skills";
 
 /** Where each tab of the former tabbed editor (`/profile?tab=skills`) is now. */
 const FORMER_TABS: Record<string, string> = {
@@ -53,7 +54,7 @@ export function pathOfFormerTab(tab: string): string {
 export function pathOfAnchor(id: string): string | undefined {
   if (id === PROFILE_ANCHORS.experience) return "/profile/experience";
   if (id === PROFILE_ANCHORS.contact) return "/profile/contact";
-  if (id === PROFILE_ANCHORS.matching) return "/profile/matching";
+  if (id === "advanced-matching") return SKILLS_PATH;
   if (id === PROFILE_ANCHORS.about) return "/profile/about";
   if (id.startsWith("about-")) return `/profile/about#${id}`;
   return undefined;

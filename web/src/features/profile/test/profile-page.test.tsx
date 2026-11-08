@@ -110,7 +110,8 @@ describe("profile page", () => {
     ["/profile?tab=gone", "/profile"],
     ["/profile#contact", "/profile/contact"],
     ["/profile#experience", "/profile/experience"],
-    ["/profile#advanced-matching", "/profile/matching"],
+    ["/profile#advanced-matching", "/profile/about#about-skills"],
+    ["/profile/matching", "/profile/about#about-skills"],
     ["/profile#about-you", "/profile/about"],
     ["/profile#about-skills", "/profile/about#about-skills"],
     ["/profile#your-cv", "/profile#your-cv"],
@@ -191,7 +192,6 @@ describe("the sections of the page", () => {
       "Experience",
       "About you",
       "Contact",
-      "Advanced matching",
     ]);
     expect(screen.getByRole("tab", { name: "About you" })).toHaveAttribute(
       "aria-selected",
@@ -635,7 +635,7 @@ describe("several forms, one profile", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("saves the skills fields and Advanced matching one after the other, each keeping the other's part", async () => {
+  it("saves the skills fields and keeps the categories stored as regular expressions", async () => {
     fakeSession(admin);
     const state = fakeProfile();
     const { user } = await openProfile("/profile/about");
@@ -649,25 +649,12 @@ describe("several forms, one profile", () => {
     await waitFor(() => {
       expect(state.saves).toHaveLength(1);
     });
-    await user.click(screen.getByRole("tab", { name: "Advanced matching" }));
-    const matching = await screen.findByRole("form", {
-      name: "Advanced matching",
-    });
-    await user.type(
-      within(matching).getByLabelText("New term for llm"),
-      "\\bgpt\\b{enter}",
-    );
-    await user.click(
-      within(matching).getByRole("button", { name: "Save advanced matching" }),
-    );
-    await waitFor(() => {
-      expect(state.saves).toHaveLength(2);
-    });
-    expect(state.saves.map((one) => one.body.base_revision)).toEqual([6, 7]);
-    const last = state.saves[1]!.body.data as Skills;
-    expect(last.years_experience).toBe(5);
-    expect(last.have[0]!.terms).toContain("\\bgpt\\b");
-    expect(last.have[1]).toEqual(haraldLike().skills.have[0]);
+    // Advanced matching is gone (owner, 2026-11-08): the expressions are kept as stored.
+    const sent = state.saves[0]!.body.data as Skills;
+    expect(sent.years_experience).toBe(5);
+    const stored = haraldLike().skills.have.filter((one) => one.advanced_regex);
+    expect(stored.length).toBeGreaterThan(0);
+    expect(sent.have.filter((one) => one.advanced_regex)).toEqual(stored);
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 

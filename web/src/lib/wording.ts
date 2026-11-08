@@ -346,7 +346,6 @@ export const WORDING = {
   letAssistantContinue: "Let the assistant continue",
   easyForHiringSoftware: "Easy for hiring software to read",
   // Profile, Skills: a gate is a requirement the person does not meet (api/app/jobs/scoring.py).
-  requirementsNotMet: "Requirements you do not meet",
   addRequirement: "Add a requirement",
   noneYet: "None yet.",
   pointsTakenOff: "Points taken off",

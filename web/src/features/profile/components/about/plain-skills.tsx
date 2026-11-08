@@ -43,7 +43,8 @@ import { PlainCard } from "./plain-card";
 /**
  * The skills by hand, while no model key is saved (owner, 2026-11-07): the years, the categories
  * and the requirements written in words, saved as a revision of the skills section like the
- * former Skills tab. The regular expressions stay Advanced matching's and are kept as stored.
+ * former Skills tab. The categories stored as regular expressions are kept as stored and keep
+ * scoring; nothing edits them since Advanced matching went (owner, 2026-11-08).
  */
 export const PlainSkills = memo(function PlainSkills({
   profile,
@@ -52,7 +53,7 @@ export const PlainSkills = memo(function PlainSkills({
   onSaved,
 }: {
   profile: Profile;
-  /** the regular expression categories and requirements, which Advanced matching edits */
+  /** how many categories and requirements are stored as regular expressions */
   advanced: number;
   onDirtyChange: (dirty: boolean) => void;
   onSaved: () => void;
@@ -103,8 +104,8 @@ export const PlainSkills = memo(function PlainSkills({
               value={[...new Set([...open, ...refused])]}
               onValueChange={setOpen}
             >
-              <CategoryLists form={form} mode="words" />
-              <Requirements form={form} mode="words" />
+              <CategoryLists form={form} />
+              <Requirements form={form} />
             </Accordion>
             {advanced > 0 ? <AdvancedLine count={advanced} /> : null}
           </PlainCard>

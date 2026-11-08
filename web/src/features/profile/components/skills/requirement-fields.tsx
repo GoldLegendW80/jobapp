@@ -20,14 +20,13 @@ import { TermChips } from "@/components/shared/profile/term-chips";
 
 /**
  * One requirement the person does not meet (a gate): its name, terms and the points it takes
- * off. `where` names it for screen readers; without `regexSwitch` its terms are words only.
+ * off. `where` names it for screen readers; its terms are words.
  */
 export function RequirementFields({
   form,
   index,
   count,
   where,
-  regexSwitch,
   onMove,
   onRemove,
 }: {
@@ -35,7 +34,6 @@ export function RequirementFields({
   index: number;
   count: number;
   where: string;
-  regexSwitch: boolean;
   onMove: (from: number, to: number) => void;
   onRemove: (index: number) => void;
 }) {
@@ -65,7 +63,7 @@ export function RequirementFields({
         label={name.trim() || where}
         title="Terms"
         compact
-        regexSwitch={regexSwitch}
+        regexSwitch={false}
       />
       <FormField
         control={form.control}

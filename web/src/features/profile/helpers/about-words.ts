@@ -61,8 +61,7 @@ export const ABOUT_WORDS = {
     "Your profile changed since this part was written, for example in Fill my profile. Done would replace those changes. Rewrite the part from your profile first.",
   rewrite: "Rewrite from my profile",
   advanced: (count: number) =>
-    `${plural(count, "advanced category", "advanced categories")} (regular expressions) stay as they are.`,
-  advancedLink: "Edit them in Advanced matching",
+    `${plural(count, "advanced category", "advanced categories")} (regular expressions) ${count === 1 ? "stays as it is and keeps" : "stay as they are and keep"} counting in the fit score.`,
   newPart: "New part",
   addPart: "Add a part",
   missing: (count: number) =>

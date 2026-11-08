@@ -1,5 +1,5 @@
 /**
- * The two lines beside the save of Advanced matching (product audit, chapter 2, owner answer 4 of 2026-11-05:
+ * The two lines beside the save of the Skills fields (product audit, chapter 2, owner answer 4 of 2026-11-05:
  * "Postings are rescored by themselves after a skills change, with the possible document cost
  * said before saving"). Since documents D29 nothing is written without a click, so a skills
  * change costs no document and no cost line is shown before the save. After a save,

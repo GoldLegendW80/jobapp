@@ -202,12 +202,8 @@ const advancedOf = (skills: Skills): Skills => ({
   gates: regex(skills.gates),
 });
 
-/** The form of Advanced matching: the regular expression categories and requirements only. */
-export const toAdvancedForm = (skills: Skills): SkillsForm =>
-  toSkillsForm(advancedOf(skills));
-
 /**
- * The skills to save: `advanced` (what Advanced matching holds) first in each list, then the
+ * The skills to save: `advanced` (the regular expressions as stored) first in each list, then the
  * categories in words and the years of `current`, the skills as stored now. An item whose switch
  * was turned off goes with them, written in words from then on.
  */

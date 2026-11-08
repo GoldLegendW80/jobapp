@@ -268,13 +268,7 @@ test("a new account gets a profile through the CLI and sees every section", asyn
     page
       .getByRole("tablist", { name: "Parts of your profile" })
       .getByRole("tab"),
-  ).toHaveText([
-    "CVs",
-    "Experience",
-    "About you",
-    "Contact",
-    "Advanced matching",
-  ]);
+  ).toHaveText(["CVs", "Experience", "About you", "Contact"]);
   await expect(page.getByRole("list", { name: "Ready for" })).toContainText(
     "Scoring postings",
   );
@@ -328,18 +322,15 @@ test("a new account gets a profile through the CLI and sees every section", asyn
   ).toHaveValue("One month.");
 
   // The skills in words are About you's, as fields without a model key; the regular expression
-  // stays in Advanced matching.
+  // is kept as stored and said to stay (Advanced matching is gone, owner 2026-11-08).
   const skills = page.getByRole("form", { name: "Skills" });
   await skills.getByRole("button", { name: "What I have, agents" }).click();
   await expect(
     skills.getByRole("list", { name: "Terms of agents" }),
   ).toContainText("langgraph");
-  await page.getByRole("tab", { name: "Advanced matching" }).click();
   await expect(
-    page
-      .getByRole("form", { name: "Advanced matching" })
-      .getByRole("list", { name: "Terms of llm" }),
-  ).toContainText("\\bllm\\b");
+    page.getByText(/\(regular expressions\) stays? as/),
+  ).toBeVisible();
 
   // Searches run the job websites ticked in Find jobs (owner, 2026-10-28): Settings, Search
   // shows no company boards.

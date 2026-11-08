@@ -52,7 +52,7 @@ const savedAnswers = (state: ReturnType<typeof fakeProfile>) =>
   lastSave(state, "answers") as Answers;
 
 describe("Skills without a model key", () => {
-  it("shows the years and the skills in words, each list folded under its names, the expressions left to Advanced matching", async () => {
+  it("shows the years and the skills in words, each list folded under its names, the expressions kept as stored", async () => {
     const { user } = await openPage();
     const form = skills();
     expect(within(form).getByLabelText("Years of experience")).toHaveValue(

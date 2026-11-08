@@ -4,9 +4,9 @@
  * tab"; helpers/anchors.ts): CVs (Your CVs and Upload your CV), Experience (experience and
  * education), About you (the skills, the answers and the facts, as text; without a model key the
  * skills and the answers are forms), Contact (the identity form, with the languages and the
- * photo), Advanced matching (the skills written as regular expressions, which About you leaves
- * out, and Try a posting). The side rail is the person at a glance and what the profile is Ready
- * for. History, Export and Import are under More actions. The search is in Settings, Search. Each
+ * photo). Advanced matching is gone (owner, 2026-11-08): skills stored as regular expressions
+ * keep scoring, and About you says they stay. The side rail is the person at a glance and what the
+ * profile is Ready for. History, Export and Import are under More actions. The search is in Settings, Search. Each
  * form saves on its own; leaving a tab or the page with one unsaved asks first.
  */
 import { FileUp } from "lucide-react";
@@ -26,7 +26,6 @@ import { useTitle } from "@/hooks/use-title";
 import type { SectionName } from "../api/profile-api";
 import { useProfile } from "../api/use-profile";
 import { AboutDocument } from "../components/about-document";
-import { AdvancedMatching } from "../components/advanced-matching";
 import { ExperienceForm } from "../components/experience-form";
 import { IdentityForm } from "../components/identity-form";
 import { ProfileMenu } from "../components/profile-menu";
@@ -52,7 +51,6 @@ const FORMS = {
   experience: { section: "experience", label: "Experience and education" },
   skills: { section: "skills", label: "Skills" },
   answers: { section: "answers", label: "Answers" },
-  matching: { section: "skills", label: "Advanced matching" },
   identity: { section: "identity", label: "Contact and links" },
 } as const satisfies Record<string, { section: SectionName; label: string }>;
 type FormName = keyof typeof FORMS;
@@ -193,18 +191,6 @@ function OneProfilePage() {
                 key={keys.identity}
                 profile={profile}
                 onDirtyChange={onDirty.identity}
-              />
-            </Section>
-          ) : null}
-          {tab === "matching" ? (
-            <Section
-              title="Advanced matching"
-              description="Skill categories and requirements written as regular expressions, which About you leaves out, and a posting tried against all your skills."
-            >
-              <AdvancedMatching
-                key={keys.matching}
-                profile={profile}
-                onDirtyChange={onDirty.matching}
               />
             </Section>
           ) : null}

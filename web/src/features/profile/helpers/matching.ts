@@ -1,7 +1,7 @@
 /**
- * How a term list matches text, ported from api/app/profile/matching.py so the Skills "Try it" box
- * shows in the browser exactly what search and scoring will decide on the server, and the regex
- * checks of api/app/profile/schemas.py so a bad pattern is caught before a save.
+ * How a term list matches text, ported from api/app/profile/matching.py so the browser decides
+ * as search and scoring do on the server, and the regex checks of api/app/profile/schemas.py so a
+ * bad pattern is caught before a save.
  *
  * A term list matches a text when any of its terms does, case-insensitive:
  * - plain term: the words as written, as a whole word, with an optional plural "s" or "es";
@@ -290,16 +290,6 @@ export function matches(
   if (compiled.kind !== "ok") return undefined;
   compiled.regex.lastIndex = 0;
   return compiled.regex.test(text);
-}
-
-/** Every match in the text, in order (what Python's `findall` counts for a category). */
-export function findMatches(regex: RegExp, text: string): string[] {
-  const found: string[] = [];
-  for (const match of text.matchAll(regex)) {
-    found.push(match[0]);
-    if (found.length >= 1000) break;
-  }
-  return found;
 }
 
 function jsRegexMessage(error: unknown): string {

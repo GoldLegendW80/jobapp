@@ -12,7 +12,7 @@ import { defineConfig, devices } from "@playwright/test";
  *   model-access  Model access card: format error; save, subscription token and remove only
  *             with E2E_MODEL_STUB=1 (a save checks at once), so this run never calls Anthropic
  *   profile   a made up profile through the CLI, every section of the profile page
- *   profile-editors  a fact part, Advanced matching and Search, no boards shown nor held
+ *   profile-editors  a fact part, the Skills fields and Search, no boards shown nor held
  *   profile-history  empty to 100%, History diff and restore, export, import
  *   profile-dates  a year alone as a date: typed, saved, reloaded, made a month, exported, imported
  *   admin-agents  Admin, Agents: the website search agent, its prompt edited, saved, reverted

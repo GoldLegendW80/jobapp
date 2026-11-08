@@ -210,7 +210,10 @@ export const routes: RouteObject[] = [
               { path: "profile/experience", element: <ProfilePage /> },
               { path: "profile/about", element: <ProfilePage /> },
               { path: "profile/contact", element: <ProfilePage /> },
-              { path: "profile/matching", element: <ProfilePage /> },
+              {
+                path: "profile/matching",
+                element: <Navigate to="/profile/about#about-skills" replace />,
+              },
               {
                 path: "profile/cv",
                 element: <Navigate to="/profile#your-cv" replace />,

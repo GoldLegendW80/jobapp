@@ -530,3 +530,9 @@ The owner's answers during the product audit, in the session that built them.
      Work step asks notice period, earliest start and work authorisation, the Looking step asks
      the motivation.
   7. The reasons a reading refused items are kept with the run and shown in its review.
+- 2026-11-08, Advanced matching removed from the profile (owner: "remove Advanced matching from
+  the profile"): the profile has four tabs (CVs, Experience, About you, Contact); the Advanced
+  matching tab and its Try a posting are gone, and `/profile/matching` lands on the Skills of
+  About you. Skill categories and requirements already stored as regular expressions keep
+  scoring as stored and the Skills fields keep them on every save; About you says how many stay.
+  No screen of the app edits them any more; a profile file imported with some keeps them.

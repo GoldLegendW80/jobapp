@@ -24,7 +24,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Everything the search, the documents and the forms read about the person, one tab per part so no part needs a long scroll (owner, 2026-11-07): CVs (/profile), Experience (/profile/experience), About you (/profile/about: Markdown, with the skills and answers as fields while no model key is saved, and fact parts that move up and down above the size of the fact base), Contact (/profile/contact) and Advanced matching (/profile/matching). The person and what the profile is Ready for stay in the side rail on every tab. The old addresses `?tab=`, `#contact` and the like, and /profile/cv land on the tab that holds what they showed.",
+          "Everything the search, the documents and the forms read about the person, one tab per part so no part needs a long scroll (owner, 2026-11-07): CVs (/profile), Experience (/profile/experience), About you (/profile/about: Markdown, with the skills and answers as fields while no model key is saved, and fact parts that move up and down above the size of the fact base), and Contact (/profile/contact). Skills stored as regular expressions keep scoring; the page that edited them is gone (owner, 2026-11-08). The person and what the profile is Ready for stay in the side rail on every tab. The old addresses `?tab=`, `#contact` and the like, and /profile/cv land on the tab that holds what they showed.",
       },
     },
   },
@@ -206,47 +206,6 @@ export const CheckMyProfileOnMyPhone: Story = {
   globals: { viewport: { value: "mobile2", isRotated: false } },
   beforeEach: () => {
     camilleAccount();
-  },
-};
-
-/** Camille's account with two categories and a requirement written as regular expressions. */
-function camilleWithExpressions() {
-  fakeSession(camille);
-  const profile = camilleProfile();
-  profile.skills.have.push({
-    name: "orchestration",
-    advanced_regex: true,
-    terms: ["\\bairflow\\b", "\\bdagster\\b", "\\bprefect\\b"],
-  });
-  profile.skills.none.push({
-    name: "mainframe",
-    advanced_regex: true,
-    terms: ["\\bcobol\\b", "\\bz/os\\b"],
-  });
-  profile.skills.gates.push({
-    name: "clearance",
-    advanced_regex: true,
-    terms: ["\\bsecurity clearance\\b"],
-    penalty: 30,
-  });
-  fakeProfile(profile);
-  fakeDocuments({ cvs: profileCvs() });
-  fakeAbout({ text: CAMILLE_ABOUT, key: "api_key" });
-}
-
-/** As a job seeker who writes regular expressions, I want to keep them beside my skills and try a posting against all of them, so that I see which postings they catch before I save. */
-export const MatchPostingsWithRegularExpressions: Story = {
-  render: () => <AppAt path="/profile/matching" />,
-  beforeEach: () => {
-    camilleWithExpressions();
-  },
-  play: async ({ canvasElement }) => {
-    await userEvent.type(
-      await within(canvasElement).findByRole("textbox", {
-        name: "Posting text",
-      }),
-      "Senior data engineer: Airflow and dbt on BigQuery, Kafka a plus. React is not needed.",
-    );
   },
 };
 

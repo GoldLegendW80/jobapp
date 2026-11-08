@@ -9,11 +9,9 @@ import {
   inWords,
   searchSchema,
   skillsSchema,
-  toAdvancedForm,
   toSearchForm,
   toSkillsForm,
   toWordsForm,
-  withAdvanced,
   withWords,
 } from "../helpers/editor-forms";
 
@@ -77,7 +75,7 @@ describe("round trips", () => {
   });
 });
 
-describe("advanced matching", () => {
+describe("skills in words beside the stored expressions", () => {
   const skills = () => {
     const data = haraldLike().skills;
     return {
@@ -88,36 +86,6 @@ describe("advanced matching", () => {
       ],
     };
   };
-
-  it("holds only the regular expressions, without the years", () => {
-    const form = toAdvancedForm(skills());
-    expect(form.years_experience).toBe("");
-    expect(form.have.map((one) => one.name)).toEqual(["llm"]);
-    expect(form.adjacent).toEqual([]);
-    expect(form.none.map((one) => one.name)).toEqual(["java"]);
-    expect(form.gates).toEqual([]);
-  });
-
-  it("saves the expressions first, then the words and the years as stored now", () => {
-    const stored = skills();
-    const now = { ...stored, years_experience: 7 };
-    const edited = fromSkillsForm(toAdvancedForm(stored));
-    edited.have[0]!.terms.push("\\bgpt\\b");
-    const sent = withAdvanced(now, edited);
-    expect(sent.years_experience).toBe(7);
-    expect(sent.have.map((one) => one.name)).toEqual(["llm", "agents"]);
-    expect(sent.have[0]!.terms).toContain("\\bgpt\\b");
-    expect(sent.none.map((one) => one.name)).toEqual(["java", "rust"]);
-    expect(sent.gates).toEqual(stored.gates);
-    // Unchanged, the round trip gives the same lists, the expressions moved first.
-    expect(
-      withAdvanced(stored, fromSkillsForm(toAdvancedForm(stored))),
-    ).toEqual({
-      ...stored,
-      have: [stored.have[1], stored.have[0]],
-      none: [stored.none[1], stored.none[0]],
-    });
-  });
 
   it("gives the fields of About you the years and the skills in words, and saves them after the expressions", () => {
     const stored = skills();
