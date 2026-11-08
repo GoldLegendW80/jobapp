@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.documents import content as c
+from app.documents import writing_rules
 from app.documents.profile_view import ProfileView
 from app.mail.factcheck_rules import Sources
 from app.profile.schemas import format_period
@@ -181,7 +182,12 @@ def sources_for(
     *,
     kind: Literal["cv", "base", "letter", "proposal"] = "cv",
 ) -> DocumentSources:
-    profile = [f"{title}\n{body}" for title, body in view.facts_blocks]
+    # The person's writing rules are instructions to the writer, never a source of a claim.
+    profile = [
+        f"{title}\n{body}"
+        for title, body in view.facts_blocks
+        if title != writing_rules.BLOCK_TITLE
+    ]
     profile += [
         _dated(e.organisation, e.title, e.location, _period(e.start), _period(e.end))
         for e in view.employers
