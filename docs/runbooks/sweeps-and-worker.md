@@ -23,7 +23,7 @@ curl -s -X POST -H 'X-Requested-With: jobapp' -b cookies http://localhost/api/jo
 curl -s -b cookies http://localhost/api/jobs/sweeps                                            # newest first, schedule
 curl -s -N -b cookies http://localhost/api/jobs/sweeps/<id>/events                             # live progress
 docker compose logs -f worker                                                                  # what the worker does
-docker compose exec -T worker python -m app.worker --check                                     # its healthcheck
+docker compose exec -T worker python -m app.worker_health                                     # its healthcheck
 ```
 
 A sweep whose worker died is failed after two minutes without a heartbeat, so the next one can

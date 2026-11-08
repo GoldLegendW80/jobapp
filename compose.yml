@@ -226,7 +226,7 @@ services:
         condition: service_healthy
     # Healthy while every queue's arq worker keeps its health record fresh in Redis (10 s).
     healthcheck:
-      test: ["CMD", "python", "-m", "app.worker", "--check"]
+      test: ["CMD", "python", "-m", "app.worker_health"]
       interval: 15s
       timeout: 8s
       start_period: 20s
