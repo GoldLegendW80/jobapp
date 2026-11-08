@@ -304,7 +304,7 @@ export const WORDING = {
   anthropicConsole: "Anthropic Console",
   // The upload of a CV (documents/upload-panel.tsx): true with or without a model key.
   uploadCvHint:
-    "Drop a PDF or a Word document here, or choose it. The app keeps the file in your documents and reads its text. Turning it into a CV you can edit uses your Anthropic API key: until one is saved, that part waits.",
+    "Drop a PDF or a Word document here, or choose it. The app keeps the file in your documents and reads its text. Turning it into a CV you can edit uses the Claude access saved in Model access: until one is saved, that part waits.",
   applicationSettings: "Application settings",
   // The posting page: Apply and the documents first, the rest folded.
   yourApplication: "Your application",
