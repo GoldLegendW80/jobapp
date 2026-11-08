@@ -351,3 +351,10 @@ def test_a_page_of_repeated_guarded_closure_words_is_read_whole() -> None:
     assert found.verdict == NO_CLOSURE
     stated = " ".join(["job expired"] * 20_000)
     assert judge(200, page(stated), POSTING, POSTING).verdict == MAY_BE_CLOSED
+
+
+def test_the_declared_residue_of_a_reading_without_regions() -> None:
+    # SPEC-jobs, "Liveness": another posting's card that names its posting still closes this one.
+    similar = "Similar jobs\nRobotics Engineer, Example Corp\nThis job is no longer available."
+    assert judge(200, page(similar), POSTING, POSTING).verdict == CLOSED
+    assert judge(200, page("This offer has expired."), POSTING, POSTING).verdict == CLOSED
