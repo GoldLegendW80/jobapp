@@ -393,7 +393,9 @@ def settings(db: Session, user_id: uuid.UUID) -> DocumentSettings:
     if row is None:
         return DEFAULT_SETTINGS
     return DocumentSettings(
-        no_dash_separators=row.no_dash_separators, banned_phrases=list(row.banned_phrases)
+        no_dash_separators=row.no_dash_separators,
+        banned_phrases=list(row.banned_phrases),
+        starter_phrases=row.starter_phrases,
     )
 
 
@@ -404,6 +406,7 @@ def save_settings(
     values = {
         "no_dash_separators": value.no_dash_separators,
         "banned_phrases": list(value.banned_phrases),
+        "starter_phrases": value.starter_phrases,
         "updated_at": at,
     }
     statement = pg_insert(DocumentSettingsRow).values(user_id=user_id, **values)

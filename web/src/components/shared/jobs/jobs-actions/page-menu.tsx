@@ -1,10 +1,12 @@
 import {
   CalendarClock,
+  ChartNoAxesColumn,
   EllipsisVertical,
   History,
   RefreshCw,
 } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -34,7 +36,8 @@ function scheduleState(state: ScheduleState | undefined): string {
 
 /**
  * The page's "More actions" menu: the automatic search (its state on the item), the past
- * searches, and rescoring all postings or the selected ones. Each opens its own dialog.
+ * searches, and rescoring all postings or the selected ones. Each opens its own dialog; Your
+ * search in numbers opens its page.
  */
 export function PageMenu({
   selected,
@@ -78,6 +81,12 @@ export function PageMenu({
           >
             <History aria-hidden="true" />
             Past searches
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/jobs/insights">
+              <ChartNoAxesColumn aria-hidden="true" />
+              Your search in numbers
+            </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem

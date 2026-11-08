@@ -59,7 +59,7 @@ async function open(options: { photo?: string | null } = {}) {
   const state = fakeProfile();
   state.photoEtag = options.photo ?? null;
   const user = userEvent.setup({ applyAccept: false });
-  renderApp("/profile");
+  renderApp("/profile/contact");
   await screen.findByRole("heading", { level: 1, name: "Profile" });
   return { user, state, input: screen.getByLabelText("Photo file") };
 }

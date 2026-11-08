@@ -9,6 +9,6 @@ export const KIND_LABEL: Record<CredentialKind, string> = {
 export const isKind = (value: string): value is CredentialKind =>
   value in KIND_LABEL;
 
-export const SAVED = "Credential saved. Verify it to check it works.";
+export const SAVED = "Credential saved.";
 export const REMOVED = "Credential removed.";
 export const EMPTY_SECRET = "Paste the token or key.";

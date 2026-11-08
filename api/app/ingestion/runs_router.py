@@ -46,6 +46,7 @@ from app.ingestion import (
     estimate_router,
     merge,
     plan,
+    refusals,
     reuse,
 )
 from app.ingestion.models import IngestionDocument
@@ -198,6 +199,10 @@ class RunOut(BaseModel):
     current_agent_run_id: uuid.UUID | None
     tokens: TokensOut
     counts: CountsOut
+    refused: list[refusals.RunRefusalOut] = Field(
+        description="Why proposals were not kept: by section and rule, the refusals that no "
+        "stored item of the same key followed, summed over the steps whose items are the run's."
+    )
     steps: list[StepOut]
     created_at: datetime
     deadline_at: datetime
@@ -401,6 +406,7 @@ def run_out(db: Session, run: IngestionRun, now: datetime) -> RunOut:
             proposals=merge.count_of_run(db, run.user_id, run.id),
             **by_status,
         ),
+        refused=refusals.of_steps(db, sources),
         steps=steps,
         created_at=run.created_at,
         deadline_at=run.deadline_at,

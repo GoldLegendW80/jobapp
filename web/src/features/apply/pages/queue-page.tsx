@@ -15,6 +15,7 @@ import { ApplicationBrowsers } from "../components/application-browsers";
 import { ApproveAll } from "../components/approve-all";
 import { serverOffset } from "../helpers/full-auto-state";
 import { FullAutoSummary } from "../components/full-auto-summary";
+import { FollowUps } from "../components/follow-ups";
 import type { QueueItem } from "../api/queue-api";
 import { useQueue } from "../api/use-queue";
 import { QueueCard } from "../components/queue-card";
@@ -132,6 +133,7 @@ export function QueuePage() {
             )}
           </>
         )}
+        <FollowUps />
       </PageBody>
     </Page>
   );

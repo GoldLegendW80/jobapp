@@ -1,13 +1,9 @@
-/** The saved model credential, and what the Model access card does with it: verify, remove. */
+/** The saved model credential, and what Model access does with it: verify, remove. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { message } from "@/features/admin/helpers/errors";
-import {
-  throttledFor,
-  useRetryCountdown,
-} from "@/features/auth/helpers/retry-countdown";
 
 import {
   getModelCredential,
@@ -18,6 +14,9 @@ import {
 } from "./agents-api";
 import { REMOVED } from "../helpers/model-credential";
 
+/** How often a credential whose check runs in the worker is read again. */
+export const CHECK_POLL_MS = 2000;
+
 /** What the last Verify said. */
 export type VerifyOutcome =
   { tone: "success" | "info"; text: string } | { tone: "error"; text: string };
@@ -27,6 +26,9 @@ export function useModelAccess() {
   const query = useQuery({
     queryKey: modelCredentialQueryKey,
     queryFn: ({ signal }) => getModelCredential(signal),
+    // A subscription token is checked by the worker: read again until the check has ended.
+    refetchInterval: (current) =>
+      current.state.data?.check?.state === "checking" ? CHECK_POLL_MS : false,
   });
   const saved = query.data ?? null;
   const setSaved = (value: ModelCredential | null) => {
@@ -34,7 +36,6 @@ export function useModelAccess() {
   };
   const [outcome, setOutcome] = useState<VerifyOutcome>();
   const [confirming, setConfirming] = useState(false);
-  const verifyWait = useRetryCountdown();
 
   const verify = useMutation({
     mutationFn: verifyModelCredential,
@@ -43,14 +44,14 @@ export function useModelAccess() {
     },
     onSuccess: (result) => {
       setSaved(result.credential);
-      setOutcome({
-        tone: result.result === "verified" ? "success" : "info",
-        text: result.message,
-      });
+      // A check under way says itself in the credential's `check`.
+      if (result.result !== "checking")
+        setOutcome({
+          tone: result.result === "verified" ? "success" : "info",
+          text: result.message,
+        });
     },
     onError: (error) => {
-      const wait = throttledFor(error);
-      if (wait !== undefined) verifyWait.start(wait);
       setOutcome({ tone: "error", text: message(error) });
       // A refused key is no longer verified; the server cleared it.
       void client.invalidateQueries({ queryKey: modelCredentialQueryKey });
@@ -76,7 +77,6 @@ export function useModelAccess() {
       setOutcome(undefined);
     },
     verify,
-    verifyWait,
     remove,
     confirming,
     askToRemove: () => {

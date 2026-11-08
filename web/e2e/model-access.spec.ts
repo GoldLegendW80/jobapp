@@ -17,13 +17,14 @@ const shots = makeShots("agents-a1", "model-access");
 /**
  * The Model access card of the account page (agents A1) against the real stack through Caddy:
  * a format error, a fake-format API key saved then refused by the check, a key the check
- * accepts, a subscription token stored as unverified, and removal with confirmation. The secret
- * never comes back to the page.
+ * accepts, a subscription token checked by one Claude Code run in the worker, and removal with
+ * confirmation. The secret never comes back to the page.
  *
- * The API key checks call GET /v1/models: with E2E_MODEL_STUB=1 the stack runs with
- * tests/anthropic-stub.compose.yml and the api asks that stub (keys containing e2egood pass,
- * others are refused); without it those two steps are skipped, so no run ever sends a key to
- * Anthropic. The subscription token makes no outbound call at all.
+ * Saving checks the credential at once (owner, 2026-11-07): an API key with GET /v1/models, a
+ * subscription token with one Claude Code run. With E2E_MODEL_STUB=1 the stack runs with
+ * tests/anthropic-stub.compose.yml and both ask that stub (keys containing e2egood pass, others
+ * are refused); without it every step that saves is skipped, so no run ever sends a credential
+ * to Anthropic.
  *
  * Locally, on a scratch Compose project (its own volumes, torn down afterwards):
  *   HTTP_PORT=8097 docker compose -p jobapp-a1 -f compose.yml -f compose.mac.yml -f tests/anthropic-stub.compose.yml \
@@ -52,8 +53,9 @@ let errors: string[];
 
 const card = () => page.getByRole("region", { name: "Model access" });
 const form = () => page.getByRole("form", { name: "Model access" });
-const savedBox = () => page.getByRole("region", { name: "Saved credential" });
-const result = () => page.getByTestId("verify-result");
+// The line under the token field: how the credential stands, its tone green, red or plain.
+const status = () => form().getByTestId("credential-status");
+const NONE = "No credential saved. Agents need one to run.";
 
 async function save(
   kind: "Anthropic API key" | "Claude subscription token",
@@ -101,7 +103,7 @@ test("the account page shows an empty Model access card", async () => {
     link.startsWith("/invite/") ? "E2E Admin" : undefined,
   );
   await page.goto("/account");
-  await expect(card().getByTestId("no-credential")).toBeVisible();
+  await expect(status()).toHaveText(NONE);
   await expect(card()).toBeVisible();
   await expect(
     form().getByRole("radio", { name: "Anthropic API key" }),
@@ -123,82 +125,81 @@ test("a subscription token under the API key choice is refused, never echoed", a
     "This is a Claude subscription token.",
   );
   await expect(form().getByLabel("API key", { exact: true })).toBeFocused();
-  await expect(card().getByTestId("no-credential")).toBeVisible();
+  await expect(status()).toHaveText(NONE);
   await shots(page, "format-error");
   await form().getByLabel("API key", { exact: true }).fill("");
 });
 
-test("a fake key is saved encrypted, only its last four characters come back", async () => {
-  await save("Anthropic API key", BAD_KEY);
-  await expect(savedBox().getByTestId("credential-last4")).toHaveText("Bad1");
-  await expect(savedBox().getByTestId("credential-status")).toHaveText(
-    "Not verified",
-  );
-  await expect(form().getByLabel("API key", { exact: true })).toHaveValue("");
-  await noSecretOnPage();
-  await page.reload();
-  await expect(savedBox().getByTestId("credential-last4")).toHaveText("Bad1");
-  await noSecretOnPage();
-});
-
-test("verify reports the fake key as refused", async () => {
+// Saving an API key checks it with Anthropic at once: only against the stub, never the real one.
+test("a fake key is saved encrypted, checked at once and shown refused, in red", async () => {
   test.skip(
     !stub,
     "set E2E_MODEL_STUB=1 with tests/anthropic-stub.compose.yml",
   );
-  await savedBox().getByRole("button", { name: "Verify" }).click();
-  await expect(result()).toContainText("Anthropic refused this credential");
-  await expect(savedBox().getByTestId("credential-status")).toHaveText(
-    "Not verified",
-  );
+  await save("Anthropic API key", BAD_KEY);
+  await expect(status()).toContainText("Anthropic refused this credential");
+  await expect(status()).toHaveAttribute("data-tone", "error");
+  await expect(form().getByLabel("API key", { exact: true })).toHaveValue("");
+  await noSecretOnPage();
   await shots(page, "verify-refused");
 });
 
-test("a key the check accepts shows its verified date", async () => {
+test("a key the check accepts turns the field green", async () => {
   test.skip(
     !stub,
     "set E2E_MODEL_STUB=1 with tests/anthropic-stub.compose.yml",
   );
   await save("Anthropic API key", GOOD_KEY);
-  await expect(savedBox().getByTestId("credential-last4")).toHaveText("Gd42");
-  await savedBox().getByRole("button", { name: "Verify" }).click();
-  await expect(result()).toContainText("Anthropic accepted this key.");
-  await expect(savedBox().getByTestId("credential-status")).toContainText(
-    "Verified on",
+  await expect(status()).toHaveText(
+    "Anthropic API key ending in Gd42, verified.",
+  );
+  await expect(status()).toHaveAttribute("data-tone", "success");
+  await page.reload();
+  await expect(status()).toHaveText(
+    "Anthropic API key ending in Gd42, verified.",
   );
   await noSecretOnPage();
   await shots(page, "verified");
 });
 
-test("a subscription token is stored and left for the first run to check", async () => {
-  await save("Claude subscription token", TOKEN);
-  await expect(savedBox()).toContainText("Claude subscription token");
-  await expect(savedBox().getByTestId("credential-last4")).toHaveText("Tk77");
-  await savedBox().getByRole("button", { name: "Verify" }).click();
-  await expect(result()).toContainText("checked by the first agent run");
-  await expect(savedBox().getByTestId("credential-status")).toHaveText(
-    "Not verified",
+// A subscription token is checked by one Claude Code run in the worker, against the stub only.
+test("a subscription token is checked by one Claude Code run, the spinner meanwhile", async () => {
+  test.skip(
+    !stub,
+    "set E2E_MODEL_STUB=1 with tests/anthropic-stub.compose.yml",
   );
+  await save("Claude subscription token", TOKEN);
+  await expect(status()).toHaveText("Checking it with Claude Code");
+  await expect(status()).not.toHaveAttribute("data-tone", "busy", {
+    timeout: 120_000,
+  });
+  await expect(
+    form().getByLabel("Subscription token", { exact: true }),
+  ).toHaveValue("");
   await noSecretOnPage();
   await shots(page, "subscription");
 });
 
 test("remove asks first, then the card is empty again", async () => {
-  await savedBox().getByRole("button", { name: "Remove" }).click();
+  test.skip(
+    !stub,
+    "set E2E_MODEL_STUB=1 with tests/anthropic-stub.compose.yml",
+  );
+  await form().getByRole("button", { name: "Remove" }).click();
   const dialog = page.getByRole("alertdialog", {
     name: "Remove the credential?",
   });
   await expect(dialog).toBeVisible();
   await shots(page, "remove-confirm", false);
   await dialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(savedBox()).toBeVisible();
-  await savedBox().getByRole("button", { name: "Remove" }).click();
+  await expect(status()).not.toHaveText(NONE);
+  await form().getByRole("button", { name: "Remove" }).click();
   await page
     .getByRole("alertdialog")
     .getByRole("button", { name: "Remove" })
     .click();
-  await expect(card().getByTestId("no-credential")).toBeVisible();
+  await expect(status()).toHaveText(NONE);
   await page.reload();
-  await expect(card().getByTestId("no-credential")).toBeVisible();
+  await expect(status()).toHaveText(NONE);
   expect(errors).toEqual([]);
 });

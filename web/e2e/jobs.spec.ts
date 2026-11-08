@@ -391,7 +391,7 @@ test("filter by status and search; the URL holds the view and opens the same in 
       second.getByRole("heading", { name: "Sign in" }),
     ).toBeVisible();
     await second.getByLabel("Email").fill(EMAIL);
-    await second.getByLabel("Password").fill(PASSWORD);
+    await second.getByLabel("Password", { exact: true }).fill(PASSWORD);
     await second.getByRole("button", { name: "Sign in" }).click();
     await expect(second).toHaveURL(sharedUrl);
     await expect(summary(second)).toHaveText(

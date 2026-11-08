@@ -8,7 +8,8 @@ api (the notes on a hand edit) and the chat all call it. It finds, in this order
 2. `claim`: M9's `factcheck_rules.check` per printed field, mapped back to `{field, start, end,
    code}`, with what `DocumentSources` adds (below); the credentials, change words and decades
    the person's texts do not state (`rules.credentials`, `rules.changes`, `rules.decades`); and
-   the person's banned phrases (`banned_phrase`);
+   the person's banned phrases with the starter list when it is on (`banned_phrase`,
+   `settings.banned_phrases`);
 3. `separator`: with the person's dash rule on, each dash used as a separator;
 4. `note`: the template's soft lengths, given `soft_limits`, and an empty required field.
 
@@ -65,7 +66,7 @@ from pydantic import BaseModel
 from app.documents import content as c
 from app.documents import rules
 from app.documents.rules import Issue
-from app.documents.settings import DocumentSettings
+from app.documents.settings import DocumentSettings, banned_phrases
 from app.documents.sources import DocumentSources
 from app.mail import factcheck_rules
 from app.mail.factcheck_rules import Sources
@@ -1168,10 +1169,12 @@ def run(
         for i in own_issues(fields, sources)
         if not any(s < i.end and i.start < e for s, e in seen.get((i.field, i.code), ()))
     ]
+    own_cv = sources.own_cv if isinstance(sources, DocumentSources) else ()
+    phrases = banned_phrases(settings, own_cv)
     for path, text in fields:
         issues += [
             Issue(path, start, end, rules.BANNED_PHRASE, "claim")
-            for start, end in rules.banned(text, settings.banned_phrases)
+            for start, end in rules.banned(text, phrases)
         ]
         if settings.no_dash_separators:
             issues += [

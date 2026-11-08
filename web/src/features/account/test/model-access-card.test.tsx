@@ -8,6 +8,7 @@ import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
 import type { ModelCredential } from "@/features/agents/api/agents-api";
+import { CHECK_POLL_MS } from "@/features/agents/api/use-model-access";
 import { REMOVED, SAVED } from "@/features/agents/helpers/model-credential";
 
 const API_KEY = `sk-ant-api03-${"Ab1_".repeat(20)}WXyz`;
@@ -95,15 +96,20 @@ async function openCard() {
 }
 
 const form = () => screen.getByRole("form", { name: "Model access" });
-const savedBox = () => screen.getByRole("region", { name: "Saved credential" });
+const status = () => screen.getByTestId("credential-status");
+/** Waits until the field says how the credential stands. */
+async function stands(text: string | RegExp) {
+  await waitFor(() => {
+    expect(status()).toHaveTextContent(text);
+  });
+  return status();
+}
 
 describe("model access card", () => {
   it("starts empty with the API key chosen and both options explained", async () => {
     credentialApi();
     await openCard();
-    expect(await screen.findByTestId("no-credential")).toHaveTextContent(
-      "No credential saved.",
-    );
+    await stands("No credential saved. Agents need one to run.");
     const apiKey = within(form()).getByRole("radio", {
       name: "Anthropic API key",
     });
@@ -129,10 +135,20 @@ describe("model access card", () => {
     );
   });
 
+  it("copies the subscription token's command in one click", async () => {
+    credentialApi();
+    const { user } = await openCard();
+    await stands(/No credential saved/);
+    await user.click(
+      within(form()).getByRole("button", { name: "Copy claude setup-token" }),
+    );
+    expect(await navigator.clipboard.readText()).toBe("claude setup-token");
+  });
+
   it("has no dashes as separators in its copy", async () => {
     credentialApi({ initial: saved });
     const { container } = await openCard();
-    await screen.findByTestId("credential-last4");
+    await stands(/verified/);
     // Hyphenated words and the sk-ant- prefixes are fine; dash separators are not.
     expect(container.textContent).not.toMatch(/[–—]| - /);
   });
@@ -140,7 +156,7 @@ describe("model access card", () => {
   it("saves an API key, then shows only its last four characters", async () => {
     const state = credentialApi();
     const { user, container } = await openCard();
-    await screen.findByTestId("no-credential");
+    await stands(/No credential saved/);
     const input = within(form()).getByLabelText("API key");
     await user.type(input, `  ${API_KEY} `);
     await user.click(
@@ -151,12 +167,13 @@ describe("model access card", () => {
       { kind: "anthropic_api_key", secret: `  ${API_KEY} ` },
     ]);
     expect(state.headers[0]?.get("X-Requested-With")).toBe("jobapp");
-    expect(
-      within(savedBox()).getByTestId("credential-last4"),
-    ).toHaveTextContent("WXyz");
-    expect(
-      within(savedBox()).getByTestId("credential-status"),
-    ).toHaveTextContent("Not verified");
+    // Checked with Anthropic at once: the field turns green.
+    const said = await stands("Anthropic API key ending in WXyz, verified.");
+    expect(said).toHaveAttribute("data-tone", "success");
+    expect(state.verifies).toBe(1);
+    expect(input.closest('[data-slot="input-group"]')).toHaveClass(
+      "border-success",
+    );
     expect(input).toHaveValue("");
     expect(input).toHaveAttribute("type", "password");
     expect(container.innerHTML).not.toContain(API_KEY.slice(0, 30));
@@ -168,12 +185,12 @@ describe("model access card", () => {
   it("keeps no copy of the secret in the mutation cache after a save", async () => {
     credentialApi();
     const { user, client } = await openCard();
-    await screen.findByTestId("no-credential");
+    await stands(/No credential saved/);
     await user.type(within(form()).getByLabelText("API key"), API_KEY);
     await user.click(
       within(form()).getByRole("button", { name: "Save credential" }),
     );
-    await screen.findByTestId("credential-last4");
+    await stands(/ending in WXyz/);
     await waitFor(() => {
       const kept = client
         .getMutationCache()
@@ -186,7 +203,7 @@ describe("model access card", () => {
   it("saves a subscription token under its own kind", async () => {
     const state = credentialApi();
     const { user } = await openCard();
-    await screen.findByTestId("no-credential");
+    await stands(/No credential saved/);
     await user.click(
       within(form()).getByRole("radio", { name: "Claude subscription token" }),
     );
@@ -196,20 +213,17 @@ describe("model access card", () => {
     await user.click(
       within(form()).getByRole("button", { name: "Save credential" }),
     );
-    await screen.findByTestId("credential-last4");
+    await stands(/^Claude subscription token ending in Tok3/);
     expect(state.puts[0]).toEqual({
       kind: "claude_subscription",
       secret: OAUTH,
     });
-    expect(
-      within(savedBox()).getByText("Claude subscription token"),
-    ).toBeVisible();
   });
 
   it("asks for a value before sending anything", async () => {
     const state = credentialApi();
     const { user } = await openCard();
-    await screen.findByTestId("no-credential");
+    await stands(/No credential saved/);
     await user.type(within(form()).getByLabelText("API key"), "   ");
     await user.click(
       within(form()).getByRole("button", { name: "Save credential" }),
@@ -237,7 +251,7 @@ describe("model access card", () => {
         ),
     });
     const { user } = await openCard();
-    await screen.findByTestId("no-credential");
+    await stands(/No credential saved/);
     const input = within(form()).getByLabelText("API key");
     await user.type(input, OAUTH);
     await user.click(
@@ -260,7 +274,7 @@ describe("model access card", () => {
         ),
     });
     const { user } = await openCard();
-    await screen.findByTestId("no-credential");
+    await stands(/No credential saved/);
     await user.type(within(form()).getByLabelText("API key"), API_KEY);
     await user.click(
       within(form()).getByRole("button", { name: "Save credential" }),
@@ -286,60 +300,86 @@ describe("model access card", () => {
     expect(input).toHaveAttribute("type", "password");
   });
 
-  it("verifies a saved key and shows the date", async () => {
+  it("checks a saved key that never was on opening, and turns the field green", async () => {
     const state = credentialApi({ initial: saved });
-    const { user } = await openCard();
-    await screen.findByTestId("credential-last4");
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Verify" }),
-    );
-    expect(await screen.findByTestId("verify-result")).toHaveTextContent(
-      "Anthropic accepted this key.",
-    );
-    expect(
-      within(savedBox()).getByTestId("credential-status"),
-    ).toHaveTextContent(/^Verified on /);
-    expect(
-      within(savedBox()).getByTestId("credential-status").querySelector("time"),
-    ).toHaveAttribute("datetime", "2026-10-10T08:05:00Z");
+    await openCard();
+    const said = await stands("Anthropic API key ending in WXyz, verified.");
+    expect(said).toHaveAttribute("data-tone", "success");
     expect(state.verifies).toBe(1);
     expect(state.headers[0]?.get("X-Requested-With")).toBe("jobapp");
   });
 
-  it("explains that a subscription token is checked by the first run", async () => {
-    const sub = { ...saved, kind: "claude_subscription" as const };
-    credentialApi({
-      initial: sub,
-      verify: () =>
-        HttpResponse.json({
-          result: "unverified",
-          message:
-            "A subscription token cannot be checked from the server without running Claude Code. It is checked by the first agent run.",
-          credential: sub,
-        }),
+  it("does not check again a key already verified", async () => {
+    const state = credentialApi({
+      initial: { ...saved, verified_at: "2026-10-09T08:00:00Z" },
     });
-    const { user } = await openCard();
-    await screen.findByTestId("credential-last4");
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Verify" }),
-    );
-    expect(await screen.findByTestId("verify-result")).toHaveTextContent(
-      /checked by the first agent run/,
-    );
-    expect(
-      within(savedBox()).getByTestId("credential-status"),
-    ).toHaveTextContent("Not verified");
+    await openCard();
+    await stands("Anthropic API key ending in WXyz, verified.");
+    expect(state.verifies).toBe(0);
   });
 
-  it("shows a refused key as an error and rereads the credential", async () => {
-    let gets = 0;
-    const verified = { ...saved, verified_at: "2026-10-09T08:00:00Z" };
-    credentialApi({
-      initial: verified,
-      get: () => {
-        gets += 1;
-        return HttpResponse.json(gets === 1 ? verified : saved);
-      },
+  it.each([
+    [
+      "verified",
+      "Claude subscription token ending in Tok3, verified.",
+      "success",
+    ],
+    [
+      "invalid",
+      "Anthropic refused this credential: it is wrong, revoked or has no access. Paste a new one.",
+      "error",
+    ],
+  ] as const)(
+    "checks a subscription token with one Claude Code run, then shows it %s",
+    async (state, said, tone) => {
+      const sub: ModelCredential = {
+        ...saved,
+        kind: "claude_subscription",
+        last4: "Tok3",
+      };
+      const checking = {
+        ...sub,
+        check: {
+          state: "checking" as const,
+          message: "Checking the token with Claude Code.",
+        },
+      };
+      let check: ModelCredential = sub;
+      const api = credentialApi({
+        initial: sub,
+        get: () => HttpResponse.json(check),
+        verify: () => {
+          // The worker answers on a later read of the credential.
+          check = {
+            ...sub,
+            verified_at: state === "verified" ? "2026-11-07T08:02:00Z" : null,
+            check: { state, message: said },
+          };
+          return HttpResponse.json({
+            result: "checking",
+            message: "Checking the token with Claude Code.",
+            credential: checking,
+          });
+        },
+      });
+      await openCard();
+      expect(await screen.findByText("Checking it with Claude Code")).toBe(
+        status(),
+      );
+      await waitFor(
+        () => {
+          expect(status()).toHaveTextContent(said);
+        },
+        { timeout: CHECK_POLL_MS * 3 },
+      );
+      expect(status()).toHaveAttribute("data-tone", tone);
+      expect(api.verifies).toBe(1);
+    },
+  );
+
+  it("turns the field red with the reason when Anthropic refuses the key, checked once", async () => {
+    const state = credentialApi({
+      initial: saved,
       verify: () =>
         HttpResponse.json(
           {
@@ -349,49 +389,19 @@ describe("model access card", () => {
           { status: 400 },
         ),
     });
-    const { user } = await openCard();
-    expect(await screen.findByTestId("credential-status")).toHaveTextContent(
-      /^Verified on/,
+    await openCard();
+    const said = await stands(/^Anthropic refused this credential/);
+    expect(said).toHaveAttribute("data-tone", "error");
+    expect(within(form()).getByLabelText("API key")).toHaveAttribute(
+      "aria-invalid",
+      "true",
     );
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Verify" }),
-    );
-    expect(await screen.findByTestId("verify-result")).toHaveTextContent(
-      /^Anthropic refused this credential/,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId("credential-status")).toHaveTextContent(
-        "Not verified",
-      );
-    });
+    // The credential is read again after a refusal, and not checked a second time.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(state.verifies).toBe(1);
   });
 
-  it("counts down when Anthropic is busy", async () => {
-    credentialApi({
-      initial: saved,
-      verify: () =>
-        HttpResponse.json(
-          {
-            detail:
-              "Anthropic is busy or rate limiting this key. Try again later.",
-          },
-          { status: 429, headers: { "Retry-After": "30" } },
-        ),
-    });
-    const { user } = await openCard();
-    await screen.findByTestId("credential-last4");
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Verify" }),
-    );
-    expect(await screen.findByTestId("verify-result")).toHaveTextContent(
-      "Try again later.",
-    );
-    expect(
-      within(savedBox()).getByRole("button", { name: /Try again in 0:[23]\d/ }),
-    ).toBeDisabled();
-  });
-
-  it("says when the server cannot reach Anthropic", async () => {
+  it("says when Anthropic is busy or cannot be reached", async () => {
     credentialApi({
       initial: saved,
       verify: () =>
@@ -400,17 +410,14 @@ describe("model access card", () => {
           { status: 503 },
         ),
     });
-    const { user } = await openCard();
-    await screen.findByTestId("credential-last4");
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Verify" }),
-    );
-    expect(await screen.findByTestId("verify-result")).toHaveTextContent(
+    await openCard();
+    const said = await stands(
       "Anthropic could not be reached. Try again later.",
     );
+    expect(said).toHaveAttribute("data-tone", "error");
   });
 
-  it("shows the verify button busy while the check runs", async () => {
+  it("shows a spinner in the field while the check runs", async () => {
     credentialApi({
       initial: saved,
       verify: async () => {
@@ -418,25 +425,21 @@ describe("model access card", () => {
         return HttpResponse.json({});
       },
     });
-    const { user } = await openCard();
-    await screen.findByTestId("credential-last4");
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Verify" }),
-    );
-    const busy = await within(savedBox()).findByRole("button", {
-      name: "Verifying",
-    });
-    expect(busy).toBeDisabled();
-    expect(busy).toHaveAttribute("aria-busy", "true");
+    await openCard();
+    const said = await stands("Checking it with Anthropic");
+    expect(said).toHaveAttribute("data-tone", "busy");
+    expect(
+      within(form())
+        .getByLabelText("API key")
+        .closest('[data-slot="input-group"]'),
+    ).toHaveAttribute("aria-busy", "true");
   });
 
   it("removes the credential only after confirmation", async () => {
     const state = credentialApi({ initial: saved });
     const { user } = await openCard();
-    await screen.findByTestId("credential-last4");
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Remove" }),
-    );
+    await stands(/ending in WXyz/);
+    await user.click(within(form()).getByRole("button", { name: "Remove" }));
     let dialog = await screen.findByRole("alertdialog", {
       name: "Remove the credential?",
     });
@@ -445,16 +448,14 @@ describe("model access card", () => {
       expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     });
     expect(state.deletes).toBe(0);
-    expect(screen.getByTestId("credential-last4")).toBeInTheDocument();
+    expect(status()).toHaveTextContent(/ending in WXyz/);
 
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Remove" }),
-    );
+    await user.click(within(form()).getByRole("button", { name: "Remove" }));
     dialog = await screen.findByRole("alertdialog");
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(await screen.findByText(REMOVED)).toBeInTheDocument();
     expect(state.deletes).toBe(1);
-    expect(await screen.findByTestId("no-credential")).toBeInTheDocument();
+    await stands(/No credential saved/);
     expect(
       within(form()).getByRole("button", { name: "Save credential" }),
     ).toBeInTheDocument();
@@ -468,10 +469,8 @@ describe("model access card", () => {
       ),
     );
     const { user } = await openCard();
-    await screen.findByTestId("credential-last4");
-    await user.click(
-      within(savedBox()).getByRole("button", { name: "Remove" }),
-    );
+    await stands(/ending in WXyz/);
+    await user.click(within(form()).getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
@@ -482,6 +481,7 @@ describe("model access card", () => {
   it("offers a retry when the credential cannot be loaded", async () => {
     let fail = true;
     credentialApi({
+      initial: saved,
       get: () =>
         fail
           ? HttpResponse.json(
@@ -499,9 +499,7 @@ describe("model access card", () => {
     ).toBeVisible();
     fail = false;
     await user.click(within(card).getByRole("button", { name: "Retry" }));
-    expect(await screen.findByTestId("credential-last4")).toHaveTextContent(
-      "WXyz",
-    );
+    await stands(/ending in WXyz/);
   });
 
   it("says when the server has no encryption key", async () => {
@@ -516,7 +514,7 @@ describe("model access card", () => {
         ),
     });
     const { user } = await openCard();
-    await screen.findByTestId("no-credential");
+    await stands(/No credential saved/);
     await user.type(within(form()).getByLabelText("API key"), API_KEY);
     await user.click(
       within(form()).getByRole("button", { name: "Save credential" }),

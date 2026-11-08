@@ -19,6 +19,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Spinner } from "@/components/ui/spinner";
+import { PostingNotices } from "@/components/shared/jobs/posting/posting-notices";
 import { useJob } from "@/features/jobs/api/use-job";
 import { paragraphs, safeHttpUrl } from "@/features/jobs/helpers/text";
 import { useIsPhone } from "@/hooks/use-media-query";
@@ -126,6 +127,7 @@ export function PostingSheet({
             </DrawerDescription>
           </DrawerHeader>
           <div className={BODY}>
+            <PostingNotices notices={card.notices} className="mb-4" />
             <PostingText card={card} open={open} />
           </div>
           <DrawerFooter>
@@ -146,6 +148,7 @@ export function PostingSheet({
           </SheetDescription>
         </SheetHeader>
         <div className={BODY}>
+          <PostingNotices notices={card.notices} className="mb-4" />
           <PostingText card={card} open={open} />
         </div>
         <SheetFooter className="flex-row flex-wrap">

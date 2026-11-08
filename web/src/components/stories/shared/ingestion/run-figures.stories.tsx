@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 
 import { RunFigures } from "@/components/shared/ingestion/run-progress/run-figures";
 import {
+  CAMILLE_REFUSED,
   doneRun,
   runningRun,
 } from "@/design-system/fixtures/camille-ingestion";
@@ -51,6 +52,12 @@ export const OnAnApiKey: Story = {
 export const Finished: Story = {
   name: "Finished",
   args: { run: doneRun() },
+};
+
+/** Finished, with why some of its proposals were not kept, one line per section and rule. */
+export const SomeNotKept: Story = {
+  name: "Finished, some proposals not kept",
+  args: { run: { ...doneRun(), refused: CAMILLE_REFUSED } },
 };
 
 /** Finished with documents unread, the cost of every attempt, and dates it could not read. */

@@ -16,6 +16,7 @@ import { z } from "zod";
 import { errorDetail, isApiError, request } from "@/lib/api";
 
 import { finishedRunKey } from "./proposals-api";
+import { refusedListSchema } from "./refused-schema";
 
 const TIMEOUT_MS = 30_000;
 const RUNS = "/ingestion/runs";
@@ -216,6 +217,8 @@ export const runSchema = z.object({
     two_digit_year: z.number(),
     proposals: z.number(),
   }),
+  /** Why proposals were not kept, by section and rule: what no stored item followed. */
+  refused: refusedListSchema,
   steps: z.array(stepSchema),
   created_at: z.string(),
   deadline_at: z.string(),

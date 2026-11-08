@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import { Brand } from "@/components/blocks/brand";
+import { CopyCommand } from "@/components/blocks/copy-command";
 import { EmptyState } from "@/components/blocks/empty-state";
 import { Fact, Facts } from "@/components/blocks/facts";
 import { LoadError } from "@/components/blocks/load-error";
@@ -226,5 +227,17 @@ export const FactsGrid: Story = {
       <Fact label="Model">claude-sonnet-5-5</Fact>
       <Fact label="Duration">42 s</Fact>
     </Facts>
+  ),
+};
+
+/** A command inline in a sentence, with Copy after it: the subscription token's `claude setup-token` in Model access. */
+export const CommandToCopy: Story = {
+  name: "Copy command",
+  render: () => (
+    <p className="text-sm text-muted-foreground">
+      In a terminal with Claude Code installed, run{" "}
+      <CopyCommand command="claude setup-token" />, sign in, and paste the token
+      it prints.
+    </p>
   ),
 };

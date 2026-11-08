@@ -16,6 +16,13 @@ import {
   lease,
   liveRoutes,
 } from "@/design-system/fixtures/live-browser";
+import {
+  cold,
+  fakeFollowUps,
+  followUp,
+  waiting,
+  written,
+} from "@/design-system/fixtures/follow-ups";
 import { fakeQueue } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
 import { server } from "@/test/server";
@@ -231,5 +238,39 @@ export const ApplicationsOnAPhone: Story = {
     fakeFormShots();
     const item = ready();
     fakeQueue([item, writing()], { [item.id]: FILLED });
+  },
+};
+
+/** As a job seeker, I want to see which applications wait for a follow up and have a draft written on my click, so that I send it myself and the next date moves. */
+export const FollowUpADueApplication: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeQueue([]);
+    fakeFollowUps([followUp(), waiting(), cold()]);
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const [first] = await page.findAllByRole("button", {
+      name: "Write a draft",
+    });
+    if (first) await userEvent.click(first);
+  },
+};
+
+/** As a job seeker, I want the draft in my words before I send it from my own mail, then to say I sent it. */
+export const SendAFollowUpFromMyMail: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeQueue([]);
+    fakeFollowUps([written()]);
+  },
+};
+
+/** As a job seeker, I want to turn follow ups off, so that the app reminds me of nothing. */
+export const FollowUpsOff: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeQueue([]);
+    fakeFollowUps([followUp()], false);
   },
 };

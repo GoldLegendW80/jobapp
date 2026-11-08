@@ -61,14 +61,17 @@ def _terms(section: dict[str, Any], name: str) -> list[Any]:
 
 def done_steps(sections: dict[str, dict[str, Any] | None]) -> list[str]:
     """The steps the stored profile already answers. `apply` is never among them (its answer is
-    apply's setting, which always has a value) and `summary` is the end itself."""
+    apply's setting, which always has a value) and `summary` is the end itself. No contract type
+    means any contract, an answer once the person has passed the step (owner, 2026-11-08)."""
     search = sections.get("search") or {}
     compensation = search.get("compensation")
+    onboarding = (sections.get("preferences") or {}).get("onboarding") or {}
+    passed = onboarding.get("steps_passed") or []
     found = {
         "profile": bool(sections.get("identity") or sections.get("experience")),
         "looking": bool(_terms(search, "title_include")),
         "where": search.get("remote_stance") is not None,
-        "work": bool(search.get("contract_types")),
+        "work": bool(search.get("contract_types")) or "work" in passed,
         "pay": isinstance(compensation, dict)
         and bool(compensation.get("salary") or compensation.get("daily_rate")),
     }

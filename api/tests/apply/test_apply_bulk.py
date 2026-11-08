@@ -147,6 +147,14 @@ def test_the_confirmation_names_each_posting_and_why_some_are_left_out(
     written = ("ML Engineer", "Data Engineer")
     assert total["high"] == sum(items[t]["estimate"]["tokens"]["high"] for t in written)
     assert not any(one["email"] for one in shown["items"])
+    # What to know before the click: the person's own application at the same company.
+    assert [(n["kind"], n["text"]) for n in items["ML Engineer"]["notices"]] == [
+        (
+            "history",
+            "You applied to Example Robotics (date not recorded) for Platform Engineer, with no "
+            "reply recorded.",
+        )
+    ]
     # Each one left out says why in the app's words, those of its own Apply.
     assert names(shown["left_out"]) == [
         ("Platform Engineer", "already_applied"),

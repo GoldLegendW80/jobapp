@@ -123,10 +123,14 @@ def test_upgrade_creates_the_jobs_schema(at_head: sa.Engine) -> None:
         "pay_currency",
         "pay_period",
         "work_mode",
+        "signals",
+        "text_fingerprint",
+        "closes_on",
         "found_on",
         "applied_on",
         "notes",
         "legacy",
+        "liveness",
         "search",
         "created_at",
         "updated_at",
@@ -134,6 +138,7 @@ def test_upgrade_creates_the_jobs_schema(at_head: sa.Engine) -> None:
     for name in (
         "fit", "url", "source", "description", "posting_text", "applied_on",
         "pay_min", "pay_max", "pay_currency", "pay_period", "work_mode",
+        "signals", "text_fingerprint", "closes_on",
     ):  # fmt: skip
         assert columns[name]["nullable"], name
     for name in ("slug", "company", "title", "status", "competencies", "gaps", "found_on"):

@@ -25,6 +25,7 @@ from tests.ingestion.test_item_proposals import (
     RUN,
     alice,
     bulk,
+    cite,
     made,
     revision,
     row,
@@ -306,3 +307,158 @@ def test_a_section_one_item_stops_applies_nothing_and_the_others_go_on(
     assert stored(factory, user, "identity").get("phone") is None
     assert stored(factory, user, "answers")["notice_period"] == "Three months"
     assert body["pending"] == 2
+
+
+# --- fill empty slots (the welcome wizard, owner 2026-11-08) -------------------------------------
+
+CV_ID = "00000000-0000-4000-8000-0000000000c1"
+EXPORT_ID = "00000000-0000-4000-8000-0000000000c2"
+
+
+def at(document: str, start: int = 0) -> dict[str, Any]:
+    return cite(start, document_id=document)
+
+
+def conflict(section: str, key_: str, value: Any, cited: str, other: Any, other_cited: str) -> Any:
+    """The keyword arguments of `made` for a conflict of two values, each cited by a document."""
+    return {
+        "citations": [at(cited)],
+        "conflict": [(items.build(section, key_, "add", other), [at(other_cited)])],
+    }
+
+
+@pytest.mark.parametrize(
+    ("documents", "picked"),
+    [
+        ([CV_ID, EXPORT_ID], "Jane-Ann Doe"),  # the CV first: its value
+        ([EXPORT_ID, CV_ID], "Jane Doe"),  # no CV: the first document of the run
+        ([], "Jane Doe"),  # nothing known: the item's own value
+    ],
+)
+def test_the_value_taken_for_a_conflict(documents: list[str], picked: str) -> None:
+    payload = {
+        "value": "Jane Doe",
+        "citations": [at(EXPORT_ID)],
+        "conflict": [{"value": "Jane-Ann Doe", "citations": [at(CV_ID)]}],
+    }
+    assert ip.chosen(payload, documents) == picked
+
+
+def test_fill_empty_takes_conflicts_and_derived_values_on_empty_slots_only(
+    factory: Factory, alice: uuid.UUID
+) -> None:
+    save(factory, alice, "identity", {"headline": "Data engineer"})
+    name = made(
+        factory,
+        alice,
+        "identity",
+        "full_name",
+        "Jane Doe",
+        **conflict("identity", "full_name", "Jane Doe", EXPORT_ID, "Jane-Ann Doe", CV_ID),
+    )
+    years = made(
+        factory,
+        alice,
+        "skills",
+        "years_experience",
+        2.5,
+        origin=items.Origin.derived,
+        flags=[items.FLAG_DERIVED],
+    )
+    held = made(
+        factory,
+        alice,
+        "identity",
+        "headline",
+        "GenAI Engineer",
+        **conflict("identity", "headline", "GenAI Engineer", CV_ID, "Engineer", EXPORT_ID),
+    )
+    read_from_image = made(
+        factory,
+        alice,
+        "identity",
+        "city",
+        "Exempleville",
+        flags=[items.FLAG_TRANSCRIBED],
+        **conflict("identity", "city", "Exempleville", CV_ID, "Port-Exemple", EXPORT_ID),
+    )
+    hint = made(factory, alice, "answers", "notice_period", "Now", flags=[items.FLAG_INSTRUCTION])
+    ids = [name, years, held, read_from_image, hint]
+    # Without it, as before: every flagged item stays for the person.
+    before = bulk(factory, alice, proposal_ids=ids, ingestion_run_id=RUN)
+    assert (before.done, set(before.skipped.values())) == ([], {ip.FLAGGED})
+    result = bulk(
+        factory, alice, proposal_ids=ids, ingestion_run_id=RUN, fill_empty=[CV_ID, EXPORT_ID]
+    )
+    assert sorted(map(str, result.done)) == sorted(map(str, (name, years)))
+    assert result.skipped == {held: ip.FLAGGED, read_from_image: ip.FLAGGED, hint: ip.FLAGGED}
+    identity = stored(factory, alice, "identity")
+    assert (identity["full_name"], identity["headline"]) == ("Jane-Ann Doe", "Data engineer")
+    assert stored(factory, alice, "skills")["years_experience"] == 2.5
+    # Recorded with the value written, marked as the code's pick: the other value is not turned
+    # down, so a later run may offer it again (owner, 2026-11-08).
+    picked = row(factory, name)
+    assert (picked.status, picked.edited_value) == (ProposalStatus.accepted, "Jane-Ann Doe")
+    assert picked.payload["picked"] is True
+    assert row(factory, years).edited_value is None
+    with factory() as db:
+        decided = ip.turned_down(db, alice, limit=100)
+    assert ("identity", "full_name") not in {(one.section, one.key) for one in decided}
+    undo(factory, alice, name)
+    assert stored(factory, alice, "identity")["full_name"] is None
+
+
+def test_fill_empty_through_the_api_prefers_the_cv_wherever_it_stands_in_the_run(
+    api: Api, me: tuple[uuid.UUID, str], factory: Factory, settings: Settings
+) -> None:
+    from tests.ingestion import merge_helpers as mh
+    from tests.profile.test_titles_reading import base_cv, consent
+
+    user, token = me
+    export = "Jane Doe\nGenAI and data engineer\nExample Robotics, Engineer, 2021 to 2023\n"
+    cv = "Jane-Ann Doe\nGenAI Engineer\n"
+    run_id, (_, cv_id) = mh.merged(
+        factory,
+        user,
+        settings,
+        [export, cv],
+        [
+            [
+                ("identity", "full_name", "Jane Doe", "Jane Doe"),
+                ("identity", "headline", "GenAI and data engineer", "GenAI and data engineer"),
+                (
+                    "experience",
+                    "employers",
+                    {
+                        "organisation": "Example Robotics",
+                        "title": "Engineer",
+                        "start": "2021-01",
+                        "end": "2023-01",
+                    },
+                    "Example Robotics, Engineer, 2021",
+                ),
+            ],
+            [
+                ("identity", "full_name", "Jane-Ann Doe", "Jane-Ann Doe"),
+                ("identity", "headline", "GenAI Engineer", "GenAI Engineer"),
+            ],
+        ],
+    )
+    consent(factory, user, uploads=False, cvs=True)
+    base_cv(factory, user, "My CV", "GenAI Engineer", source=cv_id)
+    path = f"/api/ingestion/runs/{run_id}/accept-additions"
+    pending = [str(one.id) for one in mh.proposals_of(factory, user, run_id)]
+    assert len(pending) == 4  # the name, the headline, the job, the derived years
+    plain = api.post(path, token=token, json={"proposal_ids": pending}).json()
+    assert plain["left_out"] == {"flagged": 3}  # the job alone, an empty slot, was taken
+    pending = [str(one.id) for one in mh.proposals_of(factory, user, run_id)]
+    assert (
+        api.post(path, token=token, json={"proposal_ids": pending, "fill_empty": "x"}).status_code
+        == 422
+    )
+    body = api.post(path, token=token, json={"proposal_ids": pending, "fill_empty": True}).json()
+    assert (len(body["decided"]), body["skipped"], body["pending"]) == (3, [], 0)
+    assert sorted(body) == sorted(plain)  # the same shape
+    identity = stored(factory, user, "identity")
+    assert (identity["full_name"], identity["headline"]) == ("Jane-Ann Doe", "GenAI Engineer")
+    assert stored(factory, user, "skills")["years_experience"] == 2.0

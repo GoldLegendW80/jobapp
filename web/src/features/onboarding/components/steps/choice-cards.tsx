@@ -58,19 +58,21 @@ export function Choices<T extends string>({
   );
 }
 
-/** A card of radio buttons: one choice. */
+/** A card of radio buttons: one choice; `inline` keeps two short ones side by side on a phone. */
 export function Radios<T extends string>({
   legend,
   options,
   words,
   value,
   onChange,
+  inline = false,
 }: {
   legend: string;
   options: readonly T[];
   words: (value: T) => string;
   value: T | null;
   onChange: (next: T) => void;
+  inline?: boolean;
 }) {
   const id = useId();
   return (
@@ -81,7 +83,9 @@ export function Radios<T extends string>({
       <RadioGroup
         name={id}
         value={value ?? ""}
-        className="grid-cols-1 gap-2 sm:grid-cols-2"
+        className={
+          inline ? "grid-cols-2 gap-2" : "grid-cols-1 gap-2 sm:grid-cols-2"
+        }
         onValueChange={(next) => {
           const option = options.find((o) => o === next);
           if (option !== undefined) onChange(option);

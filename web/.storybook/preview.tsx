@@ -51,7 +51,7 @@ const preview: Preview = {
       ) : (
         <TooltipProvider>
           <Story />
-          <Toaster position="bottom-center" />
+          <Toaster />
           {/* Notes on any story for Claude Code (app/dev-feedback.tsx); a page story has the app's. */}
           <Agentation
             endpoint="http://localhost:4747"

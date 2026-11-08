@@ -31,6 +31,15 @@ const terms =
     return filled(list?.terms);
   };
 
+/** The salary stance in force (`salary_stance_of`), answered only once chosen or written. */
+export function salaryAnswered(s: Section): boolean {
+  const stance =
+    s.salary_stance ?? (filled(s.salary_policy) ? "sentence" : null);
+  if (stance === "sentence") return filled(s.salary_policy);
+  if (stance === "range") return filled(s.salary_ranges);
+  return stance === "leave_blank";
+}
+
 /** The api's REQUIRED rules, in its order. */
 export const REQUIRED: Record<SectionName, Record<string, Rule>> = {
   identity: Object.fromEntries(
@@ -53,8 +62,8 @@ export const REQUIRED: Record<SectionName, Record<string, Rule>> = {
   },
   search: {
     title_include: terms("title_include"),
-    location: terms("location"),
-    contract_types: field("contract_types"),
+    // "Anywhere" of the first login wizard: no place, and a remote stance chosen.
+    location: (s) => terms("location")(s) || field("remote_stance")(s),
     remote_stance: field("remote_stance"),
     // Every search runs the job websites ticked in Find jobs alone (owner, 2026-10-28): a saved
     // board no longer counts.
@@ -67,15 +76,13 @@ export const REQUIRED: Record<SectionName, Record<string, Rule>> = {
           (site as { enabled?: unknown }).enabled === true,
       ),
   },
-  answers: Object.fromEntries(
-    [
-      "work_authorization",
-      "notice_period",
-      "earliest_start",
-      "salary_policy",
-      "motivation",
-    ].map((name) => [name, field(name)]),
-  ),
+  answers: {
+    work_authorization: field("work_authorization"),
+    notice_period: field("notice_period"),
+    earliest_start: field("earliest_start"),
+    salary: salaryAnswered,
+    motivation: field("motivation"),
+  },
   // Every field has a default: always filled, and left out of the overall mean (O4).
   preferences: {},
 };

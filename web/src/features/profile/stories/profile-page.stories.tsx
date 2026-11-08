@@ -24,7 +24,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Everything the search, the documents and the forms read about the person, on one page: the CVs, experience and education, About you (Markdown, with the skills and answers as fields while no model key is saved, and fact parts that move up and down beside the size of the fact base), Advanced matching and contact in the main column, the person and what the profile is Ready for in the side rail. Route /profile; the old addresses `?tab=` and /profile/cv land on the section that holds what they showed.",
+          "Everything the search, the documents and the forms read about the person, one tab per part so no part needs a long scroll (owner, 2026-11-07): CVs (/profile), Experience (/profile/experience), About you (/profile/about: Markdown, with the skills and answers as fields while no model key is saved, and fact parts that move up and down above the size of the fact base), Contact (/profile/contact) and Advanced matching (/profile/matching). The person and what the profile is Ready for stay in the side rail on every tab. The old addresses `?tab=`, `#contact` and the like, and /profile/cv land on the tab that holds what they showed.",
       },
     },
   },
@@ -42,7 +42,7 @@ function camilleAccount() {
   return fakeAbout({ text: CAMILLE_ABOUT, key: "api_key" });
 }
 
-/** As a job seeker, I want my whole profile on one page with what it is ready for, so that I know at a glance whether the app can score, write and apply for me. */
+/** As a job seeker, I want my profile split into tabs with what it is ready for beside them, so that I know at a glance whether the app can score, write and apply for me. */
 export const SeeMyWholeProfile: Story = {
   beforeEach: () => {
     camilleAccount();
@@ -85,18 +85,9 @@ function skillsBeingRead(status: "running" | "ready") {
   );
 }
 
-/** The story opens on the Skills part of About you, far down the page. */
-async function showSkills({ canvasElement }: { canvasElement: HTMLElement }) {
-  const skills = await within(canvasElement).findByRole("region", {
-    name: "Skills",
-  });
-  skills.scrollIntoView({ block: "start" });
-  // Clear of the app's sticky header.
-  canvasElement.ownerDocument.defaultView?.scrollBy(0, -96);
-}
-
 /** As a job seeker, I want to write my skills as plain text with a live preview, so that I describe them in my own words. */
 export const EditMySkills: Story = {
+  render: () => <AppAt path="/profile/about" />,
   beforeEach: () => {
     camilleAccount();
   },
@@ -104,28 +95,28 @@ export const EditMySkills: Story = {
     await userEvent.click(
       await within(canvasElement).findByRole("button", { name: "Edit Skills" }),
     );
-    await showSkills({ canvasElement });
   },
 };
 
 /** As a job seeker, I want to see that the app is reading my skills, so that I wait for its answer instead of editing again. */
 export const WaitWhileTheAppReadsMySkills: Story = {
+  render: () => <AppAt path="/profile/about" />,
   beforeEach: () => {
     skillsBeingRead("running");
   },
-  play: showSkills,
 };
 
 /** As a job seeker, I want to read what the app understood from my skills before it changes my profile, so that I apply only what is right. */
 export const ApplyWhatTheAppUnderstood: Story = {
+  render: () => <AppAt path="/profile/about" />,
   beforeEach: () => {
     skillsBeingRead("ready");
   },
-  play: showSkills,
 };
 
 /** As a job seeker, I want to know when a save of my experience failed, so that I do not leave thinking it is saved. */
 export const SeeWhySavingFailed: Story = {
+  render: () => <AppAt path="/profile/experience" />,
   beforeEach: () => {
     camilleAccount();
     server.use(
@@ -245,32 +236,23 @@ function camilleWithExpressions() {
 
 /** As a job seeker who writes regular expressions, I want to keep them beside my skills and try a posting against all of them, so that I see which postings they catch before I save. */
 export const MatchPostingsWithRegularExpressions: Story = {
+  render: () => <AppAt path="/profile/matching" />,
   beforeEach: () => {
     camilleWithExpressions();
   },
   play: async ({ canvasElement }) => {
-    const page = within(canvasElement);
     await userEvent.type(
-      await page.findByRole("textbox", { name: "Posting text" }),
+      await within(canvasElement).findByRole("textbox", {
+        name: "Posting text",
+      }),
       "Senior data engineer: Airflow and dbt on BigQuery, Kafka a plus. React is not needed.",
     );
-    const matching =
-      canvasElement.ownerDocument.getElementById("advanced-matching");
-    matching?.scrollIntoView({ block: "start" });
-    canvasElement.ownerDocument.defaultView?.scrollBy(0, -96);
   },
 };
 
-/** The story opens on About you, clear of the app's sticky header. */
-function showAbout({ canvasElement }: { canvasElement: HTMLElement }) {
-  canvasElement.ownerDocument
-    .getElementById("about-you")
-    ?.scrollIntoView({ block: "start" });
-  canvasElement.ownerDocument.defaultView?.scrollBy(0, -96);
-}
-
 /** As a job seeker without a model key, I want to change my skills and answers in plain fields, so that the app scores postings and fills forms without a model. */
 export const EditMySkillsAndAnswersWithoutAModelKey: Story = {
+  render: () => <AppAt path="/profile/about" />,
   beforeEach: () => {
     fakeSession(camille);
     fakeProfile(camilleProfile());
@@ -288,12 +270,12 @@ export const EditMySkillsAndAnswersWithoutAModelKey: Story = {
         name: /^Work setup and consents,/,
       }),
     );
-    showAbout({ canvasElement });
   },
 };
 
 /** As a job seeker, I want to put my fact blocks in the order my CVs should use them, so that the most telling one comes first. */
 export const ReorderMyFactBlocks: Story = {
+  render: () => <AppAt path="/profile/about" />,
   beforeEach: () => {
     camilleAccount();
   },
@@ -303,12 +285,12 @@ export const ReorderMyFactBlocks: Story = {
         name: "Move Projects up",
       }),
     );
-    showAbout({ canvasElement });
   },
 };
 
 /** As a job seeker with a long fact base, I want to see how close it is to its limit, so that I shorten it before a save is refused. */
 export const SeeMyFactBaseNearItsLimit: Story = {
+  render: () => <AppAt path="/profile/about" />,
   beforeEach: () => {
     fakeSession(camille);
     const profile = camilleProfile();
@@ -329,10 +311,27 @@ export const SeeMyFactBaseNearItsLimit: Story = {
     );
   },
   play: async ({ canvasElement }) => {
-    await within(canvasElement).findByRole("meter", {
-      name: "Fact base size",
-    });
-    showAbout({ canvasElement });
+    (
+      await within(canvasElement).findByRole("meter", {
+        name: "Fact base size",
+      })
+    ).scrollIntoView({ block: "center" });
+  },
+};
+
+/** As a job seeker, I want my jobs and schools on a tab of their own, so that I check every date without scrolling past my skills. */
+export const ListMyJobsAndSchools: Story = {
+  render: () => <AppAt path="/profile/experience" />,
+  beforeEach: () => {
+    camilleAccount();
+  },
+};
+
+/** As a job seeker, I want my photo beside my contact details, so that I see what every document shows of me in one place. */
+export const KeepMyContactDetails: Story = {
+  render: () => <AppAt path="/profile/contact" />,
+  beforeEach: () => {
+    camilleAccount();
   },
 };
 

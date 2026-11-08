@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useId, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,8 +16,8 @@ const pathOf = (tab: PageTab): string =>
 
 /**
  * The views of one area, each at its own address (Jobs: List and Map; Settings: Search and
- * Applications; Admin: Users and Agents). shadcn Tabs, so arrows move between them and Enter
- * opens one; the page's content is the open tab's panel.
+ * Applications; Admin: Users and Agents; Profile: its five parts). shadcn Tabs, so arrows move
+ * between them and Enter opens one; the page's content is the open tab's panel.
  */
 export function PageTabs({
   label,
@@ -33,6 +33,17 @@ export function PageTabs({
   const navigate = useNavigate();
   const paths = tabs.map(pathOf);
   const current = paths.includes(pathname) ? pathname : (paths[0] ?? "");
+  const listId = useId();
+  // On a phone the tabs scroll sideways: keep the open one in view, without moving the page.
+  useEffect(() => {
+    const list = document.getElementById(listId);
+    const open = list?.querySelector('[data-state="active"]');
+    if (!list || !open) return;
+    const outer = list.getBoundingClientRect();
+    const inner = open.getBoundingClientRect();
+    list.scrollLeft +=
+      inner.left - outer.left - (outer.width - inner.width) / 2;
+  }, [listId, current]);
   return (
     <Tabs
       value={current}
@@ -43,7 +54,7 @@ export function PageTabs({
       }}
       className="gap-6"
     >
-      <TabsList aria-label={label}>
+      <TabsList id={listId} aria-label={label}>
         {tabs.map((tab) => (
           <TabsTrigger key={pathOf(tab)} value={pathOf(tab)}>
             {tab.label}

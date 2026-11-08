@@ -11,6 +11,7 @@ from sqlalchemy.engine import make_url
 
 from app.config import Settings, get_settings
 from app.identity import security
+from app.jobs import liveness_check
 from app.main import create_app
 from tests.pg import Postgres, docker_available, start_postgres
 
@@ -34,6 +35,17 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def no_liveness_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No test asks a posting's address on the network: the liveness check's resolver refuses,
+    so a check ends `unconfirmed` before any request (its own tests give theirs)."""
+
+    async def offline(host: str, port: int) -> list[str]:
+        raise OSError("no network in tests")
+
+    monkeypatch.setattr(liveness_check, "RESOLVE", offline)
 
 
 @pytest.fixture(autouse=True)

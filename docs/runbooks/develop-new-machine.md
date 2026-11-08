@@ -57,5 +57,10 @@ Alpine container, does the same: with the variable set, it installs them in a th
 build that alone gets the bundle as a BuildKit secret, then fails if a line planted in the bundle
 shows in that image's files, variables, labels or history.
 Unset, the builds are the Jetson's own: `deploy.sh` and the deploy workflow build with
-`compose.yml` alone (`tests/extra_ca_test.sh`). The file names the inspecting certificate of your
+`compose.yml` alone (`tests/extra_ca_test.sh`). To run the stack on such a network and call the model (the
+API key check, Claude Code in the worker: agent runs, the subscription token check), add
+`compose.extra-ca-run.yml` too, after `compose.extra-ca.yml`: it mounts the bundle read only into
+the running api and worker and sets `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` to it (the runner
+keeps that variable for Claude Code). Without it, every model call of the stack fails with
+`CERTIFICATE_VERIFY_FAILED`, shown as "Anthropic could not be reached". Never on the Jetson. The file names the inspecting certificate of your
 network: keep it out of the repository and out of pull requests.

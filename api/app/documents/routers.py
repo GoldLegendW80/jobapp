@@ -29,6 +29,9 @@ ROUTERS: tuple[tuple[str, str], ...] = (
     ("chat_router", "router"),  # D17
     ("design_router", "router"),  # D25b
     ("panel_router", "router"),  # D29: /api/documents/{id}/panel
+    ("interview_prep_router", "router"),  # /api/jobs/{id}/interview-prep, practice, stories
+    ("checks_router", "router"),  # build all: /api/documents/{id}/coverage, the chat's rules
+    ("offer_router", "router"),  # /api/documents/offer-notes/{posting_id}
     ("router", "router"),  # D6: /api/jobs/{id}/documents, /api/documents/{id} and below, last
 )
 

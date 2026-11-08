@@ -43,6 +43,10 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   app/profile/about_agent.py), in this process like profile_titles. Tried once.
 - profile_titles_tick: cron every minute: starts the automatic job title suggestions due after
   a profile save, an accepted Fill my profile item, an upload or a base CV (titles.py `due`).
+- check_model_token(user_id, updated_at, attempt): the check of a saved subscription token, one
+  turn of Claude Code in this process (app/agents/token_check.py, owner 2026-11-07), so it takes
+  one of the MAX_AGENT_RUNS slots. Ended at token_check.JOB_TIMEOUT_S, tried once, no result
+  kept: a lost one is seen as lost by the api once its time on its way has passed.
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
   so long that their message must be lost).
@@ -136,7 +140,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue
 from app.agents import catalog as agent_catalog
-from app.agents import definitions
+from app.agents import definitions, token_check
 from app.agents import runs as agent_runs
 from app.browser import removals as browser_removals
 from app.config import Settings, get_settings, refuse_send_key
@@ -502,6 +506,19 @@ async def profile_interpret(ctx: dict[str, Any], run_id: str) -> None:
     await about_agent.execute(agent_context(ctx), uuid.UUID(run_id))
 
 
+async def check_model_token(
+    ctx: dict[str, Any], user_id: str, updated_at: str, attempt: str
+) -> str | None:
+    """One check of a saved subscription token by Claude Code (app/agents/token_check.py)."""
+    return await token_check.execute(
+        agent_context(ctx),
+        token_check.Store(lambda: ctx["redis"]),
+        uuid.UUID(user_id),
+        datetime.fromisoformat(updated_at),
+        attempt,
+    )
+
+
 async def profile_titles_tick(ctx: dict[str, Any]) -> int:
     """Starts the automatic job title suggestions that are due (app/profile/titles.py `due`)."""
     from app.profile import agents as profile_agents
@@ -598,6 +615,13 @@ def agents_queue() -> QueueSpec:
             func(profile_titles, name="profile_titles", timeout=job_timeout_s, max_tries=1),
             func(profile_interpret, name="profile_interpret", timeout=job_timeout_s, max_tries=1),
             func(profile_titles_tick, name="profile_titles_tick", timeout=60, max_tries=1),
+            func(
+                check_model_token,
+                name=token_check.JOB,
+                timeout=token_check.JOB_TIMEOUT_S,
+                max_tries=1,
+                keep_result=0,
+            ),
         ],
         cron_jobs=[
             cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60),
@@ -803,12 +827,18 @@ def apply_services(ctx: dict[str, Any]) -> Any:
 async def apply_fill(ctx: dict[str, Any], application_id: str) -> None:
     from app.apply import applier as apply_applier
     from app.apply import email as apply_email
+    from app.apply import posting_check as apply_posting_check
     from app.apply import run as apply_run
     from app.apply.models import Application
+    from app.jobs import liveness_check
 
     agent_run = False
     given = ctx.get("apply_services")
     sessions = given.sessions if given is not None else sessions_of(ctx)
+    clock = given.clock if given is not None else clock_of(ctx)
+    checker = liveness_check.for_worker(ctx)
+    if await apply_posting_check.before_fill(checker, sessions, clock, uuid.UUID(application_id)):
+        return
     with sessions() as db:
         application = db.get(Application, uuid.UUID(application_id))
         if application and application.ats == "email":

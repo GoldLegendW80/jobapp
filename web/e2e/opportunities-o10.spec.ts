@@ -73,9 +73,11 @@ test("the product pages fold details, retain settings and restore the open choic
   await expect(advanced).toHaveAttribute("aria-expanded", "true");
 
   await page.goto("/welcome?step=work");
-  await expect(page.getByRole("group")).toHaveCount(2);
+  await expect(
+    page.getByRole("group", { name: "Contracts (choose any)" }),
+  ).toBeVisible();
   for (const card of await page.getByRole("group").all()) {
-    expect(await card.getByRole("checkbox").count()).toBeLessThanOrEqual(5);
+    expect(await card.getByRole("checkbox").count()).toBeLessThanOrEqual(6);
   }
   await expect(page.getByRole("checkbox")).toHaveCount(6);
   await shots(page, "wizard-contracts");

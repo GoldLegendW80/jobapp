@@ -230,13 +230,13 @@ export function fakeDocuments(
 
 /** What GET /api/ingestion/prompt answers in tests: two short texts, told apart by their first line. */
 export const PROMPT: Prompt = {
-  version: 1,
+  version: 2,
   sha256: "ab".repeat(32),
   output_folder: "~/jobapp-dossier",
   claude_code:
-    "You are Claude Code, running in a terminal on my own computer.\n\nMy name: «Zoë Ångström»\n\nWrite exactly one file: `~/jobapp-dossier/dossier.md`.\n",
+    "You are Claude Code, running in a terminal on my own computer.\n\nMy name: «Zoë Ångström»\n\nLook through my computer for everything about my work and my career, and answer me with all a recruiter would want to know about me.\n",
   codex:
-    "You are Codex, running in a terminal on my own computer.\n\nMy name: «Zoë Ångström»\n\nWrite exactly one file: `~/jobapp-dossier/dossier.md`.\n",
+    "You are Codex, running in a terminal on my own computer.\n\nMy name: «Zoë Ångström»\n\nLook through my computer for everything about my work and my career, and answer me with all a recruiter would want to know about me.\n",
 };
 
 /** Install the handler of the prompt; the answer says how many times it was asked, and where. */

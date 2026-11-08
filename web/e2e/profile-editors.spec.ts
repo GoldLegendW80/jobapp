@@ -161,17 +161,17 @@ function importProfile(email: string) {
   return cliImportProfile(email, fakeExport());
 }
 
-/** The profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
-async function visit(page: Page, where: "profile" | "search") {
+/** A tab of the profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
+async function visit(page: Page, where: "about" | "matching" | "search") {
   if (where === "search") {
     await page.goto("/settings/search");
     await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
     return;
   }
-  if (!new URL(page.url()).pathname.endsWith("/profile"))
-    await page.goto("/profile");
+  if (new URL(page.url()).pathname !== `/profile/${where}`)
+    await page.goto(`/profile/${where}`);
   await expect(
-    page.getByRole("form", { name: "Advanced matching" }),
+    page.getByRole("heading", { level: 1, name: "Profile" }),
   ).toBeVisible();
 }
 
@@ -217,14 +217,14 @@ test("a new account gets a made up profile through the CLI", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   expect(importProfile(EMAIL)).toMatch(/revision/i);
-  await visit(page, "profile");
+  await visit(page, "about");
   await expect(page.getByTestId("profile-completeness")).toHaveText(
     "100% complete",
   );
 });
 
 test("Facts: write a Markdown part, preview it, save it to the profile", async () => {
-  await visit(page, "profile");
+  await visit(page, "about");
   await expect(part(page, "HARD RULES")).toContainText(
     "Every claim traces to this base.",
   );
@@ -277,7 +277,7 @@ test("Facts: write a Markdown part, preview it, save it to the profile", async (
 });
 
 test("Facts: a part moves up, the fact base keeps the order, the meter says its size", async () => {
-  await visit(page, "profile");
+  await visit(page, "about");
   await expect(
     page.getByRole("meter", { name: "Fact base size" }),
   ).toHaveAttribute("aria-valuetext", / of 200 KB$/);
@@ -292,7 +292,7 @@ test("Facts: a part moves up, the fact base keeps the order, the meter says its 
 });
 
 test("Advanced matching: add a regular expression, errors from the browser and the server, Try a posting", async () => {
-  await visit(page, "profile");
+  await visit(page, "matching");
   const form = matching(page);
   // Only the categories written as regular expressions are here; the others are About you's.
   await expect(form.getByRole("list", { name: "Terms of llm" })).toContainText(
@@ -379,7 +379,7 @@ test("Advanced matching: add a regular expression, errors from the browser and t
 });
 
 test("Skills without a model key: the years change by hand, the expressions are kept", async () => {
-  await visit(page, "profile");
+  await visit(page, "about");
   const skills = page.getByRole("form", { name: "Skills" });
   await expect(
     skills.getByRole("button", { name: "What I have, agents, python" }),
@@ -435,12 +435,13 @@ async function holdsBoards(page: Page): Promise<boolean> {
 }
 
 test("a reload shows every saved change", async () => {
-  await page.goto("/profile");
+  await page.goto("/profile/about");
   await expect(
     part(page, "POSITIONING").getByRole("heading", {
       name: "Lead with the business",
     }),
   ).toBeVisible();
+  await page.getByRole("tab", { name: "Advanced matching" }).click();
   const form = matching(page);
   await expect(
     form.getByRole("list", { name: "Terms of crews" }),

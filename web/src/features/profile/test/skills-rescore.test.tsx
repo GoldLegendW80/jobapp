@@ -44,7 +44,7 @@ async function openSkills() {
   const state = fakeProfile(haraldLike());
   fakeDocuments();
   const user = userEvent.setup();
-  renderApp("/profile");
+  renderApp("/profile/matching");
   await screen.findByRole("form", { name: "Advanced matching" });
   return { user, state };
 }

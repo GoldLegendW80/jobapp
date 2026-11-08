@@ -42,7 +42,6 @@ function ReviewToasts() {
       containerAriaLabel="Notifications pinned for review"
       expand
       visibleToasts={4}
-      position="bottom-center"
     />
   );
 }

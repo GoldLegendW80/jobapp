@@ -72,6 +72,7 @@ STEP_COLUMNS = {
     "two_digit_year_count": ("INTEGER", False),
     "items_count": ("INTEGER", False),
     "purge_events": ("BOOLEAN", False),
+    "refusals": ("JSONB", False),
 }
 ITEM_COLUMNS = {
     "id": ("BIGINT", False),
@@ -166,11 +167,12 @@ def test_a_new_run_and_step_start_with_the_defaults(at_head: sa.Engine) -> None:
         got = conn.execute(
             sa.text(
                 "SELECT status::text, attempt, token_budget, refused_count, two_digit_year_count, "
-                "items_count, purge_events, agent_run_id FROM ingestion_run_steps WHERE id = :s"
+                "items_count, purge_events, agent_run_id, refusals::text FROM ingestion_run_steps "
+                "WHERE id = :s"
             ),
             {"s": step},
         ).one()
-        assert tuple(got) == ("planned", 0, None, 0, 0, 0, False, None)
+        assert tuple(got) == ("planned", 0, None, 0, 0, 0, False, None, "{}")
 
 
 def test_keys_cascades_and_indexes(at_head: sa.Engine) -> None:  # noqa: F811
@@ -315,6 +317,8 @@ ITEM_SET = "UPDATE ingestion_items SET {change} WHERE step_id = :s"
         "UPDATE ingestion_run_steps SET refused_count = -1 WHERE id = :s",
         "UPDATE ingestion_run_steps SET two_digit_year_count = -1 WHERE id = :s",
         "UPDATE ingestion_run_steps SET items_count = -1 WHERE id = :s",
+        "UPDATE ingestion_run_steps SET refusals = '[]'::jsonb WHERE id = :s",
+        "UPDATE ingestion_run_steps SET refusals = NULL WHERE id = :s",
         "UPDATE ingestion_run_steps SET token_budget = -1 WHERE id = :s",
         "UPDATE ingestion_run_steps SET agent_run_id = gen_random_uuid() WHERE id = :s",
         ITEM_SET.format(change="section = ''"),

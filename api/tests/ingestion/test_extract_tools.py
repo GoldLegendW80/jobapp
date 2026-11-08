@@ -31,6 +31,7 @@ from app.ingestion.runs_models import (
     stored_text_sha256,
     text_sha256,
 )
+from app.profile.schemas import Category
 from tests.agents.run_helpers import add_user, now
 from tests.ingestion.extract_helpers import (
     MARKER,
@@ -454,7 +455,7 @@ def test_a_stored_item_becomes_a_proposal_through_the_item_model(
 # --- propose_profile_changes: what is refused -----------------------------------------------------
 
 
-def test_the_21st_refusal_and_passing_items_still_stored_after_the_budget_is_spent(
+def test_past_the_budget_a_key_refused_before_is_not_told_again_and_passing_items_are_stored(
     factory: sessionmaker[Session], clean: Step
 ) -> None:
     step_tools = tools_for(factory, clean)
@@ -471,14 +472,15 @@ def test_the_21st_refusal_and_passing_items_still_stored_after_the_budget_is_spe
         for index in range(20)
     ]
     assert counters(factory, clean) == (0, 20, 0)
-    # The 21st: no rule any more, and a passing item in the same call is stored all the same.
+    # Past the budget a key refused before gets no rule any more, a new key is still told its
+    # rule once, and a passing item in the same call is stored all the same.
     fact = item("blocks", {"title": "Ingestion pipeline", "body": FACT_LINE}, FACT_LINE)
-    answer, _ = call(step_tools, PROPOSE, section="facts", items=[block("U"), fact, block("V")])
+    answer, _ = call(step_tools, PROPOSE, section="facts", items=[block("U"), fact, block("A")])
     assert answer == {
         "stored": 1,
         "already_stored": 0,
         "refused": [
-            {"index": 0, "reason": tools.DO_NOT_RETRY},
+            refusal(0, "excerpt_not_found", "excerpts[0]", "excerpt not found"),
             {"index": 2, "reason": tools.DO_NOT_RETRY},
         ],
     }
@@ -537,8 +539,15 @@ def test_a_proposed_skills_years_experience_search_sweep_schedule_and_penalty_ar
         ],
     )
     assert error is False
+    # The years a document states may be proposed since 2026-11-08 (merge rule 7), as a figure
+    # its excerpt writes: this line writes none.
     assert answer["refused"] == [
-        refusal(0, "setting", "key", sentence),
+        refusal(
+            0,
+            "years_not_in_source",
+            "value",
+            citations.REASONS[citations.Rule.YEARS_NOT_IN_SOURCE],
+        ),
         refusal(1, "setting", "value.penalty", sentence),
     ]
     schedule = item("sweep_schedule", {"enabled": True}, FACT_LINE)
@@ -1500,6 +1509,21 @@ def test_the_prompt_states_its_rules_and_asks_for_one_line() -> None:
     for sentence in sentences:
         for dash in ("—", "–", " - "):
             assert dash not in sentence
+
+
+def test_the_prompt_spells_out_a_skill_category_one_per_heading() -> None:
+    """On a real run (2026-11-08) a call of 33 skills was refused whole: a field the section
+    model does not have, and one category per skill instead of one per heading."""
+    lines = agents.EXTRACT.system_prompt.splitlines()
+    (skills,) = [line for line in lines if line.startswith("- `skills`")]
+    for said in (
+        "exactly `{name, terms}` and no other field",
+        "the heading of a group of skills as the document writes it",
+        "One item per heading, never one item per skill",
+    ):
+        assert said in skills, said
+    # the fields the prompt names are the agent's fields of the model (`advanced_regex` a setting)
+    assert set(Category.model_fields) - {"advanced_regex"} == {"name", "terms"}
 
 
 def test_the_prompt_keeps_removals_to_the_fields_the_tool_lets_it_remove() -> None:

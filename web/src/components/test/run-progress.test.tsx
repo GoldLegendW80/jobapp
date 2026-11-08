@@ -352,6 +352,68 @@ describe("the run on the page", () => {
     expect(panel()).not.toHaveTextContent(RAW);
   });
 
+  it("a finished run says, per section and rule, why proposals were not kept", async () => {
+    await show(
+      fakeRun({
+        status: "done",
+        finished_at: "2026-10-13T09:20:00Z",
+        counts: { running: 0, done: 2, refused: 14, two_digit_year: 1 },
+        refused: [
+          {
+            section: "experience",
+            rule: "two_digit_year",
+            count: 1,
+            sentence: "two digit year, not read",
+          },
+          {
+            section: "skills",
+            rule: "unknown_field",
+            count: 14,
+            sentence:
+              "the value holds a field that this kind of item does not have",
+          },
+        ],
+        steps: [
+          fakeStep({ position: 0, status: "done", items: 3, tokens: 3_760 }),
+          fakeStep({
+            position: 1,
+            status: "done",
+            document_id: "d2",
+            document_name: "cv.txt",
+          }),
+        ],
+      }),
+    );
+    const lines = within(
+      screen.getByRole("list", { name: "What was not kept" }),
+    ).getAllByRole("listitem");
+    expect(lines.map((line) => line.textContent)).toEqual([
+      "1 job or school was not kept: your document writes a year with two digits, and the app does not guess the century.",
+      "14 skills were not kept: the assistant added a field this part of your profile does not have.",
+    ]);
+    // The lines say it for the dates too: the line of a server that kept no reasons is gone.
+    expect(screen.queryByText(/Dates written with two digit years/)).toBeNull();
+    expect(panel()).not.toHaveTextContent(RAW);
+    expect(panel()).not.toHaveTextContent(/unknown_field|this kind of item/);
+  });
+
+  it("while it reads, says nothing yet of what was not kept", async () => {
+    await show(
+      fakeRun({
+        refused: [
+          {
+            section: "skills",
+            rule: "unknown_field",
+            count: 2,
+            sentence:
+              "the value holds a field that this kind of item does not have",
+          },
+        ],
+      }),
+    );
+    expect(screen.queryByTestId("run-refusals")).toBeNull();
+  });
+
   it("says a document was not read because its text may hold a secret", async () => {
     await show(
       fakeRun({

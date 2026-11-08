@@ -16,11 +16,15 @@ posting run one after the other:
 The undo puts back the event's `from` only when the posting is still skipped by that Pass: its
 last status event is the Pass. A later status change (by the person, in bulk, by mail, by an
 agent) or an undo already done answers `changed` and nothing moves; a posting never passed too.
+
+The reason (`set_reason`, optional, one of REASONS, after the Pass) joins that same Pass event's
+data as `reason`, under the same rule as the undo; only the insights count it (insights.py).
 """
 
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal, get_args
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
@@ -33,6 +37,9 @@ from app.opportunities.deck import DECK_STATUSES
 
 VIA = "swipe"
 UNDO_VIA = "swipe_undo"
+# The reasons of career-ops' templates/discard-reasons.yml (MIT, NOTICE), one tap each.
+Reason = Literal["pay", "remote", "stack", "seniority", "location", "company_size", "culture"]
+REASONS: tuple[str, ...] = get_args(Reason)
 CHANGED = "This posting changed since you saw it. Reload the deck."
 SENTENCES = {
     "in_progress": guardrails.SENTENCES["in_progress"],
@@ -119,18 +126,33 @@ def _last_status_event(db: Session, posting: Job) -> JobEvent | None:
     ).scalar_one_or_none()
 
 
+def _pass_in_force(db: Session, posting: Job) -> JobEvent:
+    """The Pass event that keeps the posting skipped, else PassRefusedError("changed")."""
+    event = _last_status_event(db, posting) if posting.status is JobStatus.skipped else None
+    data = event.data if event is not None else {}
+    if (
+        event is None
+        or data.get("via") != VIA
+        or data.get("to") != JobStatus.skipped.value
+        or data.get("from") not in {s.value for s in DECK_STATUSES}
+    ):
+        raise PassRefusedError("changed")
+    return event
+
+
 def undo_pass(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, now: datetime) -> Outcome:
     """The undo of the posting's Pass, in the caller's transaction. Raises PostingNotFoundError
     or PassRefusedError("changed")."""
     posting = _locked(db, user_id, posting_id)
-    event = _last_status_event(db, posting) if posting.status is JobStatus.skipped else None
-    data = event.data if event is not None else {}
-    previous = data.get("from")
-    if (
-        data.get("via") != VIA
-        or data.get("to") != JobStatus.skipped.value
-        or previous not in {s.value for s in DECK_STATUSES}
-    ):
-        raise PassRefusedError("changed")
+    previous = _pass_in_force(db, posting).data["from"]
     jobs_service.set_status(db, posting, JobStatus(previous), now, via=UNDO_VIA)
     return Outcome(posting, changed=True)
+
+
+def set_reason(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, reason: str) -> None:
+    """Record `reason` (one of REASONS, checked by the caller) on the Pass in force, replacing
+    one given before, in the caller's transaction. Raises PostingNotFoundError or
+    PassRefusedError("changed")."""
+    event = _pass_in_force(db, _locked(db, user_id, posting_id))
+    event.data = {**event.data, "reason": reason}
+    db.flush()

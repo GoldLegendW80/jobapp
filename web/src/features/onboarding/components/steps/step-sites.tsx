@@ -2,7 +2,7 @@ import { SourcesEditor } from "@/components/shared/jobs/sources/sources-editor";
 import type { Sources } from "@/features/jobs/api/use-sources";
 import type { Search } from "@/features/profile/api/profile-api";
 
-/** Step 4, Websites to search: the list of Find jobs, under the step's own title. */
+/** Step 6, Websites to search: the list of Find jobs, under the step's own title. */
 export function StepSites({
   sources,
   reviewed,

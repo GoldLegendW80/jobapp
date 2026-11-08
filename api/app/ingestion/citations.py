@@ -4,8 +4,9 @@ An extraction agent proposes a profile item: a value, and excerpts of the docume
 `check_item` says whether the document supports the value. It finds each excerpt in the document,
 takes the passage it quotes (the cited span, never cutting a word or a number) and checks every
 part of the value against those passages by its field type: an address must be written there
-exactly, a name as whole words, a date with its month next to its year, a phone number whole, and
-every other number must be a number of the passage. A span is read in its place in the document:
+exactly, a name as whole words, a date with its month next to its year, a phone number whole, the
+years of experience as a number of years the passage states, and every other number must be a
+number of the passage. A span is read in its place in the document:
 an address, a phone number or a date that the excerpt cuts is not read.
 
 Pure: no database, no network, no model call, standard library only. It is called on hostile
@@ -87,6 +88,7 @@ __all__ = [
     "rule_numbers",
     "rule_phone",
     "skeleton",
+    "years_of",
 ]
 
 # --- limits ---------------------------------------------------------------------------------------
@@ -124,6 +126,7 @@ class FieldType(StrEnum):
     TEXT = "text"
     TERM = "term"
     ENUM = "enum"
+    YEARS = "years"
     SETTING = "setting"
 
 
@@ -156,6 +159,7 @@ class Rule(StrEnum):
     PHONE_TOO_SHORT = "phone_too_short"
     PHONE_NOT_IN_SOURCE = "phone_not_in_source"
     NUMBER_NOT_IN_SOURCE = "number_not_in_source"
+    YEARS_NOT_IN_SOURCE = "years_not_in_source"
 
 
 # One sentence per rule, shown to the agent and to the user. Constants: a reason never quotes
@@ -189,6 +193,10 @@ REASONS: Mapping[Rule, str] = {
     Rule.PHONE_TOO_SHORT: f"a phone number has at least {PHONE_DIGITS_MIN} digits",
     Rule.PHONE_NOT_IN_SOURCE: "the digits are not a phone number of an excerpt",
     Rule.NUMBER_NOT_IN_SOURCE: "a number of the value is not a number of an excerpt",
+    Rule.YEARS_NOT_IN_SOURCE: (
+        "the number of years is not written in an excerpt as a number of years, in digits or "
+        "in words"
+    ),
 }
 
 
@@ -1873,6 +1881,283 @@ def rule_numbers(value: str, spans: Sequence[Span]) -> Rule | None:
     return _Evidence(spans).numbers(normalise(value), value)
 
 
+# --- a stated number of years ---------------------------------------------------------------------
+
+YEARS_MAX = 60  # the profile's bound on years of experience
+_YEARS_TOKEN = re.compile(r"[0-9]+(?:[.,][0-9]+)*|[^\W\d_]+|[+\-/<≤]|[\n.;:!?,()]")
+_STOPS = frozenset("\n;!?,()")
+# Read through when looking back ("Expérience : 5 ans", "max. 2 ans"), an end when looking ahead.
+_MARKS = frozenset(".:")
+_YEAR_WORDS = frozenset({"year", "years", "yr", "yrs", "an", "ans", "annee", "annees"})
+_MONTH_WORDS = frozenset({"month", "months", "mois"})
+_ENGLISH_NUMBERS = (
+    "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen"
+    " sixteen seventeen eighteen nineteen"
+)
+_FRENCH_NUMBERS = (
+    "un deux trois quatre cinq six sept huit neuf dix onze douze treize quatorze quinze seize"
+)
+_NUMBER_WORDS: Mapping[str, int] = {
+    **{word: number for number, word in enumerate(_ENGLISH_NUMBERS.split(), start=1)},
+    **{word: number for number, word in enumerate(_FRENCH_NUMBERS.split(), start=1)},
+    "une": 1,
+    **dict.fromkeys(("twenty", "vingt"), 20),
+    **dict.fromkeys(("thirty", "trente"), 30),
+    **dict.fromkeys(("forty", "quarante"), 40),
+    **dict.fromkeys(("fifty", "cinquante"), 50),
+    **dict.fromkeys(("sixty", "soixante"), 60),
+}
+_TENS = frozenset({10, 20, 30, 40, 50, 60})
+_HALVES = (("and", "a", "half"), ("et", "demi"), ("et", "demie"))
+_JOINS = frozenset({"and", "et"})
+_DECIMALS_MAX = 2  # "3,5" and "3.75" are figures; "1,000" and "1.000" are a thousand
+_NEGATIONS = frozenset({"no", "not", "never", "nor", "without", "pas", "jamais", "ni", "sans"})
+# Before a figure, what makes it a bound above, a guess, a point in time, an age or the start
+# of a range, not the years held: "less than 5 years" does not state 5 years.
+_NOT_HELD_BEFORE = frozenset(
+    {
+        ("less", "than"),
+        ("fewer", "than"),
+        ("up", "to"),
+        ("at", "most"),
+        ("maximum", "of"),
+        ("max", "of"),
+        ("maximum",),
+        ("max",),
+        ("au", "plus"),
+        ("moins", "de"),
+        ("jusqu", "a"),
+        ("inferieur", "a"),
+        ("inferieure", "a"),
+        ("under",),
+        ("below",),
+        ("within",),
+        ("short", "of"),
+        ("<",),
+        ("≤",),
+        ("almost",),
+        ("nearly",),
+        ("close", "to"),
+        ("presque",),
+        ("pres", "de"),
+        ("y", "a"),
+        ("age",),
+        ("aged",),
+        ("age", "de"),
+        ("i", "am"),
+        ("i", "m"),
+        ("between",),
+        ("entre",),
+    }
+)
+# After the years, anywhere in their sentence: a bound above ("5 ans d'expérience maximum").
+_BOUND_AFTER = frozenset(
+    {
+        ("at", "most"),
+        ("at", "the", "most"),
+        ("max",),
+        ("maximum",),
+        ("tops",),
+        ("au", "plus"),
+        ("or", "less"),
+        ("or", "fewer"),
+        ("or", "under"),
+        ("ou", "moins"),
+    }
+)
+# Right after the years: a point in time or an age, not years held ("5 years ago").
+_NOT_HELD_AFTER = frozenset(
+    {
+        ("ago",),
+        ("old",),
+        ("of", "age"),
+        ("d", "age"),
+        ("later",),
+        ("earlier",),
+        ("before",),
+        ("after",),
+        ("back",),
+        ("hence",),
+        ("from", "now"),
+        ("plus", "tard"),
+        ("plus", "tot"),
+        ("auparavant",),
+        ("avant",),
+        ("apres",),
+    }
+)
+_RANGE = frozenset({"-", "/", "to", "a", "or", "ou", "and", "et", "until", "till", "through"})
+_PHRASE_MAX = 3  # the words of the longest phrase above
+# What may follow the years held: what they were spent on ("of", "d'expérience", "in robotics",
+# "building"), or the word experience within the next words.
+_HELD_AFTER = frozenset(
+    {
+        "of", "in", "at", "as", "with", "on", "for", "spent", "total", "overall", "combined",
+        "d", "de", "du", "des", "en", "dans", "chez", "comme", "au", "aux", "a", "sur", "pour",
+        "avec", "passes", "passees",
+    }
+)  # fmt: skip
+_EXPERIENCE = frozenset({"experience", "experiences", "exp", "seniority", "anciennete"})
+# Before a figure with nothing after it, what makes it a duration: "Expérience : 12 années",
+# "for 5 years", "depuis 5 ans", "over the past 5 years".
+_HELD_BEFORE = _EXPERIENCE | {"for", "since", "depuis", "pendant", "durant", "during", "past"}
+
+
+def _years_tokens(text: str) -> list[str]:
+    return [_unaccent(found.group()) for found in _YEARS_TOKEN.finditer(text)]
+
+
+def _word_number(tokens: Sequence[str], at: int) -> tuple[float, int] | None:
+    """A number written in words at `at` ("trois", "twenty-five", "vingt et un", "dix-sept"),
+    and the index after it."""
+    first = _NUMBER_WORDS.get(tokens[at])
+    if first is None:
+        return None
+    end = at + 1
+    if first in _TENS:
+        step = end + (end < len(tokens) and tokens[end] in _JOINS | {"-"})
+        unit = _NUMBER_WORDS.get(tokens[step]) if step < len(tokens) else None
+        if unit is not None and unit < 10 and (first > 10 or unit >= 7):
+            return float(first + unit), step + 1
+    return float(first), end
+
+
+def _number(tokens: Sequence[str], at: int) -> tuple[float | None, int] | None:
+    """The number at `at` and the index after it; None for its value when it is written with
+    a thousands separator or several marks ("1,000", "1.000.000"), never a count of years."""
+    token = tokens[at]
+    if token[0].isdigit():
+        parts = token.replace(",", ".").split(".")
+        if len(parts) > 2 or (len(parts) == 2 and len(parts[1]) > _DECIMALS_MAX):
+            return None, at + 1
+        return float(token.replace(",", ".")), at + 1
+    return _word_number(tokens, at)
+
+
+def _half(tokens: Sequence[str], at: int) -> int:
+    for words in _HALVES:
+        if tuple(tokens[at : at + len(words)]) == words:
+            return len(words)
+    return 0
+
+
+def _before(tokens: Sequence[str], at: int, size: int = 3) -> tuple[str, ...]:
+    """The last `size` words before `at` in its sentence, `.` and `:` read through."""
+    words: list[str] = []
+    at -= 1
+    while at >= 0 and len(words) < size and tokens[at] not in _STOPS:
+        if tokens[at] not in _MARKS:
+            words.append(tokens[at])
+        at -= 1
+    return tuple(reversed(words))
+
+
+def _after(tokens: Sequence[str], at: int, size: int = 6) -> tuple[str, ...]:
+    """The first `size` words from `at` in its sentence."""
+    words: list[str] = []
+    while at < len(tokens) and len(words) < size:
+        if tokens[at] in _STOPS or tokens[at] in _MARKS:
+            break
+        words.append(tokens[at])
+        at += 1
+    return tuple(words)
+
+
+def _ends(words: tuple[str, ...], phrases: frozenset[tuple[str, ...]]) -> bool:
+    sizes = range(1, min(len(words), _PHRASE_MAX) + 1)
+    return any(words[len(words) - size :] in phrases for size in sizes)
+
+
+def _starts(words: tuple[str, ...], phrases: frozenset[tuple[str, ...]]) -> bool:
+    return any(words[:size] in phrases for size in range(1, min(len(words), _PHRASE_MAX) + 1))
+
+
+def _holds(words: tuple[str, ...], phrases: frozenset[tuple[str, ...]]) -> bool:
+    return any(_starts(words[at:], phrases) for at in range(len(words)))
+
+
+def _ends_a_range(tokens: Sequence[str], at: int) -> bool:
+    """Whether the figure at `at` follows another and a range word: "3 to 5", "3 years to 5",
+    "between 3 and 5"."""
+    back = at - 2
+    if back < 0 or tokens[at - 1] not in _RANGE:
+        return False
+    back -= back > 0 and tokens[back] in _YEAR_WORDS
+    back -= back > 0 and tokens[back] == "+"
+    return _number(tokens, back) is not None
+
+
+def _held(tokens: Sequence[str], start: int, end: int) -> bool:
+    """Whether the figure at `start`, whose years end before `end`, states years held."""
+    before = _before(tokens, start)
+    if _ends(before, _NOT_HELD_BEFORE) or _NEGATIONS & set(before):
+        return False
+    if _ends_a_range(tokens, start):
+        return False
+    after = _after(tokens, end)
+    if _starts(after, _NOT_HELD_AFTER) or _holds(after, _BOUND_AFTER):
+        return False
+    if len(after) > 1 and after[0] in _RANGE and _number(after, 1) is not None:
+        return False  # the start of a range: "3 years to 5 years"
+    if after and (after[0] in _HELD_AFTER or (len(after[0]) > 4 and after[0].endswith("ing"))):
+        return True
+    return bool(_EXPERIENCE & set(after) or _HELD_BEFORE & set(before))
+
+
+def years_of(text: str) -> frozenset[float]:
+    """The numbers of years a text states as years held: a number in digits or in English or
+    French words, then an optional `+`, then a word for years ("3.5 years", "5+ years", "trois
+    ans", "cinq années"), with a half ("three and a half years", "trois ans et demi") or months
+    after it ("3 years and 6 months": 3.5, and 3.3 for 4 months, read at its shortest).
+
+    Read only when what follows says what the years were spent on ("of", "d'expérience", "in",
+    "chez", a word in -ing, the word experience) or, with nothing after them, when an experience
+    label or a duration word stands before ("Expérience : 12 années", "depuis 5 ans"). Never
+    read: a figure under a bound above, before it or after it ("at most", "pas plus de",
+    "5 ans maximum"), after a negation or a guess ("not", "almost", "près de"), in a range
+    ("3 to 5", "between 3 and 5", "entre 3 et 5"), a point in time or an age ("5 years ago",
+    "il y a 5 ans", "25 years old", "aged 25", "Jean Exemple, 25 ans"), a number written with
+    a thousands separator ("1,000"). `text` is N(text)."""
+    tokens = _years_tokens(text)
+    found: set[float] = set()
+    at = 0
+    while at < len(tokens):
+        number = _number(tokens, at)
+        if number is None:
+            at += 1
+            continue
+        value, end = number
+        start, at = at, end  # the words of one number are read once: "twenty five" is not 5
+        if value is None:
+            continue
+        if halved := _half(tokens, end):
+            value, end = value + 0.5, end + halved
+        end += end < len(tokens) and tokens[end] == "+"
+        if end >= len(tokens) or tokens[end] not in _YEAR_WORDS:
+            continue
+        end += 1
+        if halved := _half(tokens, end):
+            value, end = value + 0.5, end + halved
+        elif end + 2 < len(tokens) and tokens[end] in _JOINS and tokens[end + 2] in _MONTH_WORDS:
+            months = _number(tokens, end + 1)
+            if months is not None and months[0] is not None and months[0] < 12:
+                value, end = value + months[0] / 12, end + 3
+        if 0 < value <= YEARS_MAX and _held(tokens, start, end):
+            found.update({value, int(value * 10) / 10})
+    return frozenset(found)
+
+
+def _years(value: object, stated: frozenset[float]) -> Rule | None:
+    if isinstance(value, str):
+        try:
+            value = float(value.strip().replace(",", "."))
+        except ValueError:
+            return Rule.YEARS_NOT_IN_SOURCE
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return Rule.YEARS_NOT_IN_SOURCE
+    return None if value in stated else Rule.YEARS_NOT_IN_SOURCE
+
+
 class _Evidence:
     """The cited spans of one item, each read once, in its place in the document, for every
     part of the value."""
@@ -1885,6 +2170,12 @@ class _Evidence:
         self._forms: frozenset[str] = frozenset()
         self._readings: set[str] = set()
         self._reads: list[_Read] | None = None
+        self._years: frozenset[float] | None = None
+
+    def years(self) -> frozenset[float]:
+        if self._years is None:
+            self._years = frozenset().union(*(years_of(span.text) for span in self.spans))
+        return self._years
 
     def reads(self) -> list[_Read]:
         """The spans as rule V reads them for a name: a value of two thousand names costs each
@@ -1946,6 +2237,8 @@ class _Evidence:
             return Rule.SETTING, ""
         if value is None:
             return None, ""
+        if field_type is FieldType.YEARS:
+            return _years(value, self.years()), ""
         if field_type in (FieldType.TERM, FieldType.ENUM) and not isinstance(value, str):
             return None, ""
         if field_type is FieldType.TEXT:
@@ -1982,8 +2275,9 @@ def check_value(
     field_type: FieldType | str, value: object, spans: Sequence[Span]
 ) -> Refusal | None:
     """One scalar of a value against the cited spans, by its field type: rule V for `email`,
-    `url` and `name`, D for `date`, P for `phone`, N for `text` and `name`, nothing for `term`
-    and `enum`, and `setting` is refused whatever the spans say. None when it holds."""
+    `url` and `name`, D for `date`, P for `phone`, N for `text` and `name`, Y for `years` (a
+    number of years a span states, `years_of`), nothing for `term` and `enum`, and `setting` is
+    refused whatever the spans say. None when it holds."""
     try:
         kind = FieldType(field_type)
     except ValueError:

@@ -14,7 +14,9 @@ import {
 } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { PostingNotices } from "@/components/shared/jobs/posting/posting-notices";
 import { Button } from "@/components/ui/button";
+import { LivenessBadge } from "@/components/shared/jobs/liveness-badge";
 import { safeHttpUrl } from "@/features/jobs/helpers/text";
 import { WORDING } from "@/lib/wording";
 import { cn } from "@/lib/utils";
@@ -394,6 +396,7 @@ export function SwipeCard({
           <p className="line-clamp-2 text-base text-muted-foreground">
             {card.company}
           </p>
+          <LivenessBadge liveness={card.liveness} className="mt-1" />
         </div>
         <ul className="flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
           {place ? (
@@ -428,6 +431,7 @@ export function SwipeCard({
             )}
           </li>
         </ul>
+        <PostingNotices notices={card.notices} compact max={2} />
         {chips ? (
           <div
             aria-hidden="true"

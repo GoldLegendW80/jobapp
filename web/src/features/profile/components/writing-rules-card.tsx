@@ -1,6 +1,7 @@
 /**
  * The card "Writing rules" of the Search tab (SPEC-documents.md, Decision 9): the rules code
- * enforces on the CVs and letters the writer makes, through `GET` and `PUT /api/documents/settings`. Each change
+ * enforces on the CVs and letters the writer makes (the dash rule, the starter list of common
+ * phrases, the person's banned phrases), through `GET` and `PUT /api/documents/settings`. Each change
  * shows at once and is saved at once, the whole value at a time, one save after the other in the
  * order asked; a refused save puts back what the api answered last (between two tabs the last
  * save wins: the api keeps no revision). It sits inside the Search form, so nothing here submits it.
@@ -137,6 +138,25 @@ function Rules({ saved: first }: { saved: DocumentSettings }) {
             An em dash, an en dash or a spaced hyphen used as a separator
             becomes a comma. Hyphenated words and ranges of numbers keep a plain
             hyphen.
+          </FieldDescription>
+        </FieldContent>
+      </Field>
+
+      <Field orientation="horizontal">
+        <Switch
+          id={`${id}-starter-switch`}
+          aria-describedby={`${id}-starter`}
+          checked={shown.starter_phrases}
+          onCheckedChange={(checked) => {
+            save({ ...shown, starter_phrases: checked });
+          }}
+        />
+        <FieldContent className="gap-1">
+          <FieldLabel htmlFor={`${id}-starter-switch`}>
+            Common CV phrases
+          </FieldLabel>
+          <FieldDescription id={`${id}-starter`} className="text-xs">
+            {`Also bans the phrases recruiters read in every CV, unless your own CV uses them: ${shown.starter_list.join(", ")}.`}
           </FieldDescription>
         </FieldContent>
       </Field>

@@ -25,14 +25,13 @@ const FIELD_LABELS: Record<string, string> = {
   years_experience: "years of experience",
   have: "at least one skill category",
   title_include: "at least one title term",
-  location: "at least one location term",
-  contract_types: "at least one contract type",
+  location: "at least one place, or Anywhere",
   remote_stance: "remote stance",
   interactive_sites: "at least one job website ticked in Find jobs",
   work_authorization: "work authorisation for at least one country",
   notice_period: "notice period",
   earliest_start: "earliest start",
-  salary_policy: "salary policy",
+  salary: "how forms get your salary",
   motivation: "motivation",
 };
 

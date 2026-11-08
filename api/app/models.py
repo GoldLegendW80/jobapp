@@ -5,12 +5,14 @@ Alembic's env.py imports this module before comparing metadata with the database
 
 from app.agents import models as agents_models
 from app.apply import caps_models as apply_caps_models  # noqa: F401, registers the tables
+from app.apply import followup_models as apply_followup_models  # noqa: F401, registers the table
 from app.apply import models as apply_models  # noqa: F401, registers the tables
 from app.browser import models as browser_models  # noqa: F401, registers the tables
 from app.documents import models as documents_models  # noqa: F401, registers the tables
 from app.identity import models as identity_models
 from app.ingestion import models as ingestion_models
 from app.ingestion import runs_models as ingestion_runs_models
+from app.jobs import assess_models as jobs_assess_models  # noqa: F401, registers the table
 from app.jobs import models as jobs_models
 from app.jobs.feeds import keys as jobs_feed_keys  # noqa: F401, registers the table
 from app.mail import draft_models as mail_draft_models  # noqa: F401

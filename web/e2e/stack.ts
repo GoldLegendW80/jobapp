@@ -281,7 +281,7 @@ export function makeShots(defaultEvidence: string, spec = ""): Shots {
 export async function setPassword(page: Page, password: string, name?: string) {
   if (name !== undefined) await page.getByLabel("Name").fill(name);
   await page.getByLabel(/^(New password|Password)$/).fill(password);
-  await page.getByLabel("Confirm password").fill(password);
+  await page.getByLabel("Confirm password", { exact: true }).fill(password);
   await page
     .getByRole("button", { name: /Create account|Save password/ })
     .click();
@@ -306,7 +306,7 @@ export async function skipWelcome(page: Page) {
 export async function signIn(page: Page, email: string, password: string) {
   await page.goto("/login");
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 

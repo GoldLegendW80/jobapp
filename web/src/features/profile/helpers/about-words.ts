@@ -10,7 +10,6 @@ export const ABOUT_WORDS = {
     "Your skills, your answers to application forms and the facts about your work. Write a fact part in your own words and click Done: it is saved as written. With a model key your skills and answers are text too, and the app shows what it would change in your profile.",
   loading: "Loading your document",
   notLoaded: "Your document could not be loaded",
-  contents: "Parts of About you",
   kinds: {
     skills: "What the fit of a posting reads.",
     answers:

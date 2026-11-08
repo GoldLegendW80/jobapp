@@ -11,7 +11,7 @@ from the start of the part, in characters). `next_offset` is null at the end of 
 
 `propose_profile_changes(section, items[])` stores the items that pass, each one:
 1. built by the item model of G5 (`items.build`: section, key, action and value validated and
-   cleaned; a setting, `skills.years_experience` and an unknown key refused);
+   cleaned; a setting, a removal of `skills.years_experience` and an unknown key refused);
 2. checked by the citation checker of G4 against the whole stored text of the step's document
    (`citations.check_item`), twice: with the value as proposed, which the model wrote, and with
    the value as cleaned, which is the one stored, so that no cleaning of the section model can
@@ -39,15 +39,22 @@ items the step stored before stay rows, cite the text that is gone, and are left
 `of_stored_text()`, the condition every reader of `ingestion_items` applies.
 
 A failing item is refused and never stored. The answer names its index, the rule it broke and
-where (`at`), with the rule's constant sentence. The retry budget is in code: once
-REFUSALS_PER_STEP refusals are counted on the step, or at the KEY_REFUSALS_MAXth refusal of one
-section and key, the answer for a failing item becomes DO_NOT_RETRY. Passing items are stored
-whatever the budget says. What is counted, on the step row:
+where (`at`), with the rule's constant sentence. The retry budget is in code: at the
+KEY_REFUSALS_MAXth refusal of one section and key, or once REFUSALS_PER_STEP refusals are counted
+on the step for a key refused before (or for an item whose key cannot be told), the answer for a
+failing item becomes DO_NOT_RETRY. The first refusal of a key is always answered with its rule,
+so the agent may correct every item once, even after one call that repeats one mistake over
+more items than the budget. Passing items are stored whatever the budget says. The key of an
+entry that could not be built is the one its value would give (`_proposed_key`). What is
+counted, on the step row:
 - `refused_count`: every refusal except a `setting` and a `two_digit_year`;
 - `two_digit_year_count`: the refusals `two_digit_year`, counted apart;
-- `items_count`: the rows stored.
+- `items_count`: the rows stored;
+- `refusals`: by section and rule, the refusals whose key the step did not store afterwards,
+  settings and two digit years included (`refusals.py`).
 The budget of REFUSALS_PER_STEP is spent by the first two together; a `setting` refusal spends
-nothing of it. The refusals of one key are counted for the agent run, in memory.
+nothing of it. The refusals of one key, and the keys stored, are kept for the agent run, in
+memory.
 
 What bounds the tokens a step spends, hostile document or not, is the runner and nothing here:
 the step's `token_budget`, which G10 gives, and the 40 turns and 900 seconds of the definition.
@@ -68,6 +75,7 @@ import json
 import logging
 import re
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -79,7 +87,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import tools as app_tools
 from app.agents.tools import Scope, text_result
-from app.ingestion import citations, items, plan, stored_items
+from app.ingestion import citations, items, plan, refusals, stored_items
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import (
     IngestionItem,
@@ -119,16 +127,9 @@ TOO_MANY_ITEMS = f"At most {ITEMS_PER_CALL} items per call. Nothing was stored. 
 DO_NOT_RETRY = "not accepted, do not retry this item"
 RUN_FULL = "not stored: this run already holds the most items it may, propose nothing more"
 
-INVALID_ITEM = "invalid_item"
-REMOVAL_OF_A_LIST = "removal_of_a_list"
-REASONS: Mapping[str, str] = {
-    INVALID_ITEM: "an item is an object with key, action, value and citations",
-    REMOVAL_OF_A_LIST: (
-        "only a field that holds one value can be removed, never an entry or a list: "
-        "propose an entry as the document states it now"
-    ),
-    items.INVALID_VALUE: "the value does not fit this field",
-}
+INVALID_ITEM = refusals.INVALID_ITEM
+REMOVAL_OF_A_LIST = refusals.REMOVAL_OF_A_LIST
+REASONS = refusals.REASONS
 # Sentences of the two modules underneath that may be repeated to the model: constants, every one.
 _CONSTANT_REASONS = frozenset(
     {*citations.REASONS.values(), *items.REASONS.values(), items.ASCII_DATE, *REASONS.values()}
@@ -321,11 +322,14 @@ class _Refused:
 @dataclass
 class _StepState:
     """What the write tool keeps for one agent run: the document prepared once for every check
-    of the step, under the hash of its text, and the refusals counted per section and key."""
+    of the step, under the hash of its text, the refusals counted per section and key, and for
+    the step's `refusals` the keys stored and the rules of the keys refused and not stored yet."""
 
     document: citations.Document | None = None
     planned_on: bytes | None = None
     key_refusals: dict[str, int] = field(default_factory=dict)
+    stored_keys: set[str] = field(default_factory=set)
+    refused_keys: dict[str, Counter[str]] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def prepared(
@@ -350,6 +354,42 @@ class _StepState:
     def forget(self) -> None:
         """Nothing of a text that is gone is kept."""
         self.document = self.planned_on = None
+
+
+@dataclass
+class _Tally:
+    """What one call changes in the step's `refusals` (`refusals.py`): a refusal counts under its
+    rule unless an item of its key is stored already, and a stored item takes the refusals of its
+    key out. The agent run's memory follows once the call's transaction is committed."""
+
+    state: _StepState
+    change: Counter[str] = field(default_factory=Counter)
+    stored_now: set[str] = field(default_factory=set)
+    refused_now: dict[str, Counter[str]] = field(default_factory=dict)
+
+    def _known(self, bucket: str) -> bool:
+        return bucket in self.stored_now or bucket in self.state.stored_keys
+
+    def kept(self, bucket: str | None) -> None:
+        if bucket is None or self._known(bucket):
+            return
+        self.change.subtract(self.state.refused_keys.get(bucket, Counter()))
+        self.change.subtract(self.refused_now.pop(bucket, Counter()))
+        self.stored_now.add(bucket)
+
+    def refused(self, bucket: str | None, rule: str) -> None:
+        if bucket is not None and self._known(bucket):
+            return
+        self.change[rule] += 1
+        if bucket is not None:
+            self.refused_now.setdefault(bucket, Counter())[rule] += 1
+
+    def remember(self) -> None:
+        for bucket in self.stored_now:
+            self.state.refused_keys.pop(bucket, None)
+        self.state.stored_keys |= self.stored_now
+        for bucket, rules in self.refused_now.items():
+            self.state.refused_keys.setdefault(bucket, Counter()).update(rules)
 
 
 def _safe_path(path: object) -> str:
@@ -401,20 +441,38 @@ def _removes_a_list(section: str, entry: Mapping[str, Any]) -> bool:
 
 
 def _bucket(section: str, entry: object, item: items.Item | None) -> str | None:
-    """What "the same section and key" is for the retry budget: the key the item model computed,
-    or, for an item that could not be built, the key as proposed when it names one thing (a
-    single field, or a whole key). None when no key can be told: only the step's budget counts."""
-    if item is not None:
-        key = item.key
-    else:
-        raw = entry.get("key") if isinstance(entry, Mapping) else None
-        if not isinstance(raw, str) or len(raw) > items.KEY_MAX:
-            return None
-        slot = items.SLOTS[section].get(raw.partition(":")[0])
-        if slot is None or (slot.keyed and ":" not in raw):
-            return None
-        key = raw
+    """What "the same section and key" is for the retry budget and the step's `refusals`: the
+    key the item model computed, or for an item that could not be built the key it would have
+    (`_proposed_key`). None when no key can be told: only the step's budget counts."""
+    key = item.key if item is not None else _proposed_key(section, entry)
+    if key is None:
+        return None
     return hashlib.sha256(f"{section}\x00{key}".encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def _proposed_key(section: str, entry: object) -> str | None:
+    """The key of an item that could not be built, when it names one thing: a single field or a
+    whole key as proposed, or for an entry proposed under the name of its list the key the item
+    model computes from the identity of its value (a skill category's name), which the value may
+    still give when another of its fields broke a rule."""
+    if not isinstance(entry, Mapping):
+        return None
+    raw = entry.get("key")
+    if not isinstance(raw, str) or len(raw) > items.KEY_MAX:
+        return None
+    slot = items.SLOTS[section].get(raw.partition(":")[0])
+    if slot is None:
+        return None
+    if not slot.keyed:
+        return raw
+    try:
+        if ":" in raw:
+            return items.parse_key(section, raw)[1]
+        return items.entry_key(slot, entry.get("value"))
+    except items.ItemError:
+        return raw
+    except (AttributeError, KeyError, TypeError, ValueError):  # no identity in the value
+        return None
 
 
 def _lock_items(db: Session, ingestion_run_id: uuid.UUID) -> None:
@@ -481,8 +539,9 @@ def _propose(scope: Scope, state: _StepState, raw: object) -> tuple[str, bool]:
     if len(proposed) > ITEMS_PER_CALL:
         return TOO_MANY_ITEMS, True
     log = {"step_id": str(at.step_id), "agent_run_id": str(scope.run_id), "section": section}
-    refusals: list[dict[str, Any]] = []
+    answers: list[dict[str, Any]] = []
     stored = duplicates = 0
+    tally = _Tally(state)
     with scope.sessions() as db, db.begin():
         found = _locate(db, scope, at, lock=True)
         if found is None:
@@ -498,14 +557,17 @@ def _propose(scope: Scope, state: _StepState, raw: object) -> tuple[str, bool]:
         in_run = _items_of_run(db, step.ingestion_run_id)
         for index, entry in enumerate(proposed):
             item, verdict = _judge(section, entry, document)
+            bucket = _bucket(section, entry, item)
             if item is not None and not isinstance(verdict, _Refused):
                 if in_run >= ITEMS_PER_RUN:
-                    refusals.append({"index": index, "reason": RUN_FULL})
-                elif _store(db, scope, at, item, verdict):
+                    answers.append({"index": index, "reason": RUN_FULL})
+                    continue
+                if _store(db, scope, at, item, verdict):
                     stored += 1
                     in_run += 1
                 else:
                     duplicates += 1
+                tally.kept(bucket)
                 continue
             if not isinstance(verdict, _Refused):  # pragma: no cover, an item always comes with it
                 verdict = _Refused(INVALID_ITEM)
@@ -517,15 +579,20 @@ def _propose(scope: Scope, state: _StepState, raw: object) -> tuple[str, bool]:
                 step.two_digit_year_count += 1
             elif rule != citations.Rule.SETTING.value:
                 step.refused_count += 1
-            bucket = _bucket(section, entry, item)
+            tally.refused(bucket, rule)
             again = 0
             if bucket is not None:
                 again = state.key_refusals[bucket] = state.key_refusals.get(bucket, 0) + 1
             logger.info("ingestion item refused", extra={**log, "index": index, "rule": rule})
-            if again >= KEY_REFUSALS_MAX or (spent and rule != citations.Rule.SETTING.value):
-                refusals.append({"index": index, "reason": DO_NOT_RETRY})
+            # Past the budget a key is still told its rule once: one call that repeats one
+            # mistake must not leave every item after it without the chance of a correction.
+            retried = again != 1
+            if again >= KEY_REFUSALS_MAX or (
+                spent and retried and rule != citations.Rule.SETTING.value
+            ):
+                answers.append({"index": index, "reason": DO_NOT_RETRY})
             else:
-                refusals.append(
+                answers.append(
                     {
                         "index": index,
                         "rule": rule,
@@ -534,11 +601,13 @@ def _propose(scope: Scope, state: _StepState, raw: object) -> tuple[str, bool]:
                     }
                 )
         step.items_count += stored
+        step.refusals = refusals.moved(step.refusals, section, tally.change)
+    tally.remember()
     logger.info(
         "ingestion items proposed",
-        extra={**log, "stored": stored, "duplicates": duplicates, "refused": len(refusals)},
+        extra={**log, "stored": stored, "duplicates": duplicates, "refused": len(answers)},
     )
-    answer = {"stored": stored, "already_stored": duplicates, "refused": refusals}
+    answer = {"stored": stored, "already_stored": duplicates, "refused": answers}
     return json.dumps(answer), False
 
 

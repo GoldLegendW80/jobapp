@@ -17,11 +17,18 @@ the two bulk decisions.
   count per reason. 409 when one
   item stops the section: nothing is applied and `proposal_id` names it (`reason` is `invalid`
   or `profile_conflict`), or when the profile is held by another request (`busy`).
-- POST /api/ingestion/runs/{id}/accept-additions {proposal_ids[]}: "Accept all additions"
-  (`review.accept_additions`, owner 2026-11-05): the same rules as accept-section, every section
-  of the run at once, one revision per section. A section one item stops applies nothing and is
-  named in `stopped`; the others are kept. It answers what it accepted, what it left out with
-  the reason of each, and `pending`, how many of the run still need a decision.
+- POST /api/ingestion/runs/{id}/accept-additions {proposal_ids[], fill_empty?}: "Accept all
+  additions" (`review.accept_additions`, owner 2026-11-05): the same rules as accept-section,
+  every section of the run at once, one revision per section. A section one item stops applies
+  nothing and is named in `stopped`; the others are kept. It answers what it accepted, what it
+  left out with the reason of each, and `pending`, how many of the run still need a decision.
+  `fill_empty` (default false; the welcome wizard, owner 2026-11-08): among the same ids, an
+  addition flagged `conflict` or `derived` (and nothing else) whose slot is empty in the profile
+  is accepted too, a conflict with the value the person's CV cites (an upload kept for a base
+  CV, or the one a base CV was converted from), else the value of the document that comes first
+  in the run; it is recorded as accepted with that value, as an accept with `edited_value`
+  would be. One whose slot is not empty stays `flagged`; one flagged `looks_like_instruction`
+  or `transcribed` always does. The answer has the same shape.
 - POST /api/ingestion/runs/{id}/reject-section {section, proposal_ids[]}: "Reject the rest of
   this section", with no exclusion. The profile is not touched.
 
@@ -54,7 +61,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.ingestion import deletion, item_proposals, items, merge, review
+from app.ingestion import deletion, item_proposals, items, merge, refusals, reuse, review
 from app.ingestion.citations import FieldType
 from app.ingestion.models import IngestionDocument
 from app.ingestion.runs_models import IngestionRun, RunStatus
@@ -183,6 +190,11 @@ class ReviewOut(BaseModel):
     counts: CountsOut
     documents: list[DocumentRef]
     sections: list[SectionOut]
+    refused: list[refusals.RunRefusalOut] = Field(
+        default_factory=list,
+        description="Why proposals of the run were not kept, as `GET /api/ingestion/runs/{id}` "
+        "answers it.",
+    )
 
 
 class UndoOut(BaseModel):
@@ -511,6 +523,7 @@ def list_proposals(run_id: str, user: CurrentUser, request: Request, db: Db) -> 
             for one in selected
         ],
         sections=sections,
+        refused=refusals.of_steps(db, reuse.source_steps(db, run.id)),
     )
     db.commit()  # `get_profile` creates the profile row of a user who has none yet
     return out
@@ -612,11 +625,13 @@ def accept_section(
 
 class AdditionsIn(BaseModel):
     """The pending ids the page shows, every section together: nothing is decided that was not
-    on the screen."""
+    on the screen. `fill_empty`: also take, among them, the conflicts and derived values that
+    fill an empty slot (the welcome wizard)."""
 
     model_config = ConfigDict(extra="forbid")
 
     proposal_ids: Annotated[list[ProposalId], Field(max_length=review.IDS_MAX)]
+    fill_empty: bool = False
 
     @property
     def ids(self) -> list[uuid.UUID]:
@@ -658,11 +673,15 @@ def accept_additions(
     """Accept all additions: every addition of the run shown on the page, locked facts that
     fill an empty slot of the profile included (owner, 2026-11-05), one revision per section.
     What replaces or changes a value the profile holds, and what is flagged, stays for the
-    person, each with its reason."""
+    person, each with its reason. With `fill_empty`, a conflict or a derived value that fills an
+    empty slot is taken too, a conflict with the value of the person's CV (else of the first
+    document of the run), recorded as the person's pick."""
     run = _run(db, user, run_id)
     now = deps.clock(request)
     try:
-        done = review.accept_additions(db, user.id, run.id, body.ids, now)
+        done = review.accept_additions(
+            db, user.id, run.id, body.ids, now, fill_empty=body.fill_empty
+        )
     except review.ReviewBusyError:
         db.rollback()
         return _refused(SectionConflictOut(detail=BUSY, reason="busy"))

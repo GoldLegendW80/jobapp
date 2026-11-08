@@ -6,7 +6,7 @@
  * refuses a `quote_id` that is not the one of the estimate of now, and like the real Continue
  * it refuses an `adds` that is not `tokens.continue_adds` of now.
  */
-import { http, HttpResponse } from "msw";
+import { http, HttpResponse, type JsonBodyType } from "msw";
 
 import type {
   Consent,
@@ -165,6 +165,7 @@ export function fakeRun(over: RunOver = {}): Run {
       proposals: 0,
       ...counts,
     },
+    refused: [],
     steps: [
       fakeStep({ position: 0, status: "done", items: 3, tokens: 3_760 }),
       fakeStep({
@@ -366,6 +367,42 @@ export function fakeRuns(initial: Partial<FakeRuns> = {}): FakeRuns {
         }
         if (action === "resume") return replace(state.afterAction(run, action));
         return missing();
+      },
+    ),
+  );
+  return state;
+}
+
+/** What `fakeAdditions` answers and records. */
+export interface FakeAdditions {
+  /** The bodies of accept-additions, `fill_empty` included when sent. */
+  accepted: Array<{ proposal_ids: string[]; fill_empty?: boolean }>;
+}
+
+/**
+ * A run's proposals and its "Accept all additions" (api/app/ingestion/review_router.py): GET
+ * proposals answers `review`, POST accept-additions answers `answer` after `onAccept` (what the
+ * server writes into the profile), and records each body.
+ */
+export function fakeAdditions(
+  runId: string,
+  review: JsonBodyType,
+  answer: JsonBodyType,
+  onAccept: () => void = () => {},
+): FakeAdditions {
+  const state: FakeAdditions = { accepted: [] };
+  server.use(
+    http.get(`*/api/ingestion/runs/${runId}/proposals`, () =>
+      HttpResponse.json(review),
+    ),
+    http.post(
+      `*/api/ingestion/runs/${runId}/accept-additions`,
+      async ({ request }) => {
+        state.accepted.push(
+          (await request.json()) as FakeAdditions["accepted"][number],
+        );
+        onAccept();
+        return HttpResponse.json(answer);
       },
     ),
   );

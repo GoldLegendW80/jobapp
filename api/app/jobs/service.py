@@ -25,7 +25,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction, undefer
 
 from app.agents.models import Proposal, ProposalDecider, ProposalStatus
-from app.jobs import scoring
+from app.jobs import scoring, signals
 from app.jobs import slug as slugs
 from app.jobs import undo as undo_tokens
 from app.jobs.models import (
@@ -252,6 +252,7 @@ def create_job(db: Session, user_id: uuid.UUID, new: NewJob, now: datetime) -> J
         description=new.description,
         posting_text=new.posting_text,
         published_on=new.published_on,
+        **signals.stored(new.posting_text),
         found_on=now.date(),
         notes=new.notes,
         legacy=new.legacy,
@@ -1459,6 +1460,7 @@ def rescore_batch(
     outcome.last_id = looked[-1]
     search = user_search(db, user_id)  # the bonus (scoring.bonus); None gives none
     for job in jobs:
+        read_text(job, now)
         result = computed_score(job, skills, search)
         if result is None:
             outcome.skipped_no_text += 1
@@ -1482,6 +1484,18 @@ def rescore_batch(
             outcome.unchanged += 1
     db.flush()
     return len(looked)
+
+
+def read_text(job: Job, now: datetime) -> bool:
+    """Store what the job's text says (signals.stored) when it differs from what is stored, and
+    touch the job then. Returns whether it did."""
+    columns = signals.stored(job.posting_text)
+    if all(getattr(job, name) == value for name, value in columns.items()):
+        return False
+    for name, value in columns.items():
+        setattr(job, name, value)
+    touch(job, now)
+    return True
 
 
 def count_after(

@@ -121,7 +121,7 @@ test("person A's new answers, saved through the api, are written in About you", 
   });
   expect(key.status(), await key.text()).toBe(200);
 
-  await page.goto("/profile#about-answers");
+  await page.goto("/profile/about#about-answers");
   const answers = answersPart();
   for (const line of WRITTEN) await expect(answers).toContainText(line);
   await expect(answers).not.toContainText(/[–—]| - /);
@@ -130,7 +130,7 @@ test("person A's new answers, saved through the api, are written in About you", 
 });
 
 test("a reload shows every value", async () => {
-  await page.goto("/profile");
+  await page.goto("/profile/about");
   const answers = answersPart();
   for (const line of WRITTEN) await expect(answers).toContainText(line);
   const stored = (await (await page.request.get("/api/profile")).json()) as {

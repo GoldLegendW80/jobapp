@@ -1,17 +1,23 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 
 import { AppAt } from "@/design-system/app-at";
 import {
   allAnswered,
+  builtAdditions,
+  builtReview,
   failWizardProfile,
   fakeWizard,
   putOff,
+  readIdentity,
   rolesSaved,
+  savedAnswers,
   savedSearch,
 } from "@/design-system/fixtures/onboarding";
 import { EMPTY } from "@/features/profile/api/profile-api";
 import { fakeSession, member } from "@/test/auth";
+import { fakeDocument, fakeDocuments } from "@/test/ingestion";
+import { fakeAdditions, fakeRun, fakeRuns } from "@/test/ingestion-runs";
 
 const meta = {
   title: "Pages/Onboarding/Welcome",
@@ -21,7 +27,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The first login wizard: eight short steps with a progress bar, Back, Next and Skip this step, each saved as it goes. Route /welcome, where a new member lands on first sign in; `?step=` opens a step.",
+          "The first login wizard: ten short steps with a progress bar, Back, Next and Skip this step, each saved as it goes. Route /welcome, where a new member lands on first sign in; `?step=` opens a step.",
       },
     },
   },
@@ -49,7 +55,16 @@ export const ContinueSetupLater: Story = {
   },
 };
 
-/** As a new member, I want to start by uploading my CV, so that the app can fill my profile from it while I answer the next steps. */
+/** As a new member, I want to give the app my Claude subscription token or my Anthropic API key first, so that reading my documents, writing my CVs and searching can run. */
+export const SetUpMyModelAccess: Story = {
+  render: () => <AppAt path="/welcome?step=access" />,
+  beforeEach: () => {
+    fakeSession(member);
+    fakeWizard();
+  },
+};
+
+/** As a new member, I want to add my CV and every other file in one place, and mark which one is my CV, so that the app fills my profile from them and writes CVs that look like mine. */
 export const StartWithMyCv: Story = {
   render: () => <AppAt path="/welcome?step=profile" />,
   beforeEach: () => {
@@ -58,7 +73,71 @@ export const StartWithMyCv: Story = {
   },
 };
 
-/** As a new member, I want to name the roles I am looking for, with optional details folded away, so that the app searches for the right postings. */
+/** As a new member, I want the app to build my profile from my files right after I add them, so that the next steps start from what it found. */
+export const BuildMyProfile: Story = {
+  render: () => <AppAt path="/welcome?step=building" />,
+  beforeEach: () => {
+    fakeSession(member);
+    fakeWizard();
+    fakeDocuments([
+      fakeDocument({ id: "d1", name: "morgan-cv.pdf" }),
+      fakeDocument({ id: "d2", name: "linkedin-export.zip" }),
+    ]);
+  },
+};
+
+/** As a new member, I want to see my profile take shape while the app reads my files, so that the wait feels short and I know it works. */
+export const WatchMyProfileTakeShape: Story = {
+  render: () => <AppAt path="/welcome?step=building" />,
+  beforeEach: () => {
+    fakeSession(member);
+    fakeWizard();
+    fakeDocuments([fakeDocument({ id: "d1", name: "morgan-cv.pdf" })]);
+    fakeRuns({
+      runs: [
+        fakeRun({
+          id: "r1",
+          status: "running",
+          counts: { steps: 5, done: 2 },
+        }),
+      ],
+    });
+  },
+};
+
+/** As a new member whose files were read, I want what they say written into my empty fields at once, even a value two files disagree on, so that only what would change my own values waits for me. This story starts the reading itself (play). */
+export const ProfileBuilt: Story = {
+  render: () => <AppAt path="/welcome?step=building" />,
+  beforeEach: () => {
+    fakeSession(member);
+    fakeWizard();
+    fakeDocuments([fakeDocument({ id: "d1", name: "morgan-cv.pdf" })]);
+    fakeRuns({
+      created: fakeRun({
+        id: "r1",
+        status: "done",
+        finished_at: "2026-11-08T10:05:00Z",
+      }),
+    });
+    fakeAdditions("r1", builtReview, builtAdditions);
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await userEvent.click(
+      await page.findByRole("checkbox", {
+        name: "I have read this and I agree to send the selected documents",
+      }),
+    );
+    const build = page.getByRole("button", { name: "Build my profile" });
+    await waitFor(() => expect(build).toBeEnabled());
+    await userEvent.click(build);
+    await expect(
+      await page.findByText("Your profile is ready: 2 facts added."),
+    ).toBeVisible();
+  },
+};
+
+/** As a new member, I want to name the roles I am looking for and say why in a sentence or two, with optional details folded away, so that the app searches for the right postings and my letters start from my reasons. */
 export const SayWhatIAmLookingFor: Story = {
   render: () => <AppAt path="/welcome?step=looking" />,
   beforeEach: () => {
@@ -101,7 +180,7 @@ export const AddWebsitesToSearch: Story = {
   },
 };
 
-/** As a job seeker, I want to tick the contracts I accept, so that the app skips the ones I would never sign. */
+/** As a job seeker, I want to tick the contracts I accept and say when I can start and where I may work, with answers offered in one click, so that the app skips the contracts I would never sign and application forms get my answers. */
 export const ChooseContracts: Story = {
   render: () => <AppAt path="/welcome?step=work" />,
   beforeEach: () => {
@@ -110,7 +189,39 @@ export const ChooseContracts: Story = {
   },
 };
 
-/** As a job seeker, I want to give my pay range or rather not say, so that the cards can compare a posting's pay with mine. */
+/** As a job seeker whose profile already holds these answers, I want them shown as I gave them, the country of my profile offered, so that I only check and go on. */
+export const AnswersFromMyProfile: Story = {
+  render: () => <AppAt path="/welcome?step=work" />,
+  beforeEach: () => {
+    fakeSession(member);
+    fakeWizard({
+      state: rolesSaved,
+      search: savedSearch,
+      answers: savedAnswers,
+      identity: readIdentity,
+    });
+  },
+};
+
+/** As a job seeker, I want Next to tell me when I said I may work somewhere without naming where, so that forms never get an answer about no country. This story presses Next itself (play). */
+export const NameTheCountryFirst: Story = {
+  render: () => <AppAt path="/welcome?step=work" />,
+  beforeEach: () => {
+    fakeSession(member);
+    fakeWizard({ state: rolesSaved, search: savedSearch });
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const may = await page.findByRole("group", { name: "May you work there?" });
+    await userEvent.click(within(may).getByText("Yes"));
+    await userEvent.click(page.getByRole("button", { name: /^Next/ }));
+    await expect(await page.findByRole("alert")).toHaveTextContent(
+      "Name the country or region where you may work, for example France.",
+    );
+  },
+};
+
+/** As a job seeker, I want to give my pay range or rather not say, so that the cards can compare a posting's pay with mine and application forms that ask for it get my answer. */
 export const ShareMyPay: Story = {
   render: () => <AppAt path="/welcome?step=pay" />,
   beforeEach: () => {
@@ -130,6 +241,19 @@ export const ChooseHowTheAppApplies: Story = {
 
 /** As a job seeker, I want to see every answer as saved, change any of them, and start my first search, so that I begin from a profile I checked. */
 export const ReviewAndStart: Story = {
+  render: () => <AppAt path="/welcome?step=summary" />,
+  beforeEach: () => {
+    fakeSession(member);
+    fakeWizard({
+      state: allAnswered,
+      search: savedSearch,
+      answers: savedAnswers,
+    });
+  },
+};
+
+/** As a job seeker who left the answers for forms empty, I want the summary to name them, so that I can give them now or know my profile is not complete yet. */
+export const AnswersStillToGive: Story = {
   render: () => <AppAt path="/welcome?step=summary" />,
   beforeEach: () => {
     fakeSession(member);

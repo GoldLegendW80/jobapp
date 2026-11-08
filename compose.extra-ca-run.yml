@@ -1,0 +1,18 @@
+# Behind a TLS inspecting proxy only, on a laptop (docs/runbooks/develop-new-machine.md, Behind a
+# TLS inspecting proxy): the running api and worker trust the PEM bundle JOBAPP_EXTRA_CA names
+# (a whole bundle, the public roots included), so their model calls pass the proxy: the API key
+# check (Python, SSL_CERT_FILE) and Claude Code (NODE_EXTRA_CA_CERTS, kept by the runner). Read
+# only, never copied into an image. deploy.sh and the deploy workflow never name this file.
+#   JOBAPP_EXTRA_CA=/path/bundle.pem docker compose -f compose.yml -f compose.mac.yml \
+#     -f compose.dev.yml -f compose.extra-ca.yml -f compose.extra-ca-run.yml up -d --build --wait
+
+x-extra-ca: &extra-ca
+  environment:
+    SSL_CERT_FILE: /etc/jobapp/extra-ca.pem
+    NODE_EXTRA_CA_CERTS: /etc/jobapp/extra-ca.pem
+  volumes:
+    - ${JOBAPP_EXTRA_CA:?set JOBAPP_EXTRA_CA to the absolute path of a PEM bundle, or leave this file out}:/etc/jobapp/extra-ca.pem:ro
+
+services:
+  api: *extra-ca
+  worker: *extra-ca

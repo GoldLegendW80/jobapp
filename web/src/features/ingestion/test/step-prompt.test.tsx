@@ -63,9 +63,9 @@ describe("step 1 of /profile/fill, the prompt", () => {
     const steps = within(panel()).getAllByRole("listitem");
     expect(steps.map((step) => step.textContent)).toEqual([
       "Copy the prompt below.",
-      "Open a terminal on your computer and start Claude Code by typing claude.",
-      "Paste the prompt, replace the two folder lines near the top with the folders that hold your work, then send it.",
-      "Read the file it writes, ~/jobapp-dossier/dossier.md, then add it in step 2.",
+      "Open a terminal in your home folder and start Claude Code by typing claude.",
+      "Paste the prompt and send it. It looks through your home folder for everything about your work, which can take a while.",
+      "Read its answer, copy it whole, then paste it in step 2, under Or paste a text.",
     ]);
   });
 
@@ -73,7 +73,7 @@ describe("step 1 of /profile/fill, the prompt", () => {
     await open();
     expect(
       screen.getByText(
-        "Claude Code or Codex sends what it reads to its own model provider, under your own account. This app never reads your computer: it only gets the file you add in the next step.",
+        "Claude Code or Codex sends what it reads to its own model provider, under your own account. This app never reads your computer: it only gets the answer you paste in the next step.",
       ),
     ).toBeVisible();
     expect(screen.getByText("Where your files go")).toBeVisible();
@@ -84,7 +84,7 @@ describe("step 1 of /profile/fill, the prompt", () => {
     await open();
     const box = promptBox("Claude Code");
     expect(box).toHaveAccessibleDescription(
-      "Prompt version 1. Read it before you run it: it lists what the assistant may read and what it must leave alone.",
+      "Prompt version 2. Read it before you run it: it lists what the assistant may read and what it must leave alone.",
     );
   });
 
@@ -100,7 +100,7 @@ describe("step 1 of /profile/fill, the prompt", () => {
     expect(
       within(panel()).getByText(/start Codex by typing/),
     ).toHaveTextContent(
-      "Open a terminal on your computer and start Codex by typing codex.",
+      "Open a terminal in your home folder and start Codex by typing codex.",
     );
     await user.click(screen.getByRole("tab", { name: "Claude Code" }));
     expect(promptBox("Claude Code")).toHaveValue(PROMPT.claude_code);

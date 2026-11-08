@@ -21,6 +21,8 @@ WRITERS: tuple[str, ...] = (
     "chat",  # D17: the chat of a document
     "generate",  # D7: the generations, the final hook and the shortening pass
     "panel",  # D29: the hiring panel's seven reviewers and its merge
+    "writer_interview_prep",  # documents_interview_prep, documents_interview_practice
+    "offer_notes",  # documents_offer_read, documents_chat_offer_notes
 )
 
 

@@ -1,3 +1,5 @@
+import { RunRefusals } from "@/components/shared/ingestion/run-refusals";
+
 import type { Review } from "../../api/proposals-api";
 import {
   EMPTY_NOTE,
@@ -5,7 +7,10 @@ import {
   plural,
 } from "@/features/ingestion/helpers/proposal-words";
 
-/** The head of the review: how many proposals, how many decided, and the documents read. */
+/**
+ * The head of the review: how many proposals, how many decided, why some were not kept, and the
+ * documents read.
+ */
 export function ReviewSummary({ review }: { review: Review }) {
   const { counts } = review;
   return (
@@ -37,6 +42,7 @@ export function ReviewSummary({ review }: { review: Review }) {
           incomplete.
         </p>
       ) : null}
+      <RunRefusals refused={review.refused} />
       {review.documents.length > 0 ? (
         <ul
           aria-label="Documents read"

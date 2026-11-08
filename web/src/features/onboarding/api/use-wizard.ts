@@ -12,6 +12,7 @@ import {
   saveApplySettings,
   type ApplySettings,
 } from "@/features/apply/api/settings-api";
+import { useModelKey } from "@/features/agents/api/use-model-key";
 import { SourcesFailure, useSources } from "@/features/jobs/api/use-sources";
 import { draftOfSearch, sourceCount } from "@/features/jobs/helpers/sources";
 import {
@@ -31,6 +32,7 @@ import {
   type OnboardingState,
 } from "./onboarding-api";
 import {
+  answersWith,
   DISCOVER,
   draftOf,
   FIND_JOBS,
@@ -67,7 +69,15 @@ export function useWizard({
   const sources = useSources(profile.sections.search);
   const current = client.getQueryData<Profile>(profileKey) ?? profile;
   const listed = sourceCount(draftOfSearch(current.sections.search)) > 0;
-  const done = listed ? [...state.done, "sites"] : state.done;
+  // "Model access" is done when a credential was saved before the wizard opened (steps.ts
+  // UNSTORED): one saved on that step leaves the person there to see it, until Next.
+  const key = useModelKey();
+  const [access] = useState(() => Boolean(key.data));
+  const done = [
+    ...state.done,
+    ...(listed ? ["sites"] : []),
+    ...(access ? ["access"] : []),
+  ];
   const passed = passedOf(state.passed);
   const step: StepId = openStep(params.get("step"), done, passed);
   const fromSummary = params.get("from") === "summary";
@@ -140,12 +150,24 @@ export function useWizard({
         saving === "where" ||
         saving === "work" ||
         saving === "pay"
-      )
-        return saveSection(
+      ) {
+        const searched = await saveSection(
           "search",
           cached.revision,
           searchWith(saving, cached.sections.search, draft),
         );
+        client.setQueryData(profileKey, searched);
+        // The step's answers for forms, merged into the stored answers, only when they change.
+        const stored = searched.sections.answers;
+        const answers = answersWith(
+          saving,
+          stored,
+          draft,
+          cached.sections.search.compensation,
+        );
+        if (JSON.stringify(answers) === JSON.stringify(stored)) return searched;
+        return saveSection("answers", searched.revision, answers);
+      }
       return null;
     },
     onSuccess: async (saved, saving) => {
@@ -233,6 +255,11 @@ export function useWizard({
     if (conflict) applyConflict(conflict);
     setConflict(undefined);
   };
+  /** The profile as a step wrote it (Building your profile): the next steps start from it. */
+  const adopt = (written: Profile) => {
+    client.setQueryData(profileKey, written);
+    setDraft(draftOf(written.sections));
+  };
   const reload = () => {
     if (conflict) {
       applyConflict(conflict);
@@ -284,6 +311,7 @@ export function useWizard({
     starting: finish.isPending,
     keepEditing,
     reload,
+    adopt,
   };
 }
 

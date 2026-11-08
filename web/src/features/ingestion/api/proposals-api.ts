@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { request } from "@/lib/api";
 
+import { refusedListSchema } from "./refused-schema";
+
 /**
  * What a run proposes for the profile (task G12): `GET /api/ingestion/runs/{id}/proposals`.
  * Values and excerpts come from the user's documents: they are data, shown as text.
@@ -93,6 +95,8 @@ export const reviewSchema = z.object({
   counts: countsSchema,
   documents: z.array(documentRefSchema),
   sections: z.array(sectionSchema),
+  /** Why proposals of the run were not kept, as the run itself answers it. */
+  refused: refusedListSchema,
 });
 export type Review = z.infer<typeof reviewSchema>;
 
@@ -190,17 +194,22 @@ export type Additions = z.infer<typeof additionsSchema>;
 /**
  * "Accept all additions" (owner, 2026-11-05), for the ids shown in every section: what adds to
  * the profile, locked facts on an empty slot included, one revision per section. What replaces
- * or changes a value the profile holds stays for the person, with its reason.
+ * or changes a value the profile holds stays for the person, with its reason. `fillEmpty` (the
+ * wizard's Building your profile) also takes the items flagged as a conflict or derived whose
+ * place in the profile is empty, the server choosing one value (the CV's when known).
  */
 export function acceptAdditions(
   runId: string,
   ids: string[],
+  { fillEmpty = false }: { fillEmpty?: boolean } = {},
 ): Promise<Additions> {
   return request(
     `/ingestion/runs/${encodeURIComponent(runId)}/accept-additions`,
     {
       method: "POST",
-      body: { proposal_ids: ids },
+      body: fillEmpty
+        ? { proposal_ids: ids, fill_empty: true }
+        : { proposal_ids: ids },
       timeoutMs: TIMEOUT_MS,
       validate: (body) => additionsSchema.parse(body),
     },

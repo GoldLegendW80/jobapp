@@ -50,12 +50,16 @@ Required fields, chosen as what search and CV generation cannot run without:
 - experience: employers (at least one), education (at least one)
 - facts: blocks (at least one)
 - skills: years_experience, have (at least one category)
-- search: title_include (at least one term), location (at least one term), contract_types
-  (at least one), remote_stance, interactive_sites (at least one job website ticked in Find jobs:
-  every search runs them alone, owner 2026-10-28; saved boards no longer count)
-- answers: work_authorization (at least one country), notice_period, earliest_start,
-  salary_policy, motivation
+- search: title_include (at least one term), location (at least one term, or "Anywhere": the
+  first login wizard stores it as no term and a remote stance chosen), remote_stance,
+  interactive_sites (at least one job website ticked in Find jobs: every search runs them
+  alone, owner 2026-10-28; saved boards no longer count)
+- answers: work_authorization (at least one country), notice_period, earliest_start, salary
+  (answered: the stance chosen, `leave_blank`, `range` with at least one range or `sentence`
+  with `salary_policy` written, or `salary_policy` written with no stance), motivation
 Fields with a default (min_fit, days) always count as filled, so they are not listed.
+contract_types is not required: an empty list is any contract, since no search filters on it
+then (the jobs list, the company boards' filter, the website searches and LinkedIn's).
 """
 
 import base64
@@ -1320,6 +1324,16 @@ def _filled(value: Any) -> bool:
     return value not in (None, "", [], {})
 
 
+def _salary_answered(answers: AnswersSection) -> bool:
+    stance = answers.salary_stance_of
+    if stance == "sentence":
+        return _filled(answers.salary_policy)
+    if stance == "range":
+        return bool(answers.salary_ranges)
+    # `leave_blank` is also what an empty section reads: only a stored choice answers.
+    return answers.salary_stance == "leave_blank"
+
+
 REQUIRED: dict[str, dict[str, Callable[[Any], bool]]] = {
     "identity": {
         name: (lambda n: lambda s: _filled(getattr(s, n)))(name)
@@ -1336,8 +1350,7 @@ REQUIRED: dict[str, dict[str, Callable[[Any], bool]]] = {
     },
     "search": {
         "title_include": lambda s: bool(s.title_include.terms),
-        "location": lambda s: bool(s.location.terms),
-        "contract_types": lambda s: bool(s.contract_types),
+        "location": lambda s: bool(s.location.terms) or s.remote_stance is not None,
         "remote_stance": lambda s: s.remote_stance is not None,
         "interactive_sites": lambda s: any(site.enabled for site in s.interactive_sites),
     },
@@ -1345,7 +1358,7 @@ REQUIRED: dict[str, dict[str, Callable[[Any], bool]]] = {
         "work_authorization": lambda s: bool(s.work_authorization),
         "notice_period": lambda s: _filled(s.notice_period),
         "earliest_start": lambda s: _filled(s.earliest_start),
-        "salary_policy": lambda s: _filled(s.salary_policy),
+        "salary": _salary_answered,
         "motivation": lambda s: _filled(s.motivation),
     },
     # Every field has a default: always filled, and left out of the overall mean so a new

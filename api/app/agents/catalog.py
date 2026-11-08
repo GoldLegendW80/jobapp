@@ -37,6 +37,7 @@ STARTERS = {
     "apply": "A step of an application being filled in",
     "ingestion": "The reading of a document the person uploaded",
     "documents": "A document generation, or a message in a document's chat",
+    "jobs": "The Assess button of a posting's page",
 }
 
 
@@ -95,6 +96,7 @@ CATEGORY_OF: dict[str, str] = {
     "apply_answer": "applying",
     "apply_check": "applying",
     "apply_form": "applying",
+    "apply_followup": "applying",
     "browser_discovery": "finding",
     "browser_finder": "finding",
     "document_transcribe": "profile",
@@ -102,9 +104,13 @@ CATEGORY_OF: dict[str, str] = {
     "documents_chat_base": "documents",
     "documents_chat_cv": "documents",
     "documents_chat_letter": "documents",
+    "documents_chat_offer_notes": "documents",
     "documents_cv": "documents",
     "documents_design": "documents",
+    "documents_interview_practice": "documents",
+    "documents_interview_prep": "documents",
     "documents_letter": "documents",
+    "documents_offer_read": "documents",
     "documents_panel_manager": "documents",
     "documents_panel_merge": "documents",
     "documents_panel_reader_ceo": "documents",
@@ -116,6 +122,7 @@ CATEGORY_OF: dict[str, str] = {
     "documents_proposal": "documents",
     "echo": "test",
     "job_chat": "jobs",
+    "jobs_assess": "jobs",
     "profile_extract": "profile",
     "profile_interpret": "profile",
     "profile_titles": "profile",
@@ -174,6 +181,14 @@ FIRST_MESSAGES: dict[str, str] = {
         '"Write a short outreach proposal for this posting ..." with <the word limit>, '
         f"<the language asked>, <the tone asked>; {_JOB_LINE}."
     ),
+    "app.documents.writer_interview_prep.PrepWriter": (
+        f'"Prepare the person for the interviews of this posting ..." with <the language asked>; '
+        f"{_JOB_LINE}."
+    ),
+    "app.documents.writer_interview_prep.PracticePartner": (
+        '"The person wrote in the practice chat of their interview preparation ..." with <the '
+        f"language asked>; {_JOB_LINE}."
+    ),
     "app.documents.writer_base.BaseWriter": (
         '"Write the person\'s base CV from their profile." or, for an upload, "Convert the '
         "person's uploaded CV into their base CV\", with <the language asked> and <the "
@@ -196,10 +211,18 @@ FIRST_MESSAGES: dict[str, str] = {
         f"<the template's soft lengths>; {_JOB_LINE}."
     ),
 }
+FIRST_MESSAGES["app.documents.offer_notes.OfferReader"] = (
+    'To read: "Read the offer letter the person received for this posting, and write your notes '
+    'on it ..."; in a chat: "The person wrote in the chat of their notes on an offer letter '
+    "...\"; then <the letter's language>."
+)
 FIRST_MESSAGES["app.profile.about_agent.InterpretDefinition"] = (
     "One line saying what to do, then one data block: <the kind of the part>, <its heading and "
     "text as the person wrote it when they clicked Done>, <what the profile holds of that kind "
     "now>, <the titles of the fact blocks the part held>."
+)
+FIRST_MESSAGES["app.apply.followup_agent.FollowUpDefinition"] = (
+    f'The fixed message: "{{FIRST_MESSAGE}}"; {_JOB_LINE}. Its tool read_follow_up gives the data.'
 )
 CHAT_MESSAGE = (
     "Rebuilt from the thread's messages at every run (app/agents/chat.py): <the conversation so "
@@ -216,13 +239,16 @@ def load() -> dict[str, definitions.AgentDefinition]:
     from app.apply import agents as _apply  # noqa: F401  (apply_answer, apply_form, apply_check)
     from app.browser import finder as _finder  # noqa: F401  (browser_finder, browser_discovery)
     from app.documents import chat as _chat  # noqa: F401  (documents_chat_<kind>)
+    from app.documents import offer_notes as _offer  # noqa: F401  (documents_offer_read, chat)
     from app.documents import panel as _panel  # noqa: F401  (documents_panel_<role>, merge)
     from app.documents import writer_base as _base  # noqa: F401
     from app.documents import writer_cv as _cv  # noqa: F401
     from app.documents import writer_design as _design  # noqa: F401
+    from app.documents import writer_interview_prep as _interview  # noqa: F401
     from app.documents import writer_letter as _letter  # noqa: F401
     from app.documents import writer_proposal as _proposal  # noqa: F401
     from app.ingestion import agents as _ingestion  # noqa: F401  (profile_extract, transcribe)
+    from app.jobs import assess as _assess  # noqa: F401  (jobs_assess)
 
     return dict(definitions.AGENTS)
 

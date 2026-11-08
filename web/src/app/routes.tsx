@@ -92,6 +92,11 @@ const PostingDocumentPage = lazy(() =>
     default: m.PostingDocumentPage,
   })),
 );
+const InterviewPrepPage = lazy(() =>
+  import("@/features/documents/pages/interview-prep-page").then((m) => ({
+    default: m.InterviewPrepPage,
+  })),
+);
 const TemplatesPage = lazy(() =>
   import("@/features/documents/pages/templates-page").then((m) => ({
     default: m.TemplatesPage,
@@ -115,6 +120,11 @@ const JobsPage = lazy(() =>
 const JobsMapPage = lazy(() =>
   import("@/features/jobs/pages/jobs-map-page").then((m) => ({
     default: m.JobsMapPage,
+  })),
+);
+const InsightsPage = lazy(() =>
+  import("@/features/jobs/pages/insights-page").then((m) => ({
+    default: m.InsightsPage,
   })),
 );
 const DeckPage = lazy(() =>
@@ -180,11 +190,13 @@ export const routes: RouteObject[] = [
             children: [
               { path: "jobs", element: <JobsPage /> },
               { path: "jobs/map", element: <JobsMapPage /> },
+              { path: "jobs/insights", element: <InsightsPage /> },
               { path: "jobs/:id", element: <JobDetailPage /> },
               {
                 path: "jobs/:id/documents/:kind",
                 element: <PostingDocumentPage />,
               },
+              { path: "jobs/:id/interview", element: <InterviewPrepPage /> },
               { path: "discover", element: <DeckPage /> },
               { path: "welcome", element: <WelcomePage /> },
               { path: "documents/templates", element: <TemplatesPage /> },
@@ -194,6 +206,11 @@ export const routes: RouteObject[] = [
                 element: <AccountPage />,
               },
               { path: "profile", element: <ProfilePage /> },
+              // The tabs of the profile page (features/profile/helpers/anchors.ts).
+              { path: "profile/experience", element: <ProfilePage /> },
+              { path: "profile/about", element: <ProfilePage /> },
+              { path: "profile/contact", element: <ProfilePage /> },
+              { path: "profile/matching", element: <ProfilePage /> },
               {
                 path: "profile/cv",
                 element: <Navigate to="/profile#your-cv" replace />,

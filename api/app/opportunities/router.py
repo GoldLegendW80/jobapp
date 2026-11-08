@@ -10,6 +10,8 @@
   application_id}` with `in_progress`, `submitted` or `changed`.
 - DELETE /api/postings/{id}/pass: its undo. 200 with the status put back; 409 `changed` when the
   posting moved since the Pass, or was never passed.
+- PUT /api/postings/{id}/pass/reason `{reason}`: the Pass's optional reason (passes.REASONS),
+  200 `{id, reason}`; 409 `changed` as the undo; an unknown reason is a 422.
 
 The Like is apply's `POST /api/postings/{id}/like` (A12a), never a route of this module. Every
 route needs a session, acts on the caller's rows only (another person's posting answers the same
@@ -23,14 +25,16 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
+from app.jobs import notices
 from app.jobs.models import ContractType, Job, JobStatus, WorkMode
+from app.jobs.schemas import LivenessOut, NoticeOut
 from app.opportunities import deck as decks
 from app.opportunities import passes
 from app.opportunities import pay as pays
@@ -70,6 +74,8 @@ class CardOut(BaseModel):
     # What the posting states (O3): "45,000 to 55,000 EUR a year", "remote"; None when nothing.
     pay: str | None = None
     work_mode: WorkMode | None = None
+    notices: list[NoticeOut] = []
+    liveness: LivenessOut | None = None
 
 
 class DeckOut(BaseModel):
@@ -128,6 +134,8 @@ def _card(card: decks.Card) -> CardOut:
         ),
         pay=_pay(posting),
         work_mode=posting.work_mode,
+        notices=[NoticeOut.model_validate(notice) for notice in card.notices],
+        liveness=posting.liveness,
     )
 
 
@@ -147,6 +155,7 @@ def _pay(posting: Job) -> str | None:
 )
 def get_deck(
     user: CurrentUser,
+    request: Request,
     db: Db,
     cursor: Annotated[str | None, Query(max_length=decks.CURSOR_MAX)] = None,
     limit: Annotated[int, Query(ge=1, le=decks.LIMIT_MAX)] = decks.LIMIT_MAX,
@@ -157,7 +166,8 @@ def get_deck(
     """The person's deck, one page of cards in order."""
     filters = decks.Filters(types=tuple(dict.fromkeys(types or ())), remote=remote, source=source)
     try:
-        found = decks.deck(db, user.id, cursor=cursor, limit=limit, filters=filters)
+        today = notices.today_of(deps.clock(request))
+        found = decks.deck(db, user.id, today=today, cursor=cursor, limit=limit, filters=filters)
     except decks.InvalidCursorError:
         raise _invalid("cursor", "Invalid cursor.") from None
     return DeckOut(
@@ -209,3 +219,35 @@ def pass_posting(posting_id: str, user: CurrentUser, request: Request, db: Db) -
 def undo_pass(posting_id: str, user: CurrentUser, request: Request, db: Db) -> Any:
     """The undo of a Pass, while the Pass is the posting's last status change."""
     return _swipe(passes.undo_pass, posting_id, user, request, db)
+
+
+class PassReasonIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: passes.Reason
+
+
+class PassReasonOut(BaseModel):
+    id: uuid.UUID
+    reason: str
+
+
+@router.put(
+    "/{posting_id}/pass/reason",
+    response_model=PassReasonOut,
+    responses={**_401, **_404, **_409, **_422},
+    dependencies=[Depends(_no_store)],
+)
+def set_pass_reason(posting_id: str, body: PassReasonIn, user: CurrentUser, db: Db) -> Any:
+    """The optional reason of a Pass, while that Pass is the posting's last status change."""
+    target = _uuid_or_404(posting_id)
+    try:
+        passes.set_reason(db, user.id, target, body.reason)
+    except passes.PostingNotFoundError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND) from None
+    except passes.PassRefusedError as exc:
+        db.rollback()
+        return _refused(exc)
+    db.commit()
+    return PassReasonOut(id=target, reason=body.reason)

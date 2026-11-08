@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -14,9 +14,14 @@ export function TextAnswer({
   onChange,
   readOnly = false,
   fieldId,
+  maxLength = 2000,
+  children,
 }: {
   fieldId?: string;
   readOnly?: boolean;
+  maxLength?: number;
+  /** What the field offers under its hint: answers to pick in one click. */
+  children?: ReactNode;
   label: string;
   hint: string;
   value: string;
@@ -33,7 +38,7 @@ export function TextAnswer({
         id={id}
         value={value}
         readOnly={readOnly}
-        maxLength={2000}
+        maxLength={maxLength}
         aria-describedby={`${id}-hint`}
         onChange={(event) => {
           onChange(event.target.value);
@@ -42,6 +47,7 @@ export function TextAnswer({
       <FieldDescription id={`${id}-hint`} className="text-xs">
         {hint}
       </FieldDescription>
+      {children}
     </Field>
   );
 }

@@ -17,6 +17,7 @@ import { DeckRail } from "../components/deck/deck-rail";
 import { DeckScene } from "../components/deck/deck-scene";
 import { DeckStack, type Toward } from "../components/deck/deck-stack";
 import { DeckTopBar } from "../components/deck/deck-top-bar";
+import { PassReason } from "../components/deck/pass-reason";
 import { PostingSheet } from "../components/deck/posting-sheet";
 import { SwipeHint } from "../components/deck/swipe-hint";
 import { useDeckSignals } from "../hooks/deck/use-deck-signals";
@@ -299,6 +300,9 @@ export function DeckPage() {
                 }}
                 onUndo={undo}
               />
+            ) : null}
+            {last?.kind === "pass" ? (
+              <PassReason key={last.card.id} postingId={last.card.id} />
             ) : null}
             {top && deck.mode === "full_auto" ? (
               // Beside the deck the rail says it; stacked, the words stay under Like.

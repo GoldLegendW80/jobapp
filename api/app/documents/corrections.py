@@ -171,6 +171,7 @@ _REQUIRED = {
     "base": ("headline", "summary"),
     "letter": ("subject",),
     "proposal": ("subject", "body"),
+    "interview_prep": (),
 }
 
 

@@ -311,10 +311,16 @@ const CASES: Case[] = [
       api.putSettings({
         no_dash_separators: true,
         banned_phrases: ["synergy"],
+        starter_phrases: true,
+        starter_list: ["leveraged"],
       }),
     method: "PUT",
     url: "/api/documents/settings",
-    body: { no_dash_separators: true, banned_phrases: ["synergy"] },
+    body: {
+      no_dash_separators: true,
+      banned_phrases: ["synergy"],
+      starter_phrases: true,
+    },
     reply: { no_dash_separators: true, banned_phrases: ["synergy"] },
   },
 ];

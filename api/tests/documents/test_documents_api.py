@@ -32,6 +32,7 @@ from app.documents.models import (
     GenerationTrigger,
 )
 from app.documents.router import NAME_MAX, UNDRAWABLE, ascii_name
+from app.documents.settings import STARTER_PHRASES
 from tests.documents.render_support import (
     CV,
     FakeRenderer,
@@ -482,6 +483,8 @@ def test_templates_thumbnails_and_settings(two: dict[str, Any], api: Api) -> Non
     assert read.json() == {
         "no_dash_separators": False,
         "banned_phrases": [],
+        "starter_phrases": False,
+        "starter_list": list(STARTER_PHRASES),
     }
     saved = api.request(
         "PUT",

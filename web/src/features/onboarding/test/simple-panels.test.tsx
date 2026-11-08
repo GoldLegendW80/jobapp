@@ -18,9 +18,14 @@ beforeEach(() => {
 });
 
 describe("simple wizard panels (O10)", () => {
-  it("starts with roles and keeps every targeting choice under Advanced", async () => {
+  it("starts with roles and why, and keeps every targeting choice under Advanced", async () => {
     renderWithQuery(<StepLooking draft={draftOf(EMPTY)} change={() => {}} />);
-    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(
+      screen.getAllByRole("textbox").map((box) => box.getAttribute("id")),
+    ).toEqual([
+      screen.getByLabelText("Roles").id,
+      screen.getByLabelText("Why you are looking").id,
+    ]);
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
     expect(screen.getAllByRole("checkbox")).toHaveLength(13);
@@ -37,7 +42,7 @@ describe("simple wizard panels (O10)", () => {
         />
       </MemoryRouter>,
     );
-    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.queryByLabelText("Roles")).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Advanced" }));
     expect(screen.getByLabelText("Roles")).toHaveValue("^data.*engineer$");
     expect(screen.getByLabelText("Roles")).toHaveAttribute("readonly");
@@ -47,12 +52,14 @@ describe("simple wizard panels (O10)", () => {
   });
 
   it("puts every contract in one group whose last box is Freelance mission", () => {
-    render(<StepWork draft={draftOf(EMPTY)} change={() => {}} />);
-    const cards = screen.getAllByRole("group");
-    expect(cards).toHaveLength(1);
-    expect(cards[0]).toHaveAccessibleName("Contracts (choose any)");
+    renderWithQuery(<StepWork draft={draftOf(EMPTY)} change={() => {}} />);
+    const contracts = screen.getByRole("group", {
+      name: "Contracts (choose any)",
+    });
+    expect(screen.getAllByRole("group")[0]).toBe(contracts);
+    expect(screen.getAllByRole("checkbox")).toHaveLength(6);
     expect(
-      within(cards[0]!)
+      within(contracts)
         .getAllByRole("checkbox")
         .map((box) => box.parentElement?.textContent),
     ).toEqual([
@@ -84,7 +91,7 @@ describe("simple wizard panels (O10)", () => {
         </>
       );
     }
-    render(<Work />);
+    renderWithQuery(<Work />);
     expect(screen.getByRole("checkbox", { name: "Permanent" })).toBeChecked();
     await userEvent.click(
       screen.getByRole("checkbox", { name: "Freelance mission" }),
@@ -111,7 +118,7 @@ describe("simple wizard panels (O10)", () => {
         </>
       );
     }
-    render(<Work />);
+    renderWithQuery(<Work />);
     const box = screen.getByRole("checkbox", { name: "VIE" });
     const card = box.parentElement!;
     expect(card.tagName).toBe("LABEL");
@@ -128,6 +135,57 @@ describe("simple wizard panels (O10)", () => {
     box.focus();
     await userEvent.keyboard(" ");
     expect(box).toBeChecked();
+  });
+
+  it("asks when the person can start and where they may work, offering words to pick", async () => {
+    let saved = draftOf(EMPTY);
+    function Work() {
+      const [draft, setDraft] = useState<Draft>(draftOf(EMPTY));
+      return (
+        <StepWork
+          draft={draft}
+          change={(patch) => {
+            setDraft((old) => (saved = { ...old, ...patch }));
+          }}
+        />
+      );
+    }
+    renderWithQuery(<Work />);
+    // Nothing is chosen for the person: every field starts empty.
+    expect(screen.getByLabelText("Notice period")).toHaveValue("");
+    expect(screen.getByLabelText("Earliest start")).toHaveValue("");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Notice period: 1 month" }),
+    );
+    expect(screen.getByLabelText("Notice period")).toHaveValue("1 month");
+    // A field that holds words offers none.
+    expect(
+      screen.queryByRole("button", { name: "Notice period: 3 months" }),
+    ).toBeNull();
+    await userEvent.type(
+      screen.getByLabelText("Earliest start"),
+      "January 2027",
+    );
+    const work = screen.getByRole("group", { name: "Work authorisation" });
+    await userEvent.type(
+      within(work).getByLabelText("Country or region"),
+      "France",
+    );
+    await userEvent.click(
+      within(
+        screen.getByRole("group", { name: "May you work there?" }),
+      ).getByText("Yes"),
+    );
+    await userEvent.click(
+      within(
+        screen.getByRole("group", { name: "Do you need a visa sponsorship?" }),
+      ).getByText("No"),
+    );
+    expect(saved).toMatchObject({
+      notice: "1 month",
+      start: "January 2027",
+      authorization: { country: "France", allowed: "yes", sponsorship: "no" },
+    });
   });
 
   it("chooses one remote stance by its card or the arrow keys", async () => {

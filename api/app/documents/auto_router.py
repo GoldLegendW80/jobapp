@@ -14,7 +14,8 @@ one of these clicks, an Apply or a Like (owner, 2026-11-06).
   chain, `generate.start_letter`, D29's `panel`), even when the letter has a version: it is
   never written from the old CV. `base_document_id` names another of the person's base CVs to
   write the CV from. 202 with the generations; 404 for another person's posting or base CV;
-  409 while one is running.
+  409 while one is running, and 409 with the page's sentence for a closed posting, the
+  posting's own address read first (jobs/liveness_check.py, SPEC-jobs "Liveness").
 - `POST /api/documents/{id}/fit`: "Make it fit", a click. The `shorten` generation of a posting's
   CV whose latest version overflows, whoever made that version (a template switch included),
   started at once (`generate.make_fit`). It needs the consent, a credential, a write of the CV
@@ -55,6 +56,7 @@ from app.documents.models import (
 )
 from app.identity import deps
 from app.identity.models import User
+from app.jobs import liveness_check
 
 logger = logging.getLogger("app.documents")
 
@@ -165,6 +167,8 @@ def _give_way(db: Session, document: Document, at: datetime, *, follows: bool = 
 def write_now(
     job_id: uuid.UUID, body: WriteIn, user: CurrentUser, request: Request, db: Db
 ) -> WriteOut:
+    if (closed := liveness_check.click_refusal(request, user.id, job_id)) is not None:
+        raise _error(status.HTTP_409_CONFLICT, closed)
     at = deps.clock(request)
     kinds = [Kind(kind) for kind in dict.fromkeys(body.kinds)]
     made: list[tuple[Kind, DocumentGeneration]] = []

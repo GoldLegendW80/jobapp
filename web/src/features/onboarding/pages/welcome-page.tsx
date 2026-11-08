@@ -3,6 +3,7 @@ import { Page } from "@/components/blocks/page";
 import { PageHeader } from "@/components/blocks/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useApplySettings } from "@/features/apply/api/use-apply-settings";
+import { useModelKey } from "@/features/agents/api/use-model-key";
 import { useMe } from "@/features/auth/api/use-me";
 import { useProfile } from "@/features/profile/api/use-profile";
 import { useTitle } from "@/hooks/use-title";
@@ -13,7 +14,7 @@ import { Wizard } from "../components/wizard/wizard";
 import { WELCOME_LINE } from "../helpers/words";
 
 /**
- * /welcome, the first login wizard (opportunities O5): eight steps with a progress bar, Back,
+ * /welcome, the first login wizard (opportunities O5): ten steps with a progress bar, Back,
  * Next and "Skip this step" (not on the roles nor the summary). Next saves the step through the
  * profile's own route with the revision this page read (a second tab's save shows the profile's
  * conflict dialog) and apply's settings route for the mode after a Like. What the person typed is
@@ -28,6 +29,8 @@ export function WelcomePage() {
   const profile = useProfile();
   const state = useOnboarding();
   const settings = useApplySettings();
+  // Read before the first step opens: a saved credential means Model access is done.
+  const key = useModelKey();
   // A failed refetch keeps the wizard and its draft: only a first load that fails stops here.
   if ((profile.isError && !profile.data) || (state.isError && !state.data))
     return (
@@ -47,7 +50,7 @@ export function WelcomePage() {
         </LoadError>
       </Page>
     );
-  if (!profile.data || !state.data || !me.data)
+  if (!profile.data || !state.data || !me.data || key.isPending)
     return (
       // No h1 yet: the title shows with the wizard, so whatever waits for it finds the steps.
       <Page>

@@ -15,7 +15,7 @@ import { REMOTE_WORDS } from "@/features/onboarding/helpers/words";
 import { ONE_BOX, Radios } from "./choice-cards";
 import { TextAnswer } from "./text-answer";
 
-/** Step 3, Where: anywhere, or the places; then remote, hybrid or on site. */
+/** Step 5, Where: anywhere, or the places; then remote, hybrid or on site. */
 export function StepWhere({ draft, change, patterns, problem }: PanelProps) {
   const id = useId();
   const places = (

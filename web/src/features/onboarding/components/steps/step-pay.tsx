@@ -9,7 +9,7 @@ import { readPay, type PanelProps } from "@/features/onboarding/helpers/steps";
 import { ONE_BOX } from "./choice-cards";
 import { PayFields } from "./pay-fields";
 
-/** Step 6, Pay: "Rather not say", or the yearly salary and the daily rate, folded. */
+/** Step 8, Pay: "Rather not say", or the yearly salary and the daily rate, folded. */
 export function StepPay({ draft, change, problem }: PanelProps) {
   const id = useId();
   const [open, setOpen] = useState<boolean>();
@@ -26,8 +26,9 @@ export function StepPay({ draft, change, problem }: PanelProps) {
   return (
     <div className="flex flex-col gap-6">
       <p className="text-sm text-muted-foreground">
-        Shown on the cards next to a posting&apos;s pay. It is never typed into
-        an application form.
+        Shown on the cards next to a posting&apos;s pay, and written in the
+        application forms that ask for it. Rather not say leaves those questions
+        blank.
       </p>
       <Label htmlFor={id} className={ONE_BOX}>
         <Checkbox

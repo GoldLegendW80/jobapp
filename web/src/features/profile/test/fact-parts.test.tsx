@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { admin, fakeSession } from "@/test/auth";
-import { aboutOf, fakeAbout } from "@/test/about";
+import { aboutOf, aboutPartTitles, fakeAbout } from "@/test/about";
 import { fakeDocuments } from "@/test/documents";
 import { fakeProfile, haraldLike, XSS_BODY } from "@/test/profile";
 import { renderApp } from "@/test/render";
@@ -49,10 +49,10 @@ async function openPage(key: "api_key" | null = "api_key") {
   fakeDocuments();
   const about = fakeAbout({ text: TEXT, key });
   const user = userEvent.setup();
-  renderApp("/profile");
+  renderApp("/profile/about");
   await screen.findByRole(
-    "navigation",
-    { name: "Parts of About you" },
+    "button",
+    { name: "Add a part" },
     { timeout: 10_000 },
   );
   return { user, state, about };
@@ -92,12 +92,14 @@ describe("the order of the fact parts", () => {
       blocks: [...haraldLike().facts.blocks].reverse(),
     });
     expect(saved.base_revision).toBe(6);
-    // The contents and the document follow; the focus stays on the part that moved.
-    expect(
-      within(screen.getByRole("navigation", { name: "Parts of About you" }))
-        .getAllByRole("link")
-        .map((link) => link.textContent),
-    ).toEqual(["Skills", "POSITIONING", RULES, "Draft", "Answers"]);
+    // The document follows; the focus stays on the part that moved.
+    expect(aboutPartTitles()).toEqual([
+      "Skills",
+      "POSITIONING",
+      RULES,
+      "Draft",
+      "Answers",
+    ]);
     const down = screen.getByRole("button", { name: "Move POSITIONING down" });
     await waitFor(() => {
       expect(down).toHaveFocus();
@@ -217,7 +219,7 @@ describe("the size of the fact base", () => {
         }),
       ),
     );
-    renderApp("/profile");
+    renderApp("/profile/about");
     await screen.findByRole(
       "meter",
       { name: "Fact base size" },

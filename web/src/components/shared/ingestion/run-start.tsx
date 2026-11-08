@@ -102,7 +102,7 @@ export function RunStart({ flat = false }: { flat?: boolean } = {}) {
       ) : null}
       {items.length === 0 ? (
         <p className="text-sm">
-          You have no document yet. Add some in the Documents step first.
+          You have no document yet. Add a file or paste a text first.
         </p>
       ) : (
         <DocumentChoice

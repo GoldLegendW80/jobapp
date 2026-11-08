@@ -5,7 +5,7 @@ with the multi select to apply at all selected"; SPEC-apply, "API").
   what one click on "Apply to N" would do, read only. In the order given, until `LIMIT` postings
   are to apply: each posting the click would start (`items`: its company, title, the documents
   it lacks, which the click writes first, with their estimate, whether it is an e-mail
-  application, and `seen`, what the confirmation shows of it), each one it would not
+  application, `seen`, what the confirmation shows of it, and its `notices`), each one it would not
   (`left_out`, with the code and the sentence of the refusal its own Apply click meets), and the
   rest (`beyond`, not read: "select the others after"); the person's review box in force, the
   total estimate of the writing and the note on its cost.
@@ -15,7 +15,8 @@ with the multi select to apply at all selected"; SPEC-apply, "API").
   (`likes.on_apply`: the documents it lacks asked, `service.start`'s refusals, its events, then
   the fill, the apply agent or, with the review box ticked, Review first's apply agent of A20,
   each `ready` in turn with its list and one Confirm), one transaction per posting, in the
-  order given;
+  order given, once their own addresses were read side by side (jobs/liveness_check.py: a page
+  that says it is closed closes its posting, whose Apply then refuses `posting_closed`);
   the answer holds a result per posting. A posting that changed since (`changed`: its company,
   title, form address or mode, or documents to write that the confirmation did not show), that
   is gone (`not_found`) or that now meets a refusal is left out with its sentence; the others go
@@ -67,9 +68,10 @@ from app.documents.models import Kind
 from app.identity import deps
 from app.identity.models import User
 from app.ingestion import pricing
+from app.jobs import liveness_check, notices
 from app.jobs import service as jobs_service
 from app.jobs.models import Job
-from app.jobs.schemas import BULK_MAX
+from app.jobs.schemas import BULK_MAX, NoticeOut
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +130,7 @@ class ItemOut(PostingOut):
     estimate: EstimateOut | None  # of that writing, None when nothing is written
     email: bool  # an application by e-mail: Review first, the person sends it
     seen: str
+    notices: list[NoticeOut] = []  # what to know before the click (app/jobs/notices.py)
 
 
 class LeftOut(PostingOut):
@@ -261,6 +264,7 @@ def preview(body: PreviewIn, request: Request, user: CurrentUser, db: Db) -> Pre
     # What the earlier postings of this click take, as their committed applications will.
     keys: set[str] = set()
     roles: set[tuple[str, str]] = set()
+    shown: list[Job] = []
     for posting_id in body.posting_ids:
         posting = _posting(db, user.id, posting_id)
         if posting is None:
@@ -306,6 +310,10 @@ def preview(body: PreviewIn, request: Request, user: CurrentUser, db: Db) -> Pre
                 seen=_seen(posting, planned),
             )
         )
+        shown.append(posting)
+    said = notices.notices_of(db, user.id, shown, notices.today_of(deps.clock(request)))
+    for item in items:
+        item.notices = [NoticeOut.model_validate(notice) for notice in said[item.posting_id]]
     db.rollback()
     return PreviewOut(
         review_before_send=review,
@@ -362,6 +370,7 @@ def start(body: StartIn, request: Request, user: CurrentUser, db: Db) -> StartOu
         content = {"detail": SETTINGS_CHANGED, "code": "settings_changed"}
         return JSONResponse(status_code=409, content=content, headers=NO_STORE)
     db.rollback()
+    liveness_check.check_all(request, user.id, [item.posting_id for item in body.items])
     mode = _mode(body.review_before_send)
     results: list[ResultOut] = []
     for item in body.items:

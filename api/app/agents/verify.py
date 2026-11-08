@@ -9,13 +9,10 @@ answer; a busy API is reported as such. Outcomes:
 - 429, 529 (overloaded), 503: busy, try again later (Retry-After passed on when sent);
 - timeout, connection error, any other status: unavailable.
 
-Claude subscription token (`claude setup-token`): not checked here, by decision (agents A1,
-recorded in SPEC-agents.md, Credentials). Claude Code documents one use for that token: the
-CLAUDE_CODE_OAUTH_TOKEN variable of the Claude Code CLI, which "can only make model requests".
-There is no documented lightweight endpoint to validate it, calling the Messages API with it
-directly is not a documented or supported use, and the CLI only arrives in the image with A2.
-So the token is stored as unverified, the answer says why, and the first real agent run (A2)
-is its verification.
+Claude subscription token (`claude setup-token`): never checked here. Claude Code documents one
+use for it, the CLAUDE_CODE_OAUTH_TOKEN variable of the CLI, and only the worker image holds the
+CLI, so the token is checked by one Claude Code run in the worker (owner, 2026-11-07, replacing
+the A1 choice; app/agents/token_check.py).
 
 Tests replace the network with `transport` (an httpx2 transport); MODEL_API_BASE_URL (refused
 in production) points the SDK at a stub for the end to end journey. Nothing here logs the
@@ -31,8 +28,6 @@ from dataclasses import dataclass
 import anthropic
 import httpx2
 
-from app.agents.models import CredentialKind
-
 ANTHROPIC_API = "https://api.anthropic.com"
 TIMEOUT_S = 10.0
 
@@ -44,7 +39,6 @@ logging.getLogger("httpx2").setLevel(logging.WARNING)
 
 class Outcome(enum.StrEnum):
     verified = "verified"
-    unverified = "unverified"  # a subscription token: checked on the first agent run
     invalid = "invalid"
     busy = "busy"
     unavailable = "unavailable"
@@ -81,12 +75,8 @@ class Verifier:
     timeout_s: float = TIMEOUT_S
     transport: httpx2.BaseTransport | None = None
 
-    def check(self, kind: CredentialKind, secret: str) -> Result:
-        if kind is CredentialKind.claude_subscription:
-            return Result(Outcome.unverified)
-        return self._check_api_key(secret)
-
-    def _check_api_key(self, secret: str) -> Result:
+    def check(self, secret: str) -> Result:
+        """An Anthropic API key."""
         http_client = (
             httpx2.Client(transport=self.transport, timeout=self.timeout_s)
             if self.transport is not None

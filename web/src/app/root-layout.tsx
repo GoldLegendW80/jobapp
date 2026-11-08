@@ -26,13 +26,7 @@ export function RootLayout() {
         <Suspense fallback={<PageLoading />}>
           <Outlet />
         </Suspense>
-        {/* On a phone, above the shell's bottom tab bar (layouts/bottom-nav.tsx). */}
-        <Toaster
-          position="bottom-center"
-          mobileOffset={{
-            bottom: "calc(4.5rem + env(safe-area-inset-bottom))",
-          }}
-        />
+        <Toaster />
         <ScrollRestoration getKey={(location) => location.pathname} />
         {DevFeedback ? (
           <Suspense fallback={null}>

@@ -345,7 +345,7 @@ def test_owner_fixture_imports_complete(api: Api, alice: str) -> None:
     golden.pop("photo")
     body = import_ok(api, alice, golden)
     # Complete but for Search, which needs a job website ticked in Find jobs (owner, 2026-10-28).
-    assert body["completeness"]["overall"] == 97, body["completeness"]
+    assert body["completeness"]["overall"] == 96, body["completeness"]
     assert body["completeness"]["sections"]["search"]["missing"] == ["interactive_sites"]
     assert canonical(export(api, alice)["sections"]) == canonical(golden["sections"])
 

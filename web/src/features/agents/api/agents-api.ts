@@ -12,16 +12,30 @@ export const credentialKinds = [
 ] as const;
 export type CredentialKind = (typeof credentialKinds)[number];
 
+/**
+ * The worker's check of a subscription token (one Claude Code run, owner 2026-11-07), for the
+ * credential as it is now; null for an API key, whose check answers at once, or before any.
+ */
+export const checkSchema = z.object({
+  state: z.enum(["checking", "verified", "invalid", "busy", "unavailable"]),
+  message: z.string(),
+});
+export type CredentialCheck = z.infer<typeof checkSchema>;
+
 export const credentialSchema = z.object({
   kind: z.enum(credentialKinds),
   last4: z.string(),
   verified_at: z.string().nullable(),
   updated_at: z.string(),
+  check: checkSchema.nullable().default(null),
 });
-export type ModelCredential = z.infer<typeof credentialSchema>;
+// The input shape: `check` may be left out (null), as a server from before the check answers.
+export type ModelCredential = z.input<typeof credentialSchema>;
 
 export const verifySchema = z.object({
-  result: z.enum(["verified", "unverified"]),
+  // checking: a subscription token, checked by the worker; its outcome comes in `check`.
+  // unverified: the answer of a server from before that check.
+  result: z.enum(["verified", "checking", "unverified"]),
   message: z.string(),
   credential: credentialSchema,
 });

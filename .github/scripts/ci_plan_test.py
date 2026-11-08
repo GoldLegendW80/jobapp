@@ -2259,11 +2259,9 @@ class JourneysTest(unittest.TestCase):
         "api/app/agents/fake_streams/apply_form.json": frozenset(
             {"apply", "browser", "opportunities"}
         ),
-        # Imported by ingestion/routers.py, whose middleware main.py runs on every request,
-        # but not by the middleware's own code: the module's groups.
-        "api/app/ingestion/prompt_router.py": frozenset(
-            {"documents", "ingestion", "opportunities"}
-        ),
+        # The welcome wizard calls it (step 2's Analyze your computer, 2026-11-07), and the
+        # wizard is on every journey's way in.
+        "api/app/ingestion/prompt_router.py": ci_plan.EVERY,
         # The routes a shared web page calls (WEB_SHARED_PAGES): the /account cards, the queue
         # count of the shell, the job page's apply and documents sections, the profile's
         # Search tab, and what imports them (the apply agents through approval_router.py).

@@ -6,7 +6,9 @@
  */
 import { z } from "zod";
 
+import { noticesSchema } from "@/features/jobs/api/notices-api";
 import { isApiError, request } from "@/lib/api";
+import { livenessSchema } from "@/features/jobs/api/liveness-api";
 
 const TIMEOUT_MS = 15_000;
 
@@ -29,6 +31,8 @@ export const cardSchema = z.object({
   reason: reasonSchema,
   pay: z.string().nullable().optional(),
   work_mode: z.string().nullable().optional(),
+  notices: noticesSchema.optional(),
+  liveness: livenessSchema.nullable().optional(),
 });
 export type Card = z.infer<typeof cardSchema>;
 

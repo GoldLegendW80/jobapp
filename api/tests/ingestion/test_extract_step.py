@@ -215,8 +215,10 @@ def test_a_document_that_tells_the_agent_to_propose_a_fact_to_read_another_docum
     for row in stored_items(factory, step):
         assert (row.user_id, row.document_id) == (alice_id, step.document_id)
         assert MARKER not in json.dumps([row.value, row.citations])
-    # The three settings are refused and not counted; the address the document does not write is.
-    assert counters(factory, step) == (3, 1, 0)
+    # The two settings are refused and not counted. Counted: the address the document does not
+    # write, and the years it asks for (stated years may be proposed since 2026-11-08, merge rule
+    # 7, but only as a figure the excerpt writes as a number of years: this one writes none).
+    assert counters(factory, step) == (3, 2, 0)
     output = run_row(factory, step.agent_run_id).output
     assert output is not None
     assert output["tools_denied"] == 1  # the built-in Read

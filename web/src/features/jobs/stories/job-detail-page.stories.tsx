@@ -14,6 +14,8 @@ import {
   NO_PAY_NO_FIT_POSTING,
   postingDetail,
 } from "@/design-system/fixtures/posting-details";
+import { fakeAssessment } from "@/design-system/fixtures/posting-assessment";
+import { MAY_BE_CLOSED_CHECK } from "@/design-system/fixtures/liveness";
 import { POSTING_DETAIL, POSTINGS } from "@/design-system/fixtures/postings";
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { fakeApplication, fakeApply } from "@/test/apply";
@@ -166,4 +168,18 @@ export const PostingNoLongerExists: Story = {
 /** As a job seeker, I want the posting in one column on my phone with Apply near the top, so that I can apply on the go. */
 export const ReadAPostingOnMyPhone: Story = {
   globals: { viewport: { value: "mobile2", isRotated: false } },
+};
+
+/** As a job seeker, I want to read which requirements a posting weighs, where I am strong or missing, what it leaves unsaid about the role and a one sentence verdict, so that I decide before writing documents. */
+export const AssessAPosting: Story = {
+  beforeEach: () => {
+    fakeAssessment();
+  },
+};
+
+/** As a job seeker, I want to see when a posting's own page may say it is closed, with its words, so that I close it in one click before writing anything. */
+export const SeeThatAPostingMayBeClosed: Story = {
+  beforeEach: () => {
+    fakePostingDetails([{ ...first, liveness: MAY_BE_CLOSED_CHECK }]);
+  },
 };

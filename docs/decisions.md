@@ -135,6 +135,55 @@ choice made by the build that stands until the owner says otherwise.
   unwanted place leaves a posting out wherever the search filters (boards, feeds, browser sources
   and the website searches), through the same matcher as the unwanted titles, and wins over a
   wanted place.
+- 2026-11-07, owner decisions on the wizard's first steps (Agentation notes on /welcome): "why
+  having two drop files ? make this step simpler by letting the user upload all the files he
+  want", and asked, the owner chose "Mark it in the list": step 1 has one place for every file
+  (ingestion's drop zone, many at once, and the pasted text); a PDF or Word file added in this
+  visit offers "This is my CV", which sends it again marked `for=base_cv` (the server keeps that
+  file's bytes) and converts it into the base CV with its look (D24); then one reading of the
+  documents into the profile. The CV upload panel stays on the profile's page. Then "claude/codex
+  must be the second step (optionnal)": the prompt for Claude Code or Codex is wizard step 2,
+  skippable, with where to add the file it writes and its reading; like Websites to search it is
+  never sent to the onboarding api and counts as passed once a later step is. Its title,
+  "Analyze your computer" (owner: "change Claude Code or Codex chapter title into analyze your
+  computer or something like that"). Then "first step
+  should be to setup sub or api key": Model access (Account's own panel: a Claude subscription
+  token or an Anthropic API key, Save, Verify, Remove) is step 1 of 10, skippable; it is done,
+  and the wizard opens past it, when a credential was saved before the wizard opened, and it is
+  never sent to the onboarding api. The summary's key form is gone: the summary says which
+  credential is saved, or that none is, with Change. On that step: `claude setup-token` gets a
+  copy button where it stands in the sentence ("i prefer the old version, just put the copy to
+  clip board on the command"), and "I don't want this block, I want automatic verify, loading
+  around the token input and turn green or red according the verification": the saved
+  credential's block and its Verify button are gone; saving verifies at once (and a credential
+  never verified is checked once on opening), the field shows a spinner, then turns green or red
+  with the reason; Remove stays next to Save. Same on Account. A subscription token, which the
+  server could not check (agents A1), is now checked by one Claude Code run in the worker on
+  save (asked, the owner chose "Run Claude Code once" over leaving it to the first agent run):
+  a one line prompt, no tools, the smallest model, a tiny part of the subscription; the field
+  shows the spinner, then green, or red with the reason.
+  Then "remove this, all the files will be analyzed at the end when the user finish all the
+  steps": no reading in the steps; the summary says how many documents are read and the token
+  estimate, shows the consent box while the person has not agreed to what is sent, and Start
+  starts the reading of every file first, then ends the wizard (an unticked box ends it without
+  reading). Step 3 is only the analysis of the computer ("remove this from this step, its only
+  the analyze the computer"): the prompt and a field to paste its answer. The prompt, version 2:
+  "the prompt should be generic and let claude analyze the whole computer to extract all the
+  informations for a recruiter profile" and "do not mention jobapp specificly, just ask claude
+  or codex to output to the user the full analyze, the user will then copy and paste the
+  response into the step": the whole home folder (the never read list still holds), the
+  analysis as the answer in the conversation, no file, no app named (SPEC-ingestion); "why you
+  naled it dossier ? it should be anwser right ?": the word is gone from the screens and the
+  prompt, the answer is titled "Recruiter profile".
+  Then the reading moved again: "after the profile and analyse of the computer steps, i want to
+  run the full creation of the profile. I want a very cool animation with rive (do it with rive
+  cli)": step 3 is Building your profile (the reading of every file, a Rive scene while it runs,
+  Next waiting), and the summary no longer reads anything. Asked what happens to the proposals,
+  the owner chose "Write the new ones at once": what adds to the profile is written when the run
+  ends, as Accept all additions would, and what would replace a value waits in Fill my profile
+  (a deviation from "nothing is written before the person reviews it", for additions in the
+  wizard only). And "put the analyze the computer step under advenced in your profile step":
+  the prompt lives under Advanced in Your profile, its answer pasted with the other files.
 
 ## Mail (2026-10-13; paused 2026-10-14 after M4)
 
@@ -366,7 +415,9 @@ The owner's answers during the product audit, in the session that built them.
 - 2026-11-05, chapter 2: yes to a bottom tab bar on phones (Jobs, Discover, Applications,
   Profile; Runs moves to the user menu as Activity); yes to honest Apply wording (the wizard shows
   the Apply review box; the Applications page no longer promises approval for everything); the
-  model key: "Yes but at last possible step" (an optional inline field on the wizard's last step);
+  model key: "Yes but at last possible step" (an optional inline field on the wizard's last step;
+  replaced on 2026-11-07 by the first step, Model access, see "the wizard's first steps" under
+  Opportunities and Full auto);
   the posting page: "Yes. Also want the salary easily accessible" (Your application right under
   the title, the pay in the header, the Jobs list and the Discover card); the Account page: "Only
   websites we are signin" (only the websites the person is signed in to); Find jobs: "should be a
@@ -443,3 +494,39 @@ The owner's answers during the product audit, in the session that built them.
   ready or written first, what the review box makes it do) and starts on "Apply to 1"; the
   posting page's Apply keeps its one click. Apply to a selection leaves the company caps and the
   daily safety ceiling out, as one click Apply does.
+- 2026-11-07, the profile in tabs (owner: "review the wole profile page, it very weird, follow
+  all the design guidlines", then "I don't want too much scroll, you can put tab"): `/profile` is
+  no longer one page. Five tabs, each its own address: CVs (`/profile`), Experience
+  (`/profile/experience`), About you (`/profile/about`), Contact (`/profile/contact`), Advanced
+  matching (`/profile/matching`). The rail (the person, Ready for, More) stays beside every tab;
+  Ready for links to the tab that fixes each use. The old `?tab=` addresses and `#contact`,
+  `#experience`, `#about-*`, `#advanced-matching` land on their tab. Leaving a tab with unsaved
+  changes asks first, as any other navigation. Replaces "one page, no tabs" of 2026-11-05.
+- 2026-11-07, the CV of the welcome wizard (owner: "when i create the profile, I've put my cv but
+  then when I'm on my profile, I have an other, why ? it should replicate the one I upload"):
+  the first PDF or Word file added in Your profile is the CV, without a click; "This is my CV"
+  stays on the other ones to take its place. Its conversion into a base CV with its look is asked
+  for as soon as the file is read, whether the documents consent is given or not (the server
+  holds it until the consent), and goes on when the person moves to the next step. Before, the
+  CV had to be marked by hand and was converted only while the step stayed open, so a person
+  who went on got no CV from the file, and "Build my CV from my profile" wrote another one.
+- 2026-11-08, reading files into the profile (owner: "I've put a generic cv + my linkedin profile
+  but got only 61% completness", "why I have 2 [employer] and no [current employer]", then "yes and a. I
+  don't want help to build my profile, I want you correct all the process so it will works
+  perfectly for all the users"):
+  1. Values that agree merge into one proposal instead of a conflict: the same text but for
+     case, spaces or dash style; a value that only fills fields the other leaves empty; lists
+     joined; phone numbers compared on their digits.
+  2. One entry under two names is one entry: employers with the same dates whose names contain
+     one another, schools with the same years and the same distinctive words, a language named
+     in English or French. The employer key of 2026-10-21 stays; the matching is added on top.
+  3. A years of experience figure a document states wins over the one computed from the dates.
+  4. The welcome wizard's Building step also writes a disagreement or a computed value into an
+     empty field, taking the value of the person's CV first; nothing the person holds is
+     replaced. Fill my profile keeps "nothing picks for the user" for everything else.
+  5. Completeness counts "Anywhere" as a place and no contract type as any contract; salary is
+     answered by its stance.
+  6. The wizard asks the answers (choice "a"): the Pay step also fills the salary answer, the
+     Work step asks notice period, earliest start and work authorisation, the Looking step asks
+     the motivation.
+  7. The reasons a reading refused items are kept with the run and shown in its review.

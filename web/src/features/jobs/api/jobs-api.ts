@@ -8,7 +8,9 @@ import { z } from "zod";
 import { API_BASE, isApiError, request } from "@/lib/api";
 
 import { toSearchParams, type JobFilters } from "../helpers/filters";
+import { noticesSchema } from "./notices-api";
 import { STATUSES } from "../helpers/labels";
+import { livenessSchema } from "./liveness-api";
 
 /** Rows per request: Harald's 433 rows come in five pages. */
 export const PAGE_SIZE = 100;
@@ -48,6 +50,7 @@ export const jobListItemSchema = z.object({
   file_count: z.number().int().nonnegative(),
   created_at: z.string(),
   updated_at: z.string(),
+  liveness: livenessSchema.nullable().optional(),
 });
 export type JobListItem = z.infer<typeof jobListItemSchema>;
 
@@ -95,6 +98,7 @@ export const jobDetailSchema = jobListItemSchema.extend({
   files: z.array(jobFileSchema),
   events: z.array(jobEventSchema),
   events_total: z.number().int().nonnegative(),
+  notices: noticesSchema.optional(),
 });
 export type JobDetail = z.infer<typeof jobDetailSchema>;
 

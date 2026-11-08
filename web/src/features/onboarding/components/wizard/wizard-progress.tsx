@@ -33,9 +33,9 @@ export function WizardBar({ current }: { current: number }) {
 }
 
 /**
- * The eight names in the side rail, once the page is wide enough for one: the current one
+ * The ten names in the side rail, once the page is wide enough for one: the current one
  * marked, a step already passed opens. Narrower, only the bar shows: the heading under it says
- * "Step N of 8: Name", and Back and the summary's Change open the steps passed.
+ * "Step N of 10: Name", and Back and the summary's Change open the steps passed.
  */
 export function WizardSteps({
   current,

@@ -12,13 +12,16 @@ onto the first FULL_AUTO_TEXT_CHARS of its text), or a sweep that once skipped i
 full width letters) never shows. When the stored rules cannot be read, the deck is empty and says
 so (`rules_unreadable`): it fails closed.
 
-**Order.** Fit, highest first (no fit last), then the newest `found_on`, then the id: a total
-order, so a reload shows the same card and the cursor names a place in it.
+**Order.** A posting whose closing date is within SOON_DAYS (`notices.closes_soon`, from today
+on) first, the soonest first (owner, 2026-11-07, "build all" of the career-ops analysis); then
+fit, highest first (no fit last), then the newest `found_on`, then the id: a total order, so a
+reload shows the same card and the cursor names a place in it.
 
 **Pages.** At most LIMIT_MAX cards per call. The cursor is the sort key of the last card given
-(fit, found_on, id), not an offset: the next page holds the cards after that key in the deck as
-it is now, so a Pass, a new posting or a threshold changed between two pages never makes a card
-come twice, and the walk always ends. `left` counts the cards from the start of this page on.
+(fit, found_on, id, closes_on) and the day the walk began, not an offset: the next page holds
+the cards after that key in the deck as it is now, ordered on that same day, so a Pass, a new
+posting, a threshold changed or midnight between two pages never makes a card come twice, and
+the walk always ends. `left` counts the cards from the start of this page on.
 
 **Filters**, any combination: contract types (`ContractType` values), `remote` or `on_site`
 (the work mode the posting states, opportunities O3: `remote` keeps the remote ones, `on_site`
@@ -31,7 +34,7 @@ the match reason (`match_reason`: up to three competencies the posting asks that
 the first gap, and what of the person's seniority, industries and company types the posting
 matches, the words of the score's bonus, scoring.bonus, read against the profile as it is
 now), and the pay (`pay.pay_text`) and the work mode the posting states (O3), None when it
-states none.
+states none, and what to know before the click (`notices.notices_of`).
 
 The never apply decision runs in Python over the light columns of every candidate (id, company,
 title, fit, found_on, whether the sweep skipped it for a rule, and in Full auto the first
@@ -54,8 +57,9 @@ from sqlalchemy.orm import Session, undefer
 
 from app.apply import caps, guardrails
 from app.apply.models import Application, Mode, State
-from app.jobs import scoring, sweep
+from app.jobs import notices, scoring, sweep
 from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus, WorkMode
+from app.jobs.notices import Notice
 from app.jobs.sweep import NeverApplyRule
 from app.profile.schemas import SearchSection
 
@@ -96,6 +100,7 @@ class Reason:
 class Card:
     posting: Job
     reason: Reason
+    notices: tuple[Notice, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -108,29 +113,55 @@ class Deck:
     rules_unreadable: bool
 
 
-SortKey = tuple[bool, int, int, str]
+SortKey = tuple[bool, int, bool, int, int, str]
 
 
-def sort_key(fit: int | None, found_on: date, posting_id: uuid.UUID) -> SortKey:
-    """The deck's order as one ascending tuple: fit descending with no fit last, found_on
-    descending, then the id (its canonical text orders as Postgres orders uuids)."""
-    return (fit is None, -(fit or 0), -found_on.toordinal(), str(posting_id))
+def sort_key(
+    fit: int | None,
+    found_on: date,
+    posting_id: uuid.UUID,
+    closes_on: date | None = None,
+    today: date | None = None,
+) -> SortKey:
+    """The deck's order as one ascending tuple: closing within SOON_DAYS of `today` first, the
+    soonest first, then fit descending with no fit last, found_on descending, then the id (its
+    canonical text orders as Postgres orders uuids)."""
+    soon = today is not None and notices.closes_soon(closes_on, today)
+    first = closes_on.toordinal() if soon and closes_on is not None else 0
+    return (not soon, first, fit is None, -(fit or 0), -found_on.toordinal(), str(posting_id))
 
 
-def encode_cursor(fit: int | None, found_on: date, posting_id: uuid.UUID) -> str:
-    raw = json.dumps([fit, found_on.isoformat(), str(posting_id)], separators=(",", ":"))
+def encode_cursor(
+    fit: int | None,
+    found_on: date,
+    posting_id: uuid.UUID,
+    closes_on: date | None = None,
+    today: date | None = None,
+) -> str:
+    values = [fit, found_on.isoformat(), str(posting_id)]
+    if today is not None:
+        values += [closes_on.isoformat() if closes_on else None, today.isoformat()]
+    raw = json.dumps(values, separators=(",", ":"))
     return base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
 
 
-def decode_cursor(text: str) -> SortKey:
+def decode_cursor(text: str) -> tuple[SortKey, date | None]:
+    """The key of the last card given and the day its walk began (None in a cursor written
+    before the closing order, read as a deck with no closing date)."""
     if len(text) > CURSOR_MAX:
         raise InvalidCursorError("cursor too long")
     try:
         raw = base64.urlsafe_b64decode(text + "=" * (-len(text) % 4))
-        fit, day, posting_id = json.loads(raw)
+        values = json.loads(raw)
+        if type(values) is not list or len(values) not in (3, 5):
+            raise ValueError(values)
+        fit, day, posting_id = values[:3]
+        closes = date.fromisoformat(values[3]) if len(values) == 5 and values[3] else None
+        today = date.fromisoformat(values[4]) if len(values) == 5 else None
         if fit is not None and (type(fit) is not int or not 0 <= fit <= 100):
             raise ValueError(fit)
-        return sort_key(fit, date.fromisoformat(day), uuid.UUID(posting_id))
+        key = sort_key(fit, date.fromisoformat(day), uuid.UUID(posting_id), closes, today)
+        return key, today
     except (binascii.Error, UnicodeDecodeError, AttributeError, TypeError, ValueError) as exc:
         raise InvalidCursorError("damaged cursor") from exc
 
@@ -175,7 +206,7 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) 
         if mode is Mode.full_auto
         else sa.null()  # never_apply reads no text outside Full auto
     )
-    columns = (Job.id, Job.company, Job.title, Job.fit, Job.found_on)
+    columns = (Job.id, Job.company, Job.title, Job.fit, Job.found_on, Job.closes_on)
     query = sa.select(*columns, head.label("posting_text"), swept.label("swept")).where(
         Job.user_id == user_id,
         Job.status.in_(DECK_STATUSES),
@@ -234,12 +265,14 @@ def deck(
     db: Session,
     user_id: uuid.UUID,
     *,
+    today: date,
     cursor: str | None = None,
     limit: int = LIMIT_MAX,
     filters: Filters = NO_FILTERS,
 ) -> Deck:
-    """One page of the person's deck. Raises InvalidCursorError for a cursor it did not write."""
-    after = decode_cursor(cursor) if cursor else None
+    """One page of the person's deck, ordered on `today` or on the day the cursor's walk began.
+    Raises InvalidCursorError for a cursor it did not write."""
+    after, began = decode_cursor(cursor) if cursor else (None, today)
     limit = max(1, min(limit, LIMIT_MAX))
     min_fit, rules, search = _search(db, user_id)
     mode = Mode(caps.settings_of(db, user_id).mode_after_like.value)
@@ -248,7 +281,7 @@ def deck(
 
     rows = db.execute(_candidates(user_id, min_fit, filters, mode)).all()
     keyed = sorted(
-        (sort_key(row.fit, row.found_on, row.id), row)
+        (sort_key(row.fit, row.found_on, row.id, row.closes_on, began), row)
         for row in rows
         if not _excluded(row, rules, mode)
     )
@@ -264,17 +297,19 @@ def deck(
             .options(undefer(Job.posting_text))
         ).scalars()
     }
+    said = notices.notices_of(db, user_id, list(postings.values()), today)
     cards = [
         Card(
             postings[i],
             match_reason(postings[i].competencies, postings[i].gaps, _also(postings[i], search)),
+            tuple(said[i]),
         )
         for i in ids
         if i in postings
     ]
     last = page[-1][1] if page else None
     next_cursor = (
-        encode_cursor(last.fit, last.found_on, last.id)
+        encode_cursor(last.fit, last.found_on, last.id, last.closes_on, began)
         if last is not None and len(keyed) > len(page)
         else None
     )

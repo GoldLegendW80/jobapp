@@ -55,7 +55,7 @@ async function openMatching(
   // With a model key About you holds the skills in words as text, not as fields.
   fakeAbout({ key: "api_key" });
   const user = userEvent.setup();
-  const app = renderApp("/profile");
+  const app = renderApp("/profile/matching");
   const form = await screen.findByRole("form", { name: "Advanced matching" });
   return { user, state, form, ...app };
 }

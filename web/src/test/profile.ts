@@ -234,23 +234,26 @@ const REQUIRED: Record<SectionName, Rules> = {
   skills: { years_experience: field("years_experience"), have: field("have") },
   search: {
     title_include: terms("title_include"),
-    location: terms("location"),
-    contract_types: field("contract_types"),
+    location: (s) => terms("location")(s) || filled(s.remote_stance),
     remote_stance: field("remote_stance"),
     interactive_sites: (s) =>
       ((s.interactive_sites as { enabled: boolean }[] | undefined) ?? []).some(
         (site) => site.enabled,
       ),
   },
-  answers: Object.fromEntries(
-    [
-      "work_authorization",
-      "notice_period",
-      "earliest_start",
-      "salary_policy",
-      "motivation",
-    ].map((n) => [n, field(n)]),
-  ),
+  answers: {
+    work_authorization: field("work_authorization"),
+    notice_period: field("notice_period"),
+    earliest_start: field("earliest_start"),
+    salary: (s) => {
+      const stance =
+        s.salary_stance ?? (filled(s.salary_policy) ? "sentence" : null);
+      if (stance === "sentence") return filled(s.salary_policy);
+      if (stance === "range") return filled(s.salary_ranges);
+      return stance === "leave_blank";
+    },
+    motivation: field("motivation"),
+  },
   preferences: {},
 };
 

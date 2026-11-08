@@ -1,17 +1,18 @@
 """GET /api/ingestion/prompt: the laptop-analysis prompt, filled for the caller (SPEC-ingestion.md,
 "Laptop-analysis prompt"; tasks/ingestion/todo.md, G3).
 
-The user copies the prompt from step 1 of /profile/fill and runs it with Claude Code or Codex on
-their own computer. That assistant writes one Markdown file, the dossier, which the user reads and
-then adds on the same page. This app never reads the user's computer and runs nothing on it: the
-route only hands out text.
+The user copies the prompt from step 1 of /profile/fill (or step 3 of the welcome wizard) and runs
+it with Claude Code or Codex on their own computer. Since version 2 (owner, 2026-11-07) that
+assistant looks through the home folder and answers in the conversation with the profile, which
+the user reads, copies and pastes into the app; the prompt names no app and asks for no file.
+This app never reads the user's computer and runs nothing on it: the route only hands out text.
 
 - The text lives in `prompts/laptop_dossier.md`: a front matter with `PROMPT_VERSION`, one
   preamble for each assistant, then the body they share. Changing the file without raising the
   version fails a test (tests/ingestion/test_prompt.py pins the hash of each version).
 - The answer holds the two filled texts, the version and the SHA-256 of the file. The version is
-  also written by the prompt into the dossier's first line (`dossier-format: <n>`), so a later
-  step can tell which prompt a dossier came from.
+  also written by the prompt into the answer's first line (`profile-format: <n>`; version 1
+  wrote `dossier-format: <n>`), so a later step can tell which prompt an answer came from.
 - The only thing of the caller in the text is their display name, made safe for one line
   (`clean_name`) and written as data: inside the two marks the template puts around it, under a
   sentence that says the marks hold a name only. A name cannot hold those marks, so it cannot
@@ -37,7 +38,8 @@ from app.identity.schemas import ErrorOut
 
 TEMPLATE_PATH = Path(__file__).parent / "prompts" / "laptop_dossier.md"
 
-# Where the assistant writes the dossier, and the only place it may write.
+# Where version 1 had the assistant write the dossier; version 2 writes no file. Still in the
+# answer, so a client of version 1 keeps working.
 OUTPUT_FOLDER = "~/jobapp-dossier"
 # A name is one line of the prompt: longer than this it is cut.
 NAME_MAX = 80
@@ -148,10 +150,10 @@ def fill(assistant: str, name: str) -> str:
 
 class PromptOut(BaseModel):
     version: int = Field(
-        description="PROMPT_VERSION of the template, also the dossier-format the prompt asks for"
+        description="PROMPT_VERSION of the template, also the format line the prompt asks for"
     )
     sha256: str = Field(description="SHA-256 of the template file, as shipped")
-    output_folder: str = Field(description="The folder the prompt has the dossier written in")
+    output_folder: str = Field(description="Where version 1 had the answer written; unused since")
     claude_code: str = Field(description="The prompt to paste into Claude Code")
     codex: str = Field(description="The prompt to paste into Codex")
 

@@ -76,6 +76,11 @@ def agent_run_job_id(run_id: object) -> str:
     return f"agent-run:{run_id}"
 
 
+def token_check_job_id(attempt: str) -> str:
+    """One job per check of a subscription token (agents, app/agents/token_check.py)."""
+    return f"token-check:{attempt}"
+
+
 def document_job_id(document_id: object, attempts: int, pending_since: datetime | None) -> str:
     """One id per try of one upload: the same document, tried again or uploaded again, is
     another job; the same try asked for twice (by the upload and by the reaper) is one."""

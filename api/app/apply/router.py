@@ -6,8 +6,9 @@
   documents the posting lacks first, as a Like does, `likes.on_apply`):
   201 with the application and its warnings (`{code, sentence}`: Apply myself on a role the
   person's rules exclude), 409 `{detail, code, application_id}` for a refusal before anything is
-  spent (app/apply/guardrails.py lists the codes), 409 `busy` when a lock is held past its
-  timeout, 404 for a posting that is not the person's.
+  spent (app/apply/guardrails.py lists the codes; `posting_closed` with the page's own sentence
+  when the posting's address, read first, says it is closed: jobs/liveness_check.py), 409 `busy`
+  when a lock is held past its timeout, 404 for a posting that is not the person's.
   Full auto is never started here: its applications come from a Like while Full auto is on (A13),
   so a request cannot skip its switch and its authorisation. A rehearsal (`dry_run`) is Review
   first only.
@@ -37,6 +38,7 @@ from app.documents import store
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
+from app.jobs import liveness_check
 from app.jobs import service as jobs_service
 
 NOT_FOUND = "No such posting."
@@ -210,6 +212,10 @@ def start_application(
     posting_id: str, body: StartIn, request: Request, user: CurrentUser, db: Db
 ) -> StartedOut | JSONResponse:
     """Start an application on one of the caller's postings, or say why not."""
+    closed = liveness_check.click_refusal(request, user.id, _uuid_or_404(posting_id, NOT_FOUND))
+    if closed is not None:
+        out = RefusalOut(detail=closed, code="posting_closed")
+        return JSONResponse(status_code=409, content=out.model_dump(mode="json"), headers=NO_STORE)
     start = likes.on_apply if body.mode == "apply" else service.start
     try:
         started = start(

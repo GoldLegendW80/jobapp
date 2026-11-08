@@ -91,7 +91,7 @@ const submit = () => page.getByRole("button", { name: /Sign in|Try again/ });
 /** Submit the sign in form; returns the status the api answered. */
 async function tryLogin(email: string, password: string) {
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  await page.getByLabel("Password", { exact: true }).fill(password);
   const answer = page.waitForResponse((r) =>
     r.url().endsWith("/api/auth/login"),
   );

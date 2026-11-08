@@ -26,7 +26,7 @@ async function shots(page: Page, name: string, fullPage = true) {
 
 /**
  * The profile page against the real stack through Caddy: no mocks. A fresh account gets a made
- * up profile through the operator CLI (never Harald's data), finds every section on one page,
+ * up profile through the operator CLI (never Harald's data), finds every section in its tab,
  * then the journey edits Contact and links (with a cropped photo), Experience and the answers of
  * About you (fields without a model key, owner 2026-11-07), reloads, saves the same section from two browsers (409), and checks the
  * unsaved changes guard.
@@ -207,16 +207,21 @@ function gradientPng(width = 600, height = 400): Buffer {
   ]);
 }
 
-/** The profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
-async function visit(page: Page, where: "profile" | "search") {
+/** A tab of the profile page, or Settings, Search for the search, which moved there (owner, 2026-11-05). */
+async function visit(
+  page: Page,
+  where: "contact" | "experience" | "about" | "search",
+) {
   if (where === "search") {
     await page.goto("/settings/search");
     await expect(page.getByRole("form", { name: "Search" })).toBeVisible();
     return;
   }
-  if (!new URL(page.url()).pathname.endsWith("/profile"))
-    await page.goto("/profile");
-  await expect(page.getByRole("form", { name: "Identity" })).toBeVisible();
+  if (new URL(page.url()).pathname !== `/profile/${where}`)
+    await page.goto(`/profile/${where}`);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "Profile" }),
+  ).toBeVisible();
 }
 
 const part = (page: Page, name: string) =>
@@ -258,28 +263,40 @@ test("a new account gets a profile through the CLI and sees every section", asyn
   await expect(
     page.getByRole("heading", { level: 1, name: "Profile" }),
   ).toBeVisible();
-  // One page, no tabs: Ready for and the completeness in the side rail.
-  await expect(page.getByRole("tab")).toHaveCount(0);
+  // A tab per part, each its own address; Ready for and the completeness in the side rail.
+  await expect(
+    page
+      .getByRole("tablist", { name: "Parts of your profile" })
+      .getByRole("tab"),
+  ).toHaveText([
+    "CVs",
+    "Experience",
+    "About you",
+    "Contact",
+    "Advanced matching",
+  ]);
   await expect(page.getByRole("list", { name: "Ready for" })).toContainText(
     "Scoring postings",
   );
   await expect(page.getByTestId("profile-completeness")).toHaveText(
     "100% complete",
   );
-  for (const name of [
-    "Your CVs",
-    "Upload your CV",
-    "Experience and education",
-    "About you",
-    "Advanced matching",
-    "Contact and links",
-  ])
+  for (const name of ["Your CVs", "Upload your CV"])
     await expect(page.getByRole("heading", { level: 2, name })).toBeVisible();
 
+  await page.getByRole("tab", { name: "Contact" }).click();
+  await expect(page).toHaveURL(/\/profile\/contact$/);
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Contact and links" }),
+  ).toBeVisible();
   await expect(page.getByLabel("Full name", { exact: true })).toHaveValue(NAME);
   await expect(page.getByLabel("Language 2", { exact: true })).toHaveValue(
     "English",
   );
+  await page.getByRole("tab", { name: "Experience" }).click();
+  await expect(
+    page.getByRole("heading", { level: 2, name: "Experience and education" }),
+  ).toBeVisible();
   await expect(
     page.getByLabel("Organisation of employer 1", { exact: true }),
   ).toHaveValue("Acme Robotics");
@@ -289,6 +306,7 @@ test("a new account gets a profile through the CLI and sees every section", asyn
   await shots(page, "profile");
 
   // The facts are parts of About you, drawn by the safe renderer.
+  await page.getByRole("tab", { name: "About you" }).click();
   await expect(
     part(page, "WHAT ROBIN BUILT").getByRole("link", { name: "the portfolio" }),
   ).toBeVisible();
@@ -301,18 +319,6 @@ test("a new account gets a profile through the CLI and sees every section", asyn
   ).toBeUndefined();
   expect(await hostile.locator("script, img").count()).toBe(0);
 
-  // The skills in words are About you's, as fields without a model key; the regular expression
-  // stays in Advanced matching.
-  const skills = page.getByRole("form", { name: "Skills" });
-  await skills.getByRole("button", { name: "What I have, agents" }).click();
-  await expect(
-    skills.getByRole("list", { name: "Terms of agents" }),
-  ).toContainText("langgraph");
-  await expect(
-    page
-      .getByRole("form", { name: "Advanced matching" })
-      .getByRole("list", { name: "Terms of llm" }),
-  ).toContainText("\\bllm\\b");
   const answers = page.getByRole("form", { name: "Answers" });
   await answers
     .getByRole("button", { name: /^Availability and conditions,/ })
@@ -320,6 +326,20 @@ test("a new account gets a profile through the CLI and sees every section", asyn
   await expect(
     answers.getByLabel("Notice period", { exact: true }),
   ).toHaveValue("One month.");
+
+  // The skills in words are About you's, as fields without a model key; the regular expression
+  // stays in Advanced matching.
+  const skills = page.getByRole("form", { name: "Skills" });
+  await skills.getByRole("button", { name: "What I have, agents" }).click();
+  await expect(
+    skills.getByRole("list", { name: "Terms of agents" }),
+  ).toContainText("langgraph");
+  await page.getByRole("tab", { name: "Advanced matching" }).click();
+  await expect(
+    page
+      .getByRole("form", { name: "Advanced matching" })
+      .getByRole("list", { name: "Terms of llm" }),
+  ).toContainText("\\bllm\\b");
 
   // Searches run the job websites ticked in Find jobs (owner, 2026-10-28): Settings, Search
   // shows no company boards.
@@ -333,7 +353,7 @@ test("a new account gets a profile through the CLI and sees every section", asyn
 });
 
 test("Contact and links: edit, crop and upload a photo, save", async () => {
-  await visit(page, "profile");
+  await visit(page, "contact");
   await page
     .getByLabel("Headline", { exact: true })
     .fill("Senior Applied AI Engineer");
@@ -376,7 +396,7 @@ test("Contact and links: edit, crop and upload a photo, save", async () => {
 });
 
 test("Experience: add an employer, reorder, save", async () => {
-  await visit(page, "profile");
+  await visit(page, "experience");
   await page.getByRole("button", { name: "Add employer" }).click();
   await page
     .getByLabel("Organisation of employer 3", { exact: true })
@@ -406,7 +426,7 @@ test("Experience: add an employer, reorder, save", async () => {
 });
 
 test("About you without a model key: an answer is a field, saved with the answers", async () => {
-  await visit(page, "profile");
+  await visit(page, "about");
   const answers = page.getByRole("form", { name: "Answers" });
   await answers.getByRole("button", { name: /^In your own words,/ }).click();
   const motivation = answers.getByLabel("Motivation", { exact: true });
@@ -421,13 +441,14 @@ test("About you without a model key: an answer is a field, saved with the answer
 });
 
 test("a reload shows every saved change", async () => {
-  await page.goto("/profile");
+  await page.goto("/profile/contact");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Senior Applied AI Engineer",
   );
   await expect(
     page.getByRole("img", { name: "Your profile photo" }),
   ).toBeVisible();
+  await page.getByRole("tab", { name: "Experience" }).click();
   await expect(
     page.getByLabel("Organisation of employer 1", { exact: true }),
   ).toHaveValue("Acme Robotics");
@@ -440,6 +461,7 @@ test("a reload shows every saved change", async () => {
   await expect(
     page.getByLabel("Contract at employer 2", { exact: true }),
   ).toHaveValue("internship");
+  await page.getByRole("tab", { name: "About you" }).click();
   const answers = page.getByRole("form", { name: "Answers" });
   await answers.getByRole("button", { name: /^In your own words,/ }).click();
   await expect(answers.getByLabel("Motivation", { exact: true })).toHaveValue(
@@ -456,8 +478,8 @@ test("saving the same section from two browsers shows the conflict dialog", asyn
   const secondErrors = watchErrors(second);
   await signIn(second, EMAIL, PASSWORD);
   await expect(second).toHaveURL(/\/jobs$/);
-  await second.goto("/profile#contact");
-  await page.goto("/profile");
+  await second.goto("/profile/contact");
+  await page.goto("/profile/contact");
   await expect(second.getByLabel("City", { exact: true })).toHaveValue(
     "Nantes",
   );
@@ -496,21 +518,21 @@ test("saving the same section from two browsers shows the conflict dialog", asyn
   expect(errors).toEqual([]);
 });
 
-test("unsaved changes: leaving the page asks first, a place on the page does not", async () => {
-  await page.goto("/profile");
+test("unsaved changes: another tab of the profile or another page asks first", async () => {
+  await page.goto("/profile/contact");
   await page.getByLabel("Headline", { exact: true }).fill("Not saved yet");
   await expect(page.getByText("Unsaved changes")).toBeVisible();
 
-  // A link to a place on the page only changes the hash: nothing is left, nothing asked.
+  // Another tab would replace the form: Keep editing stays on it.
   const guard = page.getByRole("alertdialog", {
     name: "Discard unsaved changes?",
   });
-  await page
-    .getByRole("navigation", { name: "Parts of About you" })
-    .getByRole("link", { name: "Answers" })
-    .click();
-  await expect(page).toHaveURL(/\/profile#about-answers$/);
-  await expect(guard).toHaveCount(0);
+  await page.getByRole("tab", { name: "Experience" }).click();
+  await expect(guard).toContainText(
+    "Your changes to Contact and links are not saved.",
+  );
+  await guard.getByRole("button", { name: "Keep editing" }).click();
+  await expect(page).toHaveURL(/\/profile\/contact$/);
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Not saved yet",
   );
@@ -519,14 +541,14 @@ test("unsaved changes: leaving the page asks first, a place on the page does not
   await expect(guard).toBeVisible();
   await shots(page, "unsaved-guard", false);
   await guard.getByRole("button", { name: "Keep editing" }).click();
-  await expect(page).toHaveURL(/\/profile(#[\w-]+)?$/);
+  await expect(page).toHaveURL(/\/profile\/contact$/);
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Not saved yet",
   );
 
-  // Closing the tab asks the browser's own question.
+  // Closing the browser tab asks the browser's own question.
   const closing = await context.newPage();
-  await closing.goto("/profile");
+  await closing.goto("/profile/contact");
   await closing.getByLabel("Headline", { exact: true }).fill("Also not saved");
   const asked = new Promise<string>((resolve) => {
     closing.once("dialog", (d) => {
@@ -540,7 +562,7 @@ test("unsaved changes: leaving the page asks first, a place on the page does not
   await page.getByRole("link", { name: "jobapp" }).click();
   await guard.getByRole("button", { name: "Discard changes" }).click();
   await expect(page).toHaveURL(/\/jobs$/);
-  await page.goto("/profile");
+  await page.goto("/profile/contact");
   await expect(page.getByLabel("Headline", { exact: true })).toHaveValue(
     "Senior Applied AI Engineer",
   );

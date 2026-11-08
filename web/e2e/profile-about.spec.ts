@@ -16,7 +16,7 @@ import {
 const shots = makeShots("profile-about", "about");
 
 /**
- * The one page profile and its About you document (SPEC-profile, "About you") against the real
+ * The profile page and its About you tab (SPEC-profile, "About you") against the real
  * stack through Caddy: a fresh account gets a made up profile through the operator CLI and, with
  * no model key, finds its skills and answers as fields and its facts as text (the jobs stay a
  * form, the search is in Settings, Search). It saves a fact part to the profile at Done, changes
@@ -146,20 +146,20 @@ test.afterAll(async () => {
   clearAttempts([EMAIL]);
 });
 
-test("the profile is one page; without a key About you holds the skills and answers as fields", async () => {
+test("the profile is in tabs; without a key About you holds the skills and answers as fields", async () => {
   await page.goto(cliLink(EMAIL));
   await setPassword(page, PASSWORD, NAME);
   expect(cliImportProfile(EMAIL, fakeExport())).toMatch(/revision/i);
-  await page.goto("/profile");
-  await expect(page.getByRole("tab")).toHaveCount(0);
+  // The jobs stay a form, in their own tab; the search is in Settings, Search.
+  await page.goto("/profile/experience");
+  await expect(page.getByRole("form", { name: "Experience" })).toBeVisible();
+  await expect(page.getByRole("form", { name: "Search" })).toHaveCount(0);
+  await page.getByRole("tab", { name: "About you" }).click();
+  await expect(page).toHaveURL(/\/profile\/about$/);
   await expect(page.getByRole("list", { name: "Ready for" })).toContainText(
     "Scoring postings",
   );
-  await expect(
-    page
-      .getByRole("navigation", { name: "Parts of About you" })
-      .getByRole("link"),
-  ).toHaveText(["Skills", "Answers"]);
+  await expect(page.locator("#about-you h3")).toHaveText(["Skills", "Answers"]);
   const fields = page.getByRole("form", { name: "Skills" });
   await expect(
     fields.getByLabel("Years of experience", { exact: true }),
@@ -174,10 +174,7 @@ test("the profile is one page; without a key About you holds the skills and answ
   await expect(
     answers.getByLabel("Notice period", { exact: true }),
   ).toHaveValue("Three months.");
-  // The jobs stay a form; the search is in Settings, Search.
-  await expect(page.getByRole("form", { name: "Experience" })).toBeVisible();
-  await expect(page.getByRole("form", { name: "Search" })).toHaveCount(0);
-  await shots(page, "one-page");
+  await shots(page, "about-tab");
 });
 
 test("a fact part is saved to the profile at Done, without a key", async () => {

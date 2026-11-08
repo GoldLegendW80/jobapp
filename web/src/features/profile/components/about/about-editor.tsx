@@ -19,7 +19,6 @@ import {
   kindAnchors,
   moveId,
   newPartHeading,
-  partAnchor,
   shownPart,
 } from "@/features/profile/helpers/about-parts";
 import { ABOUT_WORDS as W } from "@/features/profile/helpers/about-words";
@@ -29,7 +28,6 @@ import {
   factBytes,
   isFactPart,
 } from "@/features/profile/helpers/fact-base";
-import { AboutContents, type ContentsEntry } from "./about-contents";
 import { AboutPartCard } from "./about-part-card";
 import { FactSizeMeter } from "./fact-size-meter";
 import { PlainAnswers } from "./plain-answers";
@@ -67,11 +65,6 @@ function itemsOf(about: About, parts: readonly Part[]): Item[] {
   if (!placed.has("answers")) items.push({ kind: "answers" });
   return items;
 }
-
-const FIELDS_ENTRY: Record<"skills" | "answers", ContentsEntry> = {
-  skills: { label: "Skills", anchor: "about-skills" },
-  answers: { label: "Answers", anchor: "about-answers" },
-};
 
 /**
  * The loaded document: the contents and the size of the fact base beside its parts, one part
@@ -162,125 +155,107 @@ export function AboutEditor({
     setMoved(W.moved(part.heading, up ? "up" : "down"));
   };
 
-  const entries = items.map((item) =>
-    item.kind === "part"
-      ? {
-          label: parts[item.index]?.heading ?? "",
-          anchor: partAnchor(item.index),
-        }
-      : FIELDS_ENTRY[item.kind],
-  );
-
   return (
     <div className="flex flex-col gap-4">
       {doc.status.state === "conflict" ? (
         <SaveConflictAlert onSettle={doc.settle} />
       ) : null}
-      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[11rem_minmax(0,1fr)] lg:gap-6">
-        <AboutContents
-          entries={entries}
-          footer={
-            <div className="lg:px-2">
-              <FactSizeMeter bytes={bytes} />
-            </div>
-          }
-        />
-        <div className="flex min-w-0 flex-col gap-4">
-          {items.map((item) => {
-            if (item.kind === "skills")
-              return (
-                <PlainSkills
-                  key={`skills-${forms.keys.skills}`}
-                  profile={profile}
-                  advanced={about.advanced}
-                  onDirtyChange={forms.onDirty.skills}
-                  onSaved={onSkillsSaved}
-                />
-              );
-            if (item.kind === "answers")
-              return (
-                <PlainAnswers
-                  key={`answers-${forms.keys.answers}`}
-                  profile={profile}
-                  onDirtyChange={forms.onDirty.answers}
-                  onSaved={onAnswersSaved}
-                />
-              );
-            const { index } = item;
-            const part = parts[index];
-            if (!part) return null;
-            const position = facts.indexOf(index);
+      <div className="flex min-w-0 flex-col gap-4">
+        {items.map((item) => {
+          if (item.kind === "skills")
             return (
-              <AboutPartCard
-                kindAnchor={anchors[index]}
-                key={index}
-                index={index}
-                move={
-                  position < 0
-                    ? undefined
-                    : {
-                        position,
-                        count: facts.length,
-                        disabled:
-                          editing !== null ||
-                          actions.busy ||
-                          doc.status.state === "conflict",
-                        onMove: (direction) => {
-                          movePart(index, direction === "up");
-                        },
-                      }
-                }
-                about={about}
-                part={part}
-                shown={shownPart(about, part.heading)}
-                editing={editing === index}
-                busy={actions.busy}
-                status={doc.status}
-                onEdit={() => {
-                  setEditing(index);
-                }}
-                onChange={(next) => {
-                  setPart(index, next);
-                }}
-                onDone={async (heading) => {
-                  if (await actions.finishPart(heading)) setEditing(null);
-                }}
-                onAct={(action) => void actions.runAction(action)}
+              <PlainSkills
+                key={`skills-${forms.keys.skills}`}
+                profile={profile}
+                advanced={about.advanced}
+                onDirtyChange={forms.onDirty.skills}
+                onSaved={onSkillsSaved}
               />
             );
-          })}
-          <p className="sr-only" aria-live="polite">
-            {moved}
-          </p>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              variant="outline"
-              onClick={addPart}
-              disabled={editing !== null}
-            >
-              <FilePlus2 aria-hidden="true" />
-              {W.addPart}
-            </Button>
-            {about.missing_blocks.length > 0 ? (
-              <p className="text-sm text-muted-foreground">
-                {W.missing(about.missing_blocks.length)}{" "}
-                <Button
-                  variant="link"
-                  className="h-auto p-0"
-                  disabled={actions.busy}
-                  onClick={() => {
-                    void actions.runAction({
-                      name: "rewrite",
-                      heading: null,
-                      version: about.version,
-                    });
-                  }}
-                >
-                  {W.addThem}
-                </Button>
-              </p>
-            ) : null}
-          </div>
+          if (item.kind === "answers")
+            return (
+              <PlainAnswers
+                key={`answers-${forms.keys.answers}`}
+                profile={profile}
+                onDirtyChange={forms.onDirty.answers}
+                onSaved={onAnswersSaved}
+              />
+            );
+          const { index } = item;
+          const part = parts[index];
+          if (!part) return null;
+          const position = facts.indexOf(index);
+          return (
+            <AboutPartCard
+              kindAnchor={anchors[index]}
+              key={index}
+              index={index}
+              move={
+                position < 0
+                  ? undefined
+                  : {
+                      position,
+                      count: facts.length,
+                      disabled:
+                        editing !== null ||
+                        actions.busy ||
+                        doc.status.state === "conflict",
+                      onMove: (direction) => {
+                        movePart(index, direction === "up");
+                      },
+                    }
+              }
+              about={about}
+              part={part}
+              shown={shownPart(about, part.heading)}
+              editing={editing === index}
+              busy={actions.busy}
+              status={doc.status}
+              onEdit={() => {
+                setEditing(index);
+              }}
+              onChange={(next) => {
+                setPart(index, next);
+              }}
+              onDone={async (heading) => {
+                if (await actions.finishPart(heading)) setEditing(null);
+              }}
+              onAct={(action) => void actions.runAction(action)}
+            />
+          );
+        })}
+        <p className="sr-only" aria-live="polite">
+          {moved}
+        </p>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <Button
+            variant="outline"
+            onClick={addPart}
+            disabled={editing !== null}
+          >
+            <FilePlus2 aria-hidden="true" />
+            {W.addPart}
+          </Button>
+          <FactSizeMeter bytes={bytes} />
+          {about.missing_blocks.length > 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {W.missing(about.missing_blocks.length)}{" "}
+              <Button
+                variant="link"
+                className="h-auto p-0"
+                disabled={actions.busy}
+                onClick={() => {
+                  void actions.runAction({
+                    name: "rewrite",
+                    heading: null,
+                    version: about.version,
+                  });
+                }}
+              >
+                {W.addThem}
+              </Button>
+            </p>
+          ) : null}
         </div>
       </div>
     </div>

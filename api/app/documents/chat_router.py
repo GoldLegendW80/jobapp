@@ -1,7 +1,8 @@
 """The chat of a document and the follow of a generation (task D17; SPEC-documents.md, "API").
 Included by `routers.py` before D6's `/api/documents/{document_id}`.
 
-- `GET /api/documents/{id}/messages?channel=content`: the conversation, oldest first.
+- `GET /api/documents/{id}/messages?channel=content`: the conversation, oldest first; a
+  message of the person that corrects the wording carries the rule offered (`writing_rules`).
 - `POST /api/documents/{id}/messages {text, channel?, script?}`: 202 with the message and the
   generation it started (`chat.post`). 404 for another person's document; 422 for an empty
   message, one over DOCUMENTS_CHAT_MAX_CHARS, or the `design` channel (task D26); 409 while a
@@ -35,7 +36,7 @@ from sqlalchemy.orm import Session
 from app import queue as queues
 from app.agents import runs as agent_runs
 from app.db import get_session
-from app.documents import chat, generate, store
+from app.documents import chat, generate, store, writing_rules
 from app.documents.models import (
     Channel,
     DocumentGeneration,
@@ -92,6 +93,8 @@ class MessageOut(BaseModel):
     generation_id: uuid.UUID | None
     version_number: int | None
     at: datetime
+    # A message of the person that corrects the wording: the rule the chat offers to keep.
+    rule: str | None = None
 
 
 class MessagesOut(BaseModel):
@@ -131,6 +134,7 @@ def _message(row: DocumentMessage) -> MessageOut:
         generation_id=row.generation_id,
         version_number=row.version_number,
         at=row.at,
+        rule=writing_rules.offer(row.text) if row.role == Role.user else None,
     )
 
 

@@ -159,7 +159,7 @@ const menuButton = (page: Page, name = NAME) =>
 
 async function signIn(page: Page, email: string, password: string) {
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
 }
 
@@ -221,16 +221,22 @@ test("the CLI link sets up the admin, who lands signed in on /", async ({
   // Client side check first: a mismatch sends nothing.
   if (isInvite) await page.getByLabel("Name").fill(NAME);
   await page.getByLabel(/^(New password|Password)$/).fill(PASSWORD);
-  await page.getByLabel("Confirm password").fill(`${PASSWORD}x`);
+  await page
+    .getByLabel("Confirm password", { exact: true })
+    .fill(`${PASSWORD}x`);
   await page
     .getByRole("button", { name: /Create account|Save password/ })
     .click();
   await expect(page.getByText("The passwords do not match.")).toBeVisible();
-  await expect(page.getByLabel("Confirm password")).toBeFocused();
+  await expect(
+    page.getByLabel("Confirm password", { exact: true }),
+  ).toBeFocused();
 
   // The api's own rule: a common password is refused with its message, shown as is.
   await page.getByLabel(/^(New password|Password)$/).fill("password123");
-  await page.getByLabel("Confirm password").fill("password123");
+  await page
+    .getByLabel("Confirm password", { exact: true })
+    .fill("password123");
   await page
     .getByRole("button", { name: /Create account|Save password/ })
     .click();
@@ -241,7 +247,7 @@ test("the CLI link sets up the admin, who lands signed in on /", async ({
   ).toBeVisible();
 
   await page.getByLabel(/^(New password|Password)$/).fill(PASSWORD);
-  await page.getByLabel("Confirm password").fill(PASSWORD);
+  await page.getByLabel("Confirm password", { exact: true }).fill(PASSWORD);
   await page
     .getByRole("button", { name: /Create account|Save password/ })
     .click();
@@ -406,7 +412,7 @@ test("a reset link from the CLI sets a new password and ends the old session", a
   await expect(page.getByLabel("Name")).toHaveCount(0);
   await shots(page, "reset");
   await page.getByLabel("New password", { exact: true }).fill(NEW_PASSWORD);
-  await page.getByLabel("Confirm password").fill(NEW_PASSWORD);
+  await page.getByLabel("Confirm password", { exact: true }).fill(NEW_PASSWORD);
   await page.getByRole("button", { name: "Save password" }).click();
   await expect(page).toHaveURL(/\/jobs$/);
   await expect(menuButton(page)).toBeVisible();

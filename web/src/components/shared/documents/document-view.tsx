@@ -20,6 +20,7 @@ import { type GenerationBrief } from "@/features/documents/api/posting-documents
 import { describeError } from "@/lib/api";
 import * as compare from "./compare-panel";
 import { ChatSection, ChatSheet } from "./document-view/chat-section";
+import { CoverageNote } from "./document-view/coverage-note";
 import { DocumentFacts } from "./document-view/document-facts";
 import { DocumentStatus } from "./document-view/document-status";
 import { FitNote } from "./document-view/fit-note";
@@ -211,6 +212,7 @@ function LoadedDocument({
               kind={document.kind}
               hasVersion={shown !== undefined}
             />
+            {isLatest ? <CoverageNote document={document} /> : null}
             {shown === undefined && !isOpen(generation) ? (
               <p className="text-sm text-muted-foreground">
                 Nothing has been written for this document yet.

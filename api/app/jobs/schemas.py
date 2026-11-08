@@ -343,6 +343,15 @@ ReadPayAmount = Annotated[
 ]
 
 
+class LivenessOut(BaseModel):
+    """What the last check of the posting's own address found (SPEC-jobs, "Liveness")."""
+
+    verdict: Literal["closed", "may_be_closed", "unconfirmed", "no_closure"]
+    reason: str
+    sentence: str | None = None
+    checked_at: datetime
+
+
 class JobListItem(BaseModel):
     """One row of the list: everything but the posting text, the legacy columns and the files."""
 
@@ -376,6 +385,7 @@ class JobListItem(BaseModel):
     file_count: int
     created_at: datetime
     updated_at: datetime
+    liveness: LivenessOut | None = None
 
     @model_validator(mode="after")
     def pay_order(self) -> "JobListItem":
@@ -431,12 +441,27 @@ class EventOut(BaseModel):
     data: dict[str, Any]
 
 
+class NoticeOut(BaseModel):
+    """What the person should know before the click (app/jobs/notices.py): a sentence of facts,
+    the posting's own words when it has some, and the other posting it names."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    kind: Literal["signal", "closing", "cross_listing", "history"]
+    code: str
+    text: str
+    quote: str | None = None
+    level: Literal["info", "warning"] = "info"
+    job_id: uuid.UUID | None = None
+
+
 class JobDetail(JobListItem):
     posting_text: str | None
     legacy: dict[str, Any]
     files: list[FileOut]
     events: list[EventOut]  # newest first, at most EVENTS_IN_DETAIL
     events_total: int
+    notices: list[NoticeOut] = []
 
 
 # --- editing, bulk, add, rescore (J4) -----------------------------------------------------------

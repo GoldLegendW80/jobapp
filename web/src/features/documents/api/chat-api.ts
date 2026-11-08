@@ -12,6 +12,8 @@ export const messageSchema = z.object({
   generation_id: z.string().nullable(),
   version_number: z.number().nullable(),
   at: z.string(),
+  // A message of the person that corrects the wording: the rule the chat offers to keep.
+  rule: z.string().nullish(),
 });
 export type Message = z.infer<typeof messageSchema>;
 

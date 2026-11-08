@@ -52,7 +52,7 @@ def _version(conn: sa.Connection, user: str, document: str) -> None:
 
 
 def test_0022_up_down_up(at_head: sa.Engine) -> None:
-    assert _labels(at_head) == ["cv", "letter", "proposal"]
+    assert _labels(at_head)[:3] == ["cv", "letter", "proposal"]
     with at_head.begin() as conn:
         user = add_user(conn, "e2e-docs-0022@example.org")
         posting = conn.execute(
@@ -89,7 +89,7 @@ def test_0022_up_down_up(at_head: sa.Engine) -> None:
             )
     command.upgrade(alembic_config(), "head")
     command.upgrade(alembic_config(), "head")
-    assert _labels(at_head) == ["cv", "letter", "proposal"]
+    assert _labels(at_head)[:3] == ["cv", "letter", "proposal"]
 
 
 def test_0022_offline_sql(
