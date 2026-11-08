@@ -730,6 +730,7 @@ def _create_imported(
         slug=slug,
         **{name: getattr(item, name) for name in IMPORTED_FIELDS if name != "found_on"},
         **{name: getattr(item, name) for name in carried_fields(item)},
+        **signals.stored(item.posting_text),
         found_on=item.found_on or now.date(),
         fit_overridden=manual,
         created_at=now,
@@ -807,6 +808,11 @@ def _update_imported(
         data["files_replaced"] = replaced
     for name, value in changed.items():
         setattr(job, name, value)
+    if "url" in changed:
+        job.liveness = sa.null()  # SQL NULL: the last check read the old address
+    if "posting_text" in changed or job.signals is None:
+        for name, value in signals.stored(job.posting_text).items():
+            setattr(job, name, value)
     touch(job, now)
     add_event(db, job, JobEventKind.import_, data, now)
     summary.updated += 1
@@ -1250,6 +1256,8 @@ def edit_job(
     if edits:
         for name in edits:
             setattr(job, name, changes.fields[name])
+        if "url" in edits:
+            job.liveness = sa.null()  # SQL NULL: the last check read the old address
         add_event(db, job, JobEventKind.edit, {"changes": edits}, now)
         touch(job, now)
         db.flush()

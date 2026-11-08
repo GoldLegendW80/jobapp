@@ -4,10 +4,11 @@ database, linear in the text's length.
 
 - `read(text)`: the eligibility signals, each with the posting's own sentence quoted:
   `no_sponsorship` (it does not sponsor a visa or a work permit), `sponsorship` (it does),
-  `work_permit` (it asks for the right to work in a place; `value` the place, a name of
-  `app.apply.answers.COUNTRIES`), `degree` (it requires a degree), `contractor` (independent
-  contractor, 1099, auto-entrepreneur, portage salarial), `fixed_term`, `unpaid`, `candidate_fee`
-  (the candidate pays), and `closing` (the closing date it states, `value` its ISO date).
+  `work_permit` (it requires the right to work in a place, never one it sponsors or arranges;
+  `value` the place, a name of `app.apply.answers.COUNTRIES`, one signal a place), `degree` (it
+  requires a degree), `contractor` (independent contractor, 1099, auto-entrepreneur, portage
+  salarial), `fixed_term`, `unpaid`, `candidate_fee` (the candidate pays), and `closing` (the
+  closing date it states, `value` its ISO date).
 - `closing(text)`: that closing date and its sentence, or None.
 - `fingerprint(text)`: a 64-bit SimHash of the text's distinct word pairs (a signed bigint), or
   None for a text too short to tell; `same_text(a, b)` for two fingerprints at most SAME_BITS
@@ -87,15 +88,17 @@ def _quote(sentence: str) -> str:
 
 _PLACE_OF = {phrase: name for name, phrases in COUNTRIES.items() for phrase in phrases}
 _PLACES = "|".join(re.escape(p) for p in sorted(_PLACE_OF, key=len, reverse=True))
+_PLACE = re.compile(rf"\b(?:{_PLACES})\b")
 
 
 def place_of(text: str | None) -> str | None:
     """The country or region a text names, as a name of COUNTRIES ("UK", "Royaume-Uni" and "the
-    United Kingdom" read "United Kingdom"), or None when it names none or several."""
+    United Kingdom" read "United Kingdom"), or None when it names none or several. Phrases are
+    read longest first, so "Latin America" is never the "America" inside it."""
     said = re.sub(r"^(?:the|l|le|la|les) ", "", words(text or ""))
     if said in _PLACE_OF:
         return _PLACE_OF[said]
-    named = {name for phrase, name in _PLACE_OF.items() if re.search(rf"\b{phrase}\b", said)}
+    named = {_PLACE_OF[phrase] for phrase in _PLACE.findall(said)}
     return named.pop() if len(named) == 1 else None
 
 
@@ -118,10 +121,34 @@ _FR_SPONSOR_VERB = (
     r"|accompagner|accompagnons|proposer|proposons|offrir|offrons|fournir|fournissons|assurer"
     r"|assurons)"
 )
+# The words a negation may stand apart from its verb by, and the verb from what it sponsors: allow
+# lists, so "can't wait to sponsor" or "don't just sponsor" refuse nothing.
+_NEG_GAP = (
+    r"(?: (?:currently|presently|now|yet|unfortunately|sadly|legally|generally|typically|usually"
+    r"|be|able|to|in|a|position|at|this|the|moment|time|present|stage|for|role|ever|any|longer"
+    r"|offer|provide|support))"
+)
+_OBJECT_GAP = (
+    r"(?: (?:a|an|the|any|your|our|their|new|international|foreign|overseas|non|eu|uk|usa"
+    r"|employment|employee|employees|applicants|applicant|candidates|candidate|hires|anyone"
+    r"|people|staff|workers|worker|for|or|nor|and|kind|kinds|type|types|form|forms|of|sort|this"
+    r"|these|role|roles|position|positions|work|transfer|transfers|renew|renewal|renewals"
+    r"|relocation|assistance|with|skilled|temporary|student|tier|2|at|time|now|currently))"
+)
+_FR_AUX_GAP = (
+    r"(?: (?:sommes|serons|sera|seront|est|etait|sont|pouvons|pourrons|pourrions|pourra"
+    r"|pourront|pourrait|peut|peuvent|allons|va|vont|souhaitons|prevoyons|malheureusement"
+    r"|actuellement|en|y|l|le|la|les|vous|leur|lui))"
+)
+_FR_OBJECT_GAP = (
+    r"(?: (?:de|d|du|des|un|une|le|la|les|l|votre|vos|leur|leurs|aucun|aucune|demande|demandes"
+    r"|demarche|demarches|procedure|procedures|frais|dossier|pour|ce|cette|poste|en|matiere"
+    r"|nouveaux|nouvelles|candidats|candidates|salaries|collaborateurs))"
+)
 NO_SPONSORSHIP = (
-    rf"\b{_NEG}(?: [a-z]+){{0,4}}? (?:sponsor|sponsoring|support|supporting|provide|providing"
-    rf"|offer|offering)(?: [a-z0-9]+){{0,4}}? {_SPONSOR_OBJECT}\b",
-    rf"\b{_NEG}(?: [a-z]+){{0,3}}? (?:sponsor|sponsoring)\b",
+    rf"\b{_NEG}{_NEG_GAP}{{0,4}}? (?:sponsor|sponsoring|support|supporting|provide|providing"
+    rf"|offer|offering){_OBJECT_GAP}{{0,4}}? {_SPONSOR_OBJECT}\b",
+    rf"\b{_NEG}{_NEG_GAP}{{0,3}}? (?:sponsor|sponsoring)\b",
     r"\b(?:visa |immigration |work permit |employment visa |h1b )?sponsorship (?:is |will |would "
     r"|can )?(?:not|n t|no longer) (?:be )?(?:available|offered|provided|possible|supported"
     r"|considered)\b",
@@ -133,9 +160,9 @@ NO_SPONSORSHIP = (
     r"|employer |company |work permit |employment visa |h1b )?sponsorship\b",
     r"\b(?:will|do|does|must|should) not (?:now or in the future |currently |now |presently )?"
     r"(?:require|need)(?: [a-z]+){0,3}? sponsorship\b",
-    rf"\b(?:ne|n)(?: [a-z]+){{0,3}} (?:pas|plus) (?:en mesure de |la possibilite de "
-    rf"|possible de )?(?:de )?{_FR_SPONSOR_VERB}(?: [a-z]+){{0,4}}? {_FR_SPONSOR_OBJECT}\b",
-    rf"\b(?:ne|n) {_FR_SPONSOR_VERB} (?:pas|aucun|aucune|plus)(?: [a-z]+){{0,4}}? "
+    rf"\b(?:ne|n){_FR_AUX_GAP}{{0,3}} (?:pas|plus) (?:en mesure de |la possibilite de "
+    rf"|possible de )?(?:de )?{_FR_SPONSOR_VERB}{_FR_OBJECT_GAP}{{0,4}}? {_FR_SPONSOR_OBJECT}\b",
+    rf"\b(?:ne|n) {_FR_SPONSOR_VERB} (?:pas|aucun|aucune|plus){_FR_OBJECT_GAP}{{0,4}}? "
     rf"{_FR_SPONSOR_OBJECT}\b",
     r"\b(?:pas de|aucun|aucune|sans) (?:possibilite de )?(?:parrainage|sponsoring|sponsorisation)"
     r"(?: de| d un| pour| pour le| pour un)?(?: visa| visas| permis de travail)?\b"
@@ -165,18 +192,117 @@ SPONSORSHIP = (
     r"|prendre en charge|parrainons|sponsorisons|accompagnons|prenons en charge)(?: [a-z]+){0,4}?"
     r" (?:visa|visas|permis de travail|titre de sejour)\b",
 )
-_WORK_RIGHT = (
-    r"(?:right to work|rights to work|right to live and work|authorized to work|authorised to work"
-    r"|authorization to work|authorisation to work|work authorization|work authorisation"
-    r"|eligible to work|eligibility to work|entitled to work|entitlement to work|permitted to work"
-    r"|permission to work|legally able to work|legally work|work permit|work visa|autorise a"
-    r" travailler|autorisee a travailler|autorises a travailler|autorisees a travailler"
+# The right as the person's state ("eligible to work"): naming it is asking for it.
+_RIGHT_STATE = (
+    r"(?:authorized to work|authorised to work|eligible to work|entitled to work|permitted to work"
+    r"|legally able to work|legally work|autorise a travailler|autorisee a travailler"
+    r"|autorises a travailler|autorisees a travailler)"
+)
+# The right as a thing held or given ("a work permit"): asked only by requirement wording.
+_RIGHT_THING = (
+    r"(?:right to work|rights to work|right to live and work|authorization to work"
+    r"|authorisation to work|work authorization|work authorisation|eligibility to work"
+    r"|entitlement to work|permission to work|work permit|work permits|work visa|work visas"
     r"|autorisation de travail|autorisation de travailler|droit de travailler|droit au travail"
     r"|permis de travail|titre de sejour)"
 )
+_IN = r"(?:in|within|for|en|au|aux|dans|pour|sur le territoire)(?: (?:the|l|le|la|les|de|du|des))?"
 WORK_PERMIT = (
-    rf"\b{_WORK_RIGHT}(?: [a-z0-9]+){{0,4}}? (?:in|within|for|en|au|aux|dans|pour|sur le"
-    rf" territoire)(?: (?:the|l|le|la|les|de|du|des))? (?P<place>{_PLACES})\b",
+    rf"\b(?:(?P<state>{_RIGHT_STATE})|{_RIGHT_THING})(?: [a-z0-9]+){{0,4}}? {_IN}"
+    rf" (?P<place>{_PLACES})\b",
+)
+# Each further place of a list: "in the UK, Ireland or the EU".
+_MORE_PLACE = re.compile(
+    rf" (?:(?:or|and|ou|et|and or|as well as)(?: {_IN})? )?(?:(?:the|l|le|la|les) )?"
+    rf"(?P<place>{_PLACES})\b"
+)
+# The wording that requires the right, an allow list.
+_REQUIRED = re.compile(
+    r"\b(?:must|required|require|requires|requirement|requirements|mandatory|essential"
+    r"|have to have|has to have|have to hold|has to hold|need to have|needs to have|need to hold"
+    r"|needs to hold|need you to have|need you to hold|expect you to have|expect you to hold"
+    r"|valid|only (?:candidates|applicants|people|persons|individuals|those"
+    r"|residents|citizens|nationals) (?:with|who|holding)|devez|devrez|devra|doit|doivent|requis"
+    r"|requise|requises|exige|exigee|exiges|exigees|obligatoire|obligatoires|indispensable"
+    r"|indispensables|necessaire|necessaires|valide|valides|titulaire)\b"
+)
+_HOLDS = re.compile(
+    r"(?<!\bif )(?<!\bwhether )\b(?:you|candidates|applicants|vous)(?: will| ll| would| already)?"
+    r" (?:need|have|hold|possess|avez|disposez|possedez|detenez)(?: (?:a|an|the|full|valid"
+    rf"|current|existing|proof|of|your|own|d|un|une|le|la|l|des|du|de)){{0,4}} {_RIGHT_THING}\b"
+)
+# "Right to work in the UK" alone: a list item that can only ask.
+_BARE = re.compile(
+    r"^(?:(?:a|the|full|valid|current|proven|legal|le|un) ){0,3}(?=right to work|rights to work"
+    r"|right to live and work|droit de travailler|droit au travail)"
+)
+# A requirement the sentence negates: "No work permit for Germany is required."
+_NOT_ASKED = re.compile(
+    r"\b(?:(?:not|t|never|no longer) (?:be )?(?:required|needed|necessary|mandatory|essential"
+    r"|a requirement)|no need|need not|needn t|(?:don t|do not|doesn t|does not|won t|will not"
+    r"|not) (?:need|have to|require)(?! (?:any |visa |immigration |employer |company |future "
+    r"|current ){0,3}(?:sponsorship|sponsoring|parrainage|sponsorisation)\b)|pas besoin"
+    r"|pas necessaire|pas requis|pas requise|pas obligatoire|pas exige|pas exigee"
+    r"|pas indispensable|non requis|non requise|non necessaire|non obligatoire|non exige"
+    r"|non exigee)\b"
+)
+_NO_RIGHT = re.compile(
+    r"\b(?:no|aucun|aucune|pas de|pas d)(?: (?:visa|visas|or|and|special|separate|additional"
+    r"|other|specific|prior|existing|local|valid|current|ou|et|de|d|un|une|le|la|l)){0,3}"
+    rf" {_RIGHT_THING}\b"
+)
+# The employer gives the permit: a right it sponsors, handles or arranges is not asked of anyone.
+_COMPANY = (
+    r"(?:we|we ll|we d|we re|nous|the company|our company|the employer|our employer"
+    r"|the business|our client|the client|our team|the team|our hr team|our people team)"
+)
+_COMPANY_GAP = (
+    r"(?: (?:will|can|could|would|may|shall|do|does|also|gladly|happily|fully|then|always|are"
+    r"|is|be|able|to|happy|glad|pleased|ready|willing|offer|help|pouvons|allons|savons|proposons"
+    r"|de|sommes|en|mesure|pourrons|nous|vous|aussi|egalement))"
+)
+_GIVE = (
+    r"(?:sponsor|sponsors|sponsoring|provide|provides|providing|arrange|arranges|arranging"
+    r"|handle|handles|handling|take care of|takes care of|taking care of|cover|covers|covering"
+    r"|organise|organises|organize|organizes|organising|organizing|offer|offers|offering|secure"
+    r"|secures|securing|apply for|applies for|file|files|manage|manages|managing|pay for"
+    r"|pays for|process|processes|processing|ensure|make sure|get you|sort out|sorts out"
+    r"|prendre en charge|prenons en charge|prend en charge|prennent en charge|parrainer"
+    r"|parrainons|parraine|sponsoriser|sponsorisons|sponsorise|fournir|fournissons|fournit"
+    r"|offrir|offrons|offre|proposer|proposons|propose|gerer|gerons|gere|organiser|organisons"
+    r"|organise|occupons|occupe|occuper|assurer|assurons|assure|obtenir|obtenons|faire|faisons"
+    r"|fait)"
+)
+_GIVEN_GAP = (
+    r"(?: (?:a|an|the|your|our|their|any|all|full|every|necessary|for|you|with|both|and|uk|us|eu"
+    r"|local|new|successful|candidate|candidates|hire|hires|de|d|du|des|votre|vos|un|une|le|la"
+    r"|les|l|ton|ta|tes))"
+)
+_PERMIT = (
+    rf"(?:{_RIGHT_THING}|visa|visas|sponsorship|immigration|permit|permits|paperwork"
+    r"|parrainage)"
+)
+_GIVES = re.compile(
+    rf"\b{_COMPANY}{_COMPANY_GAP}{{0,4}} (?:{_GIVE}{_GIVEN_GAP}{{0,4}} {_PERMIT}|sponsor|sponsors"
+    r"|sponsoring|parrainer|parrainons|parraine|sponsoriser|sponsorisons|sponsorise)\b"
+    # The employer by its name: "Example Robotics will handle your work permit".
+    r"|(?<!\byou )(?<!\bcandidates )(?<!\bcandidate )(?<!\bapplicants )(?<!\bapplicant )"
+    r"(?<!\bthey )(?<!\bhires )(?<!\bemployees )\b(?:will|can|ll|shall|is able to|are able to"
+    rf"|is happy to|are happy to)(?: (?:gladly|happily|also|fully))? {_GIVE}{_GIVEN_GAP}{{0,4}}"
+    rf" {_PERMIT}\b"
+    rf"|\b(?:visa|visas|work permit|work permits|work visa|work visas|immigration)"
+    r" (?:sponsorship|sponsoring)\b"
+    rf"|\bsponsorship (?:of|for) (?:(?:your|a|an|the) )?(?:{_RIGHT_THING}|visa|visas)\b"
+    rf"|\b(?:sponsored|company sponsored|employer sponsored) (?:{_RIGHT_THING}|visa|visas)\b"
+    r"|\b(?:parrainage|sponsoring|sponsorisation|prise en charge) (?:(?:de|du|d|des|votre|vos"
+    rf"|un|une) ){{0,3}}(?:{_RIGHT_THING}|visa|visas)\b"
+)
+# Right after the place: "Work permit for Germany provided."
+_GIVEN = re.compile(
+    r" (?:(?:is|are|will be|can be|may be|would be|could be|gets|get) )?(?:provided|sponsored"
+    r"|arranged|handled|covered|offered|organised|organized|included|paid for|taken care of"
+    r"|sorted|fourni|fournie|fournis|fournies|pris en charge|prise en charge|parraine"
+    r"|parrainee|offert|offerte|assure|assuree|organise|organisee|inclus|incluse)\b"
 )
 DEGREE = (
     r"\b(?:bachelor s degree|bachelors degree|bachelor degree|bachelor of|bachelor s in"
@@ -189,7 +315,15 @@ DEGREE = (
     r"\b(?:bac ?\+ ?[2-8]|diplome d ingenieur|diplome d ecole d ingenieur|ecole d ingenieur"
     r"|diplome de niveau|diplome universitaire|diplome superieur|master 1|master 2|master en"
     r"|master de|master ou|doctorat|licence en|licence professionnelle|licence ou|niveau master"
-    r"|niveau licence|dut|bts|grande ecole|ecole de commerce|formation superieure)\b",
+    r"|niveau licence|grande ecole|ecole de commerce|formation superieure|dut ou bts|bts ou dut"
+    r"|dut bts|bts dut|(?:niveau|type|formation) (?:dut|bts)|(?:dut|bts) (?:exige|exigee|requis"
+    r"|requise|obligatoire|indispensable|minimum))\b",
+)
+# DUT and BTS are also "device under test" and "base transceiver station": a degree only in a
+# sentence with a French word of diplomas.
+_DUT_BTS = re.compile(r"\b(?:dut|bts)\b")
+_FR_DIPLOMA = re.compile(
+    r"\b(?:titulaire|diplome|diplomee|diplomes|diplomees|cursus|etudes|licence|ou equivalent)\b"
 )
 CONTRACTOR = (
     r"\b(?:independent contractor|independent contractors|1099 (?:contractor|contract|position"
@@ -197,7 +331,12 @@ CONTRACTOR = (
     r"|contractor basis|contract basis|as a contractor|on a freelance basis|freelance basis"
     r"|auto entrepreneur|auto entrepreneurs|micro entrepreneur|statut d independant"
     r"|statut independant|statut de freelance|statut freelance|en tant qu independant"
-    r"|en tant que freelance|en freelance|portage salarial|en portage)\b",
+    r"|en tant que freelance|portage salarial)\b",
+    # "En freelance" of the role, never "avec des développeurs en freelance".
+    r"(?:^|\b(?:mission|missions|poste|contrat|role|prestation|intervention|collaboration"
+    r"|travail|travailler|travaillerez|exercer|exercerez|intervenir|interviendrez|recrutement"
+    r"|recrutons|propose|proposee|ouvert|ouverte|uniquement|exclusivement) )en (?:freelance"
+    r"|portage)\b",
 )
 _MONTHS_SPAN = r"(?:[1-9]|1[0-9]|2[0-4]|three|six|nine|twelve|eighteen)"
 FIXED_TERM = (
@@ -244,11 +383,6 @@ CANDIDATE_FEE = (
 _NEGATED = re.compile(
     r"\b(?:not|no|never|cannot|without|unable|ne|n|pas|aucun|aucune|sans|non|jamais|t)\b"
 )
-_NOT_ASKED = re.compile(
-    r"\b(?:not required|not needed|not necessary|not a requirement|no need|don t need"
-    r"|do not need|doesn t need|does not need|pas besoin|pas necessaire|pas requis|pas requise"
-    r"|pas obligatoire|pas exige|pas exigee|non requis|non requise|non necessaire)\b"
-)
 # Help to get a permit, or a degree that is only a plus, is not a requirement.
 _HELPED = re.compile(
     r"\b(?:help|helps|helping|assist|assists|assisting|assistance|obtain|obtaining|support"
@@ -286,6 +420,38 @@ def _any(patterns: tuple[re.Pattern[str], ...], said: str) -> bool:
     return any(p.search(said) for p in patterns)
 
 
+def _places(said: str, match: re.Match[str]) -> tuple[list[str], int]:
+    """The places of a work permit match, every one of a list, and where the list ends."""
+    named = [_PLACE_OF[match.group("place")]]
+    end = match.end()
+    while (more := _MORE_PLACE.match(said, end)) is not None:
+        named.append(_PLACE_OF[more.group("place")])
+        end = more.end()
+    return named, end
+
+
+def _rights(said: str, refused: bool) -> list[str]:
+    """The places a sentence requires the right to work in: a state of the person ("eligible to
+    work"), or a right with requirement wording ("must", "requis") or alone as a list item. None
+    when the requirement is negated, when the employer helps, sponsors, gives or arranges it, or
+    when the sentence reads as sponsorship (unless it refuses sponsorship)."""
+    if _NOT_ASKED.search(said) or _NO_RIGHT.search(said) or _HELPED.search(said):
+        return []
+    if not refused and (_GIVES.search(said) or _any(_SPONSORSHIP, said)):
+        return []
+    required = bool(_REQUIRED.search(said) or _HOLDS.search(said))
+    bare = _BARE.match(said)
+    found: list[str] = []
+    for match in _WORK_PERMIT[0].finditer(said):
+        named, end = _places(said, match)
+        if _GIVEN.match(said, end):
+            return []
+        alone = bare is not None and bare.end() == match.start() and end == len(said)
+        if required or alone or match.group("state"):
+            found.extend(named)
+    return found
+
+
 def _sentence_signals(said: str) -> list[tuple[str, str | None]]:
     """The codes one sentence's words give, with a value for work_permit."""
     found: list[tuple[str, str | None]] = []
@@ -295,10 +461,9 @@ def _sentence_signals(said: str) -> list[tuple[str, str | None]]:
         found.append(("no_sponsorship", None))
     elif not negated and _any(_SPONSORSHIP, said):
         found.append(("sponsorship", None))
-    if not _NOT_ASKED.search(said) and not _HELPED.search(said):
-        for match in _WORK_PERMIT[0].finditer(said):
-            found.append(("work_permit", _PLACE_OF[match.group("place")]))
-    if not negated and not _PREFERRED.search(said) and _any(_DEGREE, said):
+    found.extend(("work_permit", place) for place in _rights(said, refused))
+    degree = _any(_DEGREE, said) or bool(_DUT_BTS.search(said) and _FR_DIPLOMA.search(said))
+    if not negated and not _PREFERRED.search(said) and degree:
         found.append(("degree", None))
     if not negated and _any(_CONTRACTOR, said):
         found.append(("contractor", None))
@@ -354,17 +519,25 @@ _DAYS = (
     r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun"
     r"|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)"
 )
+# A bare "closes", "deadline" or "open until" is the posting's only as a label at the start of
+# its sentence: "The office closes on 24 December" is no closing date.
+_POSTING = (
+    r"(?:applications?|(?:this |the )?(?:job|posting|role|position|vacancy|advert|advertisement"
+    r"|listing|opportunity|opening|offer|application window|application period|recruitment))"
+)
 _EN_MARKER = (
-    r"(?:closing date|application deadline|deadline for applications|deadline to apply|deadline"
-    r"|applications close|applications closing|closes|closing|apply by|apply before"
-    r"|applications accepted until|accepting applications until|applications open until"
-    r"|open until|submit your application by|submit by)"
+    rf"(?:closing date|application deadline|applications deadline|deadline for applications"
+    rf"|deadline to apply|{_POSTING} (?:closes|close|closing|will close|is closing|is open until"
+    rf"|are open until|open until|remains open until|are accepted until|accepted until)"
+    rf"|accepting applications until|apply by|apply before|submit your application by"
+    rf"|^(?:closes|closing|deadline|open until|submit by))"
 )
 _FR_MARKER = (
-    r"(?:date limite de depot des candidatures|date limite de candidature|date limite de depot"
-    r"|date limite|date de cloture des candidatures|date de cloture|cloture des candidatures"
-    r"|candidatures ouvertes jusqu|candidatures acceptees jusqu|candidatures jusqu|postulez avant"
-    r"|candidatez avant|postuler avant|envoyez votre candidature avant)"
+    r"(?:date limite de depot des candidatures|date limite de candidature|date limite des"
+    r" candidatures|date limite de depot|date limite pour postuler|date de cloture des"
+    r" candidatures|cloture des candidatures|candidatures ouvertes jusqu|candidatures acceptees"
+    r" jusqu|candidatures jusqu|postulez avant|candidatez avant|postuler avant|envoyez votre"
+    r" candidature avant|^(?:date limite|date de cloture|cloture))"
 )
 _LEAD = rf"(?: (?:is|on|by|the|of|for|le|au|a|est|fixee|fixe|until|jusqu|{_DAYS}))*"
 _DATE = (

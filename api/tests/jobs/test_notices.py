@@ -137,6 +137,15 @@ def test_the_right_to_work_against_the_profile() -> None:
     ]
 
 
+def test_a_posting_that_sponsors_the_permit_asks_for_no_right_to_work() -> None:
+    job = posting("We will sponsor your visa and work permit in the UK.", location="London")
+    needs = Person(work=(entry("United Kingdom", True),))
+    found = notices.notices_for(job, needs, [], TODAY)
+    assert [n.code for n in found] == ["sponsorship"]
+    french = posting("Nous prenons en charge votre permis de travail en France.", location="Paris")
+    assert all(n.code != "work_permit" for n in notices.notices_for(french, needs, [], TODAY))
+
+
 def test_silence_on_sponsorship_where_the_person_needs_it_is_said_as_silence() -> None:
     found = notices.notices_for(posting(BODY), Person(work=(entry("Germany", True),)), [], TODAY)
     assert texts(found) == [
@@ -303,6 +312,51 @@ def test_the_same_text_under_another_company() -> None:
     assert notices.cross_listing_notice(posting(agency), printed, [applied]) is None
     other = row(text_fingerprint=signals.fingerprint("Payments platform lead. " * 30 + BODY[:40]))
     assert notices.cross_listing_notice(job, signals.fingerprint(agency), [other]) is None
+
+
+def test_each_row_folds_its_company_once_and_the_result_stays(monkeypatch: Any) -> None:
+    calls: list[str] = []
+    real = notices.company_key
+
+    def counted(company: str) -> str:
+        calls.append(company)
+        return real(company)
+
+    monkeypatch.setattr(notices, "company_key", counted)
+    printed = signals.fingerprint(f"Example Robotics is hiring.\n{BODY}")
+    rows = [
+        row(company=f"Example Company {n}", title=f"Role {n}", applied_on=None,
+            status=JobStatus.found)
+        for n in range(200)
+    ]  # fmt: skip
+    applied = row(company="EXAMPLE ROBOTICS sas", applied_on=date(2026, 10, 20))
+    copied = row(company="Example Talent", text_fingerprint=printed, applied_on=None,
+                 status=JobStatus.found)  # fmt: skip
+    rows += [applied, copied]
+    jobs = [
+        posting(f"Our client is hiring.\n{BODY}", company="Example Robotics") for _ in range(50)
+    ]
+    folded = len(calls)
+    found = [notices.notices_for(job, Person(), rows, TODAY) for job in jobs]
+    assert folded == len(rows)
+    assert len(calls) - folded == 2 * len(jobs)  # the posting's own company, once a notice
+    assert found[0] == [
+        Notice(
+            "cross_listing",
+            "same_text",
+            "Its text is nearly the same as Controls Engineer at Example Talent, found on 30 "
+            "September 2026.",
+            job_id=copied.id,
+        ),
+        Notice(
+            "history",
+            "applied_before",
+            "You applied to Example Robotics on 20 October 2026 for Controls Engineer, with no "
+            "reply recorded in 21 days.",
+            job_id=applied.id,
+        ),
+    ]
+    assert all(one == found[0] for one in found)
 
 
 # --- through the route, the person's own rows only ------------------------------------------------

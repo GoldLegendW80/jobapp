@@ -228,6 +228,23 @@ def test_patch_details_with_one_edit_event(
     assert len([k for k, _ in events(factory, job.id) if k == "edit"]) == 2  # "" after None: none
 
 
+def test_a_new_address_drops_the_last_check_of_the_old_one(
+    api: Api, alice: Signed, factory: sessionmaker[Session]
+) -> None:
+    checked = {
+        "verdict": "closed",
+        "reason": "gone",
+        "sentence": None,
+        "checked_at": NOW.isoformat(),
+    }
+    (job,) = seed(factory, alice.id, [{"liveness": checked}])
+    ok_patch(api, alice, job.id, title="Applied AI Engineer", url=job.url)
+    assert stored(factory, job.id).liveness == checked
+    body = ok_patch(api, alice, job.id, url="https://jobs.example/moved")
+    assert stored(factory, job.id).liveness is None
+    assert body["liveness"] is None
+
+
 @pytest.mark.parametrize(
     "body",
     [
