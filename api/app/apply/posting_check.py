@@ -7,7 +7,9 @@ still `queued` whose posting is closed, or whose posting's own page now says it 
 documents asks the site once an hour at most), ends `posting_closed` before the run takes its
 documents, a lease or a model: the posting's row lock, then the application's, as the run's own
 step 1 (`run._locked`), and only while the application is still `queued` and the posting still
-closed. Whatever the check cannot tell lets the run go on, as does a lock held past its timeout.
+closed. Whatever the check cannot tell lets the run go on, as does a lock held past its timeout
+or any other error of the check, so a page the check cannot read never keeps an application
+queued for the next tick.
 The ended event carries the code; the page's own sentence is the posting's (`jobs.liveness`).
 """
 
@@ -18,13 +20,11 @@ from collections.abc import Callable
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import run, states
 from app.apply.models import Application, State
 from app.jobs import liveness_check
-from app.jobs import service as jobs_service
 from app.jobs.models import JobStatus
 
 logger = logging.getLogger(__name__)
@@ -79,8 +79,11 @@ async def before_fill(
         if outcome is None or outcome.status is not JobStatus.closed:
             return False
         ended = await asyncio.to_thread(in_db, lambda db: _end(db, application_id, clock()))
-    except (jobs_service.JobBusyError, DBAPIError):
-        logger.warning("apply.posting_not_checked", extra={"application_id": str(application_id)})
+    except Exception as exc:
+        logger.warning(
+            "apply.posting_not_checked",
+            extra={"application_id": str(application_id), "error": type(exc).__name__},
+        )
         return False
     if ended:
         logger.info("apply.posting_closed", extra={"application_id": str(application_id)})

@@ -32,12 +32,14 @@ CLOSED_PAGE = f"<p>{COPY}</p><h2>This job is no longer available.</h2>"
 OPEN_PAGE = f"<h1>Applied AI Engineer</h1><p>{COPY}</p><a>Apply</a>"
 
 
-def checker(text: str, status: int = 200) -> tuple[Checker, list[httpx.Request]]:
+def checker(
+    text: str, status: int = 200, content_type: str = "text/html"
+) -> tuple[Checker, list[httpx.Request]]:
     seen: list[httpx.Request] = []
 
     def answer(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        headers = {"content-type": "text/html"}
+        headers = {"content-type": content_type}
         return httpx.Response(status, headers=headers, stream=httpx.ByteStream(text.encode()))
 
     async def resolve(host: str, port: int) -> list[str]:
@@ -157,3 +159,31 @@ def test_the_fill_job_asks_first(
     # The run itself would need a lease and a form: the check ends the job before either.
     anyio.run(worker.apply_fill, ctx, str(application_id))
     assert state(factory, application_id).state is State.posting_closed
+
+
+@pytest.mark.parametrize("charset", ["undefined", "idna"])
+def test_a_page_whose_charset_the_check_cannot_use_lets_the_run_go_on_once(
+    db: Session, factory: sessionmaker[Session], person_a: Person, charset: str
+) -> None:
+    application_id = queued(db, person_a)
+    made, seen = checker(OPEN_PAGE, content_type=f"text/html; charset={charset}")
+    assert before_fill(factory, made, application_id) is False
+    assert state(factory, application_id).state is State.queued
+    # The finding is stored: a fill asked again within the hour sends no second request.
+    assert before_fill(factory, made, application_id) is False
+    assert len(seen) == 1
+
+
+def test_any_error_of_the_check_lets_the_run_go_on(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    application_id = queued(db, person_a)
+
+    class Broken:
+        async def check(self, url: str | None) -> None:
+            raise UnicodeError("label too long")
+
+    made = Broken()
+    assert before_fill(factory, made, application_id) is False  # type: ignore[arg-type]
+    assert state(factory, application_id).state is State.queued
+    assert posting_status(factory, person_a) is JobStatus.found

@@ -350,6 +350,8 @@ class LivenessOut(BaseModel):
     reason: str
     sentence: str | None = None
     checked_at: datetime
+    # This check moved the posting to closed (a check stored before the field: False).
+    moved: bool = False
 
 
 class JobListItem(BaseModel):
