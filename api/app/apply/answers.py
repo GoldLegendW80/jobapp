@@ -813,6 +813,11 @@ COUNTRIES: dict[str, tuple[str, ...]] = {
         "zone schengen",
     ),
     "EFTA": ("efta", "european free trade association", "aele"),
+    # Regions of their own: "Latin America" holds "america" and is never the United States.
+    "North America": ("north america", "amerique du nord"),
+    "Latin America": ("latin america", "latam", "amerique latine"),
+    "South America": ("south america", "amerique du sud"),
+    "Central America": ("central america", "amerique centrale"),
     "United States": (
         "united states",
         "united states of america",

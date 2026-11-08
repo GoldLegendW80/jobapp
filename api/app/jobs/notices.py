@@ -18,7 +18,7 @@ verdict. It reads the person's own profile and rows only.
 import contextlib
 import uuid
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Literal
 
@@ -77,7 +77,8 @@ class Person:
 
 @dataclass(frozen=True)
 class Row:
-    """Another posting of the person, by its light columns."""
+    """Another posting of the person, by its light columns, and its company folded once
+    (`company_key`), since every posting shown compares it."""
 
     id: uuid.UUID
     company: str
@@ -86,6 +87,10 @@ class Row:
     applied_on: date | None
     found_on: date
     text_fingerprint: int | None
+    key: str = field(init=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "key", company_key(self.company))
 
 
 def today_of(now: datetime) -> date:
@@ -291,7 +296,7 @@ def history_notice(job: Job, rows: Sequence[Row], today: date) -> Notice | None:
     if not key:
         return None
     mine = sorted(
-        (r for r in rows if r.id != job.id and _applied(r) and company_key(r.company) == key),
+        (r for r in rows if r.key == key and r.id != job.id and _applied(r)),
         key=lambda r: (r.applied_on or date.min, r.found_on, str(r.id)),
         reverse=True,
     )
@@ -324,14 +329,14 @@ def history_notice(job: Job, rows: Sequence[Row], today: date) -> Notice | None:
 
 def cross_listing_notice(job: Job, fingerprint: int | None, rows: Sequence[Row]) -> Notice | None:
     """A posting of another company whose text is nearly the same, the one applied to first."""
+    if fingerprint is None:
+        return None
     key = company_key(job.company)
     same = sorted(
         (
             r
             for r in rows
-            if r.id != job.id
-            and company_key(r.company) != key
-            and texts.same_text(fingerprint, r.text_fingerprint)
+            if texts.same_text(fingerprint, r.text_fingerprint) and r.id != job.id and r.key != key
         ),
         key=lambda r: (not _applied(r), -r.found_on.toordinal(), str(r.id)),
     )
