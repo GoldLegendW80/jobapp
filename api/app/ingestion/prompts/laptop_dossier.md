@@ -1,5 +1,5 @@
 ---
-PROMPT_VERSION: 2
+PROMPT_VERSION: 3
 ---
 <!-- preamble:claude_code -->
 You are Claude Code, running in a terminal on my own computer. Read files with your file tools (Read, Glob, Grep) and keep shell commands to ones that only read, such as `ls` or `git log`. Do not use web search or web fetch for this task.
@@ -19,7 +19,7 @@ I am preparing job applications. Look through my computer for everything about m
 
 My home folder `~` and everything under it. Start where work usually is: CV and cover letter files, my documents, desktop and downloads, my projects and repositories (for example `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Projects`, `~/Developer`, `~/code`, `~/src`, `~/work`), and the folders of cloud drives synced to this computer. Then look further for anything else about my work: diplomas and certificates, portfolios, talks and articles, notes about projects, exported profiles such as a LinkedIn data export.
 
-Skip what only programs use: system and application folders such as `~/Library` and `~/.cache`, caches, `node_modules`, virtual environments, build output, and the folders of other programs' settings.
+Skip what only programs use: system and application folders such as `~/Library` and `~/.cache`, caches, `node_modules`, virtual environments, build output, and the folders of other programs' settings. Two folders under `~/Library` are the exception, because a Mac keeps the cloud drives synced to it there: look through `~/Library/CloudStorage` and `~/Library/Mobile Documents` like the rest.
 
 ## Rules for the whole task
 
