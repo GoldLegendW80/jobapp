@@ -1,5 +1,5 @@
 """The `worker` service: consumes the Redis queues with arq. Run with `python -m app.worker`;
-`python -m app.worker --check` is the container healthcheck (exit 0 when every queue's worker
+`python -m app.worker_health` is the container healthcheck (exit 0 when every queue's worker
 recorded its health in Redis within HEALTH_INTERVAL_S).
 
 Its own image, `jobapp-worker` (the `worker` target of api/Dockerfile: the api's code plus the
@@ -132,13 +132,13 @@ from typing import Any
 
 import sqlalchemy as sa
 from arq import cron, func
-from arq.connections import ArqRedis, create_pool
+from arq.connections import ArqRedis
 from arq.constants import in_progress_key_prefix, result_key_prefix
 from arq.cron import CronJob
 from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
 
-from app import queue
+from app import queue, worker_health
 from app.agents import catalog as agent_catalog
 from app.agents import definitions, token_check
 from app.agents import runs as agent_runs
@@ -1576,21 +1576,10 @@ async def serve(
 
 
 async def check(settings: Settings, specs: Sequence[QueueSpec] | None = None) -> int:
-    """0 when every queue's worker recorded its health recently, 1 otherwise."""
-    try:
-        async with asyncio.timeout(5):
-            pool = await create_pool(queue.redis_settings(settings.redis_url.get_secret_value()))
-            try:
-                for spec in specs or queues(settings):
-                    if not await pool.exists(spec.name + ":health-check"):
-                        print(f"{spec.name}: no recent health record", file=sys.stderr)
-                        return 1
-            finally:
-                await pool.aclose()
-    except Exception as exc:
-        print(f"redis unreachable: {type(exc).__name__}", file=sys.stderr)
-        return 1
-    return 0
+    """0 when every queue's worker recorded its health recently, 1 otherwise (the container's
+    healthcheck is app.worker_health, which does not import this module)."""
+    names = [spec.name for spec in specs or queues(settings)]
+    return await worker_health.check(settings.redis_url.get_secret_value(), names)
 
 
 # Environment variables whose names say they hold a secret (DATABASE_URL, REDIS_URL,

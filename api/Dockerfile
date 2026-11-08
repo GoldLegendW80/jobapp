@@ -90,7 +90,7 @@ COPY --chown=root:root alembic ./alembic
 COPY --chown=root:root app ./app
 USER app:app
 HEALTHCHECK --interval=30s --timeout=8s --start-period=20s --retries=3 \
-    CMD ["python", "-m", "app.worker", "--check"]
+    CMD ["python", "-m", "app.worker_health"]
 CMD ["python", "-m", "app.worker"]
 
 FROM ${PYTHON_IMAGE} AS runtime

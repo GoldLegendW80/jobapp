@@ -772,3 +772,33 @@ def test_the_sweep_runs_the_job_websites_of_the_context_or_of_browserd(
         assert isinstance(runner, sources.Runner)
     finally:
         ctx["engine"].dispose()
+
+
+def test_the_healthcheck_names_every_queue_the_worker_serves(settings: Settings) -> None:
+    from app import worker_health
+
+    assert tuple(spec.name for spec in worker.queues(settings)) == worker_health.NAMES
+
+
+def test_the_healthcheck_loads_no_job_or_agent_module() -> None:
+    """The image keeps no bytecode: on the Jetson, importing app.worker outgrew the check's 8 s
+    and a healthy worker was rolled back (deploy of 2026-11-08)."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    heavy = ("app.worker", "app.agents", "app.jobs", "app.documents", "app.apply", "app.ingestion")
+    code = (
+        "import sys, app.worker_health\n"
+        f"print(sorted(m for m in sys.modules if m.startswith({heavy!r})"
+        " and m != 'app.worker_health'))\n"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
+        timeout=60,
+    )
+    assert done.stdout.strip() == "[]"
