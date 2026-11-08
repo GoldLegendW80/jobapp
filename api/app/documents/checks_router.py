@@ -8,8 +8,8 @@ keeping a rule"). Included by `routers.py` before D6's `/api/documents/{document
 - `POST /api/documents/{id}/messages/{message_id}/rule {text}`: keep a rule from one of the
   person's own messages of this document's chat (`writing_rules.keep`); `kept` is false when the
   writing rules held it already. 404 for another person's document or message, or an answer of
-  the assistant; 422 for an empty or long rule, or one that states a fact; 409 when the facts
-  section cannot take it.
+  the assistant; 422 for an empty or long rule, one that states a fact, or one the chat would
+  not offer (`writing_rules.offer`); 409 when the facts section cannot take it.
 
 Every answer is `Cache-Control: private, no-store`. Logs carry nothing of a text.
 """
@@ -39,6 +39,10 @@ REFUSED = {
     "fact": (
         "A writing rule says how to write, not what is true of you. "
         "Put facts about you in your profile."
+    ),
+    "shape": (
+        "Keep takes a rule on the wording only, such as Never say leveraged or Shorter "
+        "sentences. Write any other rule in your profile's facts."
     ),
 }
 FACTS_FULL = "Your profile's facts cannot take this rule: {reason}"
@@ -92,7 +96,7 @@ def read_coverage(document_id: uuid.UUID, user: CurrentUser, db: Db) -> Coverage
     responses={
         404: {"description": "Not the person's document, or not one of their messages"},
         409: {"description": "The facts section cannot take the rule"},
-        422: {"description": "Empty, too long, or a fact"},
+        422: {"description": "Empty, too long, a fact, or not a rule on the wording"},
     },
 )
 def keep_rule(

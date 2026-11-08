@@ -61,6 +61,14 @@ export const NotesInFrench: Story = {
   },
 };
 
+/** A letter longer than what is read: the notes say where the reading stopped. */
+export const LongLetter: Story = {
+  name: "A letter longer than what is read",
+  beforeEach: () => {
+    fakeOfferNotes({ ...OFFER_NOTES, truncated: true, read_chars: 30_000 });
+  },
+};
+
 /** The reading stopped at its limit: read the same letter again. */
 export const ReadingStopped: Story = {
   name: "The reading stopped",

@@ -45,6 +45,10 @@ export function readingState(
 export const stoppedSentence = (error: string | null) =>
   `${STOPPED[error ?? ""] ?? "The reading stopped before the notes were stored."} Read the letter again.`;
 
+/** "Only the first 30,000 characters of the letter were read." */
+export const truncatedSentence = (readChars: number) =>
+  `Only the first ${readChars.toLocaleString("en-US")} characters of the letter were read.`;
+
 /** "The posting stated 55,000 to 65,000 EUR a year. You seek 60,000 to 70,000 EUR a year." */
 export function comparedWith(pay: OfferNotes["pay"]): string {
   const posting =

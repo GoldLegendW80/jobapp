@@ -2,8 +2,10 @@
 Included by `routers.py` before D6's `/api/documents/{document_id}`.
 
 - `GET /api/documents/offer-notes/{posting_id}`: the notes as the posting page shows them, with
-  their newest reading and what they compare the letter with; `document_id` null before the
-  first reading. 404 for a posting that is not the person's.
+  their newest reading, what they compare the letter with and whether the letter was longer
+  than what was read of it (`truncated`, `read_chars`); `document_id` null before the first
+  reading. A chat change whose run ended without its hook is settled first, so `busy` does not
+  stay true. 404 for a posting that is not the person's.
 - `POST /api/documents/offer-notes/{posting_id} {ingestion_document_id, script?}`: read that
   upload of the person's, 202 with the notes. 404 for a posting or an upload that is not the
   person's; 422 for an upload that cannot be read (not read yet, failed, pages of pictures, not
@@ -92,6 +94,8 @@ class OfferNotesOut(BaseModel):
     busy: bool  # a reading or a chat change is open
     letter: LetterOut | None  # the file read; None once deleted in ingestion
     pay: dict[str, Any]  # what the letter is compared with
+    truncated: bool  # the letter is longer than what was read of it
+    read_chars: int | None  # the characters read of it when truncated
 
 
 def _out(found: offer_notes.View) -> OfferNotesOut:
@@ -109,19 +113,21 @@ def _out(found: offer_notes.View) -> OfferNotesOut:
         busy=found.busy,
         letter=LetterOut(id=found.letter[0], name=found.letter[1]) if found.letter else None,
         pay=found.pay,
+        truncated=found.read_chars is not None,
+        read_chars=found.read_chars,
     )
 
 
-def _view(db: Session, user: User, posting_id: uuid.UUID) -> OfferNotesOut:
-    found = offer_notes.view(db, user.id, posting_id)
+def _view(db: Session, user: User, posting_id: uuid.UUID, request: Request) -> OfferNotesOut:
+    found = offer_notes.view(db, user.id, posting_id, deps.clock(request))
     if found is None:
         raise _error(status.HTTP_404_NOT_FOUND, POSTING_NOT_FOUND)
     return _out(found)
 
 
 @router.get("/api/documents/offer-notes/{posting_id}", response_model=OfferNotesOut)
-def read_notes(posting_id: uuid.UUID, user: CurrentUser, db: Db) -> OfferNotesOut:
-    return _view(db, user, posting_id)
+def read_notes(posting_id: uuid.UUID, user: CurrentUser, request: Request, db: Db) -> OfferNotesOut:
+    return _view(db, user, posting_id, request)
 
 
 @router.post(
@@ -178,4 +184,4 @@ def read_letter(
     except queues.QueueUnavailableError:
         # The run stays queued; the agents module's reaper fails it, and the page says so.
         logger.warning("documents.offer_notes.not_queued", extra={"run_id": str(started.run_id)})
-    return _view(db, user, posting_id)
+    return _view(db, user, posting_id, request)

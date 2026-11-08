@@ -46,6 +46,9 @@ export const offerNotesSchema = z.object({
     posting: z.object({ pay: z.string().nullable() }),
     pay_sought: z.array(z.string()),
   }),
+  /** The letter is longer than what was read of it: its first `read_chars` characters. */
+  truncated: z.boolean().default(false),
+  read_chars: z.number().nullable().default(null),
 });
 export type OfferNotes = z.infer<typeof offerNotesSchema>;
 

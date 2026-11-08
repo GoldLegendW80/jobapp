@@ -26,6 +26,7 @@ import {
   readingState,
   isOfferStage,
   stoppedSentence,
+  truncatedSentence,
 } from "@/features/documents/helpers/offer-notes";
 import { needsKeeping } from "@/features/documents/helpers/upload-cv";
 import { OfferNotesChat } from "./offer-notes-chat";
@@ -106,6 +107,13 @@ function OfferSection({ job }: { job: JobDetail }) {
                     Read <bdi>{shown.letter.name}</bdi> again
                   </Button>
                 ) : null}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {written && shown.truncated && shown.read_chars !== null ? (
+            <Alert data-testid="offer-letter-truncated">
+              <AlertDescription>
+                {truncatedSentence(shown.read_chars)}
               </AlertDescription>
             </Alert>
           ) : null}

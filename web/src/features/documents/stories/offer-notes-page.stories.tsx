@@ -50,3 +50,10 @@ export const ReadTheNotesOnMyOffer: Story = {
     fakeOfferNotes(OFFER_NOTES);
   },
 };
+
+/** As a person whose offer letter is longer than what the assistant reads, I want to be told where the reading stopped, so that I know the end of the letter is not in the notes. */
+export const KnowALongLetterWasCut: Story = {
+  beforeEach: () => {
+    fakeOfferNotes({ ...OFFER_NOTES, truncated: true, read_chars: 30_000 });
+  },
+};

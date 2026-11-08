@@ -329,17 +329,23 @@ without their web research.
   the merged mistakes): the panel is read, never run again. It submits through D7's
   `submit.handle`: the stories and the answers to the gaps are claims, checked against the
   profile, the base CV and the posting's title and company, so a figure the profile does not
-  state is corrected and recorded (Decision 4). A new preparation keeps the person's debrief.
+  state is corrected and recorded (Decision 4). Every field it shows (the target, the questions
+  and why, the gaps and their answers, the stories, the questions to ask) follows the dash rule,
+  whatever the person's own documents use; the debrief is the person's words and is left as
+  written. A new preparation keeps the person's debrief.
 - **Practice** (`POST /api/documents/{id}/practice`): a chat of channel `practice`; each message
   starts `documents_interview_practice`, which reads the preparation and the practice so far and
   answers through a strict tool with feedback on the last answer and one next question. Code
-  writes the answer; a run that fails says so, and a turn whose hook was lost is closed by the
-  next read.
+  writes the answer, its dashes used as separators replaced, at most 2,102 characters whatever
+  the chat's own message limit (`interview_prep.PRACTICE_ANSWER_MAX`); a run that fails says
+  so, and a turn whose hook was lost is closed by the next read.
 - **Debrief**: what was asked, appended by hand to the draft (a version).
 - **Kept stories** (`POST /api/documents/{id}/stories`): the stories the person ticks become one
   pending proposal of the profile's facts block "Interview stories" (appended to it, never
   replacing it), written only when the person accepts it on the page (`/api/proposals/{id}`);
-  the next preparation reads that block.
+  the next preparation reads that block. A second Keep before that answer adds to the pending
+  proposal, which keeps the stories of the first; the page of a posting shows a pending proposal
+  only when it holds stories of that posting's preparation.
 - **Page** `/jobs/:id/interview`: the questions, gaps, stories (Keep in my profile, then Accept or
   Reject), questions to ask and the Debrief in the main column, Practice in the side rail,
   Prepare again in the header.
@@ -360,15 +366,20 @@ either missing, nothing stored), and writes the posting's document of kind `offe
 its own words quoted, what it means in plain words), what differs from the posting's stated pay
 (`opportunities/pay.py`) and from the person's `search.compensation`, and questions for a
 lawyer. The notes are in the letter's own language (`upload.language_of`, French or English); a
-quote stays word for word, every other field follows the dash rule. No field holds a verdict or a
+quote stays word for word, every other field (a clause's title included) follows the dash rule.
+The agents read the letter's first 30,000 characters (`writer_base.UPLOAD_MAX_CHARS`): for a
+longer letter `get_offer_text` answers `truncated` with the characters read and the letter's
+own, the prompt has the summary say that only its beginning was read, and the section shows
+"Only the first 30,000 characters of the letter were read." No field holds a verdict or a
 score, the prompt forbids both and any outside fact, and a submit that tells the person to sign
 or calls signing safe is refused back to the agent (`offer_notes.VERDICT`, English and French;
 wording outside that list rests on the prompt). The page says the notes are not legal advice.
 Their chat is the documents chat (`chat.post` hands the message to `offer_notes.post_message`:
 the agent `documents_chat_offer_notes`, the same consent as the reading; a version of origin
 `chat` per change). `GET /api/documents/offer-notes/{posting_id}` answers the notes, the newest
-reading, the letter's name and what they were compared with; `GET /api/jobs/{id}/documents`
-leaves the notes out.
+reading, the letter's name, what they were compared with and `truncated` (with `read_chars`);
+it settles first a chat change whose run ended without its hook (`chat.recover`), so the notes
+do not stay busy. `GET /api/jobs/{id}/documents` leaves the notes out.
 
 ## The writers
 
@@ -424,7 +435,7 @@ Owner, 2026-11-07 ("build all" of the career-ops analysis, adapted from its `key
 
 Owner, 2026-11-07 ("build all" of the career-ops analysis, after its `modes/retro.md`, MIT, NOTICE). When a message of the person in a document's chat corrects the wording ("Never say leveraged", "Shorter summary", "Évite le jargon"), the chat offers, once the answer is written, "Keep as a rule": the message itself as a rule, which the person reads, may edit, and keeps or not. Nothing is written before Keep. Keep appends the rule as one line of the block "Writing rules" of the profile's `facts` section (made when absent), the place of the person's writing rules ("What does not move"), through a `profile_item` proposal of SPEC-agents accepted by that click: one profile revision, recorded and undoable as every accepted item. The same rule twice is kept once.
 
-A fact is never a rule: the writers read the facts section as the source of claims, so a fact kept there as a rule would make it pass. The offer (`writing_rules.offer`, code, no model) comes only for a message that holds the words of a correction of the wording (English and French) and nothing that states a fact about the person (a digit, a first person statement of what the person did, has or is, a request to add or mention something about them); what it does not recognise gets no offer, and the person can still write a rule in the profile by hand. Keep refuses a rule that states a fact the same way (422, "A writing rule says how to write, not what is true of you").
+A fact is never a rule: the writers read the facts section as the source of claims, so a fact kept there as a rule would make it pass. The offer (`writing_rules.offer`, code, no model, English and French) fails closed. It comes only for a message that states no fact and whose every clause has a shape the code recognises: never, avoid, stop or do not, then a verb and a quoted or short phrase ("Never say leveraged", "N'écris jamais « passionné »"); words of style only (tone, length, formality, bullets, dashes: "Shorter summary", "Le ton est trop formel"); quoted words swapped ("Use 'built' instead of 'developed'"); a quoted word to avoid ("'Synergy' is banned"). A fact (`writing_rules.is_fact`) is a message that names the person (you, your, yourself, me, my, I, we, tu, te, ton, votre, je, mon and the like), holds a number in digits or in words, or has a verb that puts words in the document (say, write, mention, call, add, include, replace, dire, écrire, ajouter, remplacer and the like) not negated and followed by more than quoted words and words of style ("Always mention Kubernetes", "Replace developer with architect"). What it does not recognise gets no offer, and the person can still write a rule in the profile by hand. Keep takes only what the offer would take: a fact is refused (422, "A writing rule says how to write, not what is true of you"), and so is a message of another shape (422, "Keep takes a rule on the wording only, ...").
 
 ## Templates
 
