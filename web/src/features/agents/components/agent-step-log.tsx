@@ -1,5 +1,5 @@
 import { ChevronRight, Search } from "lucide-react";
-import { useId, useState } from "react";
+import { useId, useState, type RefObject } from "react";
 
 import { LoadError } from "@/components/blocks/load-error";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +33,7 @@ import {
 import { elapsed, formatDuration } from "../helpers/format";
 import { timelineItems } from "../helpers/run-steps";
 import { useNow } from "../hooks/use-now";
+import { useReturnFocus } from "../hooks/use-return-focus";
 import { RunLiveView } from "./run-live-view";
 
 function Group({ group, start }: { group: LogGroup; start: string | null }) {
@@ -95,7 +96,14 @@ function Group({ group, start }: { group: LogGroup; start: string | null }) {
  * the step's start. A private run's log shows names and sizes only (run-steps.ts). A website
  * search also shows the browser it reads.
  */
-export function AgentStepLog({ runId }: { runId: string }) {
+export function AgentStepLog({
+  runId,
+  titleRef,
+}: {
+  runId: string;
+  /** Where the focus goes when Cancel goes away with it, at the run's end. */
+  titleRef: RefObject<HTMLHeadingElement | null>;
+}) {
   const filterId = useId();
   const [filter, setFilter] = useState("");
   const { detail, steps, live, status, connection, gone } = useRunStream(runId);
@@ -103,6 +111,7 @@ export function AgentStepLog({ runId }: { runId: string }) {
   const shown = status ?? run?.status;
   const active = shown === "queued" || shown === "running";
   const now = useNow(active);
+  const cancelFocus = useReturnFocus(active, titleRef);
   if (gone) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -149,7 +158,11 @@ export function AgentStepLog({ runId }: { runId: string }) {
         </span>
         <span className="ml-auto">
           {active ? (
-            <CancelRunButton runId={runId} stopping={run.cancel_requested} />
+            <CancelRunButton
+              runId={runId}
+              stopping={run.cancel_requested}
+              {...cancelFocus}
+            />
           ) : null}
         </span>
       </div>

@@ -1,6 +1,6 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   FAILED_RUN_ID,
@@ -16,9 +16,35 @@ import {
   makeRun,
 } from "@/design-system/fixtures/runs";
 import { fakeSession, member } from "@/test/auth";
+import { FakeEventSource } from "@/test/fake-event-source";
 import { renderApp } from "@/test/render";
 
+import type { RunStep } from "../api/runs-api";
+
 const runs = () => screen.findByRole("list", { name: "Workflow runs" });
+
+beforeEach(() => {
+  vi.stubGlobal("EventSource", FakeEventSource);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  FakeEventSource.reset();
+});
+
+/** The open step's log streams `steps`, then ends unless it is still `open`. */
+async function stream(steps: RunStep[], open = false) {
+  await screen.findByTestId("run-panel");
+  await waitFor(() => {
+    expect(FakeEventSource.last).toBeDefined();
+  });
+  const source = FakeEventSource.last!;
+  act(() => {
+    source.open();
+    for (const one of steps) source.emit("step", one);
+    if (!open) source.emit("end", {});
+  });
+}
 
 describe("Activity, the workflow runs", () => {
   it("lists every workflow on the side and each run with its trigger, newest first", async () => {
@@ -86,6 +112,7 @@ describe("a workflow run's page", () => {
       },
     });
     renderApp(`/activity/runs/${RUN_UNDER_WAY_ID}`);
+    await stream(RUNNING_STEPS, true);
     const steps = await screen.findByRole("list", {
       name: "Steps of this run",
     });
@@ -108,6 +135,15 @@ describe("a workflow run's page", () => {
 
   it("says which step failed and why", async () => {
     fakeSession(member);
+    const failed: RunStep[] = [
+      ...RUNNING_STEPS,
+      {
+        seq: 7,
+        at: "2026-11-05T08:18:51Z",
+        kind: "status",
+        data: { status: "failed", error: "max_turns" },
+      },
+    ];
     fakeActivityApi({
       step: {
         detail: makeRun({
@@ -115,18 +151,11 @@ describe("a workflow run's page", () => {
           status: "failed",
           error: "max_turns",
         }),
-        steps: [
-          ...RUNNING_STEPS,
-          {
-            seq: 7,
-            at: "2026-11-05T08:18:51Z",
-            kind: "status",
-            data: { status: "failed", error: "max_turns" },
-          },
-        ],
+        steps: failed,
       },
     });
     renderApp(`/activity/runs/${FAILED_RUN_ID}`);
+    await stream(failed);
     const steps = await screen.findByRole("list", {
       name: "Steps of this run",
     });
@@ -149,6 +178,7 @@ describe("a workflow run's page", () => {
     fakeActivityApi({ step: { detail: makeRun(), steps: FINISHED_STEPS } });
     const user = userEvent.setup();
     renderApp(`/activity/runs/${FAILED_RUN_ID}`);
+    await stream(FINISHED_STEPS);
     const call = await screen.findByRole("button", {
       name: /Tool call: get_job/,
     });
@@ -160,7 +190,10 @@ describe("a workflow run's page", () => {
       "Looker",
     );
     const log = screen.getByRole("list", { name: "Steps" });
-    expect(within(log).getAllByRole("button")).toHaveLength(2);
+    // The groups kept, not their buttons: an opened tool call holds its result's own toggle.
+    expect(
+      Array.from(log.children).map((group) => group.getAttribute("data-kind")),
+    ).toEqual(["tool_call", "text"]);
     await user.clear(screen.getByRole("searchbox", { name: "Filter the log" }));
     await user.type(
       screen.getByRole("searchbox", { name: "Filter the log" }),
@@ -181,6 +214,7 @@ describe("a workflow run's page", () => {
     });
     const user = userEvent.setup();
     renderApp(`/activity/runs/${PRIVATE_RUN_ID}`);
+    await stream(PRIVATE_STEPS);
     await user.click(
       await screen.findByRole("button", { name: /Tool call: read_document/ }),
     );

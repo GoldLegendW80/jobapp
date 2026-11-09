@@ -33,12 +33,12 @@ describe("App shell", () => {
     const links = within(
       screen.getByRole("navigation", { name: "Main" }),
     ).getAllByRole("link");
-    // Activity (the runs) is in the account menu at every width, not in the navigation.
     expect(links.map((link) => link.textContent)).toEqual([
       "Jobs",
       "Discover",
       "Applications",
       "Profile",
+      "Activity",
       "Admin",
     ]);
     expect(links[0]).toHaveAttribute("aria-current", "page");

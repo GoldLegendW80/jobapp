@@ -7,7 +7,7 @@
  * page then moves to its workflow run's address with that step open.
  */
 import { SearchX } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { EmptyState } from "@/components/blocks/empty-state";
@@ -38,6 +38,7 @@ export function WorkflowRunPage() {
   const run = query.data;
   const active = run ? ACTIVE_FLOW_STATUSES.has(run.status) : false;
   const now = useNow(active);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   useTitle(run ? (run.subject?.words ?? run.workflow_title) : WORDING.activity);
 
   const agentSteps = run?.steps.filter((step) => step.kind === "agent") ?? [];
@@ -94,6 +95,7 @@ export function WorkflowRunPage() {
     <Page>
       <PageHeader
         trail={trail}
+        titleRef={titleRef}
         title={run.subject?.words ?? run.workflow_title}
         description={`${run.workflow_title}, started ${formatDateTime(run.created_at)}`}
       />
@@ -123,7 +125,7 @@ export function WorkflowRunPage() {
             now={now}
           />
           {selected ? (
-            <AgentStepLog key={selected} runId={selected} />
+            <AgentStepLog key={selected} runId={selected} titleRef={titleRef} />
           ) : (
             <p className="text-sm text-muted-foreground">
               No agent has worked in this run yet.

@@ -1,11 +1,13 @@
 import { delay, http, HttpResponse } from "msw";
 
 import type { AgentFlow } from "@/features/admin/api/agents-api";
-import type {
-  FlowStep,
-  Workflow,
-  WorkflowRun,
-  WorkflowRunDetail,
+import {
+  ACTIVE_FLOW_STATUSES,
+  type FlowStatus,
+  type FlowStep,
+  type Workflow,
+  type WorkflowRun,
+  type WorkflowRunDetail,
 } from "@/features/agents/api/activity-api";
 import type { Run, RunStep } from "@/features/agents/api/runs-api";
 import { server } from "@/test/server";
@@ -137,7 +139,7 @@ const POSTING = {
 export const RUN_UNDER_WAY_ID = "3f6a1c2e-9b4d-4e7a-8c15-6d2b0e9f1a73";
 export const FAILED_RUN_ID = "71c9e4b2-5a3d-4f86-b0e1-2d8c7a6f5e94";
 export const PRIVATE_RUN_ID = "c25d8e1f-4b7a-4c39-9e60-1f3a8b2d7c05";
-const SEARCH_RUN_ID = "a94b2f07-1e6c-4d58-b3a9-7c0e5d2f8b16";
+export const SEARCH_RUN_ID = "a94b2f07-1e6c-4d58-b3a9-7c0e5d2f8b16";
 const CHAT_RUN_ID = "e0b7c3a9-6f2d-4a15-8e94-3b1c5d7a2f68";
 
 /** The reviewer at work in the run under way: its log opens on the run's page. */
@@ -202,6 +204,41 @@ const DOCUMENTS = workflowOf("posting_documents");
 const APPLICATION = workflowOf("application");
 const FILL = workflowOf("fill_profile");
 const CHAT = workflowOf("job_chat");
+
+/** A sweep with one website searched by its agent, `stepId`, in the state `status`. */
+export function searchRunOf(
+  stepId: string,
+  status: FlowStatus,
+): WorkflowRunDetail {
+  const done = !ACTIVE_FLOW_STATUSES.has(status);
+  return {
+    ...run(SEARCH_RUN_ID, SEARCH, {
+      trigger: {
+        kind: "recorded",
+        words: "Your click on Save and start search",
+        node: "search",
+      },
+      status,
+      finished_at: done ? ago(28) : null,
+      duration_s: done ? 120 : null,
+    }),
+    flow: SEARCH.flow,
+    steps: [
+      agentStep(
+        stepId,
+        "browser_discovery",
+        "Website search",
+        status,
+        30,
+        done ? 120 : null,
+      ),
+    ],
+    input_tokens: null,
+    output_tokens: null,
+    cost_usd: null,
+    credential_kind: null,
+  };
+}
 
 /** The documents of a Write click, under way: the CV written, its hiring panel reading it. */
 export const RUN_UNDER_WAY: WorkflowRunDetail = {

@@ -186,7 +186,7 @@ describe("the shell on a phone", () => {
     const user = userEvent.setup();
     await openJobs();
     const order: string[] = [];
-    for (let i = 0; i < 7; i += 1) {
+    for (let i = 0; i < 3 + TABS.length; i += 1) {
       await user.tab();
       const focused = document.activeElement as HTMLElement;
       order.push(focused.getAttribute("aria-label") ?? focused.textContent);
