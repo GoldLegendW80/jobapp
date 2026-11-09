@@ -38,8 +38,8 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-import type { AgentFlow, FlowNode } from "../api/agents-api";
-import { flowSentences } from "../helpers/flow-sentences";
+import type { AgentFlow, FlowNode } from "@/features/admin/api/agents-api";
+import { flowSentences } from "@/features/admin/helpers/flow-sentences";
 
 // The api's grid in pixels: a card per column and row, in the order things happen.
 const CARD_W = 260;
@@ -56,7 +56,13 @@ const ZOOM = 1.25;
 const KEEP = 48;
 
 export type NodeStatus =
-  "queued" | "running" | "success" | "failure" | "skipped" | "cancelled";
+  | "waiting"
+  | "queued"
+  | "running"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "cancelled";
 
 /** What a run of the workflow says of one step: none of it on Admin, Agents today. */
 export interface NodeRun {
@@ -64,6 +70,8 @@ export interface NodeRun {
   /** Already in words, as "1m 12s". */
   duration?: string;
   href?: string;
+  /** How many times the step ran: two websites side by side, a CV rebuilt after the panel. */
+  count?: number;
 }
 
 type Kind = FlowNode["kind"];
@@ -96,6 +104,11 @@ const STATUSES: Record<
   NodeStatus,
   { icon: LucideIcon; className: string; words: string }
 > = {
+  waiting: {
+    icon: CircleDashed,
+    className: "text-muted-foreground/60",
+    words: "Waiting",
+  },
   queued: {
     icon: CircleDashed,
     className: "text-muted-foreground",
@@ -121,6 +134,7 @@ const WORST: NodeStatus[] = [
   "failure",
   "running",
   "queued",
+  "waiting",
   "cancelled",
   "skipped",
   "success",
@@ -249,10 +263,29 @@ function triggersOf(flow: AgentFlow): string[] {
     .map((node) => node.label);
 }
 
-function statusOf(card: Card, runs: Record<string, NodeRun>) {
+function statusOf(
+  card: Card,
+  runs: Record<string, NodeRun>,
+  group: NodeRun | undefined,
+) {
   if (!card.members.length) return runs[card.node.id]?.status;
+  if (group?.status) return group.status;
   const statuses = card.members.map((member) => runs[member.id]?.status);
   return WORST.find((status) => statuses.includes(status));
+}
+
+/** "×2" for a step that ran twice, said in words to a screen reader. */
+function Count({ count }: { count?: number }) {
+  if (!count || count < 2) return null;
+  return (
+    <span
+      data-count={count}
+      className="shrink-0 rounded bg-muted px-1 text-[11px] text-muted-foreground tabular-nums"
+    >
+      <span aria-hidden="true">×{count}</span>
+      <span className="sr-only">{`${String(count)} runs, `}</span>
+    </span>
+  );
 }
 
 function KindOrStatus({ kind, status }: { kind: Kind; status?: NodeStatus }) {
@@ -287,6 +320,15 @@ function KindOrStatus({ kind, status }: { kind: Kind; status?: NodeStatus }) {
   );
 }
 
+/** "Website search: Running, 2 runs, 1m 12s.": a step of the run in a sentence. */
+function runWords(label: string, run: NodeRun | undefined, total = "") {
+  const words = run?.status ? STATUSES[run.status].words : "";
+  const count =
+    run?.count && run.count > 1 ? `, ${String(run.count)} runs` : "";
+  const time = run?.duration ? `, ${run.duration}${total}` : "";
+  return `${label}: ${words}${count}${time}.`;
+}
+
 /** A card's tooltip: the agent's registered name, then what starts or feeds it. */
 function Tip({
   lines,
@@ -316,31 +358,73 @@ const ROW_CLASS = "flex h-11 w-full items-center gap-2 px-3 text-left";
 const FOCUS =
   "outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset";
 
+const MEMBER_CLASS = "flex h-8 items-center gap-2 rounded-md px-2 text-xs";
+
+const CURRENT = "aria-[current=step]:bg-accent aria-[current=step]:font-medium";
+
+function MemberRow({
+  to,
+  current,
+  children,
+}: {
+  to?: string;
+  current: boolean;
+  children: ReactNode;
+}) {
+  const mark = current ? ("step" as const) : undefined;
+  if (!to)
+    return (
+      <div aria-current={mark} className={cn(MEMBER_CLASS, CURRENT)}>
+        {children}
+      </div>
+    );
+  return (
+    <Link
+      to={to}
+      aria-current={mark}
+      className={cn(MEMBER_CLASS, FOCUS, CURRENT)}
+    >
+      {children}
+    </Link>
+  );
+}
+
 function StepCard({
   card,
   runs,
+  group,
+  selected,
+  linkAgents,
   into,
   open,
   onToggle,
 }: {
   card: Card;
   runs: Record<string, NodeRun>;
+  /** A group card's own run: its status and total time over its agents. */
+  group?: NodeRun;
+  selected?: string;
+  linkAgents: boolean;
   into: Map<string, string[]>;
   open: boolean;
   onToggle: () => void;
 }) {
   const listId = useId();
   const { node, members } = card;
-  const run = members.length ? undefined : runs[node.id];
+  const run = members.length ? group : runs[node.id];
+  const current =
+    selected !== undefined &&
+    (node.id === selected || members.some((member) => member.id === selected));
+  const mark = current && !members.length ? ("step" as const) : undefined;
   const href =
-    run?.href ??
-    (node.kind === "agent" && !members.length
+    (members.length ? undefined : run?.href) ??
+    (linkAgents && node.kind === "agent" && !members.length
       ? `/admin/agents/${encodeURIComponent(node.id)}`
       : undefined);
   const height = CARD_H + (open ? members.length * MEMBER_H + 8 : 0);
   const head = (
     <>
-      <KindOrStatus kind={node.kind} status={statusOf(card, runs)} />
+      <KindOrStatus kind={node.kind} status={statusOf(card, runs, group)} />
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <span className="truncate">{node.label}</span>
         {node.note ? (
@@ -349,6 +433,7 @@ function StepCard({
           </span>
         ) : null}
       </span>
+      <Count count={run?.count} />
       <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
         {run?.duration ??
           (members.length ? `${String(members.length)} agents` : "")}
@@ -384,24 +469,24 @@ function StepCard({
           {members.map((member) => (
             <li key={member.id}>
               <Tip id={member.id} lines={into.get(member.id) ?? []}>
-                <Link
+                <MemberRow
+                  current={member.id === selected}
                   to={
                     runs[member.id]?.href ??
-                    `/admin/agents/${encodeURIComponent(member.id)}`
+                    (linkAgents
+                      ? `/admin/agents/${encodeURIComponent(member.id)}`
+                      : undefined)
                   }
-                  className={cn(
-                    "flex h-8 items-center gap-2 rounded-md px-2 text-xs",
-                    FOCUS,
-                  )}
                 >
                   <KindOrStatus kind="agent" status={runs[member.id]?.status} />
                   <span className="min-w-0 flex-1 truncate">
                     {member.label.replace(`${node.label}: `, "")}
                   </span>
+                  <Count count={runs[member.id]?.count} />
                   <span className="text-muted-foreground tabular-nums">
                     {runs[member.id]?.duration ?? ""}
                   </span>
-                </Link>
+                </MemberRow>
               </Tip>
             </li>
           ))}
@@ -414,7 +499,11 @@ function StepCard({
         id={node.kind === "agent" ? node.id : undefined}
         lines={into.get(node.id) ?? []}
       >
-        <Link to={href} className={cn(ROW_CLASS, FOCUS)}>
+        <Link
+          to={href}
+          aria-current={mark}
+          className={cn(ROW_CLASS, FOCUS, CURRENT)}
+        >
           {head}
         </Link>
       </Tip>
@@ -422,18 +511,22 @@ function StepCard({
   else
     body = (
       <Tip lines={into.get(node.id) ?? [node.label]}>
-        <div className={ROW_CLASS}>{head}</div>
+        <div aria-current={mark} className={cn(ROW_CLASS, CURRENT)}>
+          {head}
+        </div>
       </Tip>
     );
   return (
     <div
       data-kind={node.kind}
       data-card={card.key}
+      data-selected={current ? "" : undefined}
       aria-hidden={href || members.length ? undefined : "true"}
       style={{ left: x0(card), top: y0(card), width: CARD_W, height }}
       className={cn(
         "absolute overflow-hidden border bg-card text-sm text-card-foreground shadow-xs",
         KINDS[node.kind].shape,
+        current && "border-primary ring-2 ring-primary/40",
       )}
     >
       {body}
@@ -441,7 +534,7 @@ function StepCard({
   );
 }
 
-function Legend() {
+function Legend({ linkAgents }: { linkAgents: boolean }) {
   return (
     <ul className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
       {(Object.keys(KINDS) as Kind[]).map((key) => {
@@ -457,7 +550,7 @@ function Legend() {
             >
               <Icon className="size-3 text-muted-foreground" />
             </span>
-            {KINDS[key].legend}
+            {key === "agent" && !linkAgents ? "Agent" : KINDS[key].legend}
           </li>
         );
       })}
@@ -682,17 +775,26 @@ function usePanZoom(
  * The workflow of one category of Admin, Agents (agents A9), drawn as a run graph: its triggers,
  * then its steps as cards in columns in the order things happen (catalog.FLOWS), joined by
  * connectors, agents that run side by side as one card that lists them. `runs` gives a step a
- * status, a duration and a link, for a run of the workflow; the agents list passes none. A
- * screen reader gets each connector as a sentence.
+ * status, a duration, a link and how many times it ran, for a run of the workflow, `groupRuns`
+ * a group card's (by its name) over its agents, and `selected` the step whose log is open; the
+ * agents list passes none. A screen reader gets each connector as a sentence.
  */
 export function WorkflowDiagram({
   title,
   flow,
   runs = {},
+  groupRuns = {},
+  selected,
+  linkAgents = true,
 }: {
   title: string;
   flow: AgentFlow;
   runs?: Record<string, NodeRun>;
+  groupRuns?: Record<string, NodeRun>;
+  /** The id of the box whose step is open: its card is marked. */
+  selected?: string;
+  /** False where the person may not open Admin: an agent's card then links only to its run. */
+  linkAgents?: boolean;
 }) {
   const { cards, cardOf, connectors } = cardsOf(flow);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -715,6 +817,7 @@ export function WorkflowDiagram({
   }
   const triggers = triggersOf(flow);
   const stepsRun = flow.nodes.filter((node) => runs[node.id]?.status);
+  const groupsRun = Object.entries(groupRuns).filter(([, run]) => run.status);
   const { x, y, scale } = pan.view;
   return (
     <TooltipProvider>
@@ -818,31 +921,45 @@ export function WorkflowDiagram({
                 key={card.key}
                 card={card}
                 runs={runs}
+                group={
+                  card.members.length ? groupRuns[card.node.label] : undefined
+                }
+                selected={selected}
+                linkAgents={linkAgents}
                 into={into}
-                open={Boolean(open[card.key])}
+                open={
+                  open[card.key] ??
+                  card.members.some((member) => member.id === selected)
+                }
                 onToggle={() => {
-                  setOpen((now) => ({ ...now, [card.key]: !now[card.key] }));
+                  setOpen((now) => ({
+                    ...now,
+                    [card.key]: !(
+                      now[card.key] ??
+                      card.members.some((member) => member.id === selected)
+                    ),
+                  }));
                 }}
               />
             ))}
           </div>
         </div>
         <figcaption>
-          <Legend />
+          <Legend linkAgents={linkAgents} />
         </figcaption>
         <ul className="sr-only" aria-label={`${title}, each step in words`}>
           {flowSentences(flow).map((sentence, index) => (
             <li key={index}>{sentence}</li>
           ))}
         </ul>
-        {stepsRun.length ? (
+        {stepsRun.length || groupsRun.length ? (
           <ul className="sr-only" aria-label={`${title}, this run`}>
-            {stepsRun.map((node) => {
-              const run = runs[node.id];
-              const words = run?.status ? STATUSES[run.status].words : "";
-              const time = run?.duration ? `, ${run.duration}` : "";
-              return <li key={node.id}>{`${node.label}: ${words}${time}.`}</li>;
-            })}
+            {stepsRun.map((node) => (
+              <li key={node.id}>{runWords(node.label, runs[node.id])}</li>
+            ))}
+            {groupsRun.map(([name, run]) => (
+              <li key={`group:${name}`}>{runWords(name, run, " in all")}</li>
+            ))}
           </ul>
         ) : null}
       </figure>

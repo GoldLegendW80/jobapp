@@ -72,6 +72,7 @@ from app.documents import content as c
 from app.documents import (
     design_capture,
     estimate,
+    flows,
     generate,
     panel,
     panel_hold,
@@ -649,6 +650,7 @@ def start(
     script: str | None = None,
     settings: Settings | None = None,
     panel: str | None = None,
+    flow: agent_runs.WorkflowRef | None = None,
 ) -> AgentRun:
     """The writer run of a base generation, `queued`, and the generation `running`. The caller
     commits, then `generate.enqueue_run`. Raises agent_runs.ActiveRunsError when the person has
@@ -676,7 +678,14 @@ def start(
     if chosen is not None:
         data["script"] = chosen
     run = agent_runs.create_run(
-        db, generation.user_id, NAME, None, BASE_WRITER.validate_input(data), BASE_WRITER.model, at
+        db,
+        generation.user_id,
+        NAME,
+        None,
+        BASE_WRITER.validate_input(data),
+        BASE_WRITER.model,
+        at,
+        flow=flow or flows.base_flow(db, generation),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

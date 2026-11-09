@@ -35,7 +35,7 @@ export function BottomNav() {
       viewport={false}
       className="fixed inset-x-0 bottom-0 z-40 max-w-none border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur supports-[backdrop-filter]:bg-background/80"
     >
-      <NavigationMenuList className="mx-auto grid h-14 w-full max-w-md grid-cols-4 gap-0">
+      <NavigationMenuList className="mx-auto grid h-14 w-full max-w-lg grid-cols-5 gap-0">
         {MAIN_TABS.map(({ to, label, icon: Icon, counts }) => {
           const isActive = pathname === to || pathname.startsWith(`${to}/`);
           return (

@@ -31,9 +31,11 @@ import { selectionRefusal } from "../helpers/run-selection";
 export function useStartRun({
   documentIds,
   onStarted,
+  startedFrom,
 }: {
   documentIds: string[];
   onStarted?: (run: Run) => void;
+  startedFrom?: "onboarding";
 }) {
   const client = useQueryClient();
   const [reread, setReread] = useState<readonly string[]>([]);
@@ -99,7 +101,11 @@ export function useStartRun({
           consentKey,
           await acceptConsent(current.consent.version),
         );
-      return startRun(current.selection, current.estimate.quote_id);
+      return startRun(
+        current.selection,
+        current.estimate.quote_id,
+        startedFrom,
+      );
     },
     onSuccess: (run) => {
       client.setQueryData(runKey(run.id), run);

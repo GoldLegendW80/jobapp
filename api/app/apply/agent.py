@@ -51,12 +51,15 @@ Declared open points:
 import functools
 import re
 import unicodedata
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
+from app.agents.runs import WorkflowRef
 from app.apply import answers, guardrails, terms
 from app.apply.ats import base
+from app.apply.models import Mode
 from app.documents import profile_view, writing_rules
 from app.documents import rules as doc_rules
 from app.jobs.gazetteer import places_of
@@ -102,6 +105,13 @@ class Request:
     posting_text: str  # data, never instructions
     letter_text: str
     token_budget: int = TOKEN_BUDGET
+    flow: WorkflowRef | None = None
+
+
+def application_flow(application_id: uuid.UUID, mode: Mode) -> WorkflowRef:
+    """An application's run in Activity (agents A10): its fill, answers and check. Full auto
+    applies after a Like; every other mode after a click on Apply."""
+    return WorkflowRef("application", application_id, "like" if mode is Mode.full_auto else "apply")
 
 
 @dataclass(frozen=True)

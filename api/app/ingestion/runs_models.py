@@ -136,6 +136,10 @@ def may_be_read() -> sa.ColumnElement[bool]:
     )
 
 
+# `IngestionRun.started_from` of a run onboarding's Build my profile started.
+ONBOARDING = "onboarding"
+
+
 class IngestionRun(Base):
     __tablename__ = "ingestion_runs"
     __table_args__ = (
@@ -151,6 +155,9 @@ class IngestionRun(Base):
         ),
         sa.CheckConstraint(
             "jsonb_typeof(ceiling_history) = 'array'", name="ceiling_history_is_array"
+        ),
+        sa.CheckConstraint(
+            "started_from IS NULL OR started_from = 'onboarding'", name="started_from_known"
         ),
         # At most one active run per user: POST /api/ingestion/runs answers 409 on its violation.
         sa.Index(
@@ -206,6 +213,9 @@ class IngestionRun(Base):
     ceiling_history: Mapped[list[dict[str, Any]]] = mapped_column(
         pg.JSONB, nullable=False, default=list, server_default=sa.text("'[]'::jsonb")
     )
+    # `onboarding` for a run onboarding's Build my profile started, null for Fill my profile's
+    # (Activity tells the two triggers apart).
+    started_from: Mapped[str | None] = mapped_column(sa.Text)
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
     )

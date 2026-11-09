@@ -37,7 +37,7 @@ from app.agents import definitions
 from app.agents import runs as agent_runs
 from app.agents.models import AgentRun, CredentialKind
 from app.config import Settings, get_settings
-from app.documents import design_capture, store
+from app.documents import design_capture, flows, store
 from app.documents.models import Document, DocumentGeneration, GenerationMode, GenerationStatus
 from app.documents.models import Scope as DocumentScope
 from app.documents.writer_cv import setting
@@ -173,7 +173,14 @@ def start(
     if chosen is not None:
         data["script"] = chosen
     run = agent_runs.create_run(
-        db, generation.user_id, NAME, None, DESIGN_WRITER.validate_input(data), MODEL, at
+        db,
+        generation.user_id,
+        NAME,
+        None,
+        DESIGN_WRITER.validate_input(data),
+        MODEL,
+        at,
+        flow=flows.capture_flow(db, generation),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

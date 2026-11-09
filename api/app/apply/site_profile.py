@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from app.agents.runs import WorkflowRef
 from app.apply import (
     answers,
     form_agent,
@@ -721,6 +722,7 @@ async def fill(services: Any, run_id: uuid.UUID, agent: Any = None) -> None:
                 rows={r.field_key: r for r in rows},
                 autosave=is_autosave,
                 alive=alive,
+                flow=WorkflowRef("site_profile", plan.run_id, "site"),
             )
             for item in part.fields:
                 found, _ = await adapter.read(tools)

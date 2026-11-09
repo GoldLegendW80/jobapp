@@ -89,6 +89,7 @@ export function useBuilding(onWritten: (profile: Profile) => void) {
   const [runId, setRunId] = useState<string>();
   const reading = useStartRun({
     documentIds: ids,
+    startedFrom: "onboarding",
     onStarted: (run) => {
       keepStarted(userId, { run: run.id, written: false });
       setRunId(run.id);

@@ -1,10 +1,4 @@
-import {
-  Activity,
-  LogOut,
-  Settings,
-  ShieldCheck,
-  UserRound,
-} from "lucide-react";
+import { LogOut, Settings, ShieldCheck, UserRound } from "lucide-react";
 import { Link, NavLink } from "react-router";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -23,9 +17,8 @@ import { useAuth } from "@/features/auth/helpers/auth-context";
 import { initials } from "./initials";
 
 /**
- * The account menu at the right of the header: Account, Settings, Activity (the assistant's
- * runs, at every width), Admin for an admin on a phone (a wide screen has it in the header), and
- * Sign out.
+ * The account menu at the right of the header: Account, Settings, Admin for an admin on a phone
+ * (a wide screen has it in the header), and Sign out. Activity is in the main navigation.
  */
 export function UserMenu({
   user,
@@ -75,12 +68,6 @@ export function UserMenu({
             <Settings aria-hidden="true" />
             Settings
           </Link>
-        </DropdownMenuItem>
-        <DropdownMenuItem asChild>
-          <NavLink to="/runs">
-            <Activity aria-hidden="true" />
-            Activity
-          </NavLink>
         </DropdownMenuItem>
         {adminLink ? (
           <DropdownMenuItem asChild>

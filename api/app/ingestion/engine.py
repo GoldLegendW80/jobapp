@@ -62,6 +62,7 @@ from app.config import Settings
 from app.ingestion import agents, citations, estimate, estimate_router, merge, plan, reuse
 from app.ingestion.models import IngestionDocument, IngestionImage, TextStatus
 from app.ingestion.runs_models import (
+    ONBOARDING,
     IngestionItem,
     IngestionRun,
     IngestionRunStep,
@@ -191,7 +192,11 @@ def active_run_id(db: Session, user_id: uuid.UUID) -> uuid.UUID | None:
 
 
 def create(
-    db: Session, user_id: uuid.UUID, quote: estimate_router.Quote, now: datetime
+    db: Session,
+    user_id: uuid.UUID,
+    quote: estimate_router.Quote,
+    now: datetime,
+    started_from: str | None = None,
 ) -> IngestionRun:
     """The run of a quote and its steps, in the caller's transaction (the one that checked the
     consent and the echo). Raises `ActiveRunError` when the user has a run that is not final
@@ -213,6 +218,7 @@ def create(
         tokens_spent=0,
         ceiling_history=[],
         created_at=now,
+        started_from=started_from,
     )
     try:
         with db.begin_nested():
@@ -625,7 +631,18 @@ def _next(
     )
     try:
         created = agent_runs.create_run(
-            db, run.user_id, agent.name, None, agent.validate_input(data), model, now
+            db,
+            run.user_id,
+            agent.name,
+            None,
+            agent.validate_input(data),
+            model,
+            now,
+            flow=agent_runs.WorkflowRef(
+                "fill_profile",
+                run.id,
+                "onboarding_read" if run.started_from == ONBOARDING else "read",
+            ),
         )
     except agent_runs.ActiveRunsError:  # counted again under the user's advisory lock
         run.waiting = WAITING_SLOTS

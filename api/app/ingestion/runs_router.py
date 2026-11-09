@@ -27,7 +27,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from functools import partial
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -89,6 +89,8 @@ class RunIn(estimate_router.EstimateIn):
     # hexadecimal characters, so anything else, a lone surrogate included, is a 422 here and
     # never reaches the comparison.
     quote_id: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
+    # Sent by onboarding's Build my profile only: Activity names that click as the run's trigger.
+    started_from: Literal["onboarding"] | None = None
 
 
 class StepOut(BaseModel):
@@ -507,7 +509,7 @@ def _create(db: Session, user_id: uuid.UUID, body: RunIn, now: datetime) -> uuid
             {"detail": estimate_router.BLOCKERS[blockers[0]], "code": blockers[0]},
         )
     try:
-        return engine.create(db, user_id, quote, now).id
+        return engine.create(db, user_id, quote, now, body.started_from).id
     except engine.ActiveRunError as exc:
         raise _RefusedError(
             status.HTTP_409_CONFLICT,

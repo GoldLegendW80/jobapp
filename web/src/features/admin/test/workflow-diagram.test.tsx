@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 import { AGENT_FLOWS } from "@/design-system/fixtures/agent-flows";
 
 import type { AgentFlow, FlowNode } from "../api/agents-api";
-import { WorkflowDiagram, type NodeRun } from "../components/workflow-diagram";
+import {
+  WorkflowDiagram,
+  type NodeRun,
+} from "@/components/shared/agents/workflow-diagram";
 import { flowSentences } from "../helpers/flow-sentences";
 
 const node = (
@@ -222,6 +225,94 @@ describe("the workflow diagram", () => {
     expect(
       within(run).getByText("CV writer: Succeeded, 1m 48s."),
     ).toBeVisible();
+  });
+
+  it("counts a step that ran several times, marks the selected one, and gives a group its total time", () => {
+    render(
+      <MemoryRouter>
+        <WorkflowDiagram
+          title="Documents"
+          flow={AGENT_FLOWS.documents}
+          runs={{
+            documents_cv: {
+              status: "success",
+              duration: "3m 02s",
+              href: "/activity/runs/1?step=a",
+              count: 2,
+            },
+            documents_letter: { status: "success", duration: "52s", count: 1 },
+            documents_panel_reader_ceo: {
+              status: "running",
+              duration: "54s",
+              href: "/activity/runs/1?step=b",
+            },
+          }}
+          groupRuns={{
+            "Hiring panel": { status: "running", duration: "1m 40s" },
+          }}
+          selected="documents_panel_reader_ceo"
+          linkAgents={false}
+        />
+      </MemoryRouter>,
+    );
+    // Rebuilt after the panel: two runs on one card, said in words; one run says no count.
+    const cv = screen.getByRole("link", { name: /CV writer/ });
+    expect(cv).toHaveTextContent("×2");
+    expect(cv).toHaveAccessibleName(/2 runs/);
+    expect(
+      screen.getByText("Letter writer").closest("[data-card]"),
+    ).not.toHaveTextContent("×");
+    // The group shows its own time, not its count of agents, and opens on the step selected.
+    const panel = screen.getByRole("button", { name: /Hiring panel/ });
+    expect(panel).toHaveTextContent("1m 40s");
+    expect(panel).not.toHaveTextContent("7 agents");
+    expect(panel).toHaveAttribute("aria-expanded", "true");
+    expect(panel.closest("[data-card]")).toHaveAttribute("data-selected");
+    expect(screen.getByRole("link", { current: "step" })).toHaveTextContent(
+      "reader, the CEO",
+    );
+    expect(cv).not.toHaveAttribute("aria-current");
+    expect(cv.closest("[data-card]")).not.toHaveAttribute("data-selected");
+    const run = screen.getByRole("list", { name: "Documents, this run" });
+    expect(
+      within(run).getByText("CV writer: Succeeded, 2 runs, 3m 02s."),
+    ).toBeInTheDocument();
+    expect(
+      within(run).getByText("Hiring panel: Running, 1m 40s in all."),
+    ).toBeInTheDocument();
+  });
+
+  it("marks the card of a step selected outside a group, and none when nothing is", () => {
+    const { rerender } = render(
+      <MemoryRouter>
+        <WorkflowDiagram
+          title="Documents"
+          flow={AGENT_FLOWS.documents}
+          runs={{ documents_cv: { status: "success", href: "/x" } }}
+          selected="documents_cv"
+          linkAgents={false}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("link", { current: "step" })).toHaveTextContent(
+      "CV writer",
+    );
+    expect(document.querySelectorAll("[data-selected]")).toHaveLength(1);
+    expect(
+      screen.getByRole("button", { name: /Hiring panel/ }),
+    ).toHaveAttribute("aria-expanded", "false");
+    rerender(
+      <MemoryRouter>
+        <WorkflowDiagram
+          title="Documents"
+          flow={AGENT_FLOWS.documents}
+          runs={{ documents_cv: { status: "success", href: "/x" } }}
+          linkAgents={false}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("link", { current: "step" })).toBeNull();
+    expect(document.querySelectorAll("[data-selected]")).toHaveLength(0);
   });
 
   it("zooms with minus and plus and fits again, inside a frame that never scrolls", async () => {

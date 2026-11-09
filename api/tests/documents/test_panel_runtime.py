@@ -46,6 +46,7 @@ from tests.documents.writer_support import (
     execute,
     give_cv_text,
     person,
+    run_row,
     start,
     start_letter,
 )
@@ -124,6 +125,17 @@ def test_a_cv_goes_through_the_whole_panel_on_the_runtime_then_its_letter_starts
     ]
     assert (found.reviewed_version, found.rebuilt_version) == (1, 2)
     assert len(found.run_ids) == len(panel.ROLES) + 3  # the merge, the rebuild, the screen again
+    # Activity: every agent of the panel joins the writer's run, without a trigger of its own.
+    writer = run_row(factory, run)
+    with factory() as db:
+        joined = db.execute(
+            sa.select(AgentRun.workflow, AgentRun.workflow_run_id, AgentRun.workflow_trigger).where(
+                AgentRun.agent.like("documents_panel_%")
+            )
+        ).all()
+    assert len(joined) >= len(panel.ROLES)
+    assert set(joined) == {(writer.workflow, writer.workflow_run_id, None)}
+    assert writer.workflow == "posting_documents"
 
     first, rebuilt = versions_of(factory, document)
     assert (first.origin, rebuilt.origin) == (Origin.generated, Origin.panel)
@@ -183,6 +195,22 @@ def test_an_uploaded_cv_is_rebuilt_by_its_panel_with_its_fixed_facts_kept(
     assert rebuilt.content["fixed"] == first.content["fixed"]
     assert rebuilt.content["fixed"]["employers"][0]["title"] == "Platform Engineer"
     assert panel_of(factory, document).rebuilt_version == 2
+    # Activity: the rebuild joins the conversion's Base CV run, with no trigger of its own.
+    with factory() as db:
+        by_mode = {
+            mode: (workflow, run_id, trigger)
+            for mode, workflow, run_id, trigger in db.execute(
+                sa.select(
+                    AgentRun.input["mode"].astext,
+                    AgentRun.workflow,
+                    AgentRun.workflow_run_id,
+                    AgentRun.workflow_trigger,
+                ).where(AgentRun.agent == "documents_base")
+            ).all()
+        }
+    workflow, run_id, trigger = by_mode["base_upload"]
+    assert (workflow, trigger) == ("base_cv", "new_base")
+    assert by_mode["panel"] == (workflow, run_id, None)
     with factory() as db:
         assert (
             db.scalar(

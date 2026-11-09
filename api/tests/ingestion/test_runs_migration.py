@@ -49,6 +49,7 @@ RUN_COLUMNS = {
     "ceiling_history": ("JSONB", False),
     "created_at": ("TIMESTAMP", False),
     "finished_at": ("TIMESTAMP", True),
+    "started_from": ("TEXT", True),
 }
 STEP_COLUMNS = {
     "id": ("UUID", False),

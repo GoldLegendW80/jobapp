@@ -642,6 +642,13 @@ def test_a_sweep_reads_the_postings_it_stored(
     )
     assert row.status is SweepStatus.done
     assert row.stats["reading"] == {"read": 1, "refused": 1, "failed": 0, "left": 0}
+    with factory() as db:
+        recorded = db.execute(
+            sa.select(AgentRun.workflow, AgentRun.workflow_run_id, AgentRun.workflow_trigger)
+        ).all()
+    # Its reading runs are steps of the sweep's own run in Activity, triggered as it was.
+    assert recorded
+    assert set(recorded) == {("job_search", sweep_id, "search")}
     [job] = helpers.jobs_of(factory, user)
     assert job.location == "Barcelona, Spain"
     assert (job.pay_min, job.pay_currency, job.pay_period) == (2689, "EUR", "month")
@@ -837,6 +844,12 @@ def test_the_backlog_reads_a_saved_posting_once(
         run = db.get(AgentRun, run_id)
         assert run is not None
         assert run.input["job_ids"] == [str(job_id)]
+        # Each backlog run is a run of its own in Activity, triggered by the reader's tick.
+        assert (run.workflow, run.workflow_run_id, run.workflow_trigger) == (
+            "posting_reading",
+            None,
+            "backlog",
+        )
     assert execute(rc, run_id) is RunStatus.done
     job = job_of(factory, job_id)
     assert job.read_at == NOW

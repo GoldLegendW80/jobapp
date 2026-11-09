@@ -108,7 +108,16 @@ def _start(
         if credentials.get(db, user_id) is None:
             raise operator.Refused(status.HTTP_409_CONFLICT, operator.NO_CREDENTIAL)
         try:
-            row = runs.create_run(db, user_id, agent.name, job_id, {}, agent.model, now)
+            row = runs.create_run(
+                db,
+                user_id,
+                agent.name,
+                job_id,
+                {},
+                agent.model,
+                now,
+                flow=runs.WorkflowRef("assess", trigger="assess"),
+            )
         except runs.ActiveRunsError:
             db.rollback()
             raise operator.Refused(

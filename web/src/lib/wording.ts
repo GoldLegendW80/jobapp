@@ -337,8 +337,8 @@ export const WORDING = {
   listUsesRegularExpressions:
     "This list was saved as patterns by an earlier version. They keep working as they are, and the search reads the words in each.",
   // Audit chapter 2: plain words for the screens that showed codes or jargon.
-  assistantActivity: "Assistant activity",
-  allActivity: "All activity",
+  activity: "Activity",
+  allWorkflows: "All workflows",
   // The live view (SPEC-browser): the person takes the keyboard and the mouse, the assistant's
   // next action waits; giving them back lets it go on.
   useBrowserMyself: "Use the browser myself",

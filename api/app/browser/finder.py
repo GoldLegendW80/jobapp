@@ -984,6 +984,8 @@ class FinderSession:
     # Where the start page landed, when its website redirected it on its own origin (a locale
     # path, `/` to `/en`, jobs J18): its links are read from there.
     landed: str = ""
+    # The sweep's run in Activity (agents A10): its agent run records it.
+    flow: runs.WorkflowRef | None = None
 
     def __post_init__(self) -> None:
         if self.interactive is None or canonical(self.interactive.start) != self.start:
@@ -1639,7 +1641,7 @@ class RuntimeFinder(FinderAgent):
                 return "no_credential"
             try:
                 made = runs.create_run(
-                    db, user_id, INTERACTIVE_NAME, None, data, MODEL, context.clock()
+                    db, user_id, INTERACTIVE_NAME, None, data, MODEL, context.clock(), session.flow
                 )
             except runs.ActiveRunsError:
                 return "busy"

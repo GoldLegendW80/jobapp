@@ -755,7 +755,12 @@ def _in_db[T](sessions: sessionmaker[Session], step: Callable[[Session], T]) -> 
 
 
 def begin(
-    db: Session, user_id: uuid.UUID, ids: list[uuid.UUID], now: datetime, script: str | None
+    db: Session,
+    user_id: uuid.UUID,
+    ids: list[uuid.UUID],
+    now: datetime,
+    script: str | None,
+    flow: runs.WorkflowRef | None = None,
 ) -> tuple[uuid.UUID, int] | str:
     """A queued run of the postings of `ids` another transaction does not hold, each counted as
     an attempt held by the run (`read_run_id`) until its end is settled (`settle`): its id and
@@ -775,7 +780,7 @@ def begin(
         return "none"
     data = ReaderInput(job_ids=held, script=script).model_dump(mode="json", exclude_none=True)
     try:
-        run = runs.create_run(db, user_id, NAME, None, data, MODEL, now)
+        run = runs.create_run(db, user_id, NAME, None, data, MODEL, now, flow)
     except runs.ActiveRunsError:
         return "busy"
     db.execute(
@@ -919,7 +924,8 @@ class SweepReader:
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(max(0.0, left_s)):
                 for at in range(0, len(ids), BATCH_MAX):
-                    why = await self._read(context, user_id, ids[at : at + BATCH_MAX], reading)
+                    batch = ids[at : at + BATCH_MAX]
+                    why = await self._read(context, user_id, batch, reading, plan.flow)
                     if why:
                         stopped.append(why)
                         break
@@ -937,6 +943,7 @@ class SweepReader:
         user_id: uuid.UUID,
         batch: list[uuid.UUID],
         reading: dict[str, Any],
+        flow: runs.WorkflowRef | None = None,
     ) -> str | None:
         """One run of one batch, to its end, in one of the worker's slots; why no further run
         should start, else None."""
@@ -948,7 +955,7 @@ class SweepReader:
                 asyncio.to_thread(
                     _in_db,
                     context.sessions,
-                    lambda db: begin(db, user_id, batch, context.clock(), script),
+                    lambda db: begin(db, user_id, batch, context.clock(), script, flow),
                 )
             )
             try:
@@ -1069,7 +1076,9 @@ def start_backlog(db: Session, now: datetime) -> list[uuid.UUID]:
                 .limit(BATCH_MAX)
             )
         )
-        made = begin(db, person, ids, now, None)
+        made = begin(
+            db, person, ids, now, None, runs.WorkflowRef("posting_reading", trigger="backlog")
+        )
         if not isinstance(made, str):
             return [made[0]]
     return []

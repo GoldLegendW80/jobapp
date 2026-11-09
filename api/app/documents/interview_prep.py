@@ -216,6 +216,7 @@ def start(
             writer.PREP_WRITER.validate_input(data),
             writer.PREP_WRITER.model,
             at,
+            flow=agent_runs.WorkflowRef("interview_prep", trigger="prepare"),
         )
     except agent_runs.ActiveRunsError:
         raise PrepRefusedError("runs_busy") from None
@@ -424,6 +425,7 @@ def post_practice(
             writer.PRACTICE_PARTNER.validate_input(data),
             writer.PRACTICE_PARTNER.model,
             at,
+            flow=agent_runs.WorkflowRef("interview_prep", trigger="practice"),
         )
     except agent_runs.ActiveRunsError:
         raise PrepRefusedError("runs_busy") from None

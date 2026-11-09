@@ -14,6 +14,7 @@ import { describeError, errorDetail } from "@/lib/api";
 
 import type { Agent } from "../api/runs-api";
 import { useStartRun } from "../api/use-runs";
+import { stepHref } from "../helpers/activity";
 
 /** Recorded streams the fake backend can replay (api/app/agents/fake_streams/). */
 const TEST_SCRIPTS = [
@@ -35,7 +36,7 @@ export function TestRunCard({ agents }: { agents: Agent[] }) {
   const [script, setScript] = useState("slow");
   const start = useStartRun({
     onSuccess: (run) => {
-      void navigate(`/runs/${run.id}`);
+      void navigate(stepHref(run.id, run.id));
     },
     onError: (error) => {
       toast.error(

@@ -384,7 +384,16 @@ def start_draft(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, now: dat
         raise RefusedError("credential")
     data = {"follow_up_id": str(row.id), "token_budget": TOKEN_BUDGET}
     try:
-        run = runs.create_run(db, user_id, AGENT, posting_id, data, MODEL, now)
+        run = runs.create_run(
+            db,
+            user_id,
+            AGENT,
+            posting_id,
+            data,
+            MODEL,
+            now,
+            flow=runs.WorkflowRef("follow_up", trigger="draft"),
+        )
     except runs.ActiveRunsError:
         raise RefusedError("busy") from None
     row.run_id, row.error, row.updated_at = run.id, None, now
