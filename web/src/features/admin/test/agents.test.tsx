@@ -156,8 +156,8 @@ const SUMMARY: AgentSummary = {
   category: "finding",
 };
 
-// The api's groups (catalog.CATEGORIES), in its order.
-const CATEGORIES: AgentCategory[] = [
+// The api's groups (catalog.CATEGORIES), in its order, here without their workflows.
+const GROUPS: Omit<AgentCategory, "flow">[] = [
   {
     key: "finding",
     title: "Finding jobs",
@@ -195,6 +195,11 @@ const CATEGORIES: AgentCategory[] = [
       "These agents exist for the dev run panel and the tests, and are never listed in production.",
   },
 ];
+
+const CATEGORIES: AgentCategory[] = GROUPS.map((group) => ({
+  ...group,
+  flow: null,
+}));
 
 const agent = (
   name: string,
