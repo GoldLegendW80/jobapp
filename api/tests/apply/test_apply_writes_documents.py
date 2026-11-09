@@ -148,7 +148,8 @@ def test_the_apply_button_asks_the_missing_documents_and_waits_for_a_credential(
 def test_the_apply_button_with_a_credential_and_no_consent_queues_the_writer_at_once(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, api_app: FastAPI
 ) -> None:
-    """D30: no consent row, no consent asked; the documents tick starts the queued writer."""
+    """D30: no consent row, no consent asked; the base CV's writer is queued at once, the CV
+    after it."""
     _password(factory, person_a)
     with factory() as other:
         ring = Keyring.from_text(new_key())
@@ -167,11 +168,19 @@ def test_the_apply_button_with_a_credential_and_no_consent_queues_the_writer_at_
     assert db.scalar(sa.text("SELECT count(*) FROM document_consents")) == 0
     [(kind, generation)] = generations(db, job_id)
     assert (kind, generation.trigger) == (Kind.cv, GenerationTrigger.click)
-    assert generation.wait_reason is not GenerationWait.consent
-    assert generation.status in (GenerationStatus.queued, GenerationStatus.waiting)
-    if generation.status is GenerationStatus.waiting:
-        # A person with no base CV gets one built from the profile first (D29), nothing else.
-        assert generation.wait_reason is GenerationWait.base_cv
+    # No base CV yet: one is built from the profile first (D29), and the CV waits for it alone.
+    assert (generation.status, generation.wait_reason) == (
+        GenerationStatus.waiting,
+        GenerationWait.base_cv,
+    )
+    base_builds = db.execute(
+        sa.text(
+            "SELECT status::text, wait_reason::text FROM document_generations "
+            "WHERE user_id = :u AND mode = 'base_profile'"
+        ),
+        {"u": person_a.user_id},
+    ).all()
+    assert [tuple(row) for row in base_builds] == [("queued", None)]
 
 
 def test_written_then_sent_with_the_click_as_the_approval(
