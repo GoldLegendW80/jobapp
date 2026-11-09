@@ -513,9 +513,20 @@ const ARROWS: Record<string, [number, number]> = {
   ArrowDown: [0, -48],
 };
 
+interface Point {
+  x: number;
+  y: number;
+}
+
+const midpoint = (a: Point, b: Point): Point => ({
+  x: (a.x + b.x) / 2,
+  y: (a.y + b.y) / 2,
+});
+
 /**
  * Pan and zoom inside the frame: Fit shows the whole drawing, minus and plus zoom around the
- * frame's centre, a drag or the arrow keys move it. The page never scrolls sideways for it.
+ * frame's centre, two fingers zoom around their midpoint, a drag (one finger, both ways once the
+ * drawing is zoomed or moved) or the arrow keys move it. The page never scrolls sideways for it.
  */
 function usePanZoom(
   frame: RefObject<HTMLDivElement | null>,
@@ -531,7 +542,10 @@ function usePanZoom(
   // Null while the drawing is fitted, so it fits again when the frame's width changes.
   const [moved, setView] = useState<View | null>(null);
   const view = moved ?? fitted();
-  const drag = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  // The pointers down on the frame, where each was last: one drags, two pinch.
+  const pointers = useRef(new Map<number, Point>());
+  // The gesture moved the drawing: the click it ends with is no click on a card.
+  const gestured = useRef(false);
 
   useLayoutEffect(() => {
     const element = frame.current;
@@ -550,18 +564,20 @@ function usePanZoom(
     160,
     Math.min(MAX_H, Math.ceil(height * fitted().scale)),
   );
-  const zoom = (by: number) => {
+  /** Zoom by `by`, the drawing's point at `from` in the frame drawn at `to` afterwards. */
+  const zoomAt = (by: number, from: Point, to: Point = from) => {
     setView((was) => {
       const now = was ?? fitted();
       const scale = Math.min(2, Math.max(0.2, now.scale * by));
-      const cx = (frameW || width) / 2;
-      const cy = frameH / 2;
       return {
         scale,
-        x: cx - ((cx - now.x) * scale) / now.scale,
-        y: cy - ((cy - now.y) * scale) / now.scale,
+        x: to.x - ((from.x - now.x) * scale) / now.scale,
+        y: to.y - ((from.y - now.y) * scale) / now.scale,
       };
     });
+  };
+  const zoom = (by: number) => {
+    zoomAt(by, { x: (frameW || width) / 2, y: frameH / 2 });
   };
   const move = (dx: number, dy: number) => {
     setView((was) => {
@@ -569,31 +585,64 @@ function usePanZoom(
       return { ...now, x: now.x + dx, y: now.y + dy };
     });
   };
+  const release = (event: PointerEvent<HTMLDivElement>) => {
+    pointers.current.delete(event.pointerId);
+  };
   const handlers = {
     onPointerDown: (event: PointerEvent<HTMLDivElement>) => {
       if (event.button !== 0) return;
-      drag.current = { x: event.clientX, y: event.clientY, moved: false };
+      // A new gesture: forget a pointer whose end never reached the frame.
+      if (event.isPrimary) {
+        pointers.current.clear();
+        gestured.current = false;
+      }
+      pointers.current.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      });
     },
     onPointerMove: (event: PointerEvent<HTMLDivElement>) => {
-      const start = drag.current;
-      if (!start) return;
-      const dx = event.clientX - start.x;
-      const dy = event.clientY - start.y;
-      if (!start.moved && Math.hypot(dx, dy) < 4) return;
-      if (!start.moved) event.currentTarget.setPointerCapture(event.pointerId);
-      drag.current = { x: event.clientX, y: event.clientY, moved: true };
+      const points = pointers.current;
+      const last = points.get(event.pointerId);
+      if (!last) return;
+      const at = { x: event.clientX, y: event.clientY };
+      const [other] = [...points].filter(([id]) => id !== event.pointerId);
+      if (other) {
+        const rect = event.currentTarget.getBoundingClientRect();
+        const local = ({ x, y }: Point) => ({
+          x: x - rect.left,
+          y: y - rect.top,
+        });
+        const apart = Math.hypot(last.x - other[1].x, last.y - other[1].y);
+        points.set(event.pointerId, at);
+        gestured.current = true;
+        if (!apart) return;
+        zoomAt(
+          Math.hypot(at.x - other[1].x, at.y - other[1].y) / apart,
+          local(midpoint(last, other[1])),
+          local(midpoint(at, other[1])),
+        );
+        return;
+      }
+      const dx = at.x - last.x;
+      const dy = at.y - last.y;
+      if (!gestured.current && Math.hypot(dx, dy) < 4) return;
+      if (!gestured.current)
+        event.currentTarget.setPointerCapture(event.pointerId);
+      points.set(event.pointerId, at);
+      gestured.current = true;
       move(dx, dy);
     },
-    onPointerUp: () => {
-      if (!drag.current?.moved) drag.current = null;
-    },
-    // A drag that moved the drawing is not a click on the card it started on.
+    onPointerUp: release,
+    // The browser took the gesture (a page scroll while fitted).
+    onPointerCancel: release,
+    // A drag or a pinch that moved the drawing is not a click on the card it started on.
     onClickCapture: (event: MouseEvent<HTMLDivElement>) => {
-      if (drag.current?.moved) {
+      if (gestured.current) {
         event.preventDefault();
         event.stopPropagation();
       }
-      drag.current = null;
+      gestured.current = false;
     },
     onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => {
       const by = ARROWS[event.key];
@@ -604,6 +653,7 @@ function usePanZoom(
   };
   return {
     view,
+    fitted: moved === null,
     frameH,
     handlers,
     fit: () => {
@@ -662,20 +712,53 @@ export function WorkflowDiagram({
         aria-label={`${title}, workflow`}
         className="flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-3"
       >
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <p className="text-sm font-medium">{title}</p>
-          {triggers.length ? (
-            <p className="truncate font-mono text-xs text-muted-foreground">
-              on: {triggers.join(", ")}
-            </p>
-          ) : null}
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <p className="text-sm font-medium">{title}</p>
+            {triggers.length ? (
+              <p className="truncate font-mono text-xs text-muted-foreground">
+                on: {triggers.join(", ")}
+              </p>
+            ) : null}
+          </div>
+          {/* Beside the title, never over a card of the drawing. */}
+          <div className="flex shrink-0 gap-0.5 rounded-md border bg-card p-0.5 shadow-xs">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Fit the drawing"
+              onClick={pan.fit}
+            >
+              <Maximize aria-hidden="true" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Zoom out"
+              onClick={pan.zoomOut}
+            >
+              <Minus aria-hidden="true" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Zoom in"
+              onClick={pan.zoomIn}
+            >
+              <Plus aria-hidden="true" />
+            </Button>
+          </div>
         </div>
         <div
           ref={frame}
           role="group"
           aria-label={`${title}, workflow drawing`}
           tabIndex={0}
-          style={{ height: pan.frameH, touchAction: "pan-y" }}
+          // Fitted, a vertical swipe scrolls the page; zoomed or moved, a finger moves the drawing.
+          style={{
+            height: pan.frameH,
+            touchAction: pan.fitted ? "pan-y" : "none",
+          }}
           className="relative cursor-grab overflow-hidden rounded-lg border bg-muted/40 outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50 active:cursor-grabbing"
           {...pan.handlers}
         >
@@ -732,32 +815,6 @@ export function WorkflowDiagram({
                 }}
               />
             ))}
-          </div>
-          <div className="absolute right-2 bottom-2 flex gap-0.5 rounded-md border bg-card p-0.5 shadow-xs">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Fit the drawing"
-              onClick={pan.fit}
-            >
-              <Maximize aria-hidden="true" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Zoom out"
-              onClick={pan.zoomOut}
-            >
-              <Minus aria-hidden="true" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Zoom in"
-              onClick={pan.zoomIn}
-            >
-              <Plus aria-hidden="true" />
-            </Button>
           </div>
         </div>
         <figcaption>

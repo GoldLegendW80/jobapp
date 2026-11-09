@@ -264,7 +264,7 @@ FLOWS: dict[str, Flow] = {
             _step("system", "backlog", "Reader backlog tick, every minute", 1, 3),
             _agent("browser_discovery", 2, 0),
             _agent("posting_reader", 2, 2),
-            _step("person", "help", "Help in the live view", 3, 0),
+            _step("person", "help", "Let the assistant continue", 3, 0),
             _step("data", "postings", "Job postings", 3, 1),
         ),
         edges=_edges(
@@ -289,7 +289,7 @@ FLOWS: dict[str, Flow] = {
         nodes=(
             _step("person", "apply", "Apply", 0, 0),
             _step("person", "like", "Like", 0, 1),
-            _step("person", "site", "Complete my profile on a site", 0, 3),
+            _step("person", "site", "Complete my profile on this site", 0, 3),
             _step("person", "draft", "Write a draft", 0, 5),
             _step("data", "queued", "Queued application", 1, 0),
             _step("data", "documents", "The posting's CV and letter", 1, 1),
@@ -300,10 +300,10 @@ FLOWS: dict[str, Flow] = {
             _agent("apply_form", 3, 2),
             _agent("apply_check", 5, 3),
             _agent("apply_followup", 3, 5),
-            _step("person", "question", "Answer its question", 4, 0),
+            _step("person", "question", "Send the answer", 4, 0),
             _step("data", "answers", "Application answers", 4, 1),
             _step("data", "followup", "Follow up draft", 4, 5),
-            _step("person", "approve", "Approve, in Review first", 5, 1),
+            _step("person", "approve", "Approve and submit", 5, 1),
         ),
         edges=_edges(
             # apply/likes.py queues both; worker.py apply_tick starts the fill, which waits for
@@ -334,14 +334,14 @@ FLOWS: dict[str, Flow] = {
     "documents": Flow(
         nodes=(
             _step("person", "fit", "Make it fit", 0, 0),
-            _step("person", "click", "Write, Apply or Like", 0, 1),
-            _step("person", "base", "New base CV", 0, 3),
-            _step("person", "capture", "Retry the design capture", 0, 4),
+            _step("person", "click", "Write now, Apply or Like", 0, 1),
+            _step("person", "base", "New CV or Upload your CV", 0, 3),
+            _step("person", "capture", "Try the design again", 0, 4),
             _step("person", "chat", "Message in a document's chat", 0, 8),
-            _step("person", "offer", "Read an offer letter", 0, 10),
+            _step("person", "offer", "Read an offer", 0, 10),
             _step("person", "notes_chat", "Message about the offer notes", 0, 11),
             _step("person", "prepare", "Prepare for the interview", 0, 12),
-            _step("person", "practice", "Practice message", 0, 13),
+            _step("person", "practice", "Start practice", 0, 13),
             _agent("documents_cv", 1, 1),
             _agent("documents_letter", 1, 2),
             _agent("documents_base", 1, 3),
@@ -390,7 +390,7 @@ FLOWS: dict[str, Flow] = {
     ),
     "profile": Flow(
         nodes=(
-            _step("person", "read", "Start reading documents", 0, 0),
+            _step("person", "read", "Start reading", 0, 0),
             _step("person", "about", "Done on an About you part", 0, 2),
             _step("person", "ideas", "More ideas", 0, 3),
             _step("system", "titles_tick", "Titles tick, after a profile change", 0, 4),
@@ -402,8 +402,8 @@ FLOWS: dict[str, Flow] = {
             _step("data", "items", "Profile proposals", 3, 1),
             _step("data", "reading", "About you reading", 3, 2),
             _step("data", "titles", "Title suggestions", 3, 3),
-            _step("person", "accept", "Accept items", 4, 1),
-            _step("person", "use", "Apply the reading", 4, 2),
+            _step("person", "accept", "Accept or Accept all additions", 4, 1),
+            _step("person", "use", "Apply on the reading", 4, 2),
             _step("person", "add", "Add to job titles", 4, 3),
         ),
         edges=_edges(
@@ -428,7 +428,7 @@ FLOWS: dict[str, Flow] = {
     ),
     "jobs": Flow(
         nodes=(
-            _step("person", "assess", "Assess this posting", 0, 0),
+            _step("person", "assess", "Assess", 0, 0),
             _step("person", "with_agent", "Assess with agent", 0, 1),
             _step("person", "message", "Message in a job's chat", 0, 2),
             _agent("jobs_assess", 1, 0),

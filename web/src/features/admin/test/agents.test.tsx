@@ -467,6 +467,49 @@ describe("the list", () => {
     expect(within(jobs).queryByRole("figure")).toBeNull();
   });
 
+  it("draws no workflow for a category whose flow is malformed, and still lists every table and the other workflows", async () => {
+    fakeSession(admin);
+    const flow: AgentFlow = {
+      nodes: [
+        {
+          id: "browser_discovery",
+          kind: "agent",
+          label: "Website search",
+          column: 0,
+          row: 0,
+          note: "",
+          group: "",
+        },
+      ],
+      edges: [],
+    };
+    const categories: unknown[] = CATEGORIES.map((category) =>
+      category.key === "finding"
+        ? { ...category, flow }
+        : category.key === "jobs"
+          ? { ...category, flow: { nodes: "triage", edges: [{ from: 3 }] } }
+          : category,
+    );
+    fakeAgents(
+      makePage(),
+      undefined,
+      [SUMMARY, agent("triage", "jobs")],
+      categories as AgentCategory[],
+    );
+    renderApp("/admin/agents");
+    const jobs = await screen.findByRole("region", {
+      name: "Jobs and chat (1)",
+    });
+    expect(within(jobs).queryByRole("figure")).toBeNull();
+    expect(
+      within(jobs).getByRole("table", { name: "Jobs and chat, by name" }),
+    ).toBeInTheDocument();
+    const finding = screen.getByRole("region", { name: "Finding jobs (1)" });
+    expect(
+      within(finding).getByRole("figure", { name: "Finding jobs, workflow" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows no Test section when the api lists no test agent, as in production", async () => {
     fakeSession(admin);
     fakeAgents(makePage(), undefined, [SUMMARY, agent("triage", "jobs")]);
