@@ -288,7 +288,7 @@ FLOWS: dict[str, Flow] = {
     "applying": Flow(
         nodes=(
             _step("person", "apply", "Apply", 0, 0),
-            _step("person", "like", "Like, with Full auto on", 0, 1),
+            _step("person", "like", "Like", 0, 1),
             _step("person", "site", "Complete my profile on a site", 0, 3),
             _step("person", "draft", "Write a draft", 0, 5),
             _step("data", "queued", "Queued application", 1, 0),

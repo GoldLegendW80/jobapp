@@ -167,7 +167,7 @@ export const AGENT_FLOWS = {
       {
         id: "like",
         kind: "person",
-        label: "Like, with Full auto on",
+        label: "Like",
         column: 0,
         row: 1,
         note: "",

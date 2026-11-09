@@ -310,8 +310,9 @@ function Tip({
 }
 
 const ROW_CLASS = "flex h-11 w-full items-center gap-2 px-3 text-left";
+// Inset: the card's overflow-hidden clips a ring drawn outside it.
 const FOCUS =
-  "outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50";
+  "outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset";
 
 function StepCard({
   card,
@@ -362,7 +363,10 @@ function StepCard({
             aria-expanded={open}
             aria-controls={listId}
             onClick={onToggle}
-            className={cn(ROW_CLASS, "rounded-none font-normal")}
+            className={cn(
+              ROW_CLASS,
+              "rounded-none font-normal focus-visible:ring-inset",
+            )}
           >
             {head}
             <ChevronDown
