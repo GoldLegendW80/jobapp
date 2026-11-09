@@ -1,13 +1,7 @@
 import { http, HttpResponse, type JsonBodyType } from "msw";
 import { describe, expect, it } from "vitest";
 
-import {
-  CONSENT_TEXT,
-  fakeConsent,
-  fakeCv,
-  fakeDocumentOf,
-  fakeVersion,
-} from "@/test/documents";
+import { fakeCv, fakeDocumentOf, fakeVersion } from "@/test/documents";
 import { server } from "@/test/server";
 import { ApiError } from "@/lib/api";
 
@@ -17,7 +11,6 @@ import * as documentSettingsApi from "../api/document-settings-api";
 import * as documentsApi from "../api/documents-api";
 import * as panelApi from "../api/panel-api";
 import * as postingDocumentsApi from "../api/posting-documents-api";
-import * as consentApi from "../api/consent-api";
 import * as templatesApi from "../api/templates-api";
 
 /** Every file of the documents api, one per resource, read as one. */
@@ -27,7 +20,6 @@ const api = {
   ...postingDocumentsApi,
   ...panelApi,
   ...templatesApi,
-  ...consentApi,
   ...chatApi,
   ...documentSettingsApi,
 };
@@ -282,21 +274,6 @@ const CASES: Case[] = [
     url: "/api/document-templates/upload-ab12cd34",
     status: 204,
   },
-  {
-    name: "getConsent",
-    run: () => api.getConsent(),
-    method: "GET",
-    url: "/api/documents/consent",
-    reply: fakeConsent(),
-  },
-  {
-    name: "acceptConsent",
-    run: () => api.acceptConsent(1),
-    method: "POST",
-    url: "/api/documents/consent",
-    body: { version: 1 },
-    reply: fakeConsent({ accepted: true }),
-  },
 
   {
     name: "getSettings",
@@ -427,11 +404,11 @@ describe("documents-api", () => {
 
   it("rejects an answer of another shape as a parse error", async () => {
     server.use(
-      http.get("*/api/documents/consent", () =>
-        HttpResponse.json({ text: CONSENT_TEXT }),
+      http.get("*/api/documents/base-cvs", () =>
+        HttpResponse.json({ base_cvs: "none" }),
       ),
     );
-    await expect(api.getConsent()).rejects.toThrow();
+    await expect(api.listBaseCvs()).rejects.toThrow();
   });
 });
 
