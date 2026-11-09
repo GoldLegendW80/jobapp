@@ -54,7 +54,7 @@ describe("Activity, the workflow runs", () => {
     const list = await runs();
     const rows = within(list).getAllByRole("link");
     expect(rows[0]).toHaveTextContent("Analytics engineer at Kestrel Health");
-    expect(rows[0]).toHaveTextContent("Your click on Write");
+    expect(rows[0]).toHaveTextContent("Your click on Write now");
     expect(rows[0]).toHaveAttribute(
       "href",
       `/activity/runs/${RUN_UNDER_WAY_ID}`,
@@ -126,7 +126,7 @@ describe("a workflow run's page", () => {
     });
     expect(graph).toHaveTextContent("CV writer: Succeeded");
     expect(graph).toHaveTextContent("Letter writer: Waiting.");
-    expect(screen.getByText("Your click on Write")).toBeInTheDocument();
+    expect(screen.getByText("Your click on Write now")).toBeInTheDocument();
     expect(await screen.findByTestId("run-panel")).toHaveAttribute(
       "data-status",
       "running",

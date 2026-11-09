@@ -266,7 +266,7 @@ def test_a_runs_trigger_is_its_first_steps_when_a_later_step_records_none(
     assert [(i["id"], i["agent_runs"]) for i in items] == [(str(click), 2)]
     assert items[0]["trigger"] == {
         "kind": "recorded",
-        "words": "Your click on Write",
+        "words": "Your click on Write now",
         "node": "click",
     }
 

@@ -42,7 +42,8 @@ def test_the_cv_and_letter_of_one_click_are_one_workflow_run_and_a_later_letter_
     cv, letter = run_row(factory, cv_run), run_row(factory, letter_run)
     assert cv.workflow == letter.workflow == "posting_documents"
     assert cv.workflow_trigger == letter.workflow_trigger == "write"
-    assert cv.workflow_run_id == letter.workflow_run_id == min(cv_generation, letter_generation)
+    # Named by the CV's generation, whichever id sorts first.
+    assert cv.workflow_run_id == letter.workflow_run_id == cv_generation
 
     with factory() as db:
         # The letter written, an hour later its Write again: another click.

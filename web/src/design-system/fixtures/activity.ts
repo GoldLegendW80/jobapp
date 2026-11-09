@@ -183,7 +183,7 @@ const run = (
   id,
   workflow: workflow.key,
   workflow_title: workflow.title,
-  trigger: { kind: "click", words: "Your click", node: null },
+  trigger: { kind: "unknown", words: "Not recorded for this run", node: null },
   subject: null,
   status: "success",
   created_at: ago(30),
@@ -243,7 +243,11 @@ export function searchRunOf(
 /** The documents of a Write click, under way: the CV written, its hiring panel reading it. */
 export const RUN_UNDER_WAY: WorkflowRunDetail = {
   ...run(RUN_UNDER_WAY_ID, DOCUMENTS, {
-    trigger: { kind: "click", words: "Your click on Write", node: "click" },
+    trigger: {
+      kind: "recorded",
+      words: "Your click on Write now",
+      node: "click",
+    },
     subject: { words: POSTING.words, job_id: POSTING.id },
     status: "running",
     created_at: ago(3),
@@ -326,7 +330,7 @@ export const RUN_UNDER_WAY: WorkflowRunDetail = {
 /** An application whose answer writer failed: the run stopped there. */
 export const FAILED_RUN: WorkflowRunDetail = {
   ...run(FAILED_RUN_ID, APPLICATION, {
-    trigger: { kind: "click", words: "Your click on Apply", node: "apply" },
+    trigger: { kind: "recorded", words: "Your click on Apply", node: "apply" },
     subject: { words: "Platform engineer at Lumen Freight", job_id: null },
     status: "failure",
     created_at: ago(95),
@@ -362,8 +366,8 @@ export const FAILED_RUN: WorkflowRunDetail = {
 export const PRIVATE_RUN: WorkflowRunDetail = {
   ...run(PRIVATE_RUN_ID, FILL, {
     trigger: {
-      kind: "upload",
-      words: "Your upload, then Fill my profile",
+      kind: "recorded",
+      words: "Your click on Start reading",
       node: "read",
     },
     subject: { words: "cv-2026.pdf", job_id: null },
@@ -411,7 +415,7 @@ export const WORKFLOW_RUNS: WorkflowRun[] = [
   RUN_UNDER_WAY,
   run(CHAT_RUN_ID, CHAT, {
     trigger: {
-      kind: "message",
+      kind: "recorded",
       words: "Your message in the chat",
       node: "message",
     },
@@ -424,8 +428,8 @@ export const WORKFLOW_RUNS: WorkflowRun[] = [
   FAILED_RUN,
   run(SEARCH_RUN_ID, SEARCH, {
     trigger: {
-      kind: "schedule",
-      words: "The schedule, Mondays at 08:00",
+      kind: "recorded",
+      words: "The schedule",
       node: "schedule",
     },
     subject: {

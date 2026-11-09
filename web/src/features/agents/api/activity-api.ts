@@ -43,9 +43,9 @@ export const workflowSchema = z.object({
 });
 export type Workflow = z.infer<typeof workflowSchema>;
 
-/** How a run was started, in words ("Your click on Write"), and its box in the graph. */
+/** How a run was started, in words ("Your click on Write now"), and its box in the graph. */
 export const triggerSchema = z.object({
-  kind: z.string(),
+  kind: z.enum(["recorded", "unknown"]),
   words: z.string(),
   node: z.string().nullable(),
 });
