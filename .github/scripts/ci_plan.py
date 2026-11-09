@@ -92,7 +92,14 @@ RULES: tuple[tuple[str, frozenset[str], str], ...] = (
     # permissions, read by Claude Code only.
     ("CLAUDE.md", NONE, "documentation for Claude Code"),
     (".claude/*", NONE, "Claude Code project configuration"),
-    # The web app. No api test and no api code reads a file under web/ (checked by
+    # api/tests/agents/test_admin_agents.py compares this fixture with the agents list the api
+    # serves, and the web tests of the workflow diagram render it.
+    (
+        "web/src/design-system/fixtures/agent-flows.json",
+        frozenset({"api", "web"}),
+        "a web fixture read by an api test and by web tests",
+    ),
+    # The web app. No api test and no api code reads a file under web/ but the fixture above (checked by
     # ci_plan_test.py), and the api image is built from api/ alone. The shell unit stays: the
     # tailscale test reads web/Dockerfile.
     ("web/*", frozenset({"web", "shell", "e2e"}), "the web app"),
