@@ -3,18 +3,18 @@ import { userEvent, within } from "storybook/test";
 
 import { AppAt } from "@/design-system/app-at";
 import {
+  ASSESS_RUN_ID,
   FAILED_RUN_ID,
   PRIVATE_RUN_ID,
   PRIVATE_STEPS,
-  REVIEWER_STEP_ID,
   RUN_UNDER_WAY_ID,
+  SEARCH_RUN_ID,
+  TRIAGE_STEP_ID,
+  WEBSITE_STEPS,
+  WEBSITE_STEP_IDS,
   fakeActivityApi,
 } from "@/design-system/fixtures/activity";
-import {
-  FINISHED_STEPS,
-  RUNNING_STEPS,
-  makeRun,
-} from "@/design-system/fixtures/runs";
+import { FINISHED_STEPS, RUNNING_STEPS } from "@/design-system/fixtures/runs";
 import { fakeSession, member } from "@/test/auth";
 
 const meta = {
@@ -66,17 +66,7 @@ export const ARunUnderWay: Story = {
     fakeSession(member);
     fakeActivityApi({
       step: {
-        detail: makeRun({
-          id: REVIEWER_STEP_ID,
-          agent: "documents_panel_reader_ceo",
-          status: "running",
-          input_tokens: null,
-          output_tokens: null,
-          cost_usd: null,
-          started_at: new Date(Date.now() - 54_000).toISOString(),
-          finished_at: null,
-          duration_s: null,
-        }),
+        changes: { input_tokens: null, output_tokens: null, cost_usd: null },
         steps: RUNNING_STEPS,
         open: true,
       },
@@ -91,12 +81,7 @@ export const AFailedRun: Story = {
     fakeSession(member);
     fakeActivityApi({
       step: {
-        detail: makeRun({
-          agent: "apply_answer",
-          status: "failed",
-          error: "max_turns",
-          credential_kind: "anthropic_api_key",
-        }),
+        changes: { error: "max_turns", credential_kind: "anthropic_api_key" },
         steps: [
           ...RUNNING_STEPS,
           {
@@ -116,9 +101,11 @@ export const AFailedRun: Story = {
 export const AStepsLogOpen: Story = {
   beforeEach: () => {
     fakeSession(member);
-    fakeActivityApi({ step: { detail: makeRun(), steps: FINISHED_STEPS } });
+    fakeActivityApi({ step: { steps: FINISHED_STEPS } });
   },
-  render: () => <AppAt path={`/activity/runs/${FAILED_RUN_ID}?step=8c4f`} />,
+  render: () => (
+    <AppAt path={`/activity/runs/${ASSESS_RUN_ID}?step=${TRIAGE_STEP_ID}`} />
+  ),
   play: async ({ canvasElement }) => {
     const page = within(canvasElement);
     await userEvent.click(
@@ -135,14 +122,22 @@ export const AStepsLogOpen: Story = {
 export const APrivateRun: Story = {
   beforeEach: () => {
     fakeSession(member);
-    fakeActivityApi({
-      step: {
-        detail: makeRun({ agent: "profile_extract" }),
-        steps: PRIVATE_STEPS,
-      },
-    });
+    fakeActivityApi({ step: { steps: PRIVATE_STEPS } });
   },
   render: () => <AppAt path={`/activity/runs/${PRIVATE_RUN_ID}`} />,
+};
+
+/** As a job seeker, I want a search on two websites side by side to show both, and which one's log I read, so that I can tell them apart. */
+export const TwoWebsitesSideBySide: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeActivityApi({ step: { steps: WEBSITE_STEPS } });
+  },
+  render: () => (
+    <AppAt
+      path={`/activity/runs/${SEARCH_RUN_ID}?step=${WEBSITE_STEP_IDS[1]}`}
+    />
+  ),
 };
 
 /** As a job seeker on my phone, I want the activity readable at my screen's width, so that I can follow a run away from my desk. */

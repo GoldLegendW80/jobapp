@@ -77,6 +77,45 @@ export interface NodeState {
   status?: FlowStatus;
   duration?: string;
   href?: string;
+  count?: number;
+}
+
+/** Several steps as one: the most telling status, the time from the first start to the last end. */
+function stateOf(runId: string, steps: FlowStep[], now: number): NodeState {
+  const statuses = steps.map((step) => step.status);
+  const starts = steps
+    .map((step) => (step.started_at ? Date.parse(step.started_at) : NaN))
+    .filter((at) => !Number.isNaN(at));
+  const ends = steps.map((step) => {
+    const seconds = secondsOf(step, now);
+    return step.started_at && seconds !== null
+      ? Date.parse(step.started_at) + seconds * 1000
+      : NaN;
+  });
+  const end = Math.max(...ends.filter((at) => !Number.isNaN(at)));
+  const span = starts.length ? (end - Math.min(...starts)) / 1000 : null;
+  const agentSteps = steps.filter((step) => step.kind === "agent");
+  // One agent step opens its log; several (a website each) open the first still going.
+  const opens =
+    agentSteps.find((step) => ACTIVE_FLOW_STATUSES.has(step.status)) ??
+    agentSteps.at(0);
+  return {
+    status: TELLING.find((status) => statuses.includes(status)),
+    duration: durationWords(
+      span !== null && Number.isFinite(span) ? span : null,
+    ),
+    href: opens ? stepHref(runId, opens.id) : undefined,
+    count: steps.length,
+  };
+}
+
+function stepsByNode(run: WorkflowRunDetail): Map<string, FlowStep[]> {
+  const byNode = new Map<string, FlowStep[]>();
+  for (const step of run.steps) {
+    if (!step.node) continue;
+    byNode.set(step.node, [...(byNode.get(step.node) ?? []), step]);
+  }
+  return byNode;
 }
 
 /**
@@ -91,34 +130,8 @@ export function nodeStates(
   const flow = run.flow;
   if (!flow) return {};
   const states: Record<string, NodeState> = {};
-  const byNode = new Map<string, FlowStep[]>();
-  for (const step of run.steps) {
-    if (!step.node) continue;
-    byNode.set(step.node, [...(byNode.get(step.node) ?? []), step]);
-  }
-  for (const [node, steps] of byNode) {
-    const statuses = steps.map((step) => step.status);
-    const starts = steps
-      .map((step) => (step.started_at ? Date.parse(step.started_at) : NaN))
-      .filter((at) => !Number.isNaN(at));
-    const ends = steps.map((step) => {
-      const seconds = secondsOf(step, now);
-      return step.started_at && seconds !== null
-        ? Date.parse(step.started_at) + seconds * 1000
-        : NaN;
-    });
-    const end = Math.max(...ends.filter((at) => !Number.isNaN(at)));
-    const span = starts.length ? (end - Math.min(...starts)) / 1000 : null;
-    const agentSteps = steps.filter((step) => step.kind === "agent");
-    // One agent step opens its log; several (a website each) open the first still going.
-    const opens =
-      agentSteps.find((step) => ACTIVE_FLOW_STATUSES.has(step.status)) ??
-      agentSteps.at(0);
-    states[node] = {
-      status: TELLING.find((status) => statuses.includes(status)),
-      duration: durationWords(Number.isFinite(span) ? span : null),
-      href: opens ? stepHref(run.id, opens.id) : undefined,
-    };
+  for (const [node, steps] of stepsByNode(run)) {
+    states[node] = stateOf(run.id, steps, now);
   }
   if (run.trigger.node && !states[run.trigger.node]) {
     states[run.trigger.node] = { status: "success" };
@@ -131,6 +144,32 @@ export function nodeStates(
       if (kind === "agent" || kind === "system")
         states[id] = { status: "waiting" };
     }
+  }
+  return states;
+}
+
+/**
+ * Each group card of the run's graph (the hiring panel's reviewers) by its name: the most telling
+ * status of its agents' steps and its total time, from the first start to the last end.
+ */
+export function groupStates(
+  run: WorkflowRunDetail,
+  now: number,
+): Record<string, NodeState> {
+  const flow = run.flow;
+  if (!flow) return {};
+  const byNode = stepsByNode(run);
+  const members = new Map<string, FlowStep[]>();
+  for (const node of flow.nodes) {
+    if (node.kind !== "agent" || !node.group) continue;
+    const steps = byNode.get(node.id) ?? [];
+    members.set(node.group, [...(members.get(node.group) ?? []), ...steps]);
+  }
+  const states: Record<string, NodeState> = {};
+  for (const [group, steps] of members) {
+    // Its agents' rows say how many times each ran: the card says no count of its own.
+    if (steps.length)
+      states[group] = { ...stateOf(run.id, steps, now), count: undefined };
   }
   return states;
 }

@@ -54,7 +54,10 @@ const badge = () => panel().locator("[data-slot=badge]");
 
 /** The "Step N of 30" answers shown, each must appear once. */
 async function slowSteps(): Promise<number[]> {
-  const texts = await steps().locator("[data-kind=text]").allInnerTexts();
+  // The log's groups only: an answer's group holds its item, of the same kind.
+  const texts = await steps()
+    .locator(":scope > [data-kind=text]")
+    .allInnerTexts();
   return texts
     .map((t) => /Step (\d+) of 30/.exec(t)?.[1])
     .filter((n): n is string => n !== undefined)
@@ -68,13 +71,18 @@ async function expectNoDuplicates() {
   return seen;
 }
 
+/** An agent run's log: its step on its workflow run's page (a test agent's run is its own). */
+const stepPage = (id: string) => `/activity/runs/${id}?step=${id}`;
+
 async function startTestRun(script: string, message: string) {
-  await page.goto("/runs");
+  await page.goto("/activity");
   await page.getByLabel("Recorded stream").selectOption(script);
   await page.getByLabel("Message").fill(message);
   await page.getByRole("button", { name: "Start test run" }).click();
-  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/);
-  return page.url().split("/").at(-1) ?? "";
+  await expect(page).toHaveURL(
+    /\/activity\/runs\/[0-9a-f-]{36}\?step=[0-9a-f-]{36}$/,
+  );
+  return new URL(page.url()).searchParams.get("step") ?? "";
 }
 
 test.beforeAll(async ({ browser }) => {
@@ -194,7 +202,7 @@ test("another run is cancelled from its panel", async () => {
 });
 
 test("the first run ends with its tokens, cost and duration", async () => {
-  await page.goto(`/runs/${firstRun}`);
+  await page.goto(stepPage(firstRun));
   await expect(badge()).toHaveText("Done", { timeout: 60_000 });
   const seen = await expectNoDuplicates();
   expect(seen).toEqual(Array.from({ length: 30 }, (_, i) => i + 1));
@@ -237,11 +245,11 @@ test("the runs page lists every run with its status, tokens and cost", async () 
 
 test("a run on a subscription shows an estimate that is not a bill, a run on an API key its cost", async () => {
   // The run that ended with an API key: its amount is a cost, in its panel and in the list.
-  await page.goto(`/runs/${firstRun}`);
+  await page.goto(stepPage(firstRun));
   const metrics = () => panel().getByTestId("run-facts");
   await expect(metrics()).toContainText("Cost$0.25");
   await expect(panel().getByTestId("cost-note")).toHaveCount(0);
-  await expect(steps().locator("[data-kind=usage]")).toContainText(
+  await expect(steps().locator(":scope > [data-kind=usage]")).toContainText(
     /out, \$0\.25$/,
   );
   await costShots(page, "cost-api-key");
@@ -260,7 +268,7 @@ test("a run on a subscription shows an estimate that is not a bill, a run on an 
   await expect(panel().getByTestId("cost-note")).toHaveText(
     "This run used your Claude subscription and counts toward your plan's usage limits. What you pay is set by your plan, not by this amount: the estimate is what the same tokens cost at API prices.",
   );
-  await expect(steps().locator("[data-kind=usage]")).toContainText(
+  await expect(steps().locator(":scope > [data-kind=usage]")).toContainText(
     "$0.0123 estimated at API prices, not a bill",
   );
   // Issue #80: the note is the description of the amount for assistive technology.
@@ -288,7 +296,7 @@ test("a run on a subscription shows an estimate that is not a bill, a run on an 
   ]);
   expect(JSON.stringify(stored)).not.toContain(token);
 
-  await page.goto("/runs");
+  await page.goto("/activity");
   const list = page.getByRole("list", { name: "Workflow runs" });
   await expect(list.getByRole("listitem")).toHaveCount(4);
   const intro = page.getByText(

@@ -124,6 +124,22 @@ export const WORKFLOWS: Workflow[] = [
     ]),
   },
   {
+    key: "assess",
+    title: "Assess",
+    sentence:
+      "A posting assessed against your profile, or triaged with a note or a status proposed.",
+    flow: subflow("jobs", [
+      "assess",
+      "with_agent",
+      "jobs_assess",
+      "triage",
+      "assessment",
+      "proposals",
+      "decide",
+      "job",
+    ]),
+  },
+  {
     key: "job_chat",
     title: "Job chat",
     sentence: "An answer in a job's chat.",
@@ -141,6 +157,15 @@ export const FAILED_RUN_ID = "71c9e4b2-5a3d-4f86-b0e1-2d8c7a6f5e94";
 export const PRIVATE_RUN_ID = "c25d8e1f-4b7a-4c39-9e60-1f3a8b2d7c05";
 export const SEARCH_RUN_ID = "a94b2f07-1e6c-4d58-b3a9-7c0e5d2f8b16";
 const CHAT_RUN_ID = "e0b7c3a9-6f2d-4a15-8e94-3b1c5d7a2f68";
+export const ASSESS_RUN_ID = "5b8d0e3f-7a2c-4c61-9d4e-0a6f2b9c8e13";
+
+/** The triage of the Assess run: its log is FINISHED_STEPS, a posting checked. */
+export const TRIAGE_STEP_ID = "6c9e1f4a-8b3d-4d72-ae5f-1b7a3c0d9f24";
+/** The two websites a sweep searched side by side. */
+export const WEBSITE_STEP_IDS = [
+  "7d0f2a5b-9c4e-4e83-bf6a-2c8b4d1e0a35",
+  "8e1a3b6c-0d5f-4f94-c07b-3d9c5e2f1b46",
+] as const;
 
 /** The reviewer at work in the run under way: its log opens on the run's page. */
 export const REVIEWER_STEP_ID = "4d2e8a6c-1b9f-4e37-a5c0-8f6b3d1e9a27";
@@ -202,6 +227,7 @@ const workflowOf = (key: string): Workflow => {
 const SEARCH = workflowOf("job_search");
 const DOCUMENTS = workflowOf("posting_documents");
 const APPLICATION = workflowOf("application");
+const ASSESS = workflowOf("assess");
 const FILL = workflowOf("fill_profile");
 const CHAT = workflowOf("job_chat");
 
@@ -410,6 +436,88 @@ export const PRIVATE_RUN: WorkflowRunDetail = {
   credential_kind: "claude_subscription",
 };
 
+/** A posting triaged on a click on Assess with agent: one agent step, its log a posting check. */
+export const ASSESS_RUN: WorkflowRunDetail = {
+  ...run(ASSESS_RUN_ID, ASSESS, {
+    trigger: {
+      kind: "recorded",
+      words: "Your click on Assess with agent",
+      node: "with_agent",
+    },
+    subject: { words: POSTING.words, job_id: POSTING.id },
+    created_at: ago(61),
+    started_at: ago(61),
+    finished_at: ago(60.7),
+    duration_s: 18.4,
+  }),
+  flow: ASSESS.flow,
+  steps: [agentStep(TRIAGE_STEP_ID, "triage", "Triage", "success", 61, 18.4)],
+  input_tokens: 18240,
+  output_tokens: 612,
+  cost_usd: 0.0841,
+  credential_kind: "claude_subscription",
+};
+
+/** A scheduled sweep: two websites searched side by side, then the new postings read. */
+export const SWEEP_RUN: WorkflowRunDetail = {
+  ...run(SEARCH_RUN_ID, SEARCH, {
+    trigger: { kind: "recorded", words: "The schedule", node: "schedule" },
+    subject: {
+      words: "Data engineer, analytics engineer in Lyon or remote",
+      job_id: null,
+    },
+    created_at: ago(180),
+    started_at: ago(180),
+    finished_at: ago(164),
+    duration_s: 954,
+    agent_runs: 3,
+  }),
+  flow: SEARCH.flow,
+  steps: [
+    {
+      id: "sweep",
+      kind: "system",
+      node: "sweep",
+      name: "Sweep",
+      agent: null,
+      status: "success",
+      started_at: ago(180),
+      finished_at: ago(164),
+      duration_s: 954,
+      private: false,
+      note: "12 postings read, 0 left",
+    },
+    agentStep(
+      WEBSITE_STEP_IDS[0],
+      "browser_discovery",
+      "Website search: Example Jobs",
+      "success",
+      179.8,
+      402,
+    ),
+    agentStep(
+      WEBSITE_STEP_IDS[1],
+      "browser_discovery",
+      "Website search: Sample Careers",
+      "success",
+      179.8,
+      517,
+    ),
+    agentStep(
+      "9f2b4c7d",
+      "posting_reader",
+      "Posting reader",
+      "success",
+      171,
+      396,
+    ),
+  ],
+  input_tokens: 96120,
+  output_tokens: 8410,
+  cost_usd: null,
+  credential_kind: "claude_subscription",
+};
+
 /** A week of activity, newest first. */
 export const WORKFLOW_RUNS: WorkflowRun[] = [
   RUN_UNDER_WAY,
@@ -425,24 +533,67 @@ export const WORKFLOW_RUNS: WorkflowRun[] = [
     finished_at: ago(41.8),
     duration_s: 11.2,
   }),
+  ASSESS_RUN,
   FAILED_RUN,
-  run(SEARCH_RUN_ID, SEARCH, {
-    trigger: {
-      kind: "recorded",
-      words: "The schedule",
-      node: "schedule",
-    },
-    subject: {
-      words: "Data engineer, analytics engineer in Lyon or remote",
-      job_id: null,
-    },
-    created_at: ago(180),
-    started_at: ago(180),
-    finished_at: ago(164),
-    duration_s: 954,
-    agent_runs: 4,
-  }),
+  SWEEP_RUN,
   PRIVATE_RUN,
+];
+
+const RUN_STATUS: Record<FlowStatus, Run["status"]> = {
+  waiting: "queued",
+  queued: "queued",
+  running: "running",
+  success: "done",
+  failure: "failed",
+  skipped: "cancelled",
+  cancelled: "cancelled",
+};
+
+/** The agent run of a step, as /api/agents/runs/:id answers it: its agent, status and times. */
+export function stepRunOf(step: FlowStep, changes: Partial<Run> = {}): Run {
+  return makeRun({
+    id: step.id,
+    agent: step.agent ?? "triage",
+    status: RUN_STATUS[step.status],
+    created_at: step.started_at ?? new Date().toISOString(),
+    started_at: step.started_at,
+    finished_at: step.finished_at,
+    duration_s: step.duration_s,
+    ...changes,
+  });
+}
+
+const logLine = (
+  seq: number,
+  at: string,
+  kind: string,
+  data: Record<string, unknown> = {},
+): RunStep => ({ seq, at: `2026-11-05T06:${at}Z`, kind, data });
+
+/** The log of a website search: the site's search page read, its postings reported. */
+export const WEBSITE_STEPS: RunStep[] = [
+  logLine(1, "02:10", "status", { status: "queued" }),
+  logLine(2, "02:12", "status", { status: "running" }),
+  logLine(3, "02:13", "init", {
+    model: "claude-opus-5-5",
+    tools: ["mcp__app__browser_navigate", "mcp__app__report_postings"],
+  }),
+  logLine(4, "02:20", "tool_call", {
+    name: "mcp__app__browser_navigate",
+    input: { url: "https://careers.example.org/search?q=analytics+engineer" },
+  }),
+  logLine(5, "02:24", "tool_result", {
+    content: "Sample Careers, 12 results for analytics engineer in Lyon",
+  }),
+  logLine(6, "09:41", "tool_call", {
+    name: "mcp__app__report_postings",
+    input: { count: 4 },
+  }),
+  logLine(7, "09:42", "tool_result", { content: "4 postings kept, 2 new" }),
+  logLine(8, "10:49", "text", {
+    text: "Four postings match the search; two are new since the last sweep.",
+  }),
+  logLine(9, "10:49", "status", { status: "done" }),
 ];
 
 /** The log of a private step: tool names and sizes, never the content. */
@@ -487,12 +638,20 @@ export function fakeActivityApi(
   options: {
     runs?: WorkflowRun[];
     detail?: WorkflowRunDetail;
-    step?: { detail?: Run; steps?: RunStep[]; open?: boolean };
+    /** The open step's log: its agent run is the step's own, `changes` on top. */
+    step?: { changes?: Partial<Run>; steps?: RunStep[]; open?: boolean };
     loading?: boolean;
   } = {},
 ) {
   const runs = options.runs ?? WORKFLOW_RUNS;
-  const details = [RUN_UNDER_WAY, FAILED_RUN, PRIVATE_RUN];
+  const details = [
+    RUN_UNDER_WAY,
+    ASSESS_RUN,
+    FAILED_RUN,
+    SWEEP_RUN,
+    PRIVATE_RUN,
+    ...(options.detail ? [options.detail] : []),
+  ];
   server.use(
     http.get("*/api/activity/workflows", () =>
       HttpResponse.json({ items: WORKFLOWS }),
@@ -520,9 +679,19 @@ export function fakeActivityApi(
         : HttpResponse.json({ detail: "Not found" }, { status: 404 });
     }),
   );
-  fakeRunsApi({
-    detail: options.step?.detail ?? makeRun(),
-    steps: options.step?.steps,
-    open: options.step?.open,
-  });
+  fakeRunsApi({ steps: options.step?.steps, open: options.step?.open });
+  server.use(
+    http.get("*/api/agents/runs/:id", ({ params }) => {
+      const step = details
+        .flatMap((one) => one.steps)
+        .find((one) => one.kind === "agent" && one.id === params.id);
+      return step
+        ? HttpResponse.json({
+            ...stepRunOf(step, options.step?.changes),
+            events: [],
+            events_truncated: false,
+          })
+        : HttpResponse.json({ detail: "Not found" }, { status: 404 });
+    }),
+  );
 }

@@ -20,7 +20,6 @@ import { ConnectionState } from "@/components/shared/agents/run/connection-state
 import { RunMetrics } from "@/components/shared/agents/run/run-metrics";
 import { RunStatusBadge } from "@/components/shared/agents/run/run-status-badge";
 import { TimelineStep } from "@/components/shared/agents/run/timeline-step";
-import { agentWord } from "@/lib/wording";
 import { cn } from "@/lib/utils";
 
 import { useRunStream } from "../api/use-run-stream";
@@ -98,9 +97,12 @@ function Group({ group, start }: { group: LogGroup; start: string | null }) {
  */
 export function AgentStepLog({
   runId,
+  title,
   titleRef,
 }: {
   runId: string;
+  /** The step's name, as the steps and the graph say it. */
+  title: string;
   /** Where the focus goes when Cancel goes away with it, at the run's end. */
   titleRef: RefObject<HTMLHeadingElement | null>;
 }) {
@@ -150,7 +152,7 @@ export function AgentStepLog({
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <h2 id={`${filterId}-title`} className="text-base font-semibold">
-          {agentWord(run.agent)}
+          {title}
         </h2>
         <RunStatusBadge status={shown} />
         <span className="text-xs text-muted-foreground tabular-nums">
@@ -185,6 +187,11 @@ export function AgentStepLog({
             />
           </InputGroup>
           <ConnectionState state={connection} />
+          {detail.isRefetchError ? (
+            <span className="text-xs text-warning">
+              Could not refresh the totals; they update with the next step.
+            </span>
+          ) : null}
         </div>
         <div
           role="list"

@@ -3,19 +3,24 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  ASSESS_RUN_ID,
   FAILED_RUN_ID,
   PRIVATE_RUN_ID,
   PRIVATE_STEPS,
-  REVIEWER_STEP_ID,
+  RUN_UNDER_WAY,
   RUN_UNDER_WAY_ID,
+  SEARCH_RUN_ID,
+  TRIAGE_STEP_ID,
+  WEBSITE_STEPS,
+  WEBSITE_STEP_IDS,
   fakeActivityApi,
 } from "@/design-system/fixtures/activity";
-import {
-  FINISHED_STEPS,
-  RUNNING_STEPS,
-  makeRun,
-} from "@/design-system/fixtures/runs";
-import { fakeSession, member } from "@/test/auth";
+import { FINISHED_STEPS, RUNNING_STEPS } from "@/design-system/fixtures/runs";
+import { http, HttpResponse } from "msw";
+
+import { makeRun } from "@/design-system/fixtures/runs";
+import { admin, fakeSession, member } from "@/test/auth";
+import { server } from "@/test/server";
 import { FakeEventSource } from "@/test/fake-event-source";
 import { renderApp } from "@/test/render";
 
@@ -99,17 +104,7 @@ describe("a workflow run's page", () => {
   it("shows where a run under way is: done, at work and still to come", async () => {
     fakeSession(member);
     fakeActivityApi({
-      step: {
-        detail: makeRun({
-          id: REVIEWER_STEP_ID,
-          agent: "documents_panel_reader_ceo",
-          status: "running",
-          finished_at: null,
-          duration_s: null,
-        }),
-        steps: RUNNING_STEPS,
-        open: true,
-      },
+      step: { steps: RUNNING_STEPS, open: true },
     });
     renderApp(`/activity/runs/${RUN_UNDER_WAY_ID}`);
     await stream(RUNNING_STEPS, true);
@@ -145,14 +140,7 @@ describe("a workflow run's page", () => {
       },
     ];
     fakeActivityApi({
-      step: {
-        detail: makeRun({
-          agent: "apply_answer",
-          status: "failed",
-          error: "max_turns",
-        }),
-        steps: failed,
-      },
+      step: { changes: { error: "max_turns" }, steps: failed },
     });
     renderApp(`/activity/runs/${FAILED_RUN_ID}`);
     await stream(failed);
@@ -175,9 +163,9 @@ describe("a workflow run's page", () => {
 
   it("folds a tool call and filters the log", async () => {
     fakeSession(member);
-    fakeActivityApi({ step: { detail: makeRun(), steps: FINISHED_STEPS } });
+    fakeActivityApi({ step: { steps: FINISHED_STEPS } });
     const user = userEvent.setup();
-    renderApp(`/activity/runs/${FAILED_RUN_ID}`);
+    renderApp(`/activity/runs/${ASSESS_RUN_ID}?step=${TRIAGE_STEP_ID}`);
     await stream(FINISHED_STEPS);
     const call = await screen.findByRole("button", {
       name: /Tool call: get_job/,
@@ -207,10 +195,7 @@ describe("a workflow run's page", () => {
   it("shows a private run's steps by name and size only", async () => {
     fakeSession(member);
     fakeActivityApi({
-      step: {
-        detail: makeRun({ agent: "profile_extract" }),
-        steps: PRIVATE_STEPS,
-      },
+      step: { steps: PRIVATE_STEPS },
     });
     const user = userEvent.setup();
     renderApp(`/activity/runs/${PRIVATE_RUN_ID}`);
@@ -222,6 +207,90 @@ describe("a workflow run's page", () => {
     expect(screen.getByText("18,342 characters")).toBeInTheDocument();
   });
 
+  it("marks the open step in the graph too, and opens the log of the step chosen", async () => {
+    fakeSession(member);
+    fakeActivityApi({ step: { steps: FINISHED_STEPS } });
+    renderApp(`/activity/runs/${ASSESS_RUN_ID}?step=${TRIAGE_STEP_ID}`);
+    await stream(FINISHED_STEPS);
+    const graph = screen.getByRole("figure", { name: "Assess, workflow" });
+    const marked = within(graph).getByRole("link", { current: "step" });
+    expect(marked).toHaveTextContent("Triage");
+    expect(marked.closest("[data-card]")).toHaveAttribute("data-selected");
+    expect(graph.querySelectorAll("[data-selected]")).toHaveLength(1);
+    // The log is the chosen step's: its agent in the title, its status and time.
+    const log = screen.getByTestId("run-panel");
+    expect(within(log).getByRole("heading", { level: 2 })).toHaveTextContent(
+      "Triage",
+    );
+    expect(log).toHaveAttribute("data-status", "done");
+  });
+
+  it("counts the websites a sweep searched side by side, and marks the one whose log is open", async () => {
+    fakeSession(member);
+    fakeActivityApi({ step: { steps: WEBSITE_STEPS } });
+    const user = userEvent.setup();
+    const { location } = renderApp(
+      `/activity/runs/${SEARCH_RUN_ID}?step=${WEBSITE_STEP_IDS[1]}`,
+    );
+    await stream(WEBSITE_STEPS);
+    const graph = screen.getByRole("figure", { name: "Job search, workflow" });
+    const websites = graph.querySelector('[data-card="browser_discovery"]');
+    expect(websites).toHaveAttribute("data-selected");
+    expect(websites).toHaveTextContent("×2");
+    // From the first start to the last end: the two ran side by side, 8 min 37 s for the longer.
+    expect(websites).toHaveTextContent("8 min 37 s");
+    expect(
+      within(
+        screen.getByRole("list", { name: "Job search, this run" }),
+      ).getByText("Website search: Succeeded, 2 runs, 8 min 37 s."),
+    ).toBeInTheDocument();
+    const steps = screen.getByRole("list", { name: "Steps of this run" });
+    expect(
+      within(steps).getByRole("link", { current: "step" }),
+    ).toHaveTextContent("Website search: Sample Careers");
+    // The other website's row opens its own log; the graph's card stays marked.
+    await user.click(
+      within(steps).getByRole("link", {
+        name: /Website search: Example Jobs/,
+      }),
+    );
+    expect(location()).toBe(
+      `/activity/runs/${SEARCH_RUN_ID}?step=${WEBSITE_STEP_IDS[0]}`,
+    );
+    expect(
+      within(steps).getByRole("link", { current: "step" }),
+    ).toHaveTextContent("Website search: Example Jobs");
+    expect(websites).toHaveAttribute("data-selected");
+  });
+
+  it("gives the hiring panel's card its total time and opens it on the reviewer at work", async () => {
+    fakeSession(member);
+    fakeActivityApi({ step: { steps: RUNNING_STEPS, open: true } });
+    renderApp(`/activity/runs/${RUN_UNDER_WAY_ID}`);
+    await stream(RUNNING_STEPS, true);
+    const graph = screen.getByRole("figure", {
+      name: "Documents for a posting, workflow",
+    });
+    const panel = within(graph).getByRole("button", { name: /Hiring panel/ });
+    // Opened on its member at work, the card marked; its time is the group's, not "7 agents".
+    expect(panel).toHaveAttribute("aria-expanded", "true");
+    expect(panel).not.toHaveTextContent("7 agents");
+    expect(panel.closest("[data-card]")).toHaveAttribute("data-selected");
+    expect(
+      within(graph).getByRole("link", { current: "step" }),
+    ).toHaveTextContent("reader, the CEO");
+    expect(
+      within(
+        screen.getByRole("list", {
+          name: "Documents for a posting, this run",
+        }),
+      ).getByText(/^Hiring panel: Running, .+ in all\.$/),
+    ).toBeInTheDocument();
+    expect(RUN_UNDER_WAY.steps.some((step) => step.node === "panel")).toBe(
+      true,
+    );
+  });
+
   it("says a run that no longer exists is gone", async () => {
     fakeSession(member);
     fakeActivityApi();
@@ -229,6 +298,58 @@ describe("a workflow run's page", () => {
     expect(
       await screen.findByText("This run no longer exists"),
     ).toBeInTheDocument();
+  });
+});
+
+describe("a test run", () => {
+  it("starts with the message typed and opens its log", async () => {
+    fakeSession(admin);
+    fakeActivityApi();
+    const id = "22222222-2222-4222-8222-222222222222";
+    const starts: unknown[] = [];
+    server.use(
+      http.get("*/api/agents", () =>
+        HttpResponse.json({
+          items: [
+            {
+              name: "echo",
+              description: "Test agent",
+              model: "claude-opus-5-5",
+              max_turns: 4,
+              wall_time_s: 600,
+              test_only: true,
+            },
+          ],
+        }),
+      ),
+      http.post("*/api/agents/runs", async ({ request }) => {
+        starts.push(await request.json());
+        return HttpResponse.json(
+          makeRun({ id, agent: "echo", status: "queued" }),
+          {
+            status: 202,
+          },
+        );
+      }),
+    );
+    const user = userEvent.setup();
+    const { location } = renderApp("/activity");
+    const message = await screen.findByLabelText("Message");
+    await user.clear(message);
+    await user.click(screen.getByRole("button", { name: "Start test run" }));
+    expect(starts).toEqual([]);
+    await user.type(message, "  Bonjour ");
+    await user.selectOptions(
+      screen.getByLabelText("Recorded stream"),
+      "Reads a job with get_job",
+    );
+    await user.click(screen.getByRole("button", { name: "Start test run" }));
+    await waitFor(() => {
+      expect(location()).toBe(`/activity/runs/${id}?step=${id}`);
+    });
+    expect(starts).toEqual([
+      { agent: "echo", input: { message: "Bonjour", script: "tool" } },
+    ]);
   });
 });
 
@@ -244,13 +365,16 @@ describe("the old addresses", () => {
 
   it("lead /runs/:id to its workflow run with that step open", async () => {
     fakeSession(member);
-    fakeActivityApi({ step: { detail: makeRun(), steps: FINISHED_STEPS } });
+    fakeActivityApi({ step: { steps: FINISHED_STEPS } });
     const { location } = renderApp("/runs/8c4f");
     await waitFor(() => {
       expect(location()).toBe(`/activity/runs/${FAILED_RUN_ID}?step=8c4f`);
     });
+    const steps = await screen.findByRole("list", {
+      name: "Steps of this run",
+    });
     expect(
-      await screen.findByRole("link", { current: "step" }),
+      within(steps).getByRole("link", { current: "step" }),
     ).toHaveTextContent("Answer writer");
   });
 });

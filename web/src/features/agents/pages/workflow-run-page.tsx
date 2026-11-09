@@ -26,7 +26,7 @@ import { useWorkflowRun } from "../api/use-activity";
 import { AgentStepLog } from "../components/agent-step-log";
 import { WorkflowRunSteps } from "../components/workflow-run-steps";
 import { WorkflowRunSummary } from "../components/workflow-run-summary";
-import { nodeStates, stepHref } from "../helpers/activity";
+import { groupStates, nodeStates, stepHref } from "../helpers/activity";
 import { formatDateTime } from "@/lib/format";
 import { useNow } from "../hooks/use-now";
 
@@ -44,11 +44,11 @@ export function WorkflowRunPage() {
   const agentSteps = run?.steps.filter((step) => step.kind === "agent") ?? [];
   const asked = search.get("step");
   // The step asked for, else the step at work, else the last one that ran.
-  const selected =
-    agentSteps.find((step) => step.id === asked)?.id ??
-    agentSteps.find((step) => ACTIVE_FLOW_STATUSES.has(step.status))?.id ??
-    agentSteps.at(-1)?.id ??
-    null;
+  const selectedStep =
+    agentSteps.find((step) => step.id === asked) ??
+    agentSteps.find((step) => ACTIVE_FLOW_STATUSES.has(step.status)) ??
+    agentSteps.at(-1);
+  const selected = selectedStep?.id ?? null;
 
   useEffect(() => {
     if (run && run.id !== id) {
@@ -114,6 +114,8 @@ export function WorkflowRunPage() {
             title={run.workflow_title}
             flow={run.flow}
             runs={nodeStates(run, now)}
+            groupRuns={groupStates(run, now)}
+            selected={selectedStep?.node ?? undefined}
             linkAgents={false}
           />
         ) : null}
@@ -124,8 +126,13 @@ export function WorkflowRunPage() {
             selected={selected}
             now={now}
           />
-          {selected ? (
-            <AgentStepLog key={selected} runId={selected} titleRef={titleRef} />
+          {selectedStep ? (
+            <AgentStepLog
+              key={selectedStep.id}
+              runId={selectedStep.id}
+              title={selectedStep.name}
+              titleRef={titleRef}
+            />
           ) : (
             <p className="text-sm text-muted-foreground">
               No agent has worked in this run yet.
