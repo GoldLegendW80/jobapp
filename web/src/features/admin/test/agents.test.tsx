@@ -33,7 +33,7 @@ function makePage(overrides: Partial<AgentPage> = {}): AgentPage {
   return {
     name: "browser_discovery",
     module: "app.browser.finder",
-    starter: "A job search sweep, one website or careers page at a time",
+    starter: "A job search sweep, one run per website",
     flags: [
       "Private: its inputs and outputs are never stored, only their sizes and counts.",
     ],
@@ -161,8 +161,7 @@ const CATEGORIES: AgentCategory[] = [
   {
     key: "finding",
     title: "Finding jobs",
-    sentence:
-      "These agents search job websites and company careers pages for postings.",
+    sentence: "These agents search job websites for postings.",
   },
   {
     key: "applying",

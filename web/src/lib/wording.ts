@@ -34,7 +34,6 @@ export const AGENT_WORDS: Record<string, string> = {
   echo: "Test agent",
   triage: "Posting check",
   job_chat: "Chat about a posting",
-  browser_finder: "Website reading",
   browser_discovery: "Website search",
   apply_form: "Filling an application form",
   apply_answer: "Answer to an application question",

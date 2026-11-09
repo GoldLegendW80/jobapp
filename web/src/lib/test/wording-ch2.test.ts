@@ -24,7 +24,6 @@ const REGISTERED = [
   "echo",
   "triage",
   "job_chat",
-  "browser_finder",
   "browser_discovery",
   "apply_form",
   "apply_answer",
@@ -58,6 +57,8 @@ describe("agent words (Assistant activity)", () => {
 
   it("reads an id it does not know as words", () => {
     expect(agentWord("cv_writer")).toBe("Cv writer");
+    // A stored run of an agent removed from the code (browser B22) still reads as words.
+    expect(agentWord("browser_finder")).toBe("Browser finder");
     expect(agentWord("some__new_agent")).toBe("Some new agent");
     expect(readableCode("")).toBe("");
   });
