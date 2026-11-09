@@ -62,7 +62,6 @@ from sqlalchemy.orm import Session, sessionmaker, undefer
 from app import queue as queues
 from app.agents import credentials, definitions, runs
 from app.agents.models import AgentRun, RunStatus
-from app.browser.finder import _words
 from app.jobs import service
 from app.jobs.models import (
     ContractType,
@@ -178,6 +177,14 @@ POSTING_READER = definitions.register(
 
 
 # --- words, quotes and the cut ---------------------------------------------------------------
+
+
+def _words(text: str) -> str:
+    # The finder's folding, imported here: at the top it would register the finder's agents in
+    # every worker at its start, and their day long wall time would become the agents queue's.
+    from app.browser.finder import _words as words
+
+    return words(text)
 
 
 def _plain(ch: str) -> str:

@@ -131,6 +131,8 @@ def test_upgrade_creates_the_jobs_schema(at_head: sa.Engine) -> None:
         "notes",
         "legacy",
         "liveness",
+        "read_at",
+        "read_attempts",
         "search",
         "created_at",
         "updated_at",
@@ -141,8 +143,11 @@ def test_upgrade_creates_the_jobs_schema(at_head: sa.Engine) -> None:
         "signals", "text_fingerprint", "closes_on",
     ):  # fmt: skip
         assert columns[name]["nullable"], name
-    for name in ("slug", "company", "title", "status", "competencies", "gaps", "found_on"):
+    for name in (
+        "slug", "company", "title", "status", "competencies", "gaps", "found_on", "read_attempts",
+    ):  # fmt: skip
         assert not columns[name]["nullable"], name
+    assert columns["read_at"]["nullable"]
     assert type(columns["search"]["type"]).__name__ == "TSVECTOR"
     assert columns["search"]["computed"]["persisted"] is True
     assert type(columns["legacy"]["type"]).__name__ == "JSONB"
