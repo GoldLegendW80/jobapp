@@ -6,7 +6,10 @@ import { describe, expect, it } from "vitest";
 import { AGENT_FLOWS } from "@/design-system/fixtures/agent-flows";
 
 import type { AgentFlow, FlowNode } from "../api/agents-api";
-import { WorkflowDiagram, type NodeRun } from "../components/workflow-diagram";
+import {
+  WorkflowDiagram,
+  type NodeRun,
+} from "@/components/shared/agents/workflow-diagram";
 import { flowSentences } from "../helpers/flow-sentences";
 
 const node = (

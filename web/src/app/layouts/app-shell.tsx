@@ -20,8 +20,7 @@ const BOTTOM_BAR = "calc(3.5rem + 1px + env(safe-area-inset-bottom))";
 /**
  * The signed in frame: header with the app name, navigation and the user menu. Wide screens keep
  * the main navigation in the header; a phone (below `sm`) has a bottom tab bar instead, and the
- * header keeps the app name and the user menu, which then holds Admin too. Activity (the
- * assistant's runs) is in the user menu at every width.
+ * header keeps the app name and the user menu, which then holds Admin too.
  */
 export function AppShell() {
   const { data: user } = useMe();

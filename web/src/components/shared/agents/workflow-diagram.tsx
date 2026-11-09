@@ -38,8 +38,8 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
-import type { AgentFlow, FlowNode } from "../api/agents-api";
-import { flowSentences } from "../helpers/flow-sentences";
+import type { AgentFlow, FlowNode } from "@/features/admin/api/agents-api";
+import { flowSentences } from "@/features/admin/helpers/flow-sentences";
 
 // The api's grid in pixels: a card per column and row, in the order things happen.
 const CARD_W = 260;
@@ -54,7 +54,13 @@ const MAX_H = 640;
 const ZOOM = 1.25;
 
 export type NodeStatus =
-  "queued" | "running" | "success" | "failure" | "skipped" | "cancelled";
+  | "waiting"
+  | "queued"
+  | "running"
+  | "success"
+  | "failure"
+  | "skipped"
+  | "cancelled";
 
 /** What a run of the workflow says of one step: none of it on Admin, Agents today. */
 export interface NodeRun {
@@ -94,6 +100,11 @@ const STATUSES: Record<
   NodeStatus,
   { icon: LucideIcon; className: string; words: string }
 > = {
+  waiting: {
+    icon: CircleDashed,
+    className: "text-muted-foreground/60",
+    words: "Waiting",
+  },
   queued: {
     icon: CircleDashed,
     className: "text-muted-foreground",
@@ -119,6 +130,7 @@ const WORST: NodeStatus[] = [
   "failure",
   "running",
   "queued",
+  "waiting",
   "cancelled",
   "skipped",
   "success",
@@ -313,15 +325,28 @@ const ROW_CLASS = "flex h-11 w-full items-center gap-2 px-3 text-left";
 const FOCUS =
   "outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
+const MEMBER_CLASS = "flex h-8 items-center gap-2 rounded-md px-2 text-xs";
+
+function MemberRow({ to, children }: { to?: string; children: ReactNode }) {
+  if (!to) return <div className={MEMBER_CLASS}>{children}</div>;
+  return (
+    <Link to={to} className={cn(MEMBER_CLASS, FOCUS)}>
+      {children}
+    </Link>
+  );
+}
+
 function StepCard({
   card,
   runs,
+  linkAgents,
   into,
   open,
   onToggle,
 }: {
   card: Card;
   runs: Record<string, NodeRun>;
+  linkAgents: boolean;
   into: Map<string, string[]>;
   open: boolean;
   onToggle: () => void;
@@ -331,7 +356,7 @@ function StepCard({
   const run = members.length ? undefined : runs[node.id];
   const href =
     run?.href ??
-    (node.kind === "agent" && !members.length
+    (linkAgents && node.kind === "agent" && !members.length
       ? `/admin/agents/${encodeURIComponent(node.id)}`
       : undefined);
   const height = CARD_H + (open ? members.length * MEMBER_H + 8 : 0);
@@ -378,15 +403,13 @@ function StepCard({
           {members.map((member) => (
             <li key={member.id}>
               <Tip id={member.id} lines={into.get(member.id) ?? []}>
-                <Link
+                <MemberRow
                   to={
                     runs[member.id]?.href ??
-                    `/admin/agents/${encodeURIComponent(member.id)}`
+                    (linkAgents
+                      ? `/admin/agents/${encodeURIComponent(member.id)}`
+                      : undefined)
                   }
-                  className={cn(
-                    "flex h-8 items-center gap-2 rounded-md px-2 text-xs",
-                    FOCUS,
-                  )}
                 >
                   <KindOrStatus kind="agent" status={runs[member.id]?.status} />
                   <span className="min-w-0 flex-1 truncate">
@@ -395,7 +418,7 @@ function StepCard({
                   <span className="text-muted-foreground tabular-nums">
                     {runs[member.id]?.duration ?? ""}
                   </span>
-                </Link>
+                </MemberRow>
               </Tip>
             </li>
           ))}
@@ -435,7 +458,7 @@ function StepCard({
   );
 }
 
-function Legend() {
+function Legend({ linkAgents }: { linkAgents: boolean }) {
   return (
     <ul className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
       {(Object.keys(KINDS) as Kind[]).map((key) => {
@@ -451,7 +474,7 @@ function Legend() {
             >
               <Icon className="size-3 text-muted-foreground" />
             </span>
-            {KINDS[key].legend}
+            {key === "agent" && !linkAgents ? "Agent" : KINDS[key].legend}
           </li>
         );
       })}
@@ -625,10 +648,13 @@ export function WorkflowDiagram({
   title,
   flow,
   runs = {},
+  linkAgents = true,
 }: {
   title: string;
   flow: AgentFlow;
   runs?: Record<string, NodeRun>;
+  /** False where the person may not open Admin: an agent's card then links only to its run. */
+  linkAgents?: boolean;
 }) {
   const { cards, cardOf, connectors } = cardsOf(flow);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -721,6 +747,7 @@ export function WorkflowDiagram({
                 key={card.key}
                 card={card}
                 runs={runs}
+                linkAgents={linkAgents}
                 into={into}
                 open={Boolean(open[card.key])}
                 onToggle={() => {
@@ -757,7 +784,7 @@ export function WorkflowDiagram({
           </div>
         </div>
         <figcaption>
-          <Legend />
+          <Legend linkAgents={linkAgents} />
         </figcaption>
         <ul className="sr-only" aria-label={`${title}, each step in words`}>
           {flowSentences(flow).map((sentence, index) => (

@@ -26,7 +26,7 @@ import {
   type AgentSummary,
 } from "../api/agents-api";
 import { useAdminAgents } from "../api/use-admin-agents";
-import { WorkflowDiagram } from "../components/workflow-diagram";
+import { WorkflowDiagram } from "@/components/shared/agents/workflow-diagram";
 
 /**
  * Admin, Agents: every agent of the app, what it runs on and when it last ran, grouped by
