@@ -20,10 +20,12 @@ import { http, HttpResponse } from "msw";
 
 import { makeRun } from "@/design-system/fixtures/runs";
 import { admin, fakeSession, member } from "@/test/auth";
+import { waitForOnFakeClock } from "@/test/clock";
 import { server } from "@/test/server";
 import { FakeEventSource } from "@/test/fake-event-source";
 import { renderApp } from "@/test/render";
 
+import type { FlowStatus } from "../api/activity-api";
 import type { RunStep } from "../api/runs-api";
 
 const runs = () => screen.findByRole("list", { name: "Workflow runs" });
@@ -79,8 +81,49 @@ describe("Activity, the workflow runs", () => {
     fakeActivityApi();
     renderApp("/activity/application");
     const list = await runs();
-    expect(within(list).getAllByRole("link")).toHaveLength(1);
-    expect(list).toHaveTextContent("Platform engineer at Lumen Freight");
+    const [row] = within(list).getAllByRole("link");
+    // The api names an application run by its posting.
+    expect(row).toHaveTextContent("Platform engineer at Lumen Freight");
+    expect(row).toHaveTextContent("Your click on Apply");
+  });
+
+  it("reads a run waiting for its next step again every 2 s, and a finished one no more", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    try {
+      fakeSession(member);
+      fakeActivityApi();
+      let status: FlowStatus = "waiting";
+      let reads = 0;
+      server.use(
+        http.get("*/api/activity/runs", () => {
+          reads += 1;
+          return HttpResponse.json({ items: [{ ...RUN_UNDER_WAY, status }] });
+        }),
+      );
+      renderApp("/activity");
+      await waitForOnFakeClock(() => {
+        expect(reads).toBe(1);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_500);
+      });
+      expect(reads).toBe(1);
+      await waitForOnFakeClock(() => {
+        expect(reads).toBe(2);
+      });
+      status = "success";
+      await waitForOnFakeClock(() => {
+        expect(reads).toBe(3);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(reads).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says what will appear when there is nothing yet", async () => {

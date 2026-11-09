@@ -151,6 +151,11 @@ const POSTING = {
   id: "8b1f6d53-2e4c-4a9f-a7b2-3d0e9f8a7b62",
   words: "Analytics engineer at Kestrel Health",
 };
+/** The posting of the failed application: the api names an application by its posting. */
+const APPLIED_POSTING = {
+  id: "2f7c9a14-6d3b-4e58-9a01-5c8e7b3d2f46",
+  words: "Platform engineer at Lumen Freight",
+};
 
 export const RUN_UNDER_WAY_ID = "3f6a1c2e-9b4d-4e7a-8c15-6d2b0e9f1a73";
 export const FAILED_RUN_ID = "71c9e4b2-5a3d-4f86-b0e1-2d8c7a6f5e94";
@@ -357,7 +362,7 @@ export const RUN_UNDER_WAY: WorkflowRunDetail = {
 export const FAILED_RUN: WorkflowRunDetail = {
   ...run(FAILED_RUN_ID, APPLICATION, {
     trigger: { kind: "recorded", words: "Your click on Apply", node: "apply" },
-    subject: { words: "Platform engineer at Lumen Freight", job_id: null },
+    subject: { words: APPLIED_POSTING.words, job_id: APPLIED_POSTING.id },
     status: "failure",
     created_at: ago(95),
     started_at: ago(95),
@@ -396,7 +401,7 @@ export const PRIVATE_RUN: WorkflowRunDetail = {
       words: "Your click on Start reading",
       node: "read",
     },
-    subject: { words: "cv-2026.pdf", job_id: null },
+    subject: null,
     created_at: ago(240),
     started_at: ago(240),
     finished_at: ago(237),
@@ -463,7 +468,7 @@ export const SWEEP_RUN: WorkflowRunDetail = {
   ...run(SEARCH_RUN_ID, SEARCH, {
     trigger: { kind: "recorded", words: "The schedule", node: "schedule" },
     subject: {
-      words: "Data engineer, analytics engineer in Lyon or remote",
+      words: "Data engineer, Analytics engineer in Lyon, Remote",
       job_id: null,
     },
     created_at: ago(180),

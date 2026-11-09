@@ -655,6 +655,7 @@ def start(
     script: str | None = None,
     settings: Settings | None = None,
     panel: str | None = None,
+    flow: agent_runs.WorkflowRef | None = None,
 ) -> AgentRun:
     """The writer run of a base generation, `queued`, and the generation `running`. The caller
     commits, then `generate.enqueue_run`. Raises agent_runs.ActiveRunsError when the person has
@@ -689,7 +690,7 @@ def start(
         BASE_WRITER.validate_input(data),
         BASE_WRITER.model,
         at,
-        flow=flows.base_flow(db, generation),
+        flow=flow or flows.base_flow(db, generation),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

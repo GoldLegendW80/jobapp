@@ -27,6 +27,9 @@ router = APIRouter(prefix="/api/activity", tags=["activity"])
 SCAN_MAX = 1000
 LIST_MAX = 100
 NOT_FOUND = "Run not found."
+READER = "posting_reader"
+# The statuses of a run under way, which the page reads again.
+ACTIVE = ("running", "queued", "waiting")
 
 _STATUS = {
     RunStatus.queued: "queued",
@@ -151,7 +154,8 @@ _COLUMNS = (
     AgentRun.workflow,
     AgentRun.workflow_run_id,
     AgentRun.workflow_trigger,
-    # Only the ids an older run is grouped by, never the rest of its input.
+    # Only the ids an older run is grouped by and a reader's postings, never the rest of its input.
+    AgentRun.input["job_ids"].label("job_ids"),
     AgentRun.input["ingestion_run_id"].astext.label("ingestion_run_id"),
     AgentRun.input["application_id"].astext.label("application_id"),
     AgentRun.input["generation_id"].astext.label("generation_id"),
@@ -194,16 +198,40 @@ def _group(rows: Sequence[sa.Row[Any]]) -> list[_Group]:
     return sorted(groups.values(), key=lambda g: g.rows[0].created_at, reverse=True)
 
 
-def _status(rows: Sequence[sa.Row[Any]]) -> str:
-    statuses = {_STATUS[row.status] for row in rows}
-    for status_ in ("running", "queued", "failure"):
+def _status(steps: Sequence[StepOut]) -> str:
+    """The run's status from all its steps, the app's own included: active while any step is,
+    cancelled when its last step to end was."""
+    statuses = {step.status for step in steps}
+    for status_ in ("running", "queued", "waiting", "failure"):
         if status_ in statuses:
             return status_
-    return "cancelled" if statuses == {"cancelled"} else "success"
+    ended = [step for step in steps if step.finished_at]
+    last = max(ended, key=lambda step: step.finished_at or datetime.min) if ended else None
+    if "cancelled" in statuses and (
+        "success" not in statuses or last is None or last.status == "cancelled"
+    ):
+        return "cancelled"
+    return "success"
+
+
+def _reader_job(row: sa.Row[Any]) -> uuid.UUID | None:
+    """The one posting a reader run read, when it read one."""
+    held = row.job_ids if row.agent == READER else None
+    if not (isinstance(held, list) and len(held) == 1 and isinstance(held[0], str)):
+        return None
+    try:
+        return uuid.UUID(held[0])
+    except ValueError:
+        return None
 
 
 def _subjects(db: Session, user_id: uuid.UUID, groups: list[_Group]) -> dict[uuid.UUID, str]:
-    ids = {row.job_id for group in groups for row in group.rows if row.job_id}
+    ids = {
+        job_id
+        for group in groups
+        for row in group.rows
+        if (job_id := row.job_id or _reader_job(row))
+    }
     if not ids:
         return {}
     found = db.execute(
@@ -212,15 +240,64 @@ def _subjects(db: Session, user_id: uuid.UUID, groups: list[_Group]) -> dict[uui
     return {job_id: f"{title} at {company}" for job_id, company, title in found}
 
 
-def _summary(group: _Group, subjects: dict[uuid.UUID, str]) -> dict[str, Any]:
-    rows = group.rows
+def _subject(
+    group: _Group, found: activity_steps.Found, subjects: dict[uuid.UUID, str]
+) -> SubjectOut | None:
+    if found.subject:
+        return SubjectOut(words=found.subject, job_id=found.job_id)
+    job_id = next(
+        (
+            job_id
+            for row in group.rows
+            if (job_id := row.job_id or _reader_job(row)) and job_id in subjects
+        ),
+        None,
+    )
+    return SubjectOut(words=subjects[job_id], job_id=job_id) if job_id else None
+
+
+def _steps(
+    group: _Group,
+    workflow: workflows.Workflow,
+    found: activity_steps.Found,
+    definitions: dict[str, Any],
+) -> list[StepOut]:
+    agents = [
+        (
+            row.started_at or row.created_at,
+            StepOut(
+                id=str(row.id),
+                kind="agent",
+                node=row.agent if row.agent in workflow.nodes else None,
+                name=catalog.NAMES.get(row.agent, row.agent),
+                agent=row.agent,
+                status=_STATUS[row.status],
+                started_at=row.started_at,
+                finished_at=row.finished_at,
+                duration_s=(row.finished_at - row.started_at).total_seconds()
+                if row.started_at and row.finished_at
+                else None,
+                private=bool(definitions.get(row.agent) and definitions[row.agent].private_io),
+                note=None,
+            ),
+        )
+        for row in group.rows
+    ]
+    system = [StepOut(**step) for step in found.steps]
+    timed = agents + [(step.started_at, step) for step in system if step.started_at]
+    timed.sort(key=lambda pair: pair[0])
+    # The steps to come last, in the order their run will take them.
+    later = [step for step in system if not step.started_at]
+    return [step for _, step in timed] + later
+
+
+def _summary(group: _Group, steps: Sequence[StepOut], subject: SubjectOut | None) -> dict[str, Any]:
     workflow = workflows.BY_KEY[group.workflow]
-    job_id = next((row.job_id for row in rows if row.job_id in subjects), None)
-    started = [row.started_at for row in rows if row.started_at]
-    state = _status(rows)
+    started = [step.started_at for step in steps if step.started_at]
+    state = _status(steps)
     finished = (
-        max((row.finished_at for row in rows if row.finished_at), default=None)
-        if state not in ("running", "queued")
+        max((step.finished_at for step in steps if step.finished_at), default=None)
+        if state not in ACTIVE
         else None
     )
     return {
@@ -232,14 +309,30 @@ def _summary(group: _Group, subjects: dict[uuid.UUID, str]) -> dict[str, Any]:
             words=group.trigger.words,
             node=group.trigger.node if group.trigger.node in workflow.nodes else None,
         ),
-        "subject": SubjectOut(words=subjects[job_id], job_id=job_id) if job_id else None,
+        "subject": subject,
         "status": state,
-        "created_at": rows[0].created_at,
+        "created_at": group.rows[0].created_at,
         "started_at": min(started) if started else None,
         "finished_at": finished,
         "duration_s": (finished - min(started)).total_seconds() if finished and started else None,
-        "agent_runs": len(rows),
+        "agent_runs": len(group.rows),
     }
+
+
+class _Read:
+    """Each group's steps and subject, its app's own rows read once for all the groups."""
+
+    def __init__(self, db: Session, user_id: uuid.UUID, groups: list[_Group]) -> None:
+        self.found = activity_steps.read(
+            db, user_id, [(g.workflow, g.key, [row.id for row in g.rows]) for g in groups]
+        )
+        self.subjects = _subjects(db, user_id, groups)
+        self.definitions = catalog.load()
+
+    def of(self, group: _Group) -> tuple[list[StepOut], dict[str, Any]]:
+        found = self.found.get(group.key) or activity_steps.Found()
+        steps = _steps(group, workflows.BY_KEY[group.workflow], found, self.definitions)
+        return steps, _summary(group, steps, _subject(group, found, self.subjects))
 
 
 def _scan(db: Session, user_id: uuid.UUID) -> Sequence[sa.Row[Any]]:
@@ -257,8 +350,8 @@ def _list(
     with sessions() as db:
         groups = [g for g in _group(_scan(db, user_id)) if workflow in (None, g.workflow)]
         groups = groups[:limit]
-        subjects = _subjects(db, user_id, groups)
-        return WorkflowRunList(items=[WorkflowRunOut(**_summary(g, subjects)) for g in groups])
+        read = _Read(db, user_id, groups)
+        return WorkflowRunList(items=[WorkflowRunOut(**read.of(g)[1]) for g in groups])
 
 
 @router.get("/runs", response_model=WorkflowRunList, dependencies=[Depends(_no_store)])
@@ -301,48 +394,16 @@ def _detail(
                 return _detail(sessions, user_id, uuid.UUID(group.key))
             except ValueError:
                 return None
-        subjects = _subjects(db, user_id, [group])
-        definitions = catalog.load()
+        steps, summary = _Read(db, user_id, [group]).of(group)
         workflow = workflows.BY_KEY[group.workflow]
         tokens_in = [row.input_tokens for row in group.rows if row.input_tokens is not None]
         tokens_out = [row.output_tokens for row in group.rows if row.output_tokens is not None]
         costs = [float(row.cost_usd) for row in group.rows if row.cost_usd is not None]
         kinds = {row.credential_kind.value for row in group.rows if row.credential_kind}
-        agents = [
-            (
-                row.started_at or row.created_at,
-                StepOut(
-                    id=str(row.id),
-                    kind="agent",
-                    node=row.agent if row.agent in workflow.nodes else None,
-                    name=catalog.NAMES.get(row.agent, row.agent),
-                    agent=row.agent,
-                    status=_STATUS[row.status],
-                    started_at=row.started_at,
-                    finished_at=row.finished_at,
-                    duration_s=(row.finished_at - row.started_at).total_seconds()
-                    if row.started_at and row.finished_at
-                    else None,
-                    private=bool(definitions.get(row.agent) and definitions[row.agent].private_io),
-                    note=None,
-                ),
-            )
-            for row in group.rows
-        ]
-        system = [
-            StepOut(**step)
-            for step in activity_steps.system_steps(
-                db, user_id, group.workflow, group.key, [row.id for row in group.rows]
-            )
-        ]
-        timed = agents + [(step.started_at, step) for step in system if step.started_at]
-        timed.sort(key=lambda pair: pair[0])
-        # The steps to come last, in the order their run will take them.
-        later = [step for step in system if not step.started_at]
         return WorkflowRunDetail(
-            **_summary(group, subjects),
+            **summary,
             flow=_flow_out(workflow),
-            steps=[step for _, step in timed] + later,
+            steps=steps,
             input_tokens=sum(tokens_in) if tokens_in else None,
             output_tokens=sum(tokens_out) if tokens_out else None,
             cost_usd=round(sum(costs), 6) if costs else None,

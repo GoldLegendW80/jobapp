@@ -400,6 +400,7 @@ def start(
     long_fields: Iterable[str] = (),
     settings: Settings | None = None,
     panel: str | None = None,
+    flow: agent_runs.WorkflowRef | None = None,
 ) -> AgentRun:
     """The writer run of a generation, `queued`, and the generation `running`. The caller
     commits, then `enqueue_run`. Raises agent_runs.ActiveRunsError when the person has their
@@ -441,7 +442,7 @@ def start(
         definition.validate_input(data),
         definition.model,
         at,
-        flow=flows.posting_flow(db, generation),
+        flow=flow or flows.posting_flow(db, generation),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

@@ -5,7 +5,8 @@ A step to come is `waiting`, with no time; its agent run, once made, is an agent
 """
 
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -23,7 +24,7 @@ from app.documents.models import (
 )
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, StepStatus
 from app.ingestion.runs_models import RunStatus as IngestionStatus
-from app.jobs.models import Sweep, SweepStatus
+from app.jobs.models import Job, Sweep, SweepStatus
 
 _SWEEP = {
     SweepStatus.running: "running",
@@ -62,6 +63,17 @@ _APPLICATION_STATE = {
 # The agent each ingestion step and each waiting generation runs, by kind.
 _INGESTION_AGENT = {"transcribe": "document_transcribe", "extract": "profile_extract"}
 _WRITER = {Kind.cv: "documents_cv", Kind.letter: "documents_letter"}
+# The titles and places a sweep's subject names before it says how many more.
+_SEARCH_TERMS = 3
+
+
+@dataclass
+class Found:
+    """What the app's own rows say of one workflow run."""
+
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    subject: str | None = None
+    job_id: uuid.UUID | None = None
 
 
 def _step(
@@ -95,14 +107,33 @@ def _uuid(text: str) -> uuid.UUID | None:
         return None
 
 
-def _sweep(db: Session, user_id: uuid.UUID, key: uuid.UUID) -> list[dict[str, Any]]:
-    row = db.execute(
-        sa.select(Sweep.status, Sweep.started_at, Sweep.finished_at, Sweep.stats).where(
-            Sweep.id == key, Sweep.user_id == user_id
-        )
-    ).one_or_none()
-    if row is None:
-        return []
+def _terms(search: Mapping[str, Any], name: str) -> list[str]:
+    section = search.get(name)
+    terms = section.get("terms") if isinstance(section, dict) else None
+    return [t for t in terms if isinstance(t, str) and t] if isinstance(terms, list) else []
+
+
+def _listed(terms: list[str]) -> str:
+    shown = ", ".join(terms[:_SEARCH_TERMS])
+    more = len(terms) - _SEARCH_TERMS
+    return f"{shown} and {more} more" if more > 0 else shown
+
+
+def search_words(stats: Mapping[str, Any]) -> str | None:
+    """A sweep's search in a few words: the titles and places of its frozen scope."""
+    scope = stats.get("search_scope")
+    search = scope.get("search") if isinstance(scope, dict) else None
+    if not isinstance(search, dict):
+        return None
+    titles, places = _terms(search, "title_include"), _terms(search, "location")
+    if titles and places:
+        return f"{_listed(titles)} in {_listed(places)}"
+    if titles or places:
+        return _listed(titles or places)
+    return None
+
+
+def _sweep_steps(key: uuid.UUID, row: Any) -> list[dict[str, Any]]:
     stats = row.stats or {}
     reading = stats.get("reading") or {}
     note = (
@@ -150,65 +181,80 @@ def _sweep(db: Session, user_id: uuid.UUID, key: uuid.UUID) -> list[dict[str, An
     return steps
 
 
-def _ingestion(db: Session, user_id: uuid.UUID, key: uuid.UUID) -> list[dict[str, Any]]:
-    run = db.execute(
-        sa.select(IngestionRun.status, IngestionRun.created_at, IngestionRun.finished_at).where(
-            IngestionRun.id == key, IngestionRun.user_id == user_id
+def _sweeps(db: Session, user_id: uuid.UUID, keys: Sequence[uuid.UUID]) -> dict[uuid.UUID, Found]:
+    rows = db.execute(
+        sa.select(Sweep.id, Sweep.status, Sweep.started_at, Sweep.finished_at, Sweep.stats).where(
+            Sweep.id.in_(keys), Sweep.user_id == user_id
         )
-    ).one_or_none()
-    if run is None:
-        return []
-    steps = [
-        _step(
-            f"ingestion:{key}",
-            "run",
-            "Ingestion run",
-            _INGESTION[run.status],
-            run.created_at,
-            run.finished_at,
+    ).all()
+    return {row.id: Found(_sweep_steps(row.id, row), search_words(row.stats or {})) for row in rows}
+
+
+def _ingestions(
+    db: Session, user_id: uuid.UUID, keys: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, Found]:
+    found: dict[uuid.UUID, Found] = {}
+    waiting: dict[uuid.UUID, str] = {}
+    for run in db.execute(
+        sa.select(
+            IngestionRun.id, IngestionRun.status, IngestionRun.created_at, IngestionRun.finished_at
+        ).where(IngestionRun.id.in_(keys), IngestionRun.user_id == user_id)
+    ).all():
+        found[run.id] = Found(
+            [
+                _step(
+                    f"ingestion:{run.id}",
+                    "run",
+                    "Ingestion run",
+                    _INGESTION[run.status],
+                    run.created_at,
+                    run.finished_at,
+                )
+            ]
         )
-    ]
+        going = run.status in (IngestionStatus.running, IngestionStatus.paused)
+        waiting[run.id] = "waiting" if going else "cancelled"
+    if not found:
+        return found
     planned = db.execute(
-        sa.select(IngestionRunStep.id, IngestionRunStep.kind)
+        sa.select(IngestionRunStep.id, IngestionRunStep.ingestion_run_id, IngestionRunStep.kind)
         .where(
-            IngestionRunStep.ingestion_run_id == key,
+            IngestionRunStep.ingestion_run_id.in_(list(found)),
             IngestionRunStep.status == StepStatus.planned,
             IngestionRunStep.agent_run_id.is_(None),
         )
         .order_by(IngestionRunStep.position)
     ).all()
-    waiting = (
-        "waiting"
-        if run.status in (IngestionStatus.running, IngestionStatus.paused)
-        else ("cancelled")
-    )
     for step in planned:
         agent = _INGESTION_AGENT[str(getattr(step.kind, "value", step.kind))]
-        steps.append(_step(f"ingestion-step:{step.id}", agent, NAMES[agent], waiting))
-    return steps
+        found[step.ingestion_run_id].steps.append(
+            _step(f"ingestion-step:{step.id}", agent, NAMES[agent], waiting[step.ingestion_run_id])
+        )
+    return found
 
 
 def _documents(
-    db: Session, user_id: uuid.UUID, key: uuid.UUID, run_ids: Sequence[uuid.UUID]
-) -> list[dict[str, Any]]:
-    steps: list[dict[str, Any]] = []
+    db: Session, user_id: uuid.UUID, runs: Mapping[uuid.UUID, Sequence[uuid.UUID]]
+) -> dict[uuid.UUID, Found]:
+    found = {key: Found() for key in runs}
+    owner = {run_id: key for key, run_ids in runs.items() for run_id in run_ids}
     panels = db.execute(
         sa.select(
             DocumentPanel.id,
+            DocumentPanel.source_run_id,
             DocumentPanel.kind,
             DocumentPanel.status,
             DocumentPanel.started_at,
-            DocumentPanel.created_at,
             DocumentPanel.finished_at,
         )
-        .where(DocumentPanel.user_id == user_id, DocumentPanel.source_run_id.in_(run_ids))
+        .where(DocumentPanel.user_id == user_id, DocumentPanel.source_run_id.in_(list(owner)))
         .order_by(DocumentPanel.created_at)
     ).all()
     for panel in panels:
         status = _PANEL.get(panel.status, "failure")
         if status == "running" and panel.started_at is None:
             status = "waiting"
-        steps.append(
+        found[owner[panel.source_run_id]].steps.append(
             _step(
                 f"panel:{panel.id}",
                 "panel",
@@ -218,21 +264,29 @@ def _documents(
                 panel.finished_at,
             )
         )
-    first = db.execute(
-        sa.select(DocumentGeneration.created_at, Document.posting_id)
-        .join(Document, Document.id == DocumentGeneration.document_id)
-        .where(DocumentGeneration.id == key, DocumentGeneration.user_id == user_id)
-    ).one_or_none()
-    if first is None or first.posting_id is None:
-        return steps
     # The generations of the same click (`documents.flows.posting_flow`) no run started yet.
+    clicks = {
+        (first.created_at, first.posting_id): first.id
+        for first in db.execute(
+            sa.select(DocumentGeneration.id, DocumentGeneration.created_at, Document.posting_id)
+            .join(Document, Document.id == DocumentGeneration.document_id)
+            .where(DocumentGeneration.id.in_(list(runs)), DocumentGeneration.user_id == user_id)
+        ).all()
+        if first.posting_id is not None
+    }
+    if not clicks:
+        return found
     waiting = db.execute(
-        sa.select(DocumentGeneration.id, Document.kind)
+        sa.select(
+            DocumentGeneration.id,
+            DocumentGeneration.created_at,
+            Document.posting_id,
+            Document.kind,
+        )
         .join(Document, Document.id == DocumentGeneration.document_id)
         .where(
             DocumentGeneration.user_id == user_id,
-            DocumentGeneration.created_at == first.created_at,
-            Document.posting_id == first.posting_id,
+            sa.tuple_(DocumentGeneration.created_at, Document.posting_id).in_(list(clicks)),
             DocumentGeneration.run_id.is_(None),
             DocumentGeneration.status.in_((GenerationStatus.queued, GenerationStatus.waiting)),
         )
@@ -241,31 +295,44 @@ def _documents(
     for generation in waiting:
         agent = _WRITER.get(generation.kind)
         if agent is not None:
-            steps.append(_step(f"generation:{generation.id}", agent, NAMES[agent], "waiting"))
-    return steps
+            found[clicks[(generation.created_at, generation.posting_id)]].steps.append(
+                _step(f"generation:{generation.id}", agent, NAMES[agent], "waiting")
+            )
+    return found
 
 
-def _application(db: Session, user_id: uuid.UUID, key: uuid.UUID) -> list[dict[str, Any]]:
-    row = db.execute(
-        sa.select(Application.state, Application.created_at, Application.updated_at).where(
-            Application.id == key, Application.user_id == user_id
+def _application_status(state: State) -> str:
+    if state in _APPLICATION_RUNNING:
+        return "running"
+    if state in _APPLICATION_WAITING:
+        return "waiting"
+    if state in _APPLICATION_DONE:
+        return "success"
+    return "cancelled" if state is State.cancelled else "failure"
+
+
+def _applications(
+    db: Session, user_id: uuid.UUID, keys: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, Found]:
+    rows = db.execute(
+        sa.select(
+            Application.id,
+            Application.state,
+            Application.created_at,
+            Application.updated_at,
+            Job.id.label("job_id"),
+            Job.title,
+            Job.company,
         )
-    ).one_or_none()
-    if row is None:
-        return []
-    if row.state in _APPLICATION_RUNNING:
-        status, finished = "running", None
-    elif row.state in _APPLICATION_WAITING:
-        status, finished = "waiting", None
-    elif row.state in _APPLICATION_DONE:
-        status, finished = "success", row.updated_at
-    elif row.state is State.cancelled:
-        status, finished = "cancelled", row.updated_at
-    else:
-        status, finished = "failure", row.updated_at
-    return [
-        _step(
-            f"application:{key}",
+        .outerjoin(Job, sa.and_(Job.id == Application.posting_id, Job.user_id == user_id))
+        .where(Application.id.in_(keys), Application.user_id == user_id)
+    ).all()
+    found: dict[uuid.UUID, Found] = {}
+    for row in rows:
+        status = _application_status(row.state)
+        finished = None if status in ("running", "waiting") else row.updated_at
+        step = _step(
+            f"application:{row.id}",
             "fill",
             "Application",
             status,
@@ -273,22 +340,35 @@ def _application(db: Session, user_id: uuid.UUID, key: uuid.UUID) -> list[dict[s
             finished,
             _APPLICATION_STATE[row.state],
         )
-    ]
+        subject = f"{row.title} at {row.company}" if row.job_id else None
+        found[row.id] = Found([step], subject, row.job_id)
+    return found
 
 
-def system_steps(
-    db: Session, user_id: uuid.UUID, workflow: str, key: str, run_ids: Iterable[uuid.UUID]
-) -> list[dict[str, Any]]:
-    """The app's own steps of one workflow run of the caller, by its workflow and its id."""
-    found = _uuid(key)
-    if found is None:
-        return []
-    if workflow == "job_search":
-        return _sweep(db, user_id, found)
-    if workflow == "fill_profile":
-        return _ingestion(db, user_id, found)
-    if workflow in ("posting_documents", "base_cv"):
-        return _documents(db, user_id, found, list(run_ids))
-    if workflow == "application":
-        return _application(db, user_id, found)
-    return []
+_READERS = {
+    "job_search": _sweeps,
+    "fill_profile": _ingestions,
+    "application": _applications,
+}
+
+
+def read(
+    db: Session, user_id: uuid.UUID, runs: Iterable[tuple[str, str, Sequence[uuid.UUID]]]
+) -> dict[str, Found]:
+    """The app's own steps and subject of the caller's workflow runs, each given as its
+    workflow, its id and its agent runs' ids, by its id; a run no row speaks of is left out."""
+    asked: dict[str, dict[uuid.UUID, Sequence[uuid.UUID]]] = {}
+    named: dict[uuid.UUID, str] = {}
+    for workflow, key, run_ids in runs:
+        found = _uuid(key)
+        if found is not None:
+            asked.setdefault(workflow, {})[found] = run_ids
+            named[found] = key
+    out: dict[uuid.UUID, Found] = {}
+    for workflow, reader in _READERS.items():
+        if asked.get(workflow):
+            out.update(reader(db, user_id, list(asked[workflow])))
+    documents = {**asked.get("posting_documents", {}), **asked.get("base_cv", {})}
+    if documents:
+        out.update(_documents(db, user_id, documents))
+    return {named[key]: found for key, found in out.items()}

@@ -1,6 +1,8 @@
 """The workflow run of a posting's documents (Activity, agents A10): one per click; a base CV
-a click builds first joins it, and a design capture joins its conversion's run once."""
+a click builds first joins it, the hiring panel's rebuild joins the run of the writer it reviewed,
+a design capture joins its conversion's run once, and only a person's click records a trigger."""
 
+import dataclasses
 import uuid
 from datetime import timedelta
 
@@ -8,9 +10,10 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.runs import WorkflowRef
-from app.documents import flows, generate, store
+from app.documents import consent, flows, generate, panel, store
 from app.documents.models import (
     DocumentGeneration,
+    DocumentPanel,
     GenerationMode,
     GenerationStatus,
     GenerationTrigger,
@@ -21,6 +24,7 @@ from tests.documents.writer_support import (
     CEILING,
     ESTIMATE,
     Person,
+    execute,
     person,
     run_row,
     start,
@@ -97,11 +101,53 @@ def test_a_base_cv_a_click_builds_first_joins_that_clicks_run_and_any_other_is_i
         assert flows.base_flow(db, first) == WorkflowRef(
             "posting_documents", cv_generation, "write"
         )
-        # A base CV the documents tick builds later, or the Base CV page's, is its own run.
+        # The Base CV page's New CV, a click of its own, is its own run.
         later = _generation(who, GenerationMode.base_profile, GenerationTrigger.click, 5)
         assert flows.base_flow(db, later) == WorkflowRef("base_cv", who.base, "new_base")
-        page = _generation(who, GenerationMode.base_profile, GenerationTrigger.auto)
-        assert flows.base_flow(db, page) == WorkflowRef("base_cv", who.base, "new_base")
+        # A base CV the documents tick builds is nobody's click: no trigger.
+        tick = _generation(who, GenerationMode.base_profile, GenerationTrigger.auto)
+        assert flows.base_flow(db, tick) == WorkflowRef("base_cv", who.base, None)
+
+
+def test_make_it_fit_is_a_run_of_its_own_triggered_by_its_click(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = person(factory, migrated_url, USER)
+    start(who, None)
+    with factory() as db:
+        fit = _generation(who, GenerationMode.shorten, GenerationTrigger.click)
+        assert flows.posting_flow(db, fit) == WorkflowRef("posting_documents", fit.id, "fit")
+
+
+def test_the_panels_rebuild_after_the_click_joins_the_clicks_run_with_no_trigger(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = person(factory, migrated_url, USER)
+    on = dataclasses.replace(
+        who, settings=who.settings.model_copy(update={"documents_panel_enabled": True})
+    )
+    with factory() as db:
+        consent.record(db, who.user, AT)
+        db.commit()
+    _, click, writer = start(on, "documents_cv_valid")
+    execute(on, writer)
+    with factory() as db:
+        panel_id = db.scalar(
+            sa.select(DocumentPanel.id).where(DocumentPanel.source_run_id == writer)
+        )
+        loaded = panel.load(db, panel_id)
+        assert loaded is not None
+        later = AT + timedelta(minutes=12)
+        rebuild = panel._start_rebuild(db, loaded, uuid.uuid4().hex, later, on.settings, None)
+        assert isinstance(rebuild, uuid.UUID)
+        db.commit()
+    row = run_row(factory, rebuild)
+    assert (row.agent, row.created_at) == ("documents_cv", later)
+    assert (row.workflow, row.workflow_run_id, row.workflow_trigger) == (
+        "posting_documents",
+        click,
+        None,
+    )
 
 
 def test_the_first_design_capture_joins_its_base_cvs_run_and_a_retry_is_its_own(

@@ -14,13 +14,24 @@ from app.agents import activity_steps, catalog, runs, workflows
 from app.agents.models import AgentRun, RunStatus
 from app.apply import agent as apply_agent
 from app.apply.models import Mode, State
+from app.documents import generate, store
+from app.documents.models import (
+    DocumentGeneration,
+    DocumentPanel,
+    GenerationMode,
+    GenerationStatus,
+    GenerationTrigger,
+    Kind,
+)
 from app.identity.models import User
 from app.ingestion.plan import StepKind
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, StepStatus
 from app.ingestion.runs_models import RunStatus as IngestionStatus
 from app.jobs import sweep
-from app.jobs.models import SweepTrigger
+from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from tests.agents.conftest import ALICE, BOB
+from tests.agents.run_helpers import add_job
+from tests.apply.a11_support import application
 from tests.identity.api_helpers import Api
 
 T0 = datetime(2026, 11, 9, 8, 0, tzinfo=UTC)
@@ -52,7 +63,7 @@ def _run(
                 created_at=T0 + timedelta(minutes=minute),
                 started_at=T0 + timedelta(minutes=minute),
                 finished_at=T0 + timedelta(minutes=minute, seconds=30)
-                if status == RunStatus.done
+                if status in (RunStatus.done, RunStatus.failed, RunStatus.cancelled)
                 else None,
             )
         )
@@ -193,6 +204,8 @@ RECORDING = {
         ("base_cv", ""),
         ("base_cv", "capture"),
         ("base_cv", "new_base"),
+        ("posting_documents", ""),
+        ("posting_documents", "fit"),
         ("posting_documents", "write"),
     },
     "app/documents/interview_prep.py": {
@@ -445,3 +458,225 @@ def test_an_ingestion_runs_steps_not_started_show_as_waiting(
 
 def test_every_application_state_has_its_words_on_the_application_step() -> None:
     assert set(activity_steps._APPLICATION_STATE) == set(State)
+
+
+def _both(api: Api, token: str, key: object) -> tuple[dict[str, Any], dict[str, Any]]:
+    """A workflow run as the list and as its own page give it."""
+    [listed] = [
+        i for i in api.get("/api/activity/runs", token=token).json()["items"] if i["id"] == str(key)
+    ]
+    return listed, api.get(f"/api/activity/runs/{key}", token=token).json()
+
+
+def test_a_sweep_between_its_websites_and_its_reader_is_running_until_its_row_ends(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    with factory() as db:
+        row = sweep.start(db, me, SweepTrigger.manual, T0)
+        row.stats = {
+            **row.stats,
+            "sources": [
+                {
+                    "source_id": "b",
+                    "mode": "llm_browser",
+                    "host": "jobs.example.org",
+                    "phase": "done",
+                    "outcome": "complete",
+                    "found": 3,
+                }
+            ],
+        }
+        db.commit()
+        sweep_id = row.id
+    # Its last website searched; no reader batch started yet.
+    _run(factory, me, "browser_discovery", 1, flow=runs.WorkflowRef("job_search", sweep_id))
+    for seen in _both(api, alice, sweep_id):
+        assert (seen["status"], seen["finished_at"], seen["duration_s"]) == ("running", None, None)
+
+    _run(factory, me, "posting_reader", 3, flow=runs.WorkflowRef("job_search", sweep_id))
+    with factory() as db:
+        db.execute(
+            sa.update(Sweep)
+            .where(Sweep.id == sweep_id)
+            .values(status=SweepStatus.done, finished_at=T0 + timedelta(minutes=5))
+        )
+        db.commit()
+    for seen in _both(api, alice, sweep_id):
+        assert (seen["status"], seen["finished_at"]) == ("success", "2026-11-09T08:05:00Z")
+
+
+def test_a_clicks_documents_wait_for_the_letters_run_and_the_panels_slot(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    posting = add_job(factory, me, "Example Robotics", "Platform engineer")
+    with factory() as db:
+        made = {}
+        for kind in (Kind.cv, Kind.letter):
+            document = store.get_or_create(db, me, posting, kind, at=T0)
+            made[kind] = generate.create(
+                db,
+                document,
+                GenerationMode.posting,
+                GenerationTrigger.click,
+                None,
+                {"low": 1, "high": 2},
+                100,
+                at=T0,
+            )
+        db.commit()
+        click, letter, cv_document = (
+            made[Kind.cv].id,
+            made[Kind.letter].id,
+            made[Kind.cv].document_id,
+        )
+    writer = _run(
+        factory, me, "documents_cv", 1, flow=runs.WorkflowRef("posting_documents", click, "write")
+    )
+    with factory() as db:
+        db.execute(
+            sa.update(DocumentGeneration)
+            .where(DocumentGeneration.id == click)
+            .values(run_id=writer, status=GenerationStatus.done)
+        )
+        db.commit()
+    # The CV written, the letter's generation has no run yet.
+    for seen in _both(api, alice, click):
+        assert (seen["status"], seen["finished_at"]) == ("waiting", None)
+    assert [s["status"] for s in _both(api, alice, click)[1]["steps"]] == ["success", "waiting"]
+
+    with factory() as db:
+        db.execute(
+            sa.update(DocumentGeneration)
+            .where(DocumentGeneration.id == letter)
+            .values(status=GenerationStatus.done)
+        )
+        # The CV's panel, waiting for the person's panel slot.
+        db.add(
+            DocumentPanel(
+                user_id=me,
+                document_id=cv_document,
+                kind="cv",
+                status="running",
+                source_run_id=writer,
+                reviewed_version=1,
+            )
+        )
+        db.commit()
+    for seen in _both(api, alice, click):
+        assert (seen["status"], seen["finished_at"]) == ("waiting", None)
+
+    with factory() as db:
+        db.execute(
+            sa.update(DocumentPanel)
+            .where(DocumentPanel.source_run_id == writer)
+            .values(
+                status="done",
+                started_at=T0 + timedelta(minutes=2),
+                finished_at=T0 + timedelta(minutes=4),
+            )
+        )
+        db.commit()
+    for seen in _both(api, alice, click):
+        assert (seen["status"], seen["finished_at"]) == ("success", "2026-11-09T08:04:00Z")
+
+
+def test_an_application_waiting_for_the_person_waits_and_names_its_posting(
+    factory: sessionmaker[Session], api: Api, alice: str, bob: str
+) -> None:
+    me = _user(factory, ALICE)
+    posting = add_job(factory, me, "Example Robotics", "Platform engineer")
+    with factory() as db:
+        applied = application(db, me, posting, state=State.needs_person, mode=Mode.direct).id
+        db.commit()
+    # The apply agents record no posting of their own (`job_id` null).
+    _run(factory, me, "apply_agent", 1, flow=runs.WorkflowRef("application", applied, "apply"))
+    for seen in _both(api, alice, applied):
+        assert (seen["status"], seen["finished_at"]) == ("waiting", None)
+        assert seen["subject"] == {
+            "words": "Platform engineer at Example Robotics",
+            "job_id": str(posting),
+        }
+
+    # Another person's application id names nothing, its row never read.
+    bobs = _user(factory, BOB)
+    other = add_job(factory, bobs, "Example Freight", "Data engineer")
+    with factory() as db:
+        theirs = application(db, bobs, other, state=State.needs_person).id
+        db.commit()
+    _run(factory, me, "apply_agent", 2, flow=runs.WorkflowRef("application", theirs, "apply"))
+    for seen in _both(api, alice, theirs):
+        assert (seen["status"], seen["subject"]) == ("success", None)
+
+
+def test_a_sweep_names_its_search_and_a_reader_of_one_posting_that_posting(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    with factory() as db:
+        row = sweep.start(db, me, SweepTrigger.manual, T0)
+        row.stats = {
+            **row.stats,
+            "search_scope": {
+                **row.stats["search_scope"],
+                "search": {
+                    "title_include": {"terms": ["Platform engineer", "Data engineer"]},
+                    "location": {"terms": ["Lyon", "Remote", "Paris", "Nantes"]},
+                },
+            },
+        }
+        db.commit()
+        sweep_id = row.id
+    _run(factory, me, "browser_discovery", 1, flow=runs.WorkflowRef("job_search", sweep_id))
+    for seen in _both(api, alice, sweep_id):
+        assert seen["subject"] == {
+            "words": "Platform engineer, Data engineer in Lyon, Remote, Paris and 1 more",
+            "job_id": None,
+        }
+
+    posting = add_job(factory, me, "Example Robotics", "Platform engineer")
+    one = _run(factory, me, "posting_reader", 2, {"job_ids": [str(posting)]})
+    two = _run(factory, me, "posting_reader", 3, {"job_ids": [str(posting), str(uuid.uuid4())]})
+    assert _both(api, alice, one)[1]["subject"] == {
+        "words": "Platform engineer at Example Robotics",
+        "job_id": str(posting),
+    }
+    assert _both(api, alice, two)[1]["subject"] is None
+
+
+def test_a_run_reads_cancelled_when_its_last_step_ended_cancelled(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    stopped, retried, alone = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    for minute, status in ((0, RunStatus.done), (1, RunStatus.cancelled)):
+        _run(
+            factory,
+            me,
+            "job_chat",
+            minute,
+            flow=runs.WorkflowRef("job_chat", stopped),
+            status=status,
+        )
+    for minute, status in ((2, RunStatus.cancelled), (3, RunStatus.done)):
+        _run(
+            factory,
+            me,
+            "job_chat",
+            minute,
+            flow=runs.WorkflowRef("job_chat", retried),
+            status=status,
+        )
+    _run(
+        factory,
+        me,
+        "job_chat",
+        4,
+        flow=runs.WorkflowRef("job_chat", alone),
+        status=RunStatus.cancelled,
+    )
+    found = {
+        i["id"]: i["status"] for i in api.get("/api/activity/runs", token=alice).json()["items"]
+    }
+    assert found == {str(stopped): "cancelled", str(retried): "success", str(alone): "cancelled"}

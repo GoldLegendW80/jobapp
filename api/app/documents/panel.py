@@ -82,7 +82,7 @@ from app.agents import credentials, definitions, runs
 from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.documents import brief as briefs
 from app.documents import content as c
-from app.documents import estimate, panel_hold, store
+from app.documents import estimate, flows, panel_hold, store
 from app.documents.models import (
     Document,
     DocumentGeneration,
@@ -1057,13 +1057,17 @@ def _start_rebuild(
         )
     except store.GenerationOpenError:
         return "rebuild_busy"
+    base = document.scope == Scope.base
+    flow = flows.panel_flow(db, base, loaded.source_run_id)
     try:
-        if document.scope == Scope.base:
+        if base:
             run = writer_base.start(
-                db, generation, at=at, script=script, settings=settings, panel=key
+                db, generation, at=at, script=script, settings=settings, panel=key, flow=flow
             )
         else:
-            run = generate.start(db, generation, at=at, script=script, settings=settings, panel=key)
+            run = generate.start(
+                db, generation, at=at, script=script, settings=settings, panel=key, flow=flow
+            )
     except runs.ActiveRunsError:
         generation.status = GenerationStatus.cancelled
         generation.finished_at = at
