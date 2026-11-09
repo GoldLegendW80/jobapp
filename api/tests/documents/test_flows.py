@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.runs import WorkflowRef
-from app.documents import consent, flows, generate, panel, store
+from app.documents import flows, generate, panel, store
 from app.documents.models import (
     DocumentGeneration,
     DocumentPanel,
@@ -126,9 +126,6 @@ def test_the_panels_rebuild_after_the_click_joins_the_clicks_run_with_no_trigger
     on = dataclasses.replace(
         who, settings=who.settings.model_copy(update={"documents_panel_enabled": True})
     )
-    with factory() as db:
-        consent.record(db, who.user, AT)
-        db.commit()
     _, click, writer = start(on, "documents_cv_valid")
     execute(on, writer)
     with factory() as db:
