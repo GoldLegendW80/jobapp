@@ -13,13 +13,16 @@ and `save_posting_facts` checks and stores one posting's facts (`save`).
 
 What `save` stores, under the posting's row lock:
 - each value with a quote of the posting's text that states it, found in the text as the finder
-  compares words (`_words`: case, accents, spacing and punctuation aside); a value whose quote is
+  compares words (app/browser/words.py, a module that registers no agent: case, accents,
+  spacing and punctuation aside); a value whose quote is
   not there, or that fails its check (`_location`, `_published`, `_pay`, the enums), is dropped
   and counted, never stored;
 - the clean description: the text cut from the first match of the agent's start words to the last
-  match of its end words after it (`cut`), refused under CUT_MIN_CHARS; the cut becomes the
-  posting text and its head the description, and the fit is computed again as a rescore does,
-  a fit set by hand kept;
+  match of its end words after it (`cut`), refused under CUT_MIN_CHARS, and refused when the
+  agent was not shown the whole text (`_seen_whole`: shortened to TEXT_SHOWN_MAX, or changed
+  since the run was bound), so no word it never saw is cut away; the cut becomes the posting
+  text and its head the description, and the fit is computed again as a rescore does, a fit set
+  by hand kept;
 - never a field the person set by hand (`hand_set`: named in an `edit` event that is not the
   reader's own, VIA), never a company or location that would make the posting a duplicate of
   another of the person's, never another contract on a website whose postings have one by nature
@@ -29,11 +32,16 @@ What `save` stores, under the posting's row lock:
 The code readers (opportunities/pay.py, the finder's labels, `work_mode_of`) give the first values
 when the posting is stored and stay when no reader runs. Two ways a posting is read:
 - during its sweep (`SweepReader`, sweep.py `run_sweep`), once every source ended: batches run in
-  the sweep's own job, SWEEP_READS_AT_ONCE at a time, within SWEEP_READING_MAX_S and the sweep's
-  bound; what is not read by then stays for the backlog;
+  the sweep's own job, SWEEP_READS_AT_ONCE at a time for the whole worker (every sweep's
+  reading shares `_slots`), within SWEEP_READING_MAX_S and the sweep's bound, and none after a
+  run that failed for the credential, the provider or the worker; what is not read by then
+  stays for the backlog;
 - by the backlog (`tick`, a cron of the agents queue): one batch of the postings not read yet, as
-  its own run_agent job, BACKLOG_RUNS at a time for the whole app, for a person with a credential
-  and no sweep running, at most ATTEMPTS_MAX runs per posting. A posting without text is never read.
+  its own run_agent job, BACKLOG_RUNS at a time for the whole app, for a person with a
+  credential, no sweep running and no BACKLOG_PAUSE after such a failure (`paused`).
+Each run given a posting counts an attempt, at most ATTEMPTS_MAX; a run that failed for the
+credential, the provider, the worker or a stopping worker gives it back once ended (`settle`,
+`gives_back`). A posting without text is never read.
 
 Logs carry ids and counts, never a posting text, a quote or a value.
 """
@@ -42,13 +50,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import importlib.util
 import json
 import logging
 import time
 import unicodedata
 import uuid
-from collections import deque
+import weakref
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -60,8 +69,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
 from app import queue as queues
-from app.agents import credentials, definitions, runs
+from app.agents import credentials, definitions, failures, runs
 from app.agents.models import AgentRun, RunStatus
+from app.browser.nature import nature_contract
+from app.browser.words import words as _words
 from app.jobs import service
 from app.jobs.models import (
     ContractType,
@@ -102,12 +113,17 @@ DESCRIPTION_CHARS = 300  # sweep.DESCRIPTION_CHARS, as `_new_job` stores it
 EARLIEST = date(2000, 1, 1)
 # The day of the read in the time zone where it is latest, so a date of today anywhere is kept.
 LATEST_OFFSET = timedelta(hours=14)
-SWEEP_READS_AT_ONCE = 2
+# The sweeps' reading runs at once in the whole worker, whatever the number of sweeps, so its
+# Claude Code processes stay within SPEC-browser's memory line ("The fills", `_slots`).
+SWEEP_READS_AT_ONCE = 1
 SWEEP_READING_MAX_S = 600.0
 # The reading ends this long before the sweep's own bound, so the sweep ends by itself.
 SWEEP_MARGIN_S = 60.0
 BACKLOG_RUNS = 1
 BACKLOG_SECOND = 40
+# A person whose last reading run failed for the credential, the provider or the worker is left
+# alone this long by the backlog: one plain pause, the same after every such failure.
+BACKLOG_PAUSE = timedelta(minutes=30)
 PROMPT_PATH = Path(__file__).parent / "prompts" / "reader.md"
 FIRST_MESSAGE = (
     "Read the postings with read_postings, save the facts of each one with save_posting_facts, "
@@ -138,21 +154,31 @@ def _unread() -> sa.ColumnElement[bool]:
     return sa.and_(Job.read_at.is_(None), Job.read_attempts < ATTEMPTS_MAX, _readable())
 
 
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+
+
 def bind_postings(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
-    """What a run reads: `{"jobs": [id, ...]}`, the postings of its input that are still the
-    run's person's and hold a text, in the input's order. None when none is left: the run then
-    fails before any model call."""
+    """What a run reads: `{"jobs": [id, ...], "texts": [digest, ...]}`, the postings of its
+    input that are still the run's person's and hold a text, in the input's order, and the
+    digest of each one's text as the run starts (a cut needs the text the agent was shown).
+    None when none is left: the run then fails before any model call."""
     try:
         wanted = list(dict.fromkeys(ReaderInput.model_validate(run.input or {}).job_ids))
     except ValidationError:
         return None
-    held = set(
-        db.scalars(
-            sa.select(Job.id).where(Job.user_id == run.user_id, Job.id.in_(wanted), _readable())
+    held = {
+        row.id: _digest(row.posting_text or "")
+        for row in db.execute(
+            sa.select(Job.id, Job.posting_text).where(
+                Job.user_id == run.user_id, Job.id.in_(wanted), _readable()
+            )
         )
-    )
-    jobs = [str(job_id) for job_id in wanted if job_id in held]
-    return {"jobs": jobs} if jobs else None
+    }
+    jobs = [job_id for job_id in wanted if job_id in held]
+    if not jobs:
+        return None
+    return {"jobs": [str(job_id) for job_id in jobs], "texts": [held[job_id] for job_id in jobs]}
 
 
 POSTING_READER = definitions.register(
@@ -177,14 +203,6 @@ POSTING_READER = definitions.register(
 
 
 # --- words, quotes and the cut ---------------------------------------------------------------
-
-
-def _words(text: str) -> str:
-    # The finder's folding, imported here: at the top it would register the finder's agents in
-    # every worker at its start, and their day long wall time would become the agents queue's.
-    from app.browser.finder import _words as words
-
-    return words(text)
 
 
 def _plain(ch: str) -> str:
@@ -378,10 +396,11 @@ class Outcome:
     kept: list[str] = field(default_factory=list)  # a duplicate's identity, a website's contract
     not_in_text: list[str] = field(default_factory=list)
     invalid: list[str] = field(default_factory=list)
+    not_seen: list[str] = field(default_factory=list)  # a cut of a text not shown whole
 
     @property
     def refused(self) -> int:
-        return len(self.not_in_text) + len(self.invalid)
+        return len(self.not_in_text) + len(self.invalid) + len(self.not_seen)
 
     def answer(self, index: int) -> str:
         parts = [f"Posting {index} saved."]
@@ -392,6 +411,10 @@ class Outcome:
             ("Kept as they are", self.kept),
             ("Dropped, the quote is not in the posting text", self.not_in_text),
             ("Dropped, not a valid value", self.invalid),
+            (
+                "Not cut, you were not shown this posting's whole text, which stays whole",
+                self.not_seen,
+            ),
         ):
             if names:
                 parts.append(f"{label}: {', '.join(names)}.")
@@ -479,8 +502,6 @@ def hand_set(db: Session, job_id: uuid.UUID) -> set[str]:
 
 def _nature(job: Job) -> str | None:
     """The contract every posting of the job's website has by nature (B21), else None."""
-    from app.browser.sources.interactive import nature_contract
-
     return nature_contract(job.url or "") or nature_contract(f"https://{job.source or ''}/")
 
 
@@ -495,6 +516,27 @@ def _jsonable(value: Any) -> Any:
 
 def _ids(binding: Mapping[str, Any] | None) -> list[uuid.UUID]:
     return [uuid.UUID(str(one)) for one in (binding or {}).get("jobs", ())]
+
+
+def _as_is(value: Any) -> Any:
+    return value
+
+
+def shown(text: str, redact: Callable[[Any], Any]) -> tuple[str, bool]:
+    """What read_postings shows of a posting's text, and whether it was shortened to show it."""
+    seen = str(redact(text))
+    return seen[:TEXT_SHOWN_MAX], len(seen) > TEXT_SHOWN_MAX
+
+
+def _seen_whole(
+    binding: Mapping[str, Any] | None, index: int, text: str, redact: Callable[[Any], Any]
+) -> bool:
+    """Whether the agent could see all of `text`: it is the text the run was bound to, and
+    read_postings showed it unshortened. A cut of any other text could drop words it never saw."""
+    digests = (binding or {}).get("texts")
+    if not isinstance(digests, list | tuple) or index >= len(digests):
+        return False
+    return digests[index] == _digest(text) and not shown(text, redact)[1]
 
 
 def postings(
@@ -512,13 +554,13 @@ def postings(
                 service.jobs_of(user_id).where(Job.id.in_(ids)).options(undefer(Job.posting_text))
             )
         }
-        shown = []
+        listed = []
         for index, job_id in enumerate(ids):
             job = found.get(job_id)
             if job is None:
                 continue
-            text = redact(job.posting_text or "")
-            shown.append(
+            text, shortened = shown(job.posting_text or "", redact)
+            listed.append(
                 {
                     "index": index,
                     "title": job.title,
@@ -529,11 +571,11 @@ def postings(
                     "found_on": job.found_on.isoformat(),
                     "set_by_hand": sorted(hand_set(db, job_id) & set(READER_FIELDS)),
                     # Written by third parties: data for the model, never instructions.
-                    "untrusted_posting_text": text[:TEXT_SHOWN_MAX],
-                    "posting_text_truncated": len(text) > TEXT_SHOWN_MAX,
+                    "untrusted_posting_text": text,
+                    "posting_text_truncated": shortened,
                 }
             )
-    return json.dumps({"postings": shown}, ensure_ascii=False)
+    return json.dumps({"postings": listed}, ensure_ascii=False)
 
 
 @dataclass(frozen=True)
@@ -550,9 +592,11 @@ def save(
     binding: Mapping[str, Any] | None,
     raw: object,
     now: datetime,
+    redact: Callable[[Any], Any] = _as_is,
 ) -> Saved:
     """What save_posting_facts does with one posting (module docstring), in one transaction under
-    the posting's row lock. A malformed call stores nothing and says what to fix."""
+    the posting's row lock, `redact` being the run's, as read_postings applied it. A malformed
+    call stores nothing and says what to fix."""
     try:
         facts = Facts.model_validate(raw)
     except ValidationError as exc:
@@ -577,7 +621,10 @@ def save(
         _keep(db, job, values, hand, outcome)
         edits = _apply(job, values, outcome)
         if facts.description is not None:
-            _describe(db, job, facts.description, text, folded, origin, edits, outcome, now)
+            if _seen_whole(binding, facts.index, text, redact):
+                _describe(db, job, facts.description, text, folded, origin, edits, outcome, now)
+            else:
+                outcome.not_seen.append("description")
         if edits:
             service.add_event(db, job, JobEventKind.edit, {"changes": edits, "via": VIA}, now)
             service.touch(job, now)
@@ -711,9 +758,9 @@ def begin(
     db: Session, user_id: uuid.UUID, ids: list[uuid.UUID], now: datetime, script: str | None
 ) -> tuple[uuid.UUID, int] | str:
     """A queued run of the postings of `ids` another transaction does not hold, each counted as
-    an attempt: its id and how many postings it holds, or why none was made ("no_credential",
-    "busy": the person's runs are at runs.ACTIVE_PER_USER, "none": every posting is held or
-    read). The caller commits."""
+    an attempt held by the run (`read_run_id`) until its end is settled (`settle`): its id and
+    how many postings it holds, or why none was made ("no_credential", "busy": the person's runs
+    are at runs.ACTIVE_PER_USER, "none": every posting is held or read). The caller commits."""
     if credentials.get(db, user_id) is None:
         return "no_credential"
     held = list(
@@ -734,10 +781,75 @@ def begin(
     db.execute(
         sa.update(Job)
         .where(Job.id.in_(held))
-        .values(read_attempts=Job.read_attempts + 1, updated_at=Job.updated_at)
+        .values(read_attempts=Job.read_attempts + 1, read_run_id=run.id, updated_at=Job.updated_at)
         .execution_options(synchronize_session=False)
     )
     return run.id, len(held)
+
+
+def failed_for(error: str | None) -> str | None:
+    """What a failed run's `error` blames when the next run would fail the same way, whatever
+    its postings: "provider" (the credential or Anthropic: no credential, revoked, no credit,
+    a usage limit, the queue down) or "worker" (Claude Code missing or crashed, an internal
+    error); None for the run's own failure (failures.py)."""
+    if failures.is_provider_failure(error):
+        return "provider"
+    if failures.is_box_failure(error):
+        return "worker"
+    return None
+
+
+def gives_back(error: str | None) -> bool:
+    """Whether a failed run gives its attempts back: an attempt counts only for a run that
+    failed for its own content (its turns, its time, no result). A stopping worker's run
+    (runs.STOPPED) gives them back too; one the reaper ended (runs.INTERRUPTED at a worker's
+    start, STALE, LOST) keeps them, the bound against a posting that kills the worker."""
+    return failed_for(error) is not None or error == runs.STOPPED
+
+
+def settle(db: Session, run_id: uuid.UUID) -> str | None:
+    """Once a reading run ended, its postings let go of it, each still unread getting its
+    attempt back when `gives_back`; once only, as only the postings it holds are changed.
+    Returns `failed_for` of a failed run, else None (a run not ended yet changes nothing).
+    The caller commits."""
+    row = db.execute(
+        sa.select(AgentRun.status, AgentRun.error).where(AgentRun.id == run_id)
+    ).one_or_none()
+    if row is None or row.status in (RunStatus.queued, RunStatus.running):
+        return None
+    failed = row.status is RunStatus.failed
+    if failed and gives_back(row.error):
+        db.execute(
+            sa.update(Job)
+            .where(Job.read_run_id == run_id, Job.read_at.is_(None), Job.read_attempts > 0)
+            .values(read_attempts=Job.read_attempts - 1, updated_at=Job.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+    db.execute(
+        sa.update(Job)
+        .where(Job.read_run_id == run_id)
+        .values(read_run_id=None, updated_at=Job.updated_at)
+        .execution_options(synchronize_session=False)
+    )
+    return failed_for(row.error) if failed else None
+
+
+def settle_ended(db: Session) -> int:
+    """`settle` every reading run that ended and still holds a posting: the guarantee behind
+    the sweep's own settle, and the only one for a backlog run, whose end no hook sees when
+    the worker stops under it. The caller commits."""
+    holding = sa.select(Job.read_run_id).where(Job.read_run_id.is_not(None))
+    ended = list(
+        db.scalars(
+            sa.select(AgentRun.id).where(
+                AgentRun.id.in_(holding),
+                AgentRun.status.not_in((RunStatus.queued, RunStatus.running)),
+            )
+        )
+    )
+    for run_id in ended:
+        settle(db, run_id)
+    return len(ended)
 
 
 def swept(db: Session, user_id: uuid.UUID, sweep_id: uuid.UUID) -> list[uuid.UUID]:
@@ -756,17 +868,34 @@ def swept(db: Session, user_id: uuid.UUID, sweep_id: uuid.UUID) -> list[uuid.UUI
     )
 
 
+# The worker's one event loop runs every sweep: its reading runs share these slots.
+_SLOTS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _slots() -> asyncio.Semaphore:
+    """The SWEEP_READS_AT_ONCE slots of every sweep's reading runs in this worker."""
+    loop = asyncio.get_running_loop()
+    slots = _SLOTS.get(loop)
+    if slots is None:
+        slots = _SLOTS[loop] = asyncio.Semaphore(SWEEP_READS_AT_ONCE)
+    return slots
+
+
 @dataclass
 class SweepReader:
     """The sweep's reading of the postings it stored (sweep.py `run_sweep`, after every source
-    ended): batches of BATCH_MAX, `at_once` runs at a time in this job, until `reading_s` from
-    its start or SWEEP_MARGIN_S before the sweep's `deadline` (monotonic). Without a credential
-    it ends at once. Its counts go to `stats.reading`: read, refused (values dropped), failed
-    (postings of a run that ended without saving them) and left (for the backlog)."""
+    ended): batches of BATCH_MAX one after the other, each run in this job holding one of the
+    worker's SWEEP_READS_AT_ONCE slots (`_slots`, shared by every sweep; a batch waiting for one
+    counts no attempt), until `reading_s` from its start or SWEEP_MARGIN_S before the sweep's
+    `deadline` (monotonic). Without a credential it ends at once; after a run that failed for
+    the credential, the provider or the worker it starts no other (`skipped`). Its counts go to
+    `stats.reading`: read, refused (values dropped), failed (postings of a run that ended
+    without saving them) and left (for the backlog)."""
 
     context: Callable[[], RunContext]
     script: str | None = None
-    at_once: int = SWEEP_READS_AT_ONCE
     reading_s: float = SWEEP_READING_MAX_S
 
     async def __call__(self, plan: Plan, stats: Stats, deadline: float) -> None:
@@ -785,19 +914,15 @@ class SweepReader:
         if not has_key:
             reading["skipped"] = "no_credential"
             return
-        batches = deque(ids[at : at + BATCH_MAX] for at in range(0, len(ids), BATCH_MAX))
         stopped: list[str] = []
-
-        async def one() -> None:
-            while batches and not stopped:
-                why = await self._read(context, user_id, batches.popleft(), reading)
-                if why:
-                    stopped.append(why)
-
         left_s = min(self.reading_s, deadline - SWEEP_MARGIN_S - time.monotonic())
         with contextlib.suppress(TimeoutError):
             async with asyncio.timeout(max(0.0, left_s)):
-                await asyncio.gather(*(one() for _ in range(max(1, self.at_once))))
+                for at in range(0, len(ids), BATCH_MAX):
+                    why = await self._read(context, user_id, ids[at : at + BATCH_MAX], reading)
+                    if why:
+                        stopped.append(why)
+                        break
         reading["left"] = max(0, len(ids) - reading["read"] - reading["failed"])
         if stopped:
             reading["skipped"] = stopped[0]
@@ -813,50 +938,74 @@ class SweepReader:
         batch: list[uuid.UUID],
         reading: dict[str, Any],
     ) -> str | None:
-        """One run of one batch, to its end; why no further run should start, else None."""
+        """One run of one batch, to its end, in one of the worker's slots; why no further run
+        should start, else None."""
         from app.agents import runner  # the SDK: the worker's image only
-        from app.apply.agents import _release
 
         script = self.script
-        creating = asyncio.ensure_future(
-            asyncio.to_thread(
-                _in_db,
-                context.sessions,
-                lambda db: begin(db, user_id, batch, context.clock(), script),
+        async with _slots():
+            creating = asyncio.ensure_future(
+                asyncio.to_thread(
+                    _in_db,
+                    context.sessions,
+                    lambda db: begin(db, user_id, batch, context.clock(), script),
+                )
             )
-        )
+            try:
+                made = await asyncio.shield(creating)
+            except asyncio.CancelledError:
+                with contextlib.suppress(Exception):
+                    late = await asyncio.shield(creating)
+                    if not isinstance(late, str):
+                        await _let_go(context, late[0])
+                raise
+            if isinstance(made, str):
+                return None if made == "none" else made
+            run_id, size = made
+            tally = _TALLIES[run_id] = Tally()
+            ended = False
+            try:
+                await runner.execute(context, run_id)
+                ended = True
+            except asyncio.CancelledError:
+                await _let_go(context, run_id)
+                raise
+            except Exception as error:
+                logger.warning(
+                    "a sweep reading run failed",
+                    extra={"run_id": str(run_id), "error_type": type(error).__name__},
+                )
+                ended = True
+            finally:
+                _TALLIES.pop(run_id, None)
+                reading["read"] += tally.read
+                reading["refused"] += tally.refused
+                if ended:
+                    reading["failed"] += max(0, size - tally.read)
         try:
-            made = await asyncio.shield(creating)
-        except asyncio.CancelledError:
-            with contextlib.suppress(Exception):
-                late = await asyncio.shield(creating)
-                if not isinstance(late, str):
-                    await _release(context, late[0])
-            raise
-        if isinstance(made, str):
-            return None if made == "none" else made
-        run_id, size = made
-        tally = _TALLIES[run_id] = Tally()
-        ended = False
-        try:
-            await runner.execute(context, run_id)
-            ended = True
-        except asyncio.CancelledError:
-            await _release(context, run_id)
-            raise
-        except Exception as error:
+            blamed = await asyncio.to_thread(
+                _in_db, context.sessions, lambda db: settle(db, run_id)
+            )
+        except Exception as error:  # left to the backlog's settle_ended
             logger.warning(
-                "a sweep reading run failed",
+                "a sweep reading run was not settled",
                 extra={"run_id": str(run_id), "error_type": type(error).__name__},
             )
-            ended = True
-        finally:
-            _TALLIES.pop(run_id, None)
-            reading["read"] += tally.read
-            reading["refused"] += tally.refused
-            if ended:
-                reading["failed"] += max(0, size - tally.read)
-        return None
+            return None
+        return f"{blamed}_failure" if blamed else None
+
+
+async def _let_go(context: RunContext, run_id: uuid.UUID) -> None:
+    """A run cut by the sweep's stop or its reading's bound: failed when still queued, then
+    settled. Shielded from the cancellation that unwinds, an error swallowed (the backlog's
+    settle_ended settles it later)."""
+    from app.apply.agents import _release
+
+    await _release(context, run_id)
+    with contextlib.suppress(Exception):
+        await asyncio.shield(
+            asyncio.to_thread(_in_db, context.sessions, lambda db: settle(db, run_id))
+        )
 
 
 # --- the backlog -----------------------------------------------------------------------------
@@ -871,13 +1020,30 @@ def _active(user_id: uuid.UUID | None = None) -> sa.Select[tuple[int]]:
     return query if user_id is None else query.where(AgentRun.user_id == user_id)
 
 
+def paused(db: Session, user_id: uuid.UUID, now: datetime) -> bool:
+    """Whether the person's last reading run failed for the credential, the provider or the
+    worker (`failed_for`) less than BACKLOG_PAUSE before `now`: the next would fail the same
+    way, so a revoked key or a usage limit is not tried again each minute."""
+    last = db.execute(
+        sa.select(AgentRun.status, AgentRun.error, AgentRun.finished_at, AgentRun.created_at)
+        .where(AgentRun.agent == NAME, AgentRun.user_id == user_id)
+        .order_by(AgentRun.created_at.desc(), AgentRun.id.desc())
+        .limit(1)
+    ).one_or_none()
+    if last is None or last.status is not RunStatus.failed or failed_for(last.error) is None:
+        return False
+    return now - (last.finished_at or last.created_at) < BACKLOG_PAUSE
+
+
 def start_backlog(db: Session, now: datetime) -> list[uuid.UUID]:
-    """The runs of the backlog to queue now (module docstring): none while BACKLOG_RUNS of the
-    reader are queued or running; else one batch of the person whose last reading run is the
-    oldest, among those with a posting to read, a credential, no reading run and no sweep
-    running. The caller commits, then queues them."""
+    """The runs of the backlog to queue now (module docstring), once every ended run is
+    settled (`settle_ended`): none while BACKLOG_RUNS of the reader are queued or running; else
+    one batch of the person whose last reading run is the oldest, among those with a posting to
+    read, a credential, no reading run, no sweep running and no pause (`paused`). The caller
+    commits, then queues them."""
     # One tick at a time decides, whatever the number of workers.
     db.execute(sa.select(sa.func.pg_advisory_xact_lock(0x6A6F_6252_6561_64)))
+    settle_ended(db)
     if (db.scalar(_active()) or 0) >= BACKLOG_RUNS:
         return []
     last = (
@@ -893,7 +1059,7 @@ def start_backlog(db: Session, now: datetime) -> list[uuid.UUID]:
         .order_by(sa.nulls_first(last.asc()), Job.user_id)
     ).all()
     for person, _ in people:
-        if (db.scalar(_active(person)) or 0) > 0:
+        if (db.scalar(_active(person)) or 0) > 0 or paused(db, person, now):
             continue
         ids = list(
             db.scalars(
@@ -907,6 +1073,11 @@ def start_backlog(db: Session, now: datetime) -> list[uuid.UUID]:
         if not isinstance(made, str):
             return [made[0]]
     return []
+
+
+def _queue_down(db: Session, run_id: uuid.UUID, now: datetime) -> None:
+    if runs.fail_queued(db, run_id, runs.QUEUE_DOWN, now):
+        settle(db, run_id)
 
 
 async def tick(ctx: dict[str, Any]) -> int:
@@ -931,9 +1102,7 @@ async def tick(ctx: dict[str, Any]) -> int:
                 extra={"run_id": str(run_id), "error_type": type(error).__name__},
             )
             await asyncio.to_thread(
-                _in_db,
-                sessions,
-                lambda db, r=run_id: runs.fail_queued(db, r, runs.QUEUE_DOWN, clock()),
+                _in_db, sessions, lambda db, r=run_id: _queue_down(db, r, clock())
             )
     return len(started)
 

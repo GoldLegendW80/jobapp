@@ -74,6 +74,7 @@ from app.agents import credentials, definitions, runs
 from app.agents.failures import TOKEN_LIMIT, TURN_LIMIT
 from app.agents.models import CredentialKind, RunStatus
 from app.browser.client import BrowserError
+from app.browser.words import words as _words
 
 if TYPE_CHECKING:
     from app.agents.runner import RunContext
@@ -436,15 +437,6 @@ class FinderInput(BaseModel):
 
 def _norm(text: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
-
-
-def _words(text: str) -> str:
-    """A text as its words, case and accents aside, any other character a space: how a saved
-    title is looked for in an address's query (`FinderSession._note_address`)."""
-    plain = "".join(
-        c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c)
-    ).casefold()
-    return " ".join("".join(c if c.isalnum() else " " for c in plain).split())
 
 
 def _utcnow() -> datetime:
