@@ -62,8 +62,8 @@ export const agentCategorySchema = z.object({
   key: z.string().min(1),
   title: z.string().min(1),
   sentence: z.string(),
-  /** None for the test agents, and from an api older than the diagrams. */
-  flow: agentFlowSchema.nullable().default(null),
+  /** None for the test agents, from an api older than the diagrams, and for a malformed one. */
+  flow: agentFlowSchema.nullable().catch(null),
 });
 export type AgentCategory = z.infer<typeof agentCategorySchema>;
 

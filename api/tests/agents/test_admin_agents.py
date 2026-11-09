@@ -30,6 +30,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentEvent, AgentOverride, AgentRun, CredentialKind, RunStatus
 from app.config import Settings
 from app.identity.models import Role, User
+from tests.agents import regen_agent_flows
 from tests.agents.conftest import OAUTH
 from tests.agents.run_helpers import (
     Backends,
@@ -327,6 +328,28 @@ def test_the_list_serves_each_categorys_workflow(api: Api, admin: str) -> None:
         assert [(e["from"], e["to"]) for e in flows[key]["edges"]] == [
             (edge.source, edge.target) for edge in flow.edges
         ]
+
+
+def test_the_web_fixture_of_the_workflows_is_what_the_list_serves(api: Api, admin: str) -> None:
+    fixture = json.loads(regen_agent_flows.FIXTURE.read_text(encoding="utf-8"))
+    stale = f"{regen_agent_flows.FIXTURE.name} is stale: run `{regen_agent_flows.COMMAND}`"
+    body = api.get(AGENTS, token=admin).json()
+    served = {
+        category["key"]: category["flow"]
+        for category in body["categories"]
+        if category["flow"] is not None
+    }
+    assert fixture["flows"] == served, stale
+    # The app's own agents: a test may register others from its own module.
+    items = [
+        {field: item[field] for field in regen_agent_flows.FIELDS}
+        for item in body["items"]
+        if item["module"].startswith("app.")
+    ]
+    assert fixture["agents"] == items, stale
+    registered = {name for name in catalog.load() if definitions.module_of(name).startswith("app.")}
+    assert [agent["name"] for agent in fixture["agents"]] == sorted(registered), stale
+    assert fixture == regen_agent_flows.document(), stale
 
 
 def test_the_starter_of_an_agent_its_package_misdescribes_is_its_own() -> None:

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { describe, expect, it } from "vitest";
@@ -165,6 +165,17 @@ describe("the workflow diagram", () => {
     expect(tip).toHaveTextContent("From Sweep: one run per website");
   });
 
+  it("gives a step nothing feeds its whole label in its tooltip, for a label its card cuts", async () => {
+    const user = userEvent.setup();
+    const { container } = draw();
+    const card = container.querySelector('[data-card="click"] div');
+    if (!card) throw new Error("no Save and start search card");
+    await user.hover(card);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Save and start search",
+    );
+  });
+
   it("draws agents that run side by side as one card that opens on its list", async () => {
     const user = userEvent.setup();
     const { container } = draw(AGENT_FLOWS.documents);
@@ -224,6 +235,10 @@ describe("the workflow diagram", () => {
     });
     expect(frame).toHaveClass("overflow-hidden");
     expect(frame).toHaveAttribute("tabindex", "0");
+    // The controls have their own place: none covers a card of the drawing.
+    expect(frame).not.toContainElement(
+      screen.getByRole("button", { name: "Zoom in" }),
+    );
     const drawing = container.querySelector<HTMLElement>("[data-drawing]");
     // Three columns of 260 pixels, 332 apart, inside 24 on each side.
     expect(drawing).toHaveStyle({ width: "972px" });
@@ -240,6 +255,96 @@ describe("the workflow diagram", () => {
     frame.focus();
     await user.keyboard("{ArrowLeft}");
     expect(drawing?.style.transform).toContain("translate(48px, 0px)");
+  });
+
+  it("moves the drawing both ways under one finger once zoomed, zooms under two, and gives the page its scroll back at Fit", async () => {
+    const user = userEvent.setup();
+    const { container } = draw(AGENT_FLOWS.documents);
+    const frame = screen.getByRole("group", {
+      name: "Finding jobs, workflow drawing",
+    });
+    const drawing = container.querySelector<HTMLElement>("[data-drawing]");
+    const view = () =>
+      /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/
+        .exec(drawing?.style.transform ?? "")
+        ?.slice(1)
+        .map(Number) ?? [];
+    const touch = (pointerId: number, isPrimary: boolean) => ({
+      pointerId,
+      isPrimary,
+      pointerType: "touch",
+      button: 0,
+    });
+    const finger = (pointerId: number, isPrimary = pointerId === 1) => ({
+      down: (clientX: number, clientY: number) => {
+        fireEvent.pointerDown(frame, {
+          ...touch(pointerId, isPrimary),
+          clientX,
+          clientY,
+        });
+      },
+      to: (clientX: number, clientY: number) => {
+        fireEvent.pointerMove(frame, {
+          ...touch(pointerId, isPrimary),
+          clientX,
+          clientY,
+        });
+      },
+      up: () => {
+        fireEvent.pointerUp(frame, touch(pointerId, isPrimary));
+      },
+    });
+    // Fitted, a vertical swipe over the drawing scrolls the page.
+    expect(frame.style.touchAction).toBe("pan-y");
+    await user.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(frame.style.touchAction).toBe("none");
+    const [x, y, scale] = view();
+    // One finger up the frame: the drawing follows it, the lower rows come into view.
+    const one = finger(1);
+    one.down(200, 200);
+    one.to(200, 140);
+    one.to(170, 80);
+    one.up();
+    expect(view()).toEqual([(x ?? 0) - 30, (y ?? 0) - 120, scale]);
+    // Two fingers apart: twice the size, the point between them stays under them.
+    const [x1 = 0, y1 = 0, s1 = 1] = view();
+    const [a, b] = [finger(1), finger(2)];
+    a.down(100, 100);
+    b.down(150, 100);
+    b.to(200, 100);
+    a.up();
+    b.up();
+    const [x2 = 0, y2 = 0, s2 = 1] = view();
+    expect(s2).toBeCloseTo(Math.min(2, s1 * 2));
+    expect(x2 + ((125 - x1) * s2) / s1).toBeCloseTo(150);
+    expect(y2 + ((100 - y1) * s2) / s1).toBeCloseTo(100);
+    // A gesture the browser took ends there: the next finger drags, it pinches nothing.
+    const taken = finger(1);
+    taken.down(50, 50);
+    fireEvent.pointerCancel(frame, touch(1, true));
+    const next = finger(3, false);
+    next.down(50, 50);
+    next.to(50, 10);
+    next.up();
+    expect(view()).toEqual([x2, y2 - 40, s2]);
+    // However far a finger goes, a corner of the drawing stays in the frame.
+    const far = finger(1);
+    far.down(200, 200);
+    far.to(-9000, -9000);
+    far.up();
+    const [xFar = 0, yFar = 0, sFar = 1] = view();
+    expect(xFar + parseFloat(drawing?.style.width ?? "") * sFar).toBe(48);
+    expect(yFar + parseFloat(drawing?.style.height ?? "") * sFar).toBe(48);
+    await user.click(screen.getByRole("button", { name: "Fit the drawing" }));
+    expect(frame.style.touchAction).toBe("pan-y");
+    // A finger on a fitted drawing is the page's: the drawing stays as it is.
+    const fit = view();
+    const swipe = finger(1);
+    swipe.down(100, 100);
+    swipe.to(40, 60);
+    swipe.up();
+    expect(view()).toEqual(fit);
+    expect(frame.style.touchAction).toBe("pan-y");
   });
 
   it("says nothing with a dash as a separator, in every workflow the api serves", () => {

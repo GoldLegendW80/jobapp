@@ -18,7 +18,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Above each category's table on Admin, Agents, drawn as a run graph: the workflow's triggers on its \"on:\" line, then its steps as cards in columns in the order things happen, joined by connectors. An agent's card opens its page and its tooltip names the agent and what starts it; agents that run side by side are one card that lists them; a dashed connector goes back to an earlier step. Fit, minus and plus in the corner; drag or the arrow keys to move. A run can give each step a status, a duration and a link.",
+          "Above each category's table on Admin, Agents, drawn as a run graph: the workflow's triggers on its \"on:\" line, then its steps as cards in columns in the order things happen, joined by connectors. An agent's card opens its page and its tooltip names the agent and what starts it; agents that run side by side are one card that lists them; a dashed connector goes back to an earlier step. Fit, minus and plus beside its name; drag or the arrow keys to move, two fingers to zoom on a touch screen. A run can give each step a status, a duration and a link.",
       },
     },
   },
@@ -110,7 +110,7 @@ export const InTheDark: Story = {
   globals: { theme: "Dark" },
 };
 
-/** As an administrator on my phone, I want the whole drawing fitted inside its frame, to zoom and drag it there, so that the page itself never scrolls sideways. */
+/** As an administrator on my phone, I want the whole drawing fitted inside its frame, then to zoom and move it with my finger to every row, so that I read each card and the page itself never scrolls sideways. */
 export const OnAPhone: Story = {
   args: { title: "Documents", flow: AGENT_FLOWS.documents },
   globals: { viewport: { value: "mobile2", isRotated: false } },
