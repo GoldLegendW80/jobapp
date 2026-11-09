@@ -324,13 +324,13 @@ describe("the Documents section of a posting", () => {
     expect(api.posted[0]?.body).toEqual({ kinds: ["letter"] });
   });
 
-  it("offers no click while a written click waits for the consent, only the way to give it", async () => {
+  it("offers no click while a written click waits for a credential, only the way to add it", async () => {
     const api = fakePosting([
       ready("cv", {
-        generation: { status: "waiting", wait_reason: "consent" },
+        generation: { status: "waiting", wait_reason: "credential" },
       }),
       ready("letter", {
-        generation: { status: "waiting", wait_reason: "consent" },
+        generation: { status: "waiting", wait_reason: "credential" },
       }),
     ]);
     api.api.cvs.push(
@@ -340,11 +340,11 @@ describe("the Documents section of a posting", () => {
     for (const testId of ["posting-cv", "posting-letter"]) {
       const card = within(section).getByTestId(testId);
       expect(card).toHaveTextContent(
-        "Waiting for you to confirm what is sent.",
+        "Waiting for a model credential. Add one in your account.",
       );
       expect(
-        within(card).getByRole("link", { name: "Open your CVs" }),
-      ).toHaveAttribute("href", "/profile#your-cv");
+        within(card).getByRole("link", { name: "Open your account" }),
+      ).toHaveAttribute("href", "/account");
       expect(
         within(card).queryByRole("button", { name: "Write now" }),
       ).toBeNull();
@@ -757,10 +757,10 @@ describe("the state of a card", () => {
     ["threshold not known yet", undefined, 10, undefined, { tag: "empty" }],
     [
       "waiting with a reason",
-      doc({ generation: { status: "waiting", wait_reason: "consent" } }),
+      doc({ generation: { status: "waiting", wait_reason: "credential" } }),
       80,
       on,
-      { tag: "waiting", reason: "consent" },
+      { tag: "waiting", reason: "credential" },
     ],
     [
       "queued",
