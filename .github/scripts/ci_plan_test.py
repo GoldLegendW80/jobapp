@@ -721,7 +721,8 @@ class ReasonsTest(unittest.TestCase):
                 continue
             for text in self.strings(path):
                 if text == "web" or re.search(r"(^|[\"'/ ])web/", text):
-                    if "api" in ci_plan.units_for(text)[0]:
+                    units, why = ci_plan.units_for(text)
+                    if why != "no rule names this path" and "api" in units:
                         continue  # a file with a rule of its own that runs the api unit
                     offending.append(f"{path.relative_to(ROOT)}: {text[:60]!r}")
         self.assertEqual(offending, [])
