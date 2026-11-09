@@ -277,15 +277,6 @@ test("a new member lands on the wizard and imports an invented CV in step 2", as
     buffer: makePdf([{ lines: LINES }]),
   });
   await expect(pageN.getByText("Your CV", { exact: true })).toBeVisible();
-  const consent = pageN.getByRole("dialog", {
-    name: "What is sent to build your CV",
-  });
-  await expect(consent).toBeVisible({ timeout: 60_000 });
-  await press(consent.getByRole("checkbox"), "Space");
-  await press(
-    consent.getByRole("button", { name: "Agree and build my CV" }),
-    "Enter",
-  );
   await expect(pageN.getByTestId("upload-result")).toContainText(
     "is ready to edit",
     {

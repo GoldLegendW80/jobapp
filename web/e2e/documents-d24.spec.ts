@@ -23,7 +23,7 @@ import { clearAttempts, newContext, root, watchErrors } from "./stack";
  * the worker on the fake model backend and the real parser and renderer. An invented CV, a PDF
  * written by ./ingestion-pdf.ts from api/tests/documents/fixtures/upload_morgan.txt, is dropped
  * on Upload your CV of the profile page and goes through ingestion's upload; once its text is read
- * the consent is asked, then the conversion runs on the default recorded stream
+ * the conversion runs, with no consent asked, on the default recorded stream
  * `documents_base_upload_valid` (the page names no script; the api test
  * test_the_journeys_person_converts_the_journeys_cv_on_the_default_stream plays the same stream
  * for the same person). The new base CV holds the invented employers in its fields (read
@@ -94,7 +94,7 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("an invented CV dropped on the profile page is read, then the consent is asked", async () => {
+test("an invented CV dropped on the profile page is read, then converted with no consent asked", async () => {
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
@@ -129,15 +129,10 @@ test("an invented CV dropped on the profile page is read, then the consent is as
   );
   await expect(panel.getByText("Reading your CV")).toBeVisible();
 
-  const dialog = page.getByRole("dialog", {
-    name: "What is sent to build your CV",
-  });
-  await expect(dialog).toBeVisible({ timeout: 60_000 });
-  expect(await uploaded()).toBeUndefined(); // nothing is converted before the agreement
-  keep(EVIDENCE, "consent.png", await page.screenshot());
-  await dialog.getByRole("checkbox").check();
-  await dialog.getByRole("button", { name: "Agree and build my CV" }).click();
-  await expect(dialog).toBeHidden();
+  await expect
+    .poll(async () => (await uploaded())?.source, { timeout: 60_000 })
+    .toBe("uploaded");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });
 
 test("the converted CV is the default, with the invented employers in its fields", async () => {
