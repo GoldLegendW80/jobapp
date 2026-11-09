@@ -89,6 +89,7 @@ from app.agents.models import AgentRun, RunStatus
 from app.config import Settings, get_settings
 from app.documents import content as c
 from app.documents import (
+    flows,
     render_job,
     rules,
     store,
@@ -440,6 +441,7 @@ def start(
         definition.validate_input(data),
         definition.model,
         at,
+        flow=flows.posting_flow(db, generation),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

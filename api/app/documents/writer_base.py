@@ -681,7 +681,14 @@ def start(
     if chosen is not None:
         data["script"] = chosen
     run = agent_runs.create_run(
-        db, generation.user_id, NAME, None, BASE_WRITER.validate_input(data), BASE_WRITER.model, at
+        db,
+        generation.user_id,
+        NAME,
+        None,
+        BASE_WRITER.validate_input(data),
+        BASE_WRITER.model,
+        at,
+        flow=agent_runs.WorkflowRef("base_cv", generation.document_id, "new_base"),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

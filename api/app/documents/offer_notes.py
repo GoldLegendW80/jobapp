@@ -466,6 +466,9 @@ def _start(
         definition.validate_input(data),
         definition.model,
         at,
+        flow=agent_runs.WorkflowRef(
+            "offer_letter", trigger="notes_chat" if definition is CHAT_WRITER else "offer"
+        ),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

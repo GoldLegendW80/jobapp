@@ -524,7 +524,16 @@ def start(
     budget = estimate(len(prompt_for(request))).ceiling
     data = {"request": uuid.uuid4().hex, "token_budget": budget}
     try:
-        made = runs.create_run(db, user_id, NAME, None, data, MODEL, now)
+        made = runs.create_run(
+            db,
+            user_id,
+            NAME,
+            None,
+            data,
+            MODEL,
+            now,
+            flow=runs.WorkflowRef("job_titles", trigger="titles_tick" if auto else "ideas"),
+        )
     except runs.ActiveRunsError:
         raise RefusedError("busy") from None
     row.run_id, row.asked_at, row.error = made.id, now, None

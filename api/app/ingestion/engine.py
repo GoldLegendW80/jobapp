@@ -625,7 +625,14 @@ def _next(
     )
     try:
         created = agent_runs.create_run(
-            db, run.user_id, agent.name, None, agent.validate_input(data), model, now
+            db,
+            run.user_id,
+            agent.name,
+            None,
+            agent.validate_input(data),
+            model,
+            now,
+            flow=agent_runs.WorkflowRef("fill_profile", run.id, "read"),
         )
     except agent_runs.ActiveRunsError:  # counted again under the user's advisory lock
         run.waiting = WAITING_SLOTS

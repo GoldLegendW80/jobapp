@@ -1,8 +1,10 @@
 """Activity as workflow runs (agents A10): the workflows and their graphs, the grouping of a
 person's agent runs into workflow runs, and that each person reads only their own."""
 
+import ast
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
@@ -168,3 +170,80 @@ def test_each_person_reads_only_their_own_runs(
     assert seen["agent_runs"] == 1
     assert api.get("/api/activity/runs/not-an-id", token=alice).status_code == 404
     assert api.get("/api/activity/runs").status_code == 401
+
+
+# The starters that record their workflow run today, by file; the rest are grouped from their
+# input or shown alone until they pass one (tasks/agents/todo.md, A10).
+RECORDING = {
+    "app/agents/chat.py": {("job_chat", "message")},
+    "app/agents/operator.py": {("assess", "with_agent")},
+    "app/apply/followup_service.py": {("follow_up", "draft")},
+    "app/documents/chat.py": {("document_chat", "chat")},
+    "app/documents/flows.py": {("posting_documents", "write")},
+    "app/documents/interview_prep.py": {
+        ("interview_prep", "prepare"),
+        ("interview_prep", "practice"),
+    },
+    "app/documents/offer_notes.py": {("offer_letter", "notes_chat"), ("offer_letter", "offer")},
+    "app/documents/writer_base.py": {("base_cv", "new_base")},
+    "app/ingestion/engine.py": {("fill_profile", "read")},
+    "app/jobs/assess_router.py": {("assess", "assess")},
+    "app/profile/about.py": {("about_you", "about")},
+    "app/profile/titles.py": {("job_titles", "titles_tick"), ("job_titles", "ideas")},
+}
+
+
+def _recorded(path: Path) -> set[tuple[str, str]]:
+    """The (workflow, trigger) pairs the WorkflowRef calls of one file can record."""
+    found: set[tuple[str, str]] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if not (isinstance(node, ast.Call) and ast.unparse(node.func).endswith("WorkflowRef")):
+            continue
+        if not node.args or not isinstance(node.args[0], ast.Constant):
+            found.add(("", ""))
+            continue
+        said = node.args[2] if len(node.args) > 2 else None
+        said = next((k.value for k in node.keywords if k.arg == "trigger"), said)
+        words = (
+            [
+                n.value
+                for n in ast.walk(said)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            ]
+            if said is not None
+            else [""]
+        )
+        found |= {(node.args[0].value, word) for word in words}
+    return found
+
+
+def test_every_starter_records_a_workflow_and_a_trigger_activity_draws() -> None:
+    app = Path(__file__).resolve().parents[2]
+    seen: dict[str, set[tuple[str, str]]] = {}
+    for path in sorted((app / "app").rglob("*.py")):
+        pairs = _recorded(path)
+        if pairs and path.name != "runs.py":
+            seen[str(path.relative_to(app))] = pairs
+    assert seen == RECORDING
+    for pairs in seen.values():
+        for workflow, trigger in pairs:
+            assert workflow in workflows.BY_KEY, workflow
+            # Each trigger has its box in the workflow's graph, where the run page marks it.
+            assert workflows.TRIGGERS[trigger].node in workflows.BY_KEY[workflow].nodes, trigger
+
+
+def test_a_runs_trigger_is_its_first_steps_when_a_later_step_records_none(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    click = uuid.uuid4()
+    _run(factory, me, "documents_cv", 0, flow=runs.WorkflowRef("posting_documents", click, "write"))
+    _run(factory, me, "documents_cv", 4, flow=runs.WorkflowRef("posting_documents", click))
+
+    items = api.get("/api/activity/runs", token=alice).json()["items"]
+    assert [(i["id"], i["agent_runs"]) for i in items] == [(str(click), 2)]
+    assert items[0]["trigger"] == {
+        "kind": "recorded",
+        "words": "Your click on Write",
+        "node": "click",
+    }

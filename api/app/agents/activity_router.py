@@ -168,6 +168,7 @@ class _Group:
 
 def _group(rows: Sequence[sa.Row[Any]]) -> list[_Group]:
     groups: dict[str, _Group] = {}
+    triggers: dict[uuid.UUID, workflows.Trigger] = {}
     for row in rows:
         held = {
             name: getattr(row, name)
@@ -184,8 +185,12 @@ def _group(rows: Sequence[sa.Row[Any]]) -> list[_Group]:
         )
         group = groups.setdefault(key, _Group(key, workflow, trigger))
         group.rows.append(row)
+        triggers[row.id] = trigger
     for group in groups.values():
         group.rows.sort(key=lambda row: (row.created_at, str(row.id)))
+        # The run's trigger is its first step's: a later step (a rebuild) records none.
+        said = [triggers[row.id] for row in group.rows]
+        group.trigger = next((t for t in said if t is not workflows.NOT_RECORDED), said[0])
     return sorted(groups.values(), key=lambda g: g.rows[0].created_at, reverse=True)
 
 

@@ -567,6 +567,7 @@ def start(
         definition.validate_input(data),
         definition.model,
         at,
+        flow=agent_runs.WorkflowRef("document_chat", trigger="chat"),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running

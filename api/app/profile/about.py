@@ -321,7 +321,16 @@ def start(
     request = _request(part, _sections(db, user_id, now), _owned(row, part))
     data = {"request": uuid.uuid4().hex, "token_budget": _estimate_of(request).ceiling}
     try:
-        made = runs.create_run(db, user_id, NAME, None, data, MODEL, now)
+        made = runs.create_run(
+            db,
+            user_id,
+            NAME,
+            None,
+            data,
+            MODEL,
+            now,
+            flow=runs.WorkflowRef("about_you", trigger="about"),
+        )
     except runs.ActiveRunsError:
         raise RefusedError("busy") from None
     row.interpretation = {**asked, "status": "running", "run_id": str(made.id)}
