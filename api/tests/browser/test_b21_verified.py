@@ -590,29 +590,17 @@ ADVICE = finder.REPORT_ADVICE["missing_field"]
         {"url": JOB + "\x00"},
     ],
 )
-@pytest.mark.parametrize("careers", [False, True])
-def test_the_path_without_commits_refuses_controls_too(item, careers):
-    """`report` (`_keep`): on a job website, and on a careers page, where the agent's own
-    text and location are kept when its posting's page was not opened."""
-    if careers:
-        from tests.browser.test_finder_session import posting_of, session_on, site_pages
-
-        one, _ = session_on(site_pages("AI Engineer Consultant"))
-        posting = posting_of("AI Engineer Consultant") | item
-        if "url" in item:
-            posting["url"] = posting_of("AI Engineer Consultant")["url"] + "\x00"
-    else:
-        one, _ = opened((JOB, OFFER))
-        one.on_verified = None
-        posting = {"title": "AI Engineer Consultant", "url": JOB, "text": "x", **item}
+def test_the_path_without_commits_refuses_controls_too(item):
+    """`report` (`_keep`), the path of a website's search without the sweep's commits."""
+    one, _ = opened((JOB, OFFER))
+    one.on_verified = None
+    posting = {"title": "AI Engineer Consultant", "url": JOB, "text": "x", **item}
     clean = {
         k: v.replace("\x00", "").replace("\ud800", "").replace("\x1b", "")
         for k, v in posting.items()
     }
     answer, _ = asyncio.run(one.report_verified([posting, clean]))
-    assert json.loads(answer)["refused"] == [
-        {"index": 0, "reason": "missing_field", **({} if careers else {"do": ADVICE})}
-    ]
+    assert json.loads(answer)["refused"] == [{"index": 0, "reason": "missing_field", "do": ADVICE}]
     assert json.loads(answer)["kept"] == 1  # the clean one: one bad item fails alone
 
 

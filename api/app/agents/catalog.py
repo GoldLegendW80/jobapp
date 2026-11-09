@@ -33,7 +33,7 @@ logger = logging.getLogger("app.agents.catalog")
 # by its module only).
 STARTERS = {
     "agents": "A button of the app (POST /api/agents/runs)",
-    "browser": "A job search sweep, one website or careers page at a time",
+    "browser": "A job search sweep, one run per website",
     "apply": "A step of an application being filled in",
     "ingestion": "The reading of a document the person uploaded",
     "documents": "A document generation, or a message in a document's chat",
@@ -56,7 +56,7 @@ CATEGORIES: tuple[Category, ...] = (
     Category(
         "finding",
         "Finding jobs",
-        "These agents search job websites and company careers pages for postings, and read "
+        "These agents search job websites for postings, and read "
         "each posting found to fill its details.",
     ),
     Category(
@@ -99,7 +99,6 @@ CATEGORY_OF: dict[str, str] = {
     "apply_form": "applying",
     "apply_followup": "applying",
     "browser_discovery": "finding",
-    "browser_finder": "finding",
     "document_transcribe": "profile",
     "documents_base": "documents",
     "documents_chat_base": "documents",
@@ -150,10 +149,10 @@ FIRST_MESSAGES: dict[str, str] = {
         f"The input's message, else the default message below; {_JOB_LINE}."
     ),
     "app.browser.finder.FinderDefinition": (
-        "For a website search, a JSON object search_scope: <the website's start address>, "
-        "<the titles sought>, <the places sought>, <the site's filters>, <the person's search "
-        "criteria>, <the person's own instructions, marked untrusted>, <whether the person is "
-        'signed in there>. For a careers page, the fixed message: "{FIRST_MESSAGE}"'
+        "A JSON object search_scope: <the website's start address>, <the titles sought>, <the "
+        "places sought>, <the site's filters>, <the person's search criteria>, <the person's own "
+        "instructions, marked untrusted>, <a summary of the person's profile>, <whether the "
+        "person is signed in there>."
     ),
     "app.apply.form_agent.FormDefinition": 'The fixed message: "{FIRST_MESSAGE}"',
     "app.apply.applier.ApplierDefinition": (
@@ -239,7 +238,7 @@ def load() -> dict[str, definitions.AgentDefinition]:
     Claude Agent SDK. tests/agents/test_admin_agents.py fails when a module of app/ registers an
     agent and is not reached from here."""
     from app.apply import agents as _apply  # noqa: F401  (apply_answer, apply_form, apply_check)
-    from app.browser import finder as _finder  # noqa: F401  (browser_finder, browser_discovery)
+    from app.browser import finder as _finder  # noqa: F401  (browser_discovery)
     from app.documents import chat as _chat  # noqa: F401  (documents_chat_<kind>)
     from app.documents import offer_notes as _offer  # noqa: F401  (documents_offer_read, chat)
     from app.documents import panel as _panel  # noqa: F401  (documents_panel_<role>, merge)
@@ -274,9 +273,9 @@ class Ceiling:
 
 
 ON_THE_QUEUE = "It runs as its own job on the agents queue, which lets a run take this long."
-# The agents of a sweep (app/browser/finder.py): a worker meets them only once a sweep imports
-# the finder, so the agents queue's job timeout, built at the worker's start, never counts them.
-SWEEP_AGENTS = ("browser_finder", "browser_discovery")
+# The agent of a sweep (app/browser/finder.py): a worker meets it only once a sweep imports the
+# finder, so the agents queue's job timeout, built at the worker's start, never counts it.
+SWEEP_AGENTS = ("browser_discovery",)
 
 
 def _in_a_sweep() -> Ceiling:
@@ -350,7 +349,6 @@ _INSIDE: dict[str, Callable[[], Ceiling]] = {
     "apply_check": _in_a_decision,
     "apply_form": _in_a_fill_form,
     "browser_discovery": _in_a_sweep,
-    "browser_finder": _in_a_sweep,
     "document_transcribe": _in_an_import,
     "profile_extract": _in_an_import,
 }

@@ -582,7 +582,7 @@ def test_a_save_in_a_fresh_worker_leaves_its_agents_and_their_bounds_as_they_wer
     factory: sessionmaker[Session],
 ) -> None:
     """The agents worker's longest wall time (its job timeout and stale bound) is computed from
-    the agents registered in its process: a save there must import none (browser_finder's day)."""
+    the agents registered in its process: a save there must import none (a sweep agent's day)."""
     user = new_user(factory, "e2e-reader-fresh@example.org")
     job_id = add_posting(factory, user)
     asked = facts(contract_type={"value": "CDD", "quote": "Durée : 12 mois"})
@@ -598,7 +598,7 @@ def test_a_save_in_a_fresh_worker_leaves_its_agents_and_their_bounds_as_they_wer
     assert (found["read"], found["nature"], found["quoted"]) == (True, "VIE", True)
     assert found["after"] == found["before"]
     assert found["before"]["longest"] == 3600
-    assert "browser_finder" not in found["after"]["agents"]
+    assert "browser_discovery" not in found["after"]["agents"]
     assert "app.browser.finder" not in found["after"]["modules"]
     assert "app.browser.sources.interactive" not in found["after"]["modules"]
     job = job_of(factory, job_id)

@@ -12,8 +12,8 @@ websites the person signed in to) and hands over to `run_selected`, which takes 
 of the person's browser per website, paces its pages and stores the verified findings through
 the run's commits (sweep.Commits, jobs J11).
 
-This module also holds what the website search, the finder and Apply share: the snapshot parser
-(`parse_snapshot`, `Node`, `visible_lines`), the page budget (`Pages`) and the pacing per host
+This module also holds what the website search, its agent and Apply share: the snapshot parser
+(`parse_snapshot`, `Node`), the page budget (`Pages`) and the pacing per host
 across people and leases (`Pacer`): before every page, the first of a lease included, the
 search waits until a pause drawn from PAGE_PAUSE_S (uniform, a platform's own range on its key,
 platform_policy.pause_for and pace_key) has passed since the previous page of that host ended,
@@ -237,42 +237,17 @@ def parse_snapshot(text: str) -> Node:
 SKIPPED_ROLES = frozenset({"button", "tooltip", "img", "figure", "switch", "combobox", "option"})
 
 
-def visible_lines(node: Node, stop: Callable[[Node], bool] = lambda n: False) -> list[str]:
-    """The text a reader sees under `node`, one line per element, without hidden icons, buttons,
-    tooltips and images; reading ends at the first node `stop` accepts."""
-    lines: list[str] = []
-    stack = [node]
-    while stack:
-        current = stack.pop()
-        if stop(current):
-            break
-        if current.hidden or current.role in SKIPPED_ROLES:
-            continue
-        line = current.label().strip()
-        if line and current.role != "link":
-            lines.append(line)
-        stack.extend(reversed(current.children))
-    return lines
-
-
-def own_texts(node: Node) -> list[str]:
-    """The visible texts of `node` and of its direct children, in order."""
-    found = [node.label()] if node.label() and not node.hidden else []
-    found += [c.label() for c in node.children if c.label() and not c.hidden]
-    return [text.strip() for text in found if text.strip()]
-
-
 # --- running the websites ----------------------------------------------------------------------
 
 
 class Tools(Protocol):
     """What a source calls: app/browser/tools.py's LeaseTools."""
 
-    async def navigate(self, url: str) -> dict[str, Any]: ...
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]: ...
 
     async def snapshot(self) -> dict[str, Any]: ...
 
-    async def click(self, ref: str, element: str = "") -> dict[str, Any]: ...
+    async def wait_for(self, **args: Any) -> dict[str, Any]: ...
 
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -406,7 +381,7 @@ class Pages:
         self.pauses: list[float] = []
         # The holders of this lease's pages whose host Redis would not take back.
         self.unreleased: set[str] = set()
-        # The last page's snapshot text and address (the finder agent of B9 reads them).
+        # The last page's snapshot text and address (the search agent reads them).
         self.last_text, self.last_url = "", ""
 
     async def _act(
@@ -493,12 +468,6 @@ class Pages:
             raise SourceError("page_failed")
         self.last_text, self.last_url = shot["snapshot"], str(shot.get("url") or "")
         return parse_snapshot(shot["snapshot"]), str(shot.get("url") or "")
-
-    async def open(self, url: str) -> tuple[Node, str]:
-        return await self._act(lambda: self.tools.navigate(url))
-
-    async def click(self, ref: str, element: str) -> tuple[Node, str]:
-        return await self._act(lambda: self.tools.click(ref, element), "browser_click")
 
 
 _CODE = re.compile(r"[a-z][a-z_]{0,39}")

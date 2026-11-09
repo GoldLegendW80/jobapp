@@ -1,6 +1,6 @@
-"""The agents runtime of the finder tests: real Postgres for the runs and the credential (the
-jobs fixtures, re-exported for the importers), the fake backend's recorded streams in place of the
-model (app/agents/fake_streams/browser_finder*.json and the website streams)."""
+"""The agents runtime of the search agent's tests: real Postgres for the runs and the credential
+(the jobs fixtures, re-exported for the importers), the fake backend's recorded streams in place
+of the model (app/agents/fake_streams/)."""
 
 import uuid
 from datetime import UTC, datetime

@@ -251,15 +251,15 @@ def test_an_agent_run_of_more_than_40_turns_and_20_pages_and_100_postings_is_all
             assert not error, answer
             assert json.loads(answer)["kept"] == 1, answer
             calls += 2
-        assert calls == 302 > finder.MAX_TURNS
-        return finder.Ran(input_tokens=2 * finder.TOKEN_BUDGET, output_tokens=10)
+        assert calls == 302
+        return finder.Ran(input_tokens=1_200_000, output_tokens=10)
 
     entry, _, leases = run(selected(), site, ScriptedFinder(script), pacer=NoPause())
     assert len(saved) == 150 > finder.POSTINGS_MAX
     # The start page, the page typed on, the results and the 150 postings.
-    assert entry["result_pages"] == 153 > finder.PAGES_MAX
+    assert entry["result_pages"] == 153
     assert entry["error"] is None
-    assert entry["tokens"]["input"] == 2 * finder.TOKEN_BUDGET
+    assert entry["tokens"]["input"] == 1_200_000
     assert len(leases.acquired) == 1
 
 
@@ -342,7 +342,7 @@ def test_another_platform_has_no_page_cap_of_the_policy():
         sweep_id=str(uuid.uuid4()),
     )
     assert (entry["error"], entry["found"]) == ("finding_persistence_pending", 30)
-    assert entry["result_pages"] == 33 > finder.PAGES_MAX  # the start, typed, results, 30 postings
+    assert entry["result_pages"] == 33  # the start, typed, results, 30 postings
 
 
 # --- per person --------------------------------------------------------------------------------
