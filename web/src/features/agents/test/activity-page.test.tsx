@@ -90,6 +90,29 @@ describe("Activity, the workflow runs", () => {
     expect(await screen.findByText("No activity yet")).toBeInTheDocument();
   });
 
+  it("offers Retry when the activity could not be loaded", async () => {
+    fakeSession(member);
+    fakeActivityApi({ runs: [] });
+    let fail = true;
+    server.use(
+      http.get("*/api/activity/runs", () =>
+        fail
+          ? HttpResponse.json({ detail: "boom" }, { status: 500 })
+          : HttpResponse.json({ items: [] }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderApp("/activity");
+    expect(
+      await screen.findByText(
+        /The activity could not be loaded\. Something went wrong on the server\./,
+      ),
+    ).toBeVisible();
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("No activity yet")).toBeInTheDocument();
+  });
+
   it("shows it loads while the runs are on their way", async () => {
     fakeSession(member);
     fakeActivityApi({ loading: true });
@@ -362,6 +385,41 @@ describe("a test run", () => {
     expect(starts).toEqual([
       { agent: "echo", input: { message: "Bonjour", script: "tool" } },
     ]);
+  });
+  it("says why it did not start", async () => {
+    fakeSession(admin);
+    fakeActivityApi();
+    server.use(
+      http.get("*/api/agents", () =>
+        HttpResponse.json({
+          items: [
+            {
+              name: "echo",
+              description: "Test agent",
+              model: "claude-opus-5-5",
+              max_turns: 4,
+              wall_time_s: 600,
+              test_only: true,
+            },
+          ],
+        }),
+      ),
+      http.post("*/api/agents/runs", () =>
+        HttpResponse.json(
+          { detail: "No model credential is saved." },
+          { status: 409 },
+        ),
+      ),
+    );
+    const user = userEvent.setup();
+    const { location } = renderApp("/activity");
+    await user.click(
+      await screen.findByRole("button", { name: "Start test run" }),
+    );
+    expect(
+      await screen.findByText(/No model credential is saved/),
+    ).toBeInTheDocument();
+    expect(location()).toBe("/activity");
   });
 });
 
