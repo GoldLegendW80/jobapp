@@ -284,6 +284,13 @@ Migration **0015 (D5)**, the only one of this plan: the seven tables of the spec
 **Playwright journey:** the journeys that ran the tick (documents d12, d13) and apply's one click fit assumption, typechecked; see the pull request for what was not run.
 **Scope:** L. **Depends on:** D27. **Migration:** 0036 (expand). **Owns:** `api/app/documents/` (not D28's files), `api/app/apply/caps.py`, `likes.py`, the documents web feature, the profile settings card, this section.
 
+## D30: No documents consent
+**Issue:** #768. **Decision:** docs/decisions.md, Documents, 2026-11-09 (D30). **Spec:** SPEC-documents.md, Flow step 2, "Writing on a click".
+**Acceptance:** a click on Write, Apply or Like with a credential and no consent row starts the writer at once; the base CV from the profile, an upload's conversion and design capture, the document chats, interview preparation, follow ups and the profile titles start without a consent; a generation stored waiting with `consent` is started by the tick; nothing in `api/app` or `web/src` reads, writes or names the documents consent but the model and the enum value kept for the database; the credential check stays everywhere.
+**Edge cases to test:** a stored `consent` wait on a click, a base CV build, an upload's conversion, a design capture and a proposal; no credential still waits.
+**Playwright journey:** none new; the journeys that accepted the consent through the api drop that step.
+**Scope:** M. **Depends on:** none. **Migration:** none (a later contract step may drop `document_consents` and the enum value). **Owns:** the documents consent wherever it is used.
+
 ## D23: Privacy proof and limits over the module
 **Issue:** to create.
 **Acceptance:** one test file that runs every route and job of the module with the canary planted in the profile, the uploaded CV and its page images, the base CV, a user template, the posting, the draft and a chat message of either channel, and finds it nowhere in logs, arq arguments and results, Redis keys and values, error answers or run events; isolation of every route against user B in one table driven test; every limit of the spec's "Limits" hit once with its answer; a test that no path of the module refuses a render, a download or a freeze on content grounds; deletion of a posting and of an account removes every row of the module (counted before and after); the gallery shows the twenty templates (D18 and D19 to D22 all merged); the backup note of the README names the module's tables.
@@ -328,6 +335,7 @@ Migration **0015 (D5)**, the only one of this plan: the seven tables of the spec
 | D26 | to create | Fix the captured design with the chat | M | D25b, D25c | none | 12 |
 | D23 | to create | Privacy proof and limits | S | D6 to D26 | none | 13 |
 | D28 | none | The design capture copies an upload by measurement | L | D27 | none | after D27 |
+| D30 | #768 | No documents consent | M | none | none | after D29 |
 | Checkpoint D | to create | The owner's own profile, after D13, after D25c and after D23 | human | D13, D25c, then D23 | none | after 8, 11 and 13 |
 
 Thirty tasks (D0 to D26, with D4 split into D4a and D4b and D25 into D25a, D25b and D25c) and a checkpoint. No task is L. Twenty two are M and eight are S (D0 included); each M is sized for one agent run of about 90 tool calls.
