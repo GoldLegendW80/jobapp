@@ -41,6 +41,11 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   this process like apply_decide, so it takes one of the MAX_AGENT_RUNS slots. Tried once.
 - profile_interpret(run_id): one reading of a part of the About you document (profile,
   app/profile/about_agent.py), in this process like profile_titles. Tried once.
+- cron:posting_reader: every minute, the posting reader's backlog (app/jobs/reader.py `tick`):
+  one batch of saved postings not read yet as a run_agent job, one such run at a time for the
+  whole app, so it holds at most one of the MAX_AGENT_RUNS slots. A sweep reads the postings it
+  stored in its own job (reader.SweepReader, at most two runs at once once its websites ended),
+  never on this queue.
 - profile_titles_tick: cron every minute: starts the automatic job title suggestions due after
   a profile save, an accepted Fill my profile item, an upload or a base CV (titles.py `due`).
 - check_model_token(user_id, updated_at, attempt): the check of a saved subscription token, one
@@ -148,7 +153,7 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import rescore, service, sweep
+from app.jobs import reader, rescore, service, sweep
 from app.logging_config import configure_logging
 
 logger = logging.getLogger("app.worker")
@@ -284,6 +289,7 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
         feeds=feed_sources(ctx),
         apis=(boards.Boards(ctx.get("boards_transport")), linkedin),
         browser=websites,
+        reader=reader.SweepReader(lambda: agent_context(ctx)),
     )
 
 
@@ -626,6 +632,7 @@ def agents_queue() -> QueueSpec:
         cron_jobs=[
             cron(reap_agent_runs, name="cron:reap_agent_runs", second=45, timeout=60),
             cron(profile_titles_tick, name="cron:profile_titles", second=15, timeout=60),
+            cron(reader.tick, name="cron:posting_reader", second=reader.BACKLOG_SECOND, timeout=60),
         ],
         # Two jobs at once: a third run waits in the queue (the reaper cron, a few milliseconds,
         # waits for a free slot too).

@@ -123,6 +123,7 @@ CATEGORY_OF: dict[str, str] = {
     "echo": "test",
     "job_chat": "jobs",
     "jobs_assess": "jobs",
+    "posting_reader": "finding",
     "profile_extract": "profile",
     "profile_interpret": "profile",
     "profile_titles": "profile",
@@ -249,6 +250,7 @@ def load() -> dict[str, definitions.AgentDefinition]:
     from app.documents import writer_proposal as _proposal  # noqa: F401
     from app.ingestion import agents as _ingestion  # noqa: F401  (profile_extract, transcribe)
     from app.jobs import assess as _assess  # noqa: F401  (jobs_assess)
+    from app.jobs import reader as _reader  # noqa: F401  (posting_reader)
 
     return dict(definitions.AGENTS)
 

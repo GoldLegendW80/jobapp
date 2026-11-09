@@ -241,6 +241,12 @@ class Job(Base):
     # What the last check of the posting's own address found (app/jobs/liveness_check.py,
     # migration 0039): {verdict, reason, sentence, checked_at}; null until a check ran.
     liveness: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
+    # The posting reader (app/jobs/reader.py, migration 0047): when it read the posting, and how
+    # many of its runs were given it (the backlog gives a posting up after reader.ATTEMPTS_MAX).
+    read_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    read_attempts: Mapped[int] = mapped_column(
+        sa.SmallInteger, nullable=False, default=0, server_default="0"
+    )
     search: Mapped[Any] = mapped_column(
         pg.TSVECTOR, sa.Computed(SEARCH_EXPRESSION, persisted=True), deferred=True
     )
