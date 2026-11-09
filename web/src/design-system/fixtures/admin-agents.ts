@@ -158,7 +158,7 @@ const SAVED: Partial<Editable> = {
 export const AGENT_PAGE: AgentPage = {
   name: "browser_discovery",
   module: "app.browser.finder",
-  starter: "A job search sweep, one website or careers page at a time",
+  starter: "A job search sweep, one run per website, two websites at once",
   flags: [
     "Private: its inputs and outputs are never stored, only their sizes and counts.",
     "Internal: started by the app itself, never by a person.",
