@@ -38,7 +38,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The chat that changes a document, built from the chat of a posting (its thread, turns, empty state and prompt): the conversation, the examples of a first change, the box with Send inside it, and the consent and credential it waits for. In the document view's side rail, or a drawer on a phone.",
+          "The chat that changes a document, built from the chat of a posting (its thread, turns, empty state and prompt): the conversation, the examples of a first change, the box with Send inside it, and the credential it waits for. In the document view's side rail, or a drawer on a phone.",
       },
     },
   },
@@ -98,14 +98,6 @@ export const BeingAnswered: Story = {
         }),
       ),
     );
-  },
-};
-
-/** No consent yet: the box waits, and Read and confirm opens what is sent. */
-export const NoConsent: Story = {
-  name: "Waiting for the consent",
-  beforeEach: () => {
-    fakeOneDocument(CV);
   },
 };
 

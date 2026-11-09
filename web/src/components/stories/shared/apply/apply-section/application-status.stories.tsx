@@ -51,14 +51,6 @@ export const WaitingForABrowser: Story = {
   args: { application: applicationIn("queued") },
 };
 
-/** The CV and letter wait for the documents consent: the link opens the CV tab. */
-export const WaitingForTheDocumentsConsent: Story = {
-  name: "Waiting for the documents consent",
-  args: {
-    application: applicationIn("queued", { needs: "documents:consent" }),
-  },
-};
-
 /** The CV and letter wait for a model credential: the link opens the account. */
 export const WaitingForACredential: Story = {
   name: "Waiting for a model credential",

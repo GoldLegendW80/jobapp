@@ -82,10 +82,10 @@ export const Writing: Story = {
 
 /** Waiting, and where to settle what it waits for. */
 export const Waiting: Story = {
-  name: "Waiting for the consent",
+  name: "Waiting for a model credential",
   args: {
     document: postingDocument("cv", JOB.id, {
-      generation: { status: "waiting", wait_reason: "consent" },
+      generation: { status: "waiting", wait_reason: "credential" },
     }),
   },
 };

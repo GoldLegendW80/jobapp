@@ -130,12 +130,12 @@ export const WaitWhileTheCvIsWritten: Story = {
 };
 
 /** As a job seeker, I want to know why the writer is not starting, so that I give it what it waits for. */
-export const WaitingForMyConsent: Story = {
+export const WaitingForMyCredential: Story = {
   beforeEach: () => {
     fakeSession(camille);
     fakePostingDocuments(JOB, [
       postingDocument("cv", JOB.id, {
-        generation: { status: "waiting", wait_reason: "consent" },
+        generation: { status: "waiting", wait_reason: "credential" },
       }),
     ]);
   },
