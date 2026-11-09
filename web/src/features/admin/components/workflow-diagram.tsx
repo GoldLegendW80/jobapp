@@ -52,6 +52,8 @@ const MEMBER_H = 32;
 const LANE = 10;
 const MAX_H = 640;
 const ZOOM = 1.25;
+// How much of the drawing a drag or a zoom leaves in the frame, so it is never lost.
+const KEEP = 48;
 
 export type NodeStatus =
   "queued" | "running" | "success" | "failure" | "skipped" | "cancelled";
@@ -419,7 +421,7 @@ function StepCard({
     );
   else
     body = (
-      <Tip lines={into.get(node.id) ?? []}>
+      <Tip lines={into.get(node.id) ?? [node.label]}>
         <div className={ROW_CLASS}>{head}</div>
       </Tip>
     );
@@ -525,8 +527,9 @@ const midpoint = (a: Point, b: Point): Point => ({
 
 /**
  * Pan and zoom inside the frame: Fit shows the whole drawing, minus and plus zoom around the
- * frame's centre, two fingers zoom around their midpoint, a drag (one finger, both ways once the
- * drawing is zoomed or moved) or the arrow keys move it. The page never scrolls sideways for it.
+ * frame's centre, two fingers zoom around their midpoint, a drag (on a touch screen, one finger
+ * once the drawing is zoomed or moved) or the arrow keys move it, never all of it out of the
+ * frame. The page never scrolls sideways for it.
  */
 function usePanZoom(
   frame: RefObject<HTMLDivElement | null>,
@@ -564,16 +567,21 @@ function usePanZoom(
     160,
     Math.min(MAX_H, Math.ceil(height * fitted().scale)),
   );
+  const kept = ({ scale, x, y }: View): View => ({
+    scale,
+    x: Math.min((frameW || width) - KEEP, Math.max(KEEP - width * scale, x)),
+    y: Math.min(frameH - KEEP, Math.max(KEEP - height * scale, y)),
+  });
   /** Zoom by `by`, the drawing's point at `from` in the frame drawn at `to` afterwards. */
   const zoomAt = (by: number, from: Point, to: Point = from) => {
     setView((was) => {
       const now = was ?? fitted();
       const scale = Math.min(2, Math.max(0.2, now.scale * by));
-      return {
+      return kept({
         scale,
         x: to.x - ((from.x - now.x) * scale) / now.scale,
         y: to.y - ((from.y - now.y) * scale) / now.scale,
-      };
+      });
     });
   };
   const zoom = (by: number) => {
@@ -582,7 +590,7 @@ function usePanZoom(
   const move = (dx: number, dy: number) => {
     setView((was) => {
       const now = was ?? fitted();
-      return { ...now, x: now.x + dx, y: now.y + dy };
+      return kept({ ...now, x: now.x + dx, y: now.y + dy });
     });
   };
   const release = (event: PointerEvent<HTMLDivElement>) => {
@@ -624,6 +632,8 @@ function usePanZoom(
         );
         return;
       }
+      // A fitted drawing shows whole: a finger on it scrolls the page, never moves the drawing.
+      if (moved === null && event.pointerType === "touch") return;
       const dx = at.x - last.x;
       const dy = at.y - last.y;
       if (!gestured.current && Math.hypot(dx, dy) < 4) return;

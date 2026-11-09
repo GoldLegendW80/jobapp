@@ -162,6 +162,17 @@ describe("the workflow diagram", () => {
     expect(tip).toHaveTextContent("From Sweep: one run per website");
   });
 
+  it("gives a step nothing feeds its whole label in its tooltip, for a label its card cuts", async () => {
+    const user = userEvent.setup();
+    const { container } = draw();
+    const card = container.querySelector('[data-card="click"] div');
+    if (!card) throw new Error("no Save and start search card");
+    await user.hover(card);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Save and start search",
+    );
+  });
+
   it("draws agents that run side by side as one card that opens on its list", async () => {
     const user = userEvent.setup();
     const { container } = draw(AGENT_FLOWS.documents);
@@ -313,14 +324,24 @@ describe("the workflow diagram", () => {
     next.to(50, 10);
     next.up();
     expect(view()).toEqual([x2, y2 - 40, s2]);
+    // However far a finger goes, a corner of the drawing stays in the frame.
+    const far = finger(1);
+    far.down(200, 200);
+    far.to(-9000, -9000);
+    far.up();
+    const [xFar = 0, yFar = 0, sFar = 1] = view();
+    expect(xFar + parseFloat(drawing?.style.width ?? "") * sFar).toBe(48);
+    expect(yFar + parseFloat(drawing?.style.height ?? "") * sFar).toBe(48);
     await user.click(screen.getByRole("button", { name: "Fit the drawing" }));
     expect(frame.style.touchAction).toBe("pan-y");
-    // A sideways drag at Fit moves the drawing, then a finger moves it both ways.
-    const side = finger(1);
-    side.down(100, 100);
-    side.to(40, 100);
-    side.up();
-    expect(frame.style.touchAction).toBe("none");
+    // A finger on a fitted drawing is the page's: the drawing stays as it is.
+    const fit = view();
+    const swipe = finger(1);
+    swipe.down(100, 100);
+    swipe.to(40, 60);
+    swipe.up();
+    expect(view()).toEqual(fit);
+    expect(frame.style.touchAction).toBe("pan-y");
   });
 
   it("says nothing with a dash as a separator, in every workflow the api serves", () => {
