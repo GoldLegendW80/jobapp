@@ -56,7 +56,8 @@ CATEGORIES: tuple[Category, ...] = (
     Category(
         "finding",
         "Finding jobs",
-        "These agents search job websites and company careers pages for postings.",
+        "These agents search job websites and company careers pages for postings, and read "
+        "each posting found to fill its details.",
     ),
     Category(
         "applying",
