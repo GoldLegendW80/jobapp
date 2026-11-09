@@ -467,7 +467,13 @@ export function fakeActivityApi(
     }),
     http.get("*/api/activity/runs/:id", ({ params }) => {
       const found =
-        options.detail ?? details.find((one) => one.id === params.id);
+        options.detail ??
+        details.find(
+          (one) =>
+            one.id === params.id ||
+            // An agent run's id finds its workflow run, as the api does.
+            one.steps.some((step) => step.id === params.id),
+        );
       return found
         ? HttpResponse.json(found)
         : HttpResponse.json({ detail: "Not found" }, { status: 404 });

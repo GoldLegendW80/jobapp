@@ -118,6 +118,18 @@ class AgentRun(Base):
         sa.Index("ix_agent_runs_job_id", "job_id"),
         # The Agents tab of Admin: an agent's last runs (A6).
         sa.Index("ix_agent_runs_agent_created_at", "agent", sa.text("created_at DESC")),
+        # Activity: the agent runs of one workflow run (A10).
+        sa.Index(
+            "ix_agent_runs_user_id_workflow_run_id",
+            "user_id",
+            "workflow_run_id",
+            postgresql_where="workflow_run_id IS NOT NULL",
+        ),
+        sa.CheckConstraint(
+            "(workflow IS NULL OR char_length(workflow) BETWEEN 1 AND 64) "
+            "AND (workflow_trigger IS NULL OR char_length(workflow_trigger) BETWEEN 1 AND 64)",
+            name="workflow_length",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -133,6 +145,10 @@ class AgentRun(Base):
     job_id: Mapped[uuid.UUID | None] = mapped_column(
         pg.UUID(as_uuid=True), sa.ForeignKey("jobs.id", ondelete="SET NULL")
     )
+    # The workflow run it belongs to (Activity, A10), set by its starter; null on older runs.
+    workflow: Mapped[str | None] = mapped_column(sa.Text)
+    workflow_run_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
+    workflow_trigger: Mapped[str | None] = mapped_column(sa.Text)
     status: Mapped[RunStatus] = mapped_column(
         RUN_STATUS_ENUM, nullable=False, server_default=RunStatus.queued.value
     )

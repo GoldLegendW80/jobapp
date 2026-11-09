@@ -77,6 +77,9 @@ def test_schema(at_head: sa.Engine) -> None:
         "cost_usd",
         "credential_kind",  # added by 0010 (issue #33)
         "agent_version",  # added by 0031 (agents A6)
+        "workflow",  # added by 0048 (agents A10)
+        "workflow_run_id",  # added by 0048 (agents A10)
+        "workflow_trigger",  # added by 0048 (agents A10)
         "cancel_requested_at",
         "started_at",
         "finished_at",
