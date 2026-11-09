@@ -122,6 +122,18 @@ describe("a workflow run's page", () => {
     expect(graph).toHaveTextContent("CV writer: Succeeded");
     expect(graph).toHaveTextContent("Letter writer: Waiting.");
     expect(screen.getByText("Your click on Write now")).toBeInTheDocument();
+    // The summary: trigger, who, status, total duration, tokens and amount, summed.
+    const summary = screen.getByText("Total duration").closest("dl")!;
+    for (const fact of [
+      "Triggered by",
+      "Who",
+      "You",
+      "Status",
+      "Tokens",
+      "48,210 in, 3,904 out",
+      "$0.31",
+    ])
+      expect(summary).toHaveTextContent(fact);
     expect(await screen.findByTestId("run-panel")).toHaveAttribute(
       "data-status",
       "running",
