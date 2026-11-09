@@ -14,6 +14,7 @@ e-mail the Users page of Admin shows (agents A7); and the link to its page only 
 ran it.
 """
 
+import dataclasses
 import uuid
 from datetime import datetime
 from typing import Annotated, Any
@@ -121,10 +122,37 @@ class AgentSummary(BaseModel):
     category: str
 
 
+class FlowNodeOut(BaseModel):
+    id: str
+    # "agent" (its id is the agent's name), "person", "system" or "data".
+    kind: str
+    label: str
+    column: int
+    row: int
+    note: str
+    # Agents of one group run side by side under one step, drawn as one card.
+    group: str
+
+
+class FlowEdgeOut(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    source: str = Field(alias="from")
+    target: str = Field(alias="to")
+    label: str
+
+
+class FlowOut(BaseModel):
+    nodes: list[FlowNodeOut]
+    edges: list[FlowEdgeOut]
+
+
 class CategoryOut(BaseModel):
     key: str
     title: str
     sentence: str
+    # The workflow drawn above its table (catalog.FLOWS, agents A9); none for the test agents.
+    flow: FlowOut | None
 
 
 class AgentList(BaseModel):
@@ -477,6 +505,15 @@ def _no_store(response: Response) -> None:
     response.headers["Cache-Control"] = "no-store"
 
 
+def _flow(flow: catalog.Flow | None) -> FlowOut | None:
+    if flow is None:
+        return None
+    return FlowOut(
+        nodes=[FlowNodeOut(**dataclasses.asdict(node)) for node in flow.nodes],
+        edges=[FlowEdgeOut(source=e.source, target=e.target, label=e.label) for e in flow.edges],
+    )
+
+
 @router.get("", response_model=AgentList)
 def list_agents(request: Request, response: Response, db: Db) -> AgentList:
     """Every agent registered here, test ones included outside production."""
@@ -514,7 +551,12 @@ def list_agents(request: Request, response: Response, db: Db) -> AgentList:
             )
         )
     categories = [
-        CategoryOut(key=category.key, title=category.title, sentence=category.sentence)
+        CategoryOut(
+            key=category.key,
+            title=category.title,
+            sentence=category.sentence,
+            flow=_flow(catalog.FLOWS.get(category.key)),
+        )
         for category in catalog.CATEGORIES
     ]
     return AgentList(items=items, categories=categories)

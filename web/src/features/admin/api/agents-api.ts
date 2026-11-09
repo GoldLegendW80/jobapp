@@ -25,11 +25,45 @@ export const agentSummarySchema = z.object({
 });
 export type AgentSummary = z.infer<typeof agentSummarySchema>;
 
-/** A group of the list, in the api's order (catalog.CATEGORIES). */
+export const FLOW_NODE_KINDS = ["agent", "person", "system", "data"] as const;
+
+/**
+ * A box of a category's workflow (catalog.FLOWS, agents A9): an agent, whose id is its name, or
+ * a person's click, a job of the app, or stored data, at a column and a row laid out by the api.
+ */
+export const flowNodeSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(FLOW_NODE_KINDS).catch("system"),
+  label: z.string(),
+  column: z.number().int().min(0),
+  row: z.number().int().min(0),
+  note: z.string().default(""),
+  /** Agents that run side by side under one step share it: one card lists them. */
+  group: z.string().default(""),
+});
+export type FlowNode = z.infer<typeof flowNodeSchema>;
+
+/** An arrow of a workflow: who starts or feeds whom, in a few words. */
+export const flowEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  label: z.string(),
+});
+export type FlowEdge = z.infer<typeof flowEdgeSchema>;
+
+export const agentFlowSchema = z.object({
+  nodes: z.array(flowNodeSchema),
+  edges: z.array(flowEdgeSchema),
+});
+export type AgentFlow = z.infer<typeof agentFlowSchema>;
+
+/** A group of the list, in the api's order (catalog.CATEGORIES), with its workflow. */
 export const agentCategorySchema = z.object({
   key: z.string().min(1),
   title: z.string().min(1),
   sentence: z.string(),
+  /** None for the test agents, from an api older than the diagrams, and for a malformed one. */
+  flow: agentFlowSchema.nullable().catch(null),
 });
 export type AgentCategory = z.infer<typeof agentCategorySchema>;
 

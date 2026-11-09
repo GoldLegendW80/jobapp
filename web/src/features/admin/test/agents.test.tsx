@@ -12,6 +12,7 @@ import {
   changesOf,
   REVERT_NOTE,
   type AgentCategory,
+  type AgentFlow,
   type AgentPage,
   type AgentSummary,
   type Editable,
@@ -156,8 +157,8 @@ const SUMMARY: AgentSummary = {
   category: "finding",
 };
 
-// The api's groups (catalog.CATEGORIES), in its order.
-const CATEGORIES: AgentCategory[] = [
+// The api's groups (catalog.CATEGORIES), in its order, here without their workflows.
+const GROUPS: Omit<AgentCategory, "flow">[] = [
   {
     key: "finding",
     title: "Finding jobs",
@@ -194,6 +195,11 @@ const CATEGORIES: AgentCategory[] = [
       "These agents exist for the dev run panel and the tests, and are never listed in production.",
   },
 ];
+
+const CATEGORIES: AgentCategory[] = GROUPS.map((group) => ({
+  ...group,
+  flow: null,
+}));
 
 const agent = (
   name: string,
@@ -390,6 +396,118 @@ describe("the list", () => {
       screen.queryByRole("heading", { name: /^Profile and import/ }),
     ).toBeNull();
     noDashes(container.textContent);
+  });
+
+  it("draws each category's workflow above its table, in the same section, and none without one", async () => {
+    fakeSession(admin);
+    const flow: AgentFlow = {
+      nodes: [
+        {
+          id: "sweep",
+          kind: "system",
+          label: "Sweep",
+          column: 0,
+          row: 0,
+          note: "",
+          group: "",
+        },
+        {
+          id: "browser_discovery",
+          kind: "agent",
+          label: "browser_discovery",
+          column: 1,
+          row: 0,
+          note: "",
+          group: "",
+        },
+      ],
+      edges: [
+        {
+          from: "sweep",
+          to: "browser_discovery",
+          label: "one run per website",
+        },
+      ],
+    };
+    fakeAgents(
+      makePage(),
+      undefined,
+      [SUMMARY, agent("triage", "jobs")],
+      CATEGORIES.map((category) =>
+        category.key === "finding" ? { ...category, flow } : category,
+      ),
+    );
+    renderApp("/admin/agents");
+    const table = await screen.findByRole("table", {
+      name: "Finding jobs, by name",
+    });
+    const finding = screen.getByRole("region", { name: "Finding jobs (1)" });
+    const figure = within(finding).getByRole("figure", {
+      name: "Finding jobs, workflow",
+    });
+    expect(
+      figure.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The drawing's agent opens the same page as its row.
+    expect(
+      within(figure).getByRole("link", { name: "browser_discovery" }),
+    ).toHaveAttribute("href", "/admin/agents/browser_discovery");
+    expect(
+      within(figure).getByText(
+        "From Sweep to browser_discovery: one run per website.",
+      ),
+    ).toBeInTheDocument();
+    // The table is unchanged: its row and its columns.
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((head) => head.textContent),
+    ).toEqual(["Agent", "Module", "Model", "Version", "Last run"]);
+    const jobs = screen.getByRole("region", { name: "Jobs and chat (1)" });
+    expect(within(jobs).queryByRole("figure")).toBeNull();
+  });
+
+  it("draws no workflow for a category whose flow is malformed, and still lists every table and the other workflows", async () => {
+    fakeSession(admin);
+    const flow: AgentFlow = {
+      nodes: [
+        {
+          id: "browser_discovery",
+          kind: "agent",
+          label: "Website search",
+          column: 0,
+          row: 0,
+          note: "",
+          group: "",
+        },
+      ],
+      edges: [],
+    };
+    const categories: unknown[] = CATEGORIES.map((category) =>
+      category.key === "finding"
+        ? { ...category, flow }
+        : category.key === "jobs"
+          ? { ...category, flow: { nodes: "triage", edges: [{ from: 3 }] } }
+          : category,
+    );
+    fakeAgents(
+      makePage(),
+      undefined,
+      [SUMMARY, agent("triage", "jobs")],
+      categories as AgentCategory[],
+    );
+    renderApp("/admin/agents");
+    const jobs = await screen.findByRole("region", {
+      name: "Jobs and chat (1)",
+    });
+    expect(within(jobs).queryByRole("figure")).toBeNull();
+    expect(
+      within(jobs).getByRole("table", { name: "Jobs and chat, by name" }),
+    ).toBeInTheDocument();
+    const finding = screen.getByRole("region", { name: "Finding jobs (1)" });
+    expect(
+      within(finding).getByRole("figure", { name: "Finding jobs, workflow" }),
+    ).toBeInTheDocument();
   });
 
   it("shows no Test section when the api lists no test agent, as in production", async () => {

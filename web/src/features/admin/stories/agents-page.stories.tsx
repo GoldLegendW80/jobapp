@@ -27,7 +27,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Every agent of the app grouped by category, what it runs on, its version and its last run. Route /admin/agents, for administrators only.",
+          "Every agent of the app grouped by category, each category's workflow drawn above its table, what each agent runs on, its version and its last run. Route /admin/agents, for administrators only.",
       },
     },
   },
@@ -37,7 +37,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** As an administrator, I want every agent grouped by what it does, with its model, version and last run, so that I can see at a glance which one to open. */
+/** As an administrator, I want every agent grouped by what it does, with a drawing of how each workflow's agents are started above its table, so that I understand how the agents relate and see at a glance which one to open. */
 export const BrowseAgentsByCategory: Story = {
   beforeEach: () => {
     fakeSession(admin);

@@ -30,6 +30,7 @@ from app.agents.crypto import Keyring
 from app.agents.models import AgentEvent, AgentOverride, AgentRun, CredentialKind, RunStatus
 from app.config import Settings
 from app.identity.models import Role, User
+from tests.agents import regen_agent_flows
 from tests.agents.conftest import OAUTH
 from tests.agents.run_helpers import (
     Backends,
@@ -226,7 +227,9 @@ def test_the_list_returns_each_agents_category_and_the_groups_in_order(
 ) -> None:
     body = api.get(AGENTS, token=admin).json()
     assert [category["key"] for category in body["categories"]] == CATEGORY_KEYS
-    assert body["categories"][0] == {
+    first = dict(body["categories"][0])
+    assert first.pop("flow")["nodes"]  # its workflow (agents A9)
+    assert first == {
         "key": "finding",
         "title": "Finding jobs",
         "sentence": catalog.CATEGORIES[0].sentence,
@@ -241,6 +244,125 @@ def test_the_list_returns_each_agents_category_and_the_groups_in_order(
     body = api.get(AGENTS, token=admin).json()
     assert "test" not in {item["category"] for item in body["items"]}
     assert [category["key"] for category in body["categories"]] == CATEGORY_KEYS
+
+
+DASH = re.compile(r"[–—]| - ")
+
+
+def test_each_workflow_draws_every_agent_of_its_category_and_only_registered_ones() -> None:
+    agents = catalog.load()
+    assert set(catalog.FLOWS) == set(CATEGORY_KEYS) - {"test"}
+    drawn: dict[str, str] = {}
+    for key, flow in catalog.FLOWS.items():
+        for node in flow.nodes:
+            if node.kind != "agent":
+                continue
+            assert node.id in agents, f"{node.id} is drawn in {key} and not registered"
+            # A plain name on the card, the registered name in the link.
+            assert node.label == catalog.NAMES[node.id]
+            assert "_" not in node.label
+            assert node.id not in drawn, f"{node.id} is drawn twice"
+            drawn[node.id] = key
+    product = {
+        name
+        for name, agent in agents.items()
+        if definitions.module_of(name).startswith("app.") and not agent.test_only
+    }
+    assert product - set(drawn) == set(), "registered agents drawn in no workflow"
+    assert set(catalog.NAMES) == product
+    assert set(drawn) <= product
+    for name, key in drawn.items():
+        assert catalog.CATEGORY_OF[name] == key, name
+
+
+def test_each_workflow_is_laid_out_and_worded_for_its_drawing() -> None:
+    for key, flow in catalog.FLOWS.items():
+        ids = [node.id for node in flow.nodes]
+        assert len(ids) == len(set(ids)), key
+        places = [(node.column, node.row) for node in flow.nodes]
+        assert len(places) == len(set(places)), f"two boxes of {key} at one place"
+        pairs = [(edge.source, edge.target) for edge in flow.edges]
+        assert len(pairs) == len(set(pairs)), f"an arrow of {key} is drawn twice"
+        linked = set()
+        for edge in flow.edges:
+            assert edge.source in ids, (key, edge)
+            assert edge.target in ids, (key, edge)
+            assert edge.source != edge.target, (key, edge)
+            assert 2 <= len(edge.label.split()) <= 5, (key, edge.label)
+            assert not DASH.search(edge.label), (key, edge.label)
+            linked |= {edge.source, edge.target}
+        for node in flow.nodes:
+            assert node.kind in catalog.NODE_KINDS, (key, node)
+            assert min(node.column, node.row) >= 0, (key, node)
+            assert node.label, (key, node)
+            assert not DASH.search(node.label + node.note), (key, node)
+            # A box with no arrow says why, as the proposal writer nothing starts yet.
+            assert node.id in linked or node.note, (key, node.id)
+        # A group's agents run side by side under one step: one column, one card.
+        groups: dict[str, set[int]] = {}
+        for node in flow.nodes:
+            if node.group:
+                groups.setdefault(node.group, set()).add(node.column)
+        assert all(len(columns) == 1 for columns in groups.values()), (key, groups)
+    proposal = next(n for n in catalog.FLOWS["documents"].nodes if n.id == "documents_proposal")
+    assert proposal.note == "Not started by the app yet"
+    edges = catalog.FLOWS["documents"].edges
+    assert not [e for e in edges if "documents_proposal" in (e.source, e.target)]
+    reviewers = [n.id for n in catalog.FLOWS["documents"].nodes if n.group == "Hiring panel"]
+    assert len(reviewers) == 7
+
+
+def test_the_list_serves_each_categorys_workflow(api: Api, admin: str) -> None:
+    body = api.get(AGENTS, token=admin).json()
+    flows = {category["key"]: category["flow"] for category in body["categories"]}
+    assert flows["test"] is None
+    finding = flows["finding"]
+    assert {"id": "browser_discovery", "kind": "agent", "label": "Website search"}.items() <= (
+        next(node for node in finding["nodes"] if node["id"] == "browser_discovery").items()
+    )
+    assert {"from": "sweep", "to": "posting_reader", "label": "then reads its postings"} in (
+        finding["edges"]
+    )
+    for key, flow in catalog.FLOWS.items():
+        assert len(flows[key]["nodes"]) == len(flow.nodes), key
+        assert [(e["from"], e["to"]) for e in flows[key]["edges"]] == [
+            (edge.source, edge.target) for edge in flow.edges
+        ]
+
+
+def test_the_web_fixture_of_the_workflows_is_what_the_list_serves(api: Api, admin: str) -> None:
+    fixture = json.loads(regen_agent_flows.FIXTURE.read_text(encoding="utf-8"))
+    stale = f"{regen_agent_flows.FIXTURE.name} is stale: run `{regen_agent_flows.COMMAND}`"
+    body = api.get(AGENTS, token=admin).json()
+    served = {
+        category["key"]: category["flow"]
+        for category in body["categories"]
+        if category["flow"] is not None
+    }
+    assert fixture["flows"] == served, stale
+    # The app's own agents: a test may register others from its own module.
+    items = [
+        {field: item[field] for field in regen_agent_flows.FIELDS}
+        for item in body["items"]
+        if item["module"].startswith("app.")
+    ]
+    assert fixture["agents"] == items, stale
+    registered = {name for name in catalog.load() if definitions.module_of(name).startswith("app.")}
+    assert [agent["name"] for agent in fixture["agents"]] == sorted(registered), stale
+    assert fixture == regen_agent_flows.document(), stale
+
+
+def test_the_starter_of_an_agent_its_package_misdescribes_is_its_own() -> None:
+    agents = catalog.load()
+    for name, sentence in catalog.STARTER_OF.items():
+        assert catalog.starter(agents[name]) == sentence, name
+        assert not DASH.search(sentence), name
+    assert catalog.starter(agents["posting_reader"]) != catalog.starter(agents["jobs_assess"])
+    assert "Assess" not in catalog.starter(agents["posting_reader"])
+    assert catalog.starter(agents["apply_followup"]) != catalog.starter(agents["apply_form"])
+    assert "two websites at once" in catalog.starter(agents["browser_discovery"])
+    for name in ("profile_titles", "profile_interpret"):
+        assert catalog.starter(agents[name]) != "Its own module, in code", name
 
 
 def test_only_an_admin_reaches_the_tab(

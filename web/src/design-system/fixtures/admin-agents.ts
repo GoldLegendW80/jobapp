@@ -1,20 +1,24 @@
 import type {
   AgentCategory,
+  AgentFlow,
   AgentPage,
   AgentSummary,
   Editable,
 } from "@/features/admin/api/agents-api";
 
+import { AGENT_FLOWS, REGISTERED_AGENTS } from "./agent-flows";
+
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
 
-/** The groups of the list, in the api's order (catalog.CATEGORIES). */
-export const AGENT_CATEGORIES: AgentCategory[] = [
+/** The groups of the list, in the api's order (catalog.CATEGORIES), before their workflows. */
+const CATEGORIES: Omit<AgentCategory, "flow">[] = [
   {
     key: "finding",
     title: "Finding jobs",
-    sentence: "These agents search job websites for postings.",
+    sentence:
+      "These agents search job websites for postings, and read each posting found to fill its details.",
   },
   {
     key: "applying",
@@ -48,6 +52,14 @@ export const AGENT_CATEGORIES: AgentCategory[] = [
   },
 ];
 
+const FLOWS: Record<string, AgentFlow | undefined> = AGENT_FLOWS;
+
+/** The groups of the list with the workflow drawn above each table (agents A9). */
+export const AGENT_CATEGORIES: AgentCategory[] = CATEGORIES.map((category) => ({
+  ...category,
+  flow: FLOWS[category.key] ?? null,
+}));
+
 const summary = (
   name: string,
   category: string,
@@ -69,79 +81,39 @@ const summary = (
   ...changes,
 });
 
-/** Every agent of the app as the list shows it: badges, saved versions, a code change. */
-export const AGENTS: AgentSummary[] = [
-  summary(
-    "browser_discovery",
-    "finding",
-    "Searches one job website with the browser, as a person would.",
-    {
-      module: "app.browser.finder",
-      internal: true,
-      private_io: true,
-      version: 2,
-      overridden: true,
-      code_changed: ["system_prompt"],
-      last_run_at: ago(40 * 60_000),
-    },
-  ),
-  summary(
-    "careers_page_reader",
-    "finding",
-    "Reads a company careers page and lists the postings it links to.",
-    { internal: true, last_run_at: ago(DAY) },
-  ),
-  summary(
-    "apply_answer",
-    "applying",
-    "Answers one open question of an application form from the profile.",
-    { model: "claude-opus-5-5", private_io: true },
-  ),
-  summary(
-    "apply_form",
-    "applying",
-    "Fills in an application form in the browser and stops before Submit.",
-    { model: "claude-opus-5-5", private_io: true, last_run_at: ago(2 * DAY) },
-  ),
-  summary(
-    "documents_cv",
-    "documents",
-    "Writes the CV for one posting from the base CV and the profile.",
-    {
-      version: 3,
-      overridden: true,
-      code_changed: ["model"],
-      last_run_at: ago(5 * HOUR),
-    },
-  ),
-  summary(
-    "documents_letter",
-    "documents",
-    "Writes the cover letter for one posting in the tone the person chose.",
-  ),
-  summary(
-    "profile_import",
-    "profile",
-    "Reads an uploaded CV and proposes the profile fields it finds.",
-    { private_io: true, last_run_at: null },
-  ),
-  summary(
-    "job_assessment",
-    "jobs",
-    "Assesses a posting against the profile: strengths, gaps and questions.",
-  ),
-  summary(
-    "job_chat",
-    "jobs",
-    "Answers the person's questions about one job in its chat.",
-    { last_run_at: ago(15 * 60_000) },
-  ),
-  summary("echo", "test", "Repeats the message it is given.", {
-    module: "app.agents.test_agents",
-    test_only: true,
-    last_run_at: null,
+/** What makes some rows differ: a saved version, a code change, a run long ago or never. */
+const VARIETY: Record<string, Partial<AgentSummary>> = {
+  browser_discovery: {
+    version: 2,
+    overridden: true,
+    code_changed: ["system_prompt"],
+    last_run_at: ago(40 * 60_000),
+  },
+  posting_reader: { last_run_at: ago(DAY) },
+  apply_form: { last_run_at: ago(2 * DAY) },
+  documents_cv: {
+    version: 3,
+    overridden: true,
+    code_changed: ["model"],
+    last_run_at: ago(5 * HOUR),
+  },
+  documents_proposal: { last_run_at: null },
+  profile_extract: { last_run_at: null },
+  job_chat: { last_run_at: ago(15 * 60_000) },
+  echo: { last_run_at: null },
+};
+
+/** Every agent of the app as the list shows it, with its badges, versions and last runs. */
+export const AGENTS: AgentSummary[] = REGISTERED_AGENTS.map((agent) =>
+  summary(agent.name, agent.category, agent.description, {
+    module: agent.module,
+    model: agent.model,
+    internal: agent.internal,
+    private_io: agent.private_io,
+    test_only: agent.test_only,
+    ...VARIETY[agent.name],
   }),
-];
+);
 
 /** GET /api/admin/agents. */
 export const agentList = (items: AgentSummary[] = AGENTS) => ({
@@ -186,7 +158,7 @@ const SAVED: Partial<Editable> = {
 export const AGENT_PAGE: AgentPage = {
   name: "browser_discovery",
   module: "app.browser.finder",
-  starter: "A job search sweep, one run per website",
+  starter: "A job search sweep, one run per website, two websites at once",
   flags: [
     "Private: its inputs and outputs are never stored, only their sizes and counts.",
     "Internal: started by the app itself, never by a person.",

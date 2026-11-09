@@ -20,12 +20,17 @@ import {
 } from "@/components/ui/table";
 import { useTitle } from "@/hooks/use-title";
 
-import { type AgentList, type AgentSummary } from "../api/agents-api";
+import {
+  type AgentFlow,
+  type AgentList,
+  type AgentSummary,
+} from "../api/agents-api";
 import { useAdminAgents } from "../api/use-admin-agents";
+import { WorkflowDiagram } from "../components/workflow-diagram";
 
 /**
  * Admin, Agents: every agent of the app, what it runs on and when it last ran, grouped by
- * category (agents A8).
+ * category (agents A8), each category's workflow drawn above its table (agents A9).
  */
 export function AdminAgentsPage() {
   useTitle("Agents");
@@ -49,6 +54,7 @@ interface AgentGroup {
   key: string;
   title: string;
   sentence: string;
+  flow: AgentFlow | null;
   agents: AgentSummary[];
 }
 
@@ -56,6 +62,7 @@ const OTHER: Omit<AgentGroup, "agents"> = {
   key: "other",
   title: "Other",
   sentence: "These agents have no category the list knows.",
+  flow: null,
 };
 
 /**
@@ -100,6 +107,9 @@ function AgentGroups({ list, now }: { list: AgentList; now: Date }) {
           }
           description={group.sentence}
         >
+          {group.flow?.nodes.length ? (
+            <WorkflowDiagram title={group.title} flow={group.flow} />
+          ) : null}
           <AgentsTable title={group.title} items={group.agents} now={now} />
         </Section>
       ))}

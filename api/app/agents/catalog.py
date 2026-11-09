@@ -33,11 +33,19 @@ logger = logging.getLogger("app.agents.catalog")
 # by its module only).
 STARTERS = {
     "agents": "A button of the app (POST /api/agents/runs)",
-    "browser": "A job search sweep, one run per website",
+    "browser": "A job search sweep, one run per website, two websites at once",
     "apply": "A step of an application being filled in",
     "ingestion": "The reading of a document the person uploaded",
     "documents": "A document generation, or a message in a document's chat",
     "jobs": "The Assess button of a posting's page",
+}
+
+# Who starts an agent whose package's sentence above would be wrong for it.
+STARTER_OF = {
+    "apply_followup": "The Write a draft button of an application the person follows up",
+    "posting_reader": "A sweep once its sources ended, and the backlog tick every minute",
+    "profile_interpret": "Done on a part of the About you document",
+    "profile_titles": "The More ideas button, and the tick after a change to the profile",
 }
 
 
@@ -138,6 +146,313 @@ _PACKAGE_CATEGORY = {
     "browser": "finding",
     "documents": "documents",
     "ingestion": "profile",
+}
+
+# --- the workflows drawn above each category's table (agents A9) ------------------------------
+
+NODE_KINDS = ("agent", "person", "system", "data")
+
+
+@dataclass(frozen=True)
+class Node:
+    """A box of a workflow's diagram: an agent by its registered name, or a step of kind person
+    (a click, a message, an upload), system (a sweep, a cron, a tick, a worker job) or data (a
+    stored thing another step reads), at a column and a row laid out by hand, left to right in
+    the order things happen. `note` says what the drawing alone cannot (an agent nothing starts)."""
+
+    id: str
+    kind: str
+    label: str
+    column: int
+    row: int
+    note: str = ""
+    # Agents that run side by side under one step share a group: drawn as one card listing them.
+    group: str = ""
+
+
+@dataclass(frozen=True)
+class Edge:
+    """An arrow of a workflow: who starts or feeds whom, in 2 to 5 plain words. An arrow to an
+    earlier column is a return (a rebuild, a question answered and queued again)."""
+
+    source: str
+    target: str
+    label: str
+
+
+@dataclass(frozen=True)
+class Flow:
+    nodes: tuple[Node, ...]
+    edges: tuple[Edge, ...]
+
+
+# The plain name of each agent on its card; its registered name stays the link and the tooltip.
+NAMES: dict[str, str] = {
+    "apply_agent": "Apply agent",
+    "apply_answer": "Answer writer",
+    "apply_check": "Answer checker",
+    "apply_form": "Form filler",
+    "apply_followup": "Follow up writer",
+    "browser_discovery": "Website search",
+    "document_transcribe": "Page transcriber",
+    "documents_base": "Base CV writer",
+    "documents_chat_base": "Base CV chat",
+    "documents_chat_cv": "CV chat",
+    "documents_chat_letter": "Letter chat",
+    "documents_chat_offer_notes": "Offer notes chat",
+    "documents_cv": "CV writer",
+    "documents_design": "Design capture",
+    "documents_interview_practice": "Interview practice",
+    "documents_interview_prep": "Interview prep writer",
+    "documents_letter": "Letter writer",
+    "documents_offer_read": "Offer letter reader",
+    "documents_panel_manager": "Hiring panel: hiring manager",
+    "documents_panel_merge": "Hiring panel: merge",
+    "documents_panel_reader_ceo": "Hiring panel: reader, the CEO",
+    "documents_panel_reader_manager": "Hiring panel: reader, hiring manager",
+    "documents_panel_reader_recruiter": "Hiring panel: reader, the recruiter",
+    "documents_panel_reader_rival": "Hiring panel: reader, another applicant",
+    "documents_panel_reader_teammate": "Hiring panel: reader, the teammate",
+    "documents_panel_screen": "Hiring panel: automated screen",
+    "documents_proposal": "Proposal writer",
+    "job_chat": "Job chat",
+    "jobs_assess": "Posting assessor",
+    "posting_reader": "Posting reader",
+    "profile_extract": "Profile extractor",
+    "profile_interpret": "About you reader",
+    "profile_titles": "Job title suggester",
+    "triage": "Triage",
+}
+_PANEL_GROUP = "Hiring panel"
+
+
+def _agent(name: str, column: int, row: int, note: str = "", group: str = "") -> Node:
+    return Node(name, "agent", NAMES[name], column, row, note, group)
+
+
+def _step(kind: str, key: str, label: str, column: int, row: int) -> Node:
+    return Node(key, kind, label, column, row)
+
+
+def _edges(*lines: tuple[str, str, str]) -> tuple[Edge, ...]:
+    return tuple(Edge(source, target, label) for source, target, label in lines)
+
+
+_PANEL = (
+    "documents_panel_screen",
+    "documents_panel_manager",
+    "documents_panel_reader_manager",
+    "documents_panel_reader_rival",
+    "documents_panel_reader_ceo",
+    "documents_panel_reader_recruiter",
+    "documents_panel_reader_teammate",
+)
+_WRITERS = ("documents_cv", "documents_letter", "documents_base")
+_CHATS = ("documents_chat_cv", "documents_chat_letter", "documents_chat_base")
+
+# Each edge is a fact of the code that starts or feeds the agent; the comment above a group names
+# where. tests/agents/test_admin_agents.py fails when a drawn agent is not registered, or a
+# registered one is drawn in no flow. The test category has none.
+FLOWS: dict[str, Flow] = {
+    "finding": Flow(
+        nodes=(
+            _step("person", "search", "Save and start search", 0, 0),
+            _step("person", "onboarding", "Start, at the end of onboarding", 0, 1),
+            _step("system", "schedule", "Scheduled sweeps", 0, 2),
+            _step("data", "scope", "Search settings", 0, 3),
+            _step("system", "sweep", "Sweep", 1, 1),
+            _step("system", "backlog", "Reader backlog tick, every minute", 1, 3),
+            _agent("browser_discovery", 2, 0),
+            _agent("posting_reader", 2, 2),
+            _step("person", "help", "Let the assistant continue", 3, 0),
+            _step("data", "postings", "Job postings", 3, 1),
+        ),
+        edges=_edges(
+            # jobs/sweep_router.py POST /api/jobs/sweeps, opportunities/onboarding_router.py
+            # complete, worker.py scheduled_sweeps; sweep.begin freezes the scope.
+            ("search", "sweep", "starts a sweep"),
+            ("onboarding", "sweep", "starts the first sweep"),
+            ("schedule", "sweep", "starts one when due"),
+            ("scope", "sweep", "frozen at its start"),
+            # sweep.py run_sweep: the websites, then the reader; browser/sources/interactive.py.
+            ("sweep", "browser_discovery", "one run per website"),
+            ("browser_discovery", "help", "asks for help"),
+            ("help", "browser_discovery", "gives the browser back"),
+            ("browser_discovery", "postings", "stores verified postings"),
+            ("sweep", "posting_reader", "then reads its postings"),
+            # worker.py cron:posting_reader, reader.tick.
+            ("backlog", "posting_reader", "reads the unread ones"),
+            ("posting_reader", "postings", "fills facts and text"),
+        ),
+    ),
+    "applying": Flow(
+        nodes=(
+            _step("person", "apply", "Apply", 0, 0),
+            _step("person", "like", "Like", 0, 1),
+            _step("person", "site", "Complete my profile on this site", 0, 3),
+            _step("person", "draft", "Write a draft", 0, 5),
+            _step("data", "queued", "Queued application", 1, 0),
+            _step("data", "documents", "The posting's CV and letter", 1, 1),
+            _step("system", "fill", "Fill job, started by the apply tick", 2, 0),
+            _step("system", "decision", "Decision of a Full auto item", 4, 3),
+            _agent("apply_agent", 3, 0),
+            _agent("apply_answer", 3, 1),
+            _agent("apply_form", 3, 2),
+            _agent("apply_check", 5, 3),
+            _agent("apply_followup", 3, 5),
+            _step("person", "question", "Send the answer", 4, 0),
+            _step("data", "answers", "Application answers", 4, 1),
+            _step("data", "followup", "Follow up draft", 4, 5),
+            _step("person", "approve", "Approve and submit", 5, 1),
+        ),
+        edges=_edges(
+            # apply/likes.py queues both; worker.py apply_tick starts the fill, which waits for
+            # the documents (apply/run.py).
+            ("apply", "queued", "queues it"),
+            ("like", "queued", "queues it"),
+            ("queued", "fill", "the tick starts it"),
+            ("documents", "fill", "waits for their PDFs"),
+            # worker.py apply_fill: the apply agent, or the adapter path (apply/run.py).
+            ("fill", "apply_agent", "One click Apply"),
+            ("fill", "apply_answer", "answers what is left"),
+            ("fill", "apply_form", "an unknown or changed form"),
+            ("apply_agent", "question", "asks the person"),
+            ("question", "queued", "queues it again"),
+            ("apply_answer", "answers", "writes its answers"),
+            ("apply_form", "answers", "writes its answers"),
+            ("answers", "approve", "shown for approval"),
+            # apply/site_profile.py site_profile_run.
+            ("site", "apply_form", "fills the site's profile"),
+            # worker.py apply_tick queues the decision; apply/submit.py _decide, model_check.py.
+            ("answers", "decision", "a ready Full auto item"),
+            ("decision", "apply_check", "checks the free text"),
+            # apply/followups_router.py write.
+            ("draft", "apply_followup", "writes a follow up"),
+            ("apply_followup", "followup", "stores the draft"),
+        ),
+    ),
+    "documents": Flow(
+        nodes=(
+            _step("person", "fit", "Make it fit", 0, 0),
+            _step("person", "click", "Write now, Apply or Like", 0, 1),
+            _step("person", "base", "New CV or Upload your CV", 0, 3),
+            _step("person", "capture", "Try the design again", 0, 4),
+            _step("person", "chat", "Message in a document's chat", 0, 8),
+            _step("person", "offer", "Read an offer", 0, 10),
+            _step("person", "notes_chat", "Message about the offer notes", 0, 11),
+            _step("person", "prepare", "Prepare for the interview", 0, 12),
+            _step("person", "practice", "Start practice", 0, 13),
+            _agent("documents_cv", 1, 1),
+            _agent("documents_letter", 1, 2),
+            _agent("documents_base", 1, 3),
+            _agent("documents_design", 1, 4),
+            *(_agent(name, 1, 7 + index) for index, name in enumerate(_CHATS)),
+            _agent("documents_offer_read", 1, 10),
+            _agent("documents_interview_prep", 1, 12),
+            _agent("documents_proposal", 1, 14, "Not started by the app yet"),
+            _step("system", "panel", "Hiring panel job", 2, 0),
+            _step("data", "notes", "Offer notes", 2, 10),
+            _step("data", "prep", "Interview prep", 2, 12),
+            *(_agent(name, 3, index, group=_PANEL_GROUP) for index, name in enumerate(_PANEL)),
+            _agent("documents_chat_offer_notes", 3, 11),
+            _agent("documents_interview_practice", 3, 13),
+            _agent("documents_panel_merge", 4, 3),
+        ),
+        edges=_edges(
+            # documents/auto_router.py write_now and make_it_fit, documents/tick.py
+            # start_clicks; generate.start_letter_after, after the CV or its panel.
+            ("fit", "documents_cv", "asks a shorter CV"),
+            ("click", "documents_cv", "writes the CV"),
+            ("documents_cv", "documents_letter", "then the letter"),
+            # documents/base_router.py create_base_cv; writer_base.py after a conversion;
+            # documents/design_router.py capture.
+            ("base", "documents_base", "builds or converts it"),
+            ("documents_base", "documents_design", "captures an upload's design"),
+            ("capture", "documents_design", "captures it again"),
+            # generate.py on_final and writer_base.py open the panel; panel.py runs it.
+            *((writer, "panel", "sends its draft") for writer in _WRITERS),
+            *(("panel", role, "reviews, three at once") for role in _PANEL),
+            *((role, "documents_panel_merge", "sends its review") for role in _PANEL),
+            ("documents_panel_merge", "panel", "plans a rebuild"),
+            *(("panel", writer, "rebuilds the draft") for writer in _WRITERS),
+            # documents/chat.py post; documents/offer_router.py read_letter.
+            *(("chat", name, "asks for a change") for name in _CHATS),
+            ("offer", "documents_offer_read", "reads the letter"),
+            ("documents_offer_read", "notes", "writes the notes"),
+            ("notes", "documents_chat_offer_notes", "discussed in a chat"),
+            ("notes_chat", "documents_chat_offer_notes", "asks about them"),
+            # documents/interview_prep_router.py prepare and practice.
+            ("prepare", "documents_interview_prep", "writes the prep"),
+            ("documents_interview_prep", "prep", "stores the prep"),
+            ("prep", "documents_interview_practice", "practised in a chat"),
+            ("practice", "documents_interview_practice", "answers the person"),
+        ),
+    ),
+    "profile": Flow(
+        nodes=(
+            _step("person", "read", "Start reading", 0, 0),
+            _step("person", "about", "Done on an About you part", 0, 2),
+            _step("person", "ideas", "More ideas", 0, 3),
+            _step("system", "titles_tick", "Titles tick, after a profile change", 0, 4),
+            _step("system", "run", "Ingestion run", 1, 0),
+            _agent("document_transcribe", 2, 0),
+            _agent("profile_extract", 2, 1),
+            _agent("profile_interpret", 2, 2),
+            _agent("profile_titles", 2, 3),
+            _step("data", "items", "Profile proposals", 3, 1),
+            _step("data", "reading", "About you reading", 3, 2),
+            _step("data", "titles", "Title suggestions", 3, 3),
+            _step("person", "accept", "Accept or Accept all additions", 4, 1),
+            _step("person", "use", "Apply on the reading", 4, 2),
+            _step("person", "add", "Add to job titles", 4, 3),
+        ),
+        edges=_edges(
+            # ingestion/runs_router.py start_run; plan.py puts every transcription first;
+            # engine.py merges the items at the run's end.
+            ("read", "run", "starts a run"),
+            ("run", "document_transcribe", "scanned pages first"),
+            ("run", "profile_extract", "then each document"),
+            ("document_transcribe", "profile_extract", "its transcribed text"),
+            ("profile_extract", "items", "proposes items"),
+            ("items", "accept", "reviewed by the person"),
+            # profile/about_router.py done and apply.
+            ("about", "profile_interpret", "reads that part"),
+            ("profile_interpret", "reading", "writes a reading"),
+            ("reading", "use", "shown to the person"),
+            # profile/titles_router.py more_ideas; worker.py cron:profile_titles.
+            ("ideas", "profile_titles", "suggests more titles"),
+            ("titles_tick", "profile_titles", "starts the runs due"),
+            ("profile_titles", "titles", "stores its suggestions"),
+            ("titles", "add", "picked by the person"),
+        ),
+    ),
+    "jobs": Flow(
+        nodes=(
+            _step("person", "assess", "Assess", 0, 0),
+            _step("person", "with_agent", "Assess with agent", 0, 1),
+            _step("person", "message", "Message in a job's chat", 0, 2),
+            _agent("jobs_assess", 1, 0),
+            _agent("triage", 1, 1),
+            _agent("job_chat", 1, 2),
+            _step("data", "assessment", "Assessment", 2, 0),
+            _step("data", "proposals", "Proposals", 2, 1),
+            _step("data", "thread", "Chat thread", 2, 2),
+            _step("person", "decide", "Accept or Reject", 3, 1),
+            _step("data", "job", "The job posting", 4, 1),
+        ),
+        edges=_edges(
+            # jobs/assess_router.py start; agents/router.py runs; agents/chat_router.py.
+            ("assess", "jobs_assess", "assesses the posting"),
+            ("jobs_assess", "assessment", "stores the assessment"),
+            ("with_agent", "triage", "starts a triage run"),
+            ("triage", "proposals", "proposes a note or status"),
+            ("message", "job_chat", "answers in the chat"),
+            ("job_chat", "thread", "writes its answer"),
+            # agents/proposals.py accept.
+            ("proposals", "decide", "shown to the person"),
+            ("decide", "job", "an accepted one changes it"),
+        ),
+    ),
 }
 
 _JOB_LINE = 'then a line "Job id: <the run\'s job id>" when the run is about a job'
@@ -251,6 +566,7 @@ def load() -> dict[str, definitions.AgentDefinition]:
     from app.ingestion import agents as _ingestion  # noqa: F401  (profile_extract, transcribe)
     from app.jobs import assess as _assess  # noqa: F401  (jobs_assess)
     from app.jobs import reader as _reader  # noqa: F401  (posting_reader)
+    from app.profile import agents as _profile  # noqa: F401  (profile_titles, profile_interpret)
 
     return dict(definitions.AGENTS)
 
@@ -387,6 +703,8 @@ def starter(definition: definitions.AgentDefinition) -> str:
         return "The dev run panel and the tests, never in production"
     if definition.chat:
         return "A message in a chat thread"
+    if definition.name in STARTER_OF:
+        return STARTER_OF[definition.name]
     if not definition.internal:
         return STARTERS["agents"]
     return STARTERS.get(package_of(definition), "Its own module, in code")
