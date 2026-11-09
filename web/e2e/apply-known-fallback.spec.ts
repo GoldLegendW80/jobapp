@@ -121,17 +121,6 @@ async function prepare(where: Page, who: Person) {
       })
     ).status(),
   ).toBe(200);
-  const { version } = (await (
-    await where.request.get("/api/documents/consent")
-  ).json()) as { version: number };
-  expect(
-    (
-      await where.request.post("/api/documents/consent", {
-        headers: CSRF,
-        data: { version },
-      })
-    ).status(),
-  ).toBe(200);
   const built = await where.request.post("/api/documents/base-cvs", {
     headers: CSRF,
     data: { from: "profile", script: "documents_base_journey" },

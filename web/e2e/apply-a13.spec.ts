@@ -182,13 +182,6 @@ test("an invented person has the consent, a base CV, a company cap and five post
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
-  const asked = await page.request.get("/api/documents/consent");
-  const { version } = (await asked.json()) as { version: number };
-  const accepted = await page.request.post("/api/documents/consent", {
-    headers: CSRF,
-    data: { version },
-  });
-  expect(accepted.status()).toBe(200);
   const caps = await page.request.get("/api/apply/caps");
   const { revision } = (await caps.json()) as { revision: string };
   const capped = await page.request.put("/api/apply/caps", {

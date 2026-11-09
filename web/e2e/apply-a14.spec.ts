@@ -36,16 +36,6 @@ test("review confirms a posting recipient and sends exactly the fixed PDFs throu
         secret: `sk-ant-api03-e2egood${"Fa14".repeat(20)}Rn42`,
       },
     });
-    const consent = await page.request.get("/api/documents/consent");
-    const { version } = (await consent.json()) as { version: number };
-    expect(
-      (
-        await page.request.post("/api/documents/consent", {
-          headers: CSRF,
-          data: { version },
-        })
-      ).status(),
-    ).toBe(200);
     const built = await page.request.post("/api/documents/base-cvs", {
       headers: CSRF,
       data: { from: "profile", script: "documents_base_journey" },

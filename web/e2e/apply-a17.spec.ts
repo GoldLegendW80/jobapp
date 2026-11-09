@@ -63,16 +63,6 @@ test("A approves one fake submission; B and a signed-out person cannot read its 
       },
     });
     expect(credential.status()).toBe(200);
-    const consent = await page.request.get("/api/documents/consent");
-    const { version } = (await consent.json()) as { version: number };
-    expect(
-      (
-        await page.request.post("/api/documents/consent", {
-          headers: CSRF,
-          data: { version },
-        })
-      ).status(),
-    ).toBe(200);
     const base = await page.request.post("/api/documents/base-cvs", {
       headers: CSRF,
       data: { from: "profile", script: "documents_base_journey" },

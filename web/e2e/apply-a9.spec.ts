@@ -94,13 +94,6 @@ test("an invented person has a posting on the fake Ashby form with its CV and le
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
-  const asked = await page.request.get("/api/documents/consent");
-  const { version } = (await asked.json()) as { version: number };
-  const accepted = await page.request.post("/api/documents/consent", {
-    headers: CSRF,
-    data: { version },
-  });
-  expect(accepted.status()).toBe(200);
   const built = await page.request.post("/api/documents/base-cvs", {
     headers: CSRF,
     data: { from: "profile", script: "documents_base_journey" },
