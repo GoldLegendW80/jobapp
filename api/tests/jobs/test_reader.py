@@ -541,7 +541,10 @@ def test_the_backlog_reads_a_saved_posting_once(
     job_id = add_posting(factory, user)
     add_posting(factory, user, text="   ", url=OTHER_URL, title="Data analyst")  # never read
     [run_id] = backlog(factory)
-    assert backlog(factory) == []  # one batch at a time
+    other = new_user(factory, "e2e-reader-backlog-2@example.org")
+    save_credential(factory, keyring, other)
+    add_posting(factory, other)
+    assert backlog(factory) == []  # one run at a time for the whole app
     with factory() as db:
         run = db.get(AgentRun, run_id)
         assert run is not None
@@ -550,7 +553,11 @@ def test_the_backlog_reads_a_saved_posting_once(
     job = job_of(factory, job_id)
     assert job.read_at == NOW
     assert job.location == "Barcelona, Spain"
-    assert backlog(factory) == []
+    [next_run] = backlog(factory)  # the other person's turn: this posting is read
+    with factory() as db:
+        run = db.get(AgentRun, next_run)
+        assert run is not None
+        assert run.user_id == other
 
 
 def test_the_backlog_gives_a_posting_up_after_three_failed_attempts(
