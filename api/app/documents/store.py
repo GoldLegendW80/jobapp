@@ -78,7 +78,6 @@ from app.documents.models import (
     BaseSource,
     Channel,
     Document,
-    DocumentConsent,
     DocumentGeneration,
     DocumentMessage,
     DocumentSettingsRow,
@@ -413,18 +412,6 @@ def save_settings(
     db.execute(statement.on_conflict_do_update(index_elements=["user_id"], set_=values))
     db.expire_all()
     return value
-
-
-@_busy
-def accept_consent(db: Session, user_id: uuid.UUID, text_version: int, at: datetime) -> None:
-    statement = pg_insert(DocumentConsent).values(
-        user_id=user_id, text_version=text_version, accepted_at=at
-    )
-    db.execute(statement.on_conflict_do_nothing())
-
-
-def consented(db: Session, user_id: uuid.UUID, text_version: int) -> bool:
-    return db.get(DocumentConsent, (user_id, text_version)) is not None
 
 
 # --- the language of a posting ------------------------------------------------------------------

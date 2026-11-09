@@ -51,7 +51,6 @@ SENTENCES: dict[str, tuple[int, str]] = {
     "done": (409, "The thank you note is sent already."),
     "never_apply": (409, "Your rules exclude this role, so the assistant writes nothing for it."),
     "running": (409, "The assistant is writing this draft. Wait for it to finish."),
-    "consent": (409, "Confirm what is sent to the writer first, in the CV tab of your profile."),
     "credential": (409, "Add a model credential in your account first."),
     "busy": (409, "Your assistant is busy with other work. Try again when it is done."),
     "queue_down": (503, followup_agent.ERRORS["queue_down"]),

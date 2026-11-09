@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import { fakeSession, member } from "@/test/auth";
-import { CONSENT_TEXT, fakeCv, fakeDocuments } from "@/test/documents";
+import { fakeCv, fakeDocuments } from "@/test/documents";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
@@ -51,76 +51,8 @@ describe("your CVs", () => {
     ).toEqual(expect.arrayContaining(["Your CVs", "Upload your CV"]));
   });
 
-  it("shows the empty state and asks for the consent before anything is sent", async () => {
+  it("builds at once on the click with no consent asked, and shows a reload still building", async () => {
     const api = setup();
-    const { user } = await openCvs();
-    expect(await screen.findByText("You have no CV yet")).toBeVisible();
-    expect(screen.getByTestId("confirm-line")).toHaveTextContent(
-      "Confirm what is sent to build your CV.",
-    );
-
-    await user.click(
-      screen.getByRole("button", { name: "Build it from my profile" }),
-    );
-    const dialog = await screen.findByRole("dialog", {
-      name: "What is sent to build your CV",
-    });
-    expect(within(dialog).getByTestId("consent-text")).toHaveTextContent(
-      CONSENT_TEXT,
-    );
-    expect(within(dialog).getByTestId("consent-model")).toHaveTextContent(
-      "claude-opus-5-5",
-    );
-    const estimates = within(dialog).getByTestId("consent-estimates");
-    expect(estimates).toHaveTextContent(
-      "One posting, its CV and letter read by the hiring panel: about 12,000 to 20,000 tokens.",
-    );
-    expect(estimates).not.toHaveTextContent("A typical week");
-    expect(estimates).toHaveTextContent("tokens count against your quota");
-    const agree = within(dialog).getByRole("button", {
-      name: "Agree and build my CV",
-    });
-    expect(agree).toBeDisabled();
-
-    // Declined: nothing is recorded, nothing is built, the tab keeps asking.
-    await user.click(within(dialog).getByRole("button", { name: "Not now" }));
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
-    expect(writes(api)).toEqual([]);
-    expect(screen.getByTestId("confirm-line")).toBeVisible();
-  });
-
-  it("records the consent of the version shown, then builds the CV from the profile", async () => {
-    const api = setup();
-    const { user } = await openCvs();
-    await user.click(
-      await screen.findByRole("button", { name: "Build it from my profile" }),
-    );
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("checkbox"));
-    await user.click(
-      within(dialog).getByRole("button", { name: "Agree and build my CV" }),
-    );
-
-    expect(
-      await screen.findByText("Your first CV is being built."),
-    ).toBeVisible();
-    expect(writes(api).map((one) => [one.method, one.path, one.body])).toEqual([
-      ["POST", "/api/documents/consent", { version: 1 }],
-      ["POST", "/api/documents/base-cvs", { from: "profile" }],
-    ]);
-    expect(
-      api.requests.every(
-        (one) =>
-          one.method === "GET" ||
-          one.headers.get("x-requested-with") === "jobapp",
-      ),
-    ).toBe(true);
-  });
-
-  it("builds at once when the consent was given, and shows a reload still building", async () => {
-    const api = setup({ consent: { accepted: true } });
     const { user } = await openCvs();
     await user.click(
       await screen.findByRole("button", { name: "Build it from my profile" }),
@@ -132,39 +64,6 @@ describe("your CVs", () => {
     expect(writes(api).map((one) => one.path)).toEqual([
       "/api/documents/base-cvs",
     ]);
-  });
-
-  it("keeps the dialog usable by keyboard alone", async () => {
-    setup();
-    const { user } = await openCvs();
-    const build = await screen.findByRole("button", {
-      name: "Build it from my profile",
-    });
-    build.focus();
-    await user.keyboard("{Enter}");
-    const dialog = await screen.findByRole("dialog");
-    // Tab reaches the box, a space ticks it, and tab then reaches the enabled button.
-    const box = within(dialog).getByRole("checkbox");
-    for (let stops = 0; stops < 6 && document.activeElement !== box; stops += 1)
-      await user.tab();
-    expect(box).toHaveFocus();
-    await user.keyboard(" ");
-    expect(box).toBeChecked();
-    const agree = within(dialog).getByRole("button", {
-      name: "Agree and build my CV",
-    });
-    for (
-      let stops = 0;
-      stops < 3 && document.activeElement !== agree;
-      stops += 1
-    )
-      await user.tab();
-    expect(agree).toHaveFocus();
-    expect(agree).toBeEnabled();
-    await user.keyboard("{Escape}");
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
   });
 
   it("lists the CVs with their source, template and default, and the threshold line", async () => {
@@ -179,7 +78,6 @@ describe("your CVs", () => {
           template_slug: "ledger",
         }),
       ],
-      consent: { accepted: true },
     });
     await openCvs();
     const list = await screen.findByRole("list", { name: "Your CVs" });
@@ -206,7 +104,6 @@ describe("your CVs", () => {
         fakeCv({ id: "a", name: "Main CV" }),
         fakeCv({ id: "b", name: "Second", is_default: false }),
       ],
-      consent: { accepted: true },
     });
     const { user } = await openCvs();
     await user.click(
@@ -283,7 +180,6 @@ describe("your CVs", () => {
         fakeCv({ id: "a", name: "Main CV" }),
         fakeCv({ id: "b", name: "Second", is_default: false }),
       ],
-      consent: { accepted: true },
     });
     await openCvs();
     const button = await screen.findByRole("button", {
@@ -310,50 +206,9 @@ describe("your CVs", () => {
     expect(screen.queryByTestId("no-experience-line")).toBeNull();
   });
 
-  it("reads the consent again when its text changed under the open tab", async () => {
-    const api = setup();
-    const { user } = await openCvs();
-    await user.click(
-      await screen.findByRole("button", { name: "Build it from my profile" }),
-    );
-    let outdated = false;
-    server.use(
-      http.post("*/api/documents/consent", () => {
-        outdated = true;
-        return HttpResponse.json(
-          {
-            detail:
-              "The consent text has changed. Read the current text and accept it.",
-          },
-          { status: 422 },
-        );
-      }),
-      http.get("*/api/documents/consent", () =>
-        HttpResponse.json({
-          ...api.consent,
-          version: outdated ? 2 : 1,
-          text: outdated ? "The newer text." : api.consent.text,
-        }),
-      ),
-    );
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("checkbox"));
-    await user.click(
-      within(dialog).getByRole("button", { name: "Agree and build my CV" }),
-    );
-    expect(await screen.findByTestId("consent-text")).toHaveTextContent(
-      "The newer text.",
-    );
-    expect(within(dialog).getByRole("checkbox")).not.toBeChecked();
-    expect(
-      writes(api).some((one) => one.path === "/api/documents/base-cvs"),
-    ).toBe(false);
-  });
-
   it("deletes the last CV and goes back to the empty state", async () => {
     setup({
       cvs: [fakeCv({ id: "a", name: "Only CV" })],
-      consent: { accepted: true },
     });
     const { user } = await openCvs();
     await user.click(
@@ -367,7 +222,7 @@ describe("your CVs", () => {
     expect(await screen.findByText("You have no CV yet")).toBeVisible();
   });
 
-  it("makes a copy without asking for the consent: a copy sends nothing to a model", async () => {
+  it("makes a copy from another CV", async () => {
     const api = setup({ cvs: [fakeCv({ id: "a", name: "Main CV" })] });
     const { user } = await openCvs();
     await user.click(await screen.findByRole("button", { name: "New CV" }));
@@ -426,21 +281,6 @@ describe("your CVs", () => {
     ).toBeVisible();
   });
 
-  it("starts the consent from New CV, closing the dialog under it", async () => {
-    const api = setup({ cvs: [fakeCv({ id: "a" })] });
-    const { user } = await openCvs();
-    await user.click(await screen.findByRole("button", { name: "New CV" }));
-    const dialog = await screen.findByRole("dialog", { name: "New CV" });
-    await user.click(within(dialog).getByRole("button", { name: "Build it" }));
-    expect(
-      await screen.findByRole("dialog", {
-        name: "What is sent to build your CV",
-      }),
-    ).toBeVisible();
-    expect(screen.queryByRole("dialog", { name: "New CV" })).toBeNull();
-    expect(writes(api)).toEqual([]);
-  });
-
   it("disables New CV at the most, with the sentence", async () => {
     const cvs = Array.from({ length: 10 }, (_, index): BaseCv =>
       fakeCv({
@@ -449,7 +289,7 @@ describe("your CVs", () => {
         is_default: index === 0,
       }),
     );
-    setup({ cvs, consent: { accepted: true } });
+    setup({ cvs });
     await openCvs();
     const button = await screen.findByRole("button", { name: "New CV" });
     expect(button).toBeDisabled();
@@ -486,7 +326,6 @@ describe("your CVs", () => {
           },
         }),
       ],
-      consent: { accepted: true },
     });
     await openCvs();
     expect(
@@ -516,7 +355,6 @@ describe("your CVs", () => {
           },
         }),
       ],
-      consent: { accepted: true },
     });
     await openCvs();
     expect(
@@ -537,7 +375,6 @@ describe("your CVs", () => {
       cvs: Array.from({ length: 10 }, (_, index) =>
         fakeCv({ id: `c${String(index)}`, is_default: index === 0 }),
       ),
-      consent: { accepted: true },
       max: 10,
     });
     // Another tab filled the list after this page loaded: the server answers 409.
@@ -560,18 +397,12 @@ describe("your CVs", () => {
   });
 
   it("uses no dash as a separator in any state of the tab", async () => {
-    const api = setup({ consent: { accepted: false } });
+    const api = setup();
     const { user } = await openCvs();
     const states: string[] = [];
     const seen = () => states.push(document.body.textContent);
     await screen.findByText("You have no CV yet");
     seen();
-    await user.click(
-      screen.getByRole("button", { name: "Build it from my profile" }),
-    );
-    await screen.findByRole("dialog");
-    seen();
-    await user.click(screen.getByRole("button", { name: "Not now" }));
     api.cvs.push(
       fakeCv({
         id: "w",
@@ -585,9 +416,12 @@ describe("your CVs", () => {
         },
       }),
     );
-    await waitFor(() => {
-      expect(screen.queryByRole("dialog")).toBeNull();
-    });
+    await user.click(
+      screen.getByRole("button", { name: "Build it from my profile" }),
+    );
+    await screen.findByText("Waits");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    seen();
     expect(states.length).toBe(2);
     for (const text of states) expect(text).not.toMatch(SEPARATOR);
   });

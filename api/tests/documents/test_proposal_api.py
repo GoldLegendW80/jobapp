@@ -99,7 +99,7 @@ def test_a_proposal_is_read_and_listed_with_its_postings_documents(
     assert only["id"] == str(alex["document"])
     assert only["kind"] == "proposal"
     assert only["generation"]["status"] == "waiting"
-    assert only["generation"]["wait_reason"] == "consent"
+    assert only["generation"]["wait_reason"] == "credential"  # no consent is asked
 
 
 def test_a_hand_edit_makes_a_version_with_its_notes_and_queues_no_render(

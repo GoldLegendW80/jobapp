@@ -44,7 +44,7 @@ describe("the review queue page", () => {
       }),
       queueItem(2, "queued", {
         title: "Field Engineer",
-        needs: "documents:consent",
+        needs: "documents:writing",
         documents: {},
       }),
     ]);

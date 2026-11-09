@@ -11,9 +11,9 @@ transaction, under the posting it was given: the proposal of that posting, made 
 with `to` set to `contact`, and its writing started (`generate.create` and `generate.start`, the
 writer of `writer_proposal`, the fact check and its corrections as for a letter). A second call
 returns the same document and starts nothing while it has a version or a writing open; one
-whose writing failed or was stopped is written again. The writing waits for the consent and the
+whose writing failed or was stopped is written again. The writing waits for the
 credential as a click does (`writer_base.wait_reason`), and the tick's `start_clicks` starts it
-once they are there; a person whose runs are all busy keeps it `queued`, which the tick starts
+once it is there; a person whose runs are all busy keeps it `queued`, which the tick starts
 too. The caller commits, then queues `run_id` with `generate.enqueue_run`.
 
 Versions and edits are those of every document: the routes of router.py save its draft (a

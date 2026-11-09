@@ -879,20 +879,23 @@ describe("a failing refresh", () => {
     ).toBeVisible();
   });
 
-  it("asks for the documents consent with a link, and writes nothing before", async () => {
+  it("asks for a model credential with a link, and asks no consent", async () => {
     fakeApply({
       application: fakeApplication("queued", {
         mode: "direct",
-        needs: "documents:consent",
+        needs: "documents:credential",
       }),
     });
     const { section } = await openSection();
     expect(
-      await within(section).findByText(/nothing is written before\.$/),
+      await within(section).findByText(
+        /Add a model credential in your account first\.$/,
+      ),
     ).toBeVisible();
     expect(
-      within(section).getByRole("link", { name: "Open your CVs" }),
-    ).toHaveAttribute("href", "/profile#your-cv");
+      within(section).getByRole("link", { name: "Open your account" }),
+    ).toHaveAttribute("href", "/account");
+    expect(within(section).queryByText(/Confirm what is sent/)).toBeNull();
   });
 
   it("says plainly that a writer failed and nothing was sent", async () => {

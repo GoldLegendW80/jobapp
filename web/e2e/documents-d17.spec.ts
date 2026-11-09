@@ -148,13 +148,6 @@ test("a posting's CV is rendered once, with the consent and a credential", async
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
-  const asked = await page.request.get("/api/documents/consent");
-  const { version } = (await asked.json()) as { version: number };
-  const accepted = await page.request.post("/api/documents/consent", {
-    headers: CSRF,
-    data: { version },
-  });
-  expect(accepted.status()).toBe(200);
   postingId = await addPosting(page.request, person);
   cvId = seedDocuments(person, postingId).cv;
   await saveDraft(page.request, cvId, WRITTEN);

@@ -3,7 +3,7 @@ upload", steps 1 to 6): the second step of a conversion, after its content.
 
 **The request.** `prepare_after_conversion` records the capture of an upload whose content
 conversion is done (D24) in the conversion's own transaction, under a savepoint: one
-`template_capture` generation of the base CV, `queued`, `waiting` with `consent` or `credential`
+`template_capture` generation of the base CV, `queued`, `waiting` with `credential`
 (`writer_base.wait_reason`), or `failed` with `binding_gone` when the file's bytes are gone.
 `start_prepared` starts that generation's run (`writer_design`) once the bytes and the reason to
 wait are read again under the document lock: `enqueue(final, generation_id)` calls it after the

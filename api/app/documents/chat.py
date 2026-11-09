@@ -22,7 +22,7 @@ chat writer of the document's kind (`post`):
   `conversation_chars` (`estimate_for`: at most CONVERSATION_SHARE of the run's high estimate,
   over the turns that send it again), the newest always.
 
-**Before a run starts:** the consent of the current text and a model credential (the rule of
+**Before a run starts:** a model credential (the rule of
 every model call of the module, `writer_base.wait_reason`), else nothing is stored and the
 route answers 409 with what to settle: a waiting chat would hold the document's one open
 generation, and nothing would start it. One open generation per document (409 while one runs);
@@ -137,7 +137,6 @@ HOOK_GRACE_S = 120  # as the tick's: a final hook ends within the runner's own l
 QUOTE_MAX = 80
 CORRECTIONS_LISTED = 5
 
-NO_CONSENT = "Confirm what is sent to the model first, then send your message again."
 NO_CREDENTIAL = "Add a model credential on the Account page first, then send your message again."
 SUGGEST_PROFILE = "If it is true, add it to your profile, then ask again."
 FAILED = {
@@ -461,7 +460,7 @@ def visible(text: str) -> bool:
 
 
 class ChatRefusedError(Exception):
-    """The chat cannot start a run now: `reason` is `consent` or `credential`, or `kind` for a
+    """The chat cannot start a run now: `reason` is `credential`, or `kind` for a
     document that has no chat (an outreach proposal)."""
 
     def __init__(self, reason: str) -> None:

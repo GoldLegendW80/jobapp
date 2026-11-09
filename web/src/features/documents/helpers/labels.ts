@@ -13,7 +13,7 @@ import type {
   VersionSummary,
   WaitReason,
 } from "../api/documents-api";
-import type { Estimate } from "../api/consent-api";
+import type { Estimate } from "../api/estimate-api";
 import type { GenerationBrief } from "../api/posting-documents-api";
 
 export const SOURCE_LABELS: Record<BaseSource, string> = {
@@ -42,8 +42,8 @@ export function templateLabel(slug: string): string {
 }
 
 export const WAIT_SENTENCES: Record<WaitReason, string> = {
-  consent:
-    "Waiting for you to confirm what is sent. Open Your CVs on your profile.",
+  // The database's value kept until a contract migration: the next tick starts such a row.
+  consent: "Starting in a moment.",
   credential: "Waiting for a model credential. Add one in your account.",
   base_cv: "Waiting for your base CV to exist.",
   daily_ceiling:
@@ -87,7 +87,7 @@ export function isOpen(
 /** How often an open document is read again while something is being written or rendered. */
 export const POLL_MS = 1500;
 
-/** While a generation waits for the person (consent, credential, ceiling) nothing can change soon. */
+/** While a generation waits for the person (credential, ceiling) nothing can change soon. */
 export const WAITING_POLL_MS = 10_000;
 
 /** How long until the document is read again; false when nothing is being written or rendered. */

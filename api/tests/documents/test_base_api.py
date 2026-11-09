@@ -1,14 +1,13 @@
-"""D9: the base CVs and the consent through the app, two e2e people. The list and its default
-(made twice, deleted with others and last), a build from the profile (waiting for the consent,
-then for a credential, then started), a build from an empty profile (a skeleton with its note),
-a copy (and a copy of another person's, 404), the 11th refused with its sentence, a delete that
-leaves the posting CVs written from it, an upload of an unknown file (404; D24's own tests are
-in test_base_upload_api.py), the consent (its pinned text, its version, accepted twice, the text
-bumped), its estimates, and a claim added by hand to a base CV that stays a note at every save."""
+"""D9: the base CVs through the app, two e2e people. The list and its default (made twice,
+deleted with others and last), a build from the profile (waiting for a credential alone, then
+started; D30 removed the consent and its route), a build from an empty profile (a skeleton with
+its note), a copy (and a copy of another person's, 404), the 11th refused with its sentence, a
+delete that leaves the posting CVs written from it, an upload of an unknown file (404; D24's own
+tests are in test_base_upload_api.py), the model the estimates are priced with, and a claim
+added by hand to a base CV that stays a note at every save."""
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from datetime import timedelta
 from typing import Any
@@ -21,7 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
-from app.documents import base_router, consent, store, writer_base
+from app.documents import base_router, estimate, store, writer_base
 from app.documents.models import (
     BaseSource,
     Document,
@@ -40,12 +39,6 @@ __all__ = ["api", "app", "clock", "engine", "factory", "migrated_url"]
 ALEX = "e2e-docs-base-alex@example.org"
 BLAKE = "e2e-docs-base-blake@example.org"
 BASES = "/api/documents/base-cvs"
-CONSENT = "/api/documents/consent"
-# SHA-256 of each consent text: editing the words of a version fails here (consent.py).
-DIGESTS = {
-    1: "34d57d47024662f34306e675e84339a437d499faa24e64a51ed6f1db9a2d1f51",
-    2: "aa4987bd6058d98d66b37846f1b9d3d2e63215e6f3db9d2c8ae6f4eef941eca6",
-}
 
 
 @pytest.fixture
@@ -69,10 +62,6 @@ def _credential(factory: sessionmaker[Session], user: uuid.UUID, clock: Any) -> 
         keyring = Keyring.from_text(new_key())
         credentials.save(db, keyring, user, CredentialKind.anthropic_api_key, API_KEY, clock())
         db.commit()
-
-
-def _consent(api: Api, token: str) -> Any:
-    return api.request("POST", CONSENT, token=token, json={"version": consent.VERSION})
 
 
 def _build(api: Api, token: str, **body: Any) -> Any:
@@ -104,81 +93,25 @@ def alex(factory: sessionmaker[Session], api: Api, clock: Any, queue: RecordingQ
     return _person(factory, api, ALEX, clock)
 
 
-# --- the consent --------------------------------------------------------------------------------
+# --- no consent ----------------------------------------------------------------------------------
 
 
-def test_consent_texts_are_pinned() -> None:
-    digests = {
-        version: hashlib.sha256(words.encode()).hexdigest()
-        for version, words in consent.TEXTS.items()
-    }
-    assert digests == DIGESTS
-    assert max(consent.TEXTS) == consent.VERSION
-    for words in consent.TEXTS.values():
-        assert "\u2014" not in words
-        assert "\u2013" not in words
-        assert " - " not in words
+def test_the_documents_consent_has_no_route_any_more() -> None:
+    """D30: the owner removed the documents consent; nothing asks it or records it."""
+    paths = {getattr(route, "path", "") for route in base_router.router.routes}
+    assert not any(path.endswith("/consent") for path in paths)
 
 
-def test_consent_is_asked_recorded_once_and_asked_again_when_the_text_changes(
-    api: Api, alex: Any, factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    token, user = alex
-    first = api.request("GET", CONSENT, token=token).json()
-    assert first["version"] == 2
-    assert first["accepted"] is False
-    assert first["text"] == consent.TEXTS[2]
-    assert "pictures" in first["text"]
-    assert "Nothing is written without your click." in first["text"]
-    assert "automatic" not in first["text"].lower()
-    assert first["model"] is None  # no credential yet
-    assert first["posting"]["tokens"]["low"] < first["posting"]["tokens"]["high"]
-    assert first["posting"]["cost"] is None
-    assert "week" not in first
-    assert "min_fit" not in first
-
-    stale = api.request("POST", CONSENT, token=token, json={"version": 1})
-    assert stale.status_code == 422
-    assert stale.json()["detail"] == consent.OUTDATED
-    accepted = _consent(api, token)
-    assert accepted.status_code == 200
-    assert accepted.json()["accepted"] is True
-    again = _consent(api, token).json()
-    assert again["accepted_at"] == accepted.json()["accepted_at"]  # the first date stays
-
-    monkeypatch.setattr(consent, "TEXTS", {**consent.TEXTS, 3: "A new text."})
-    monkeypatch.setattr(consent, "VERSION", 3)
-    bumped = api.request("GET", CONSENT, token=token).json()
-    assert bumped["version"] == 3
-    assert bumped["accepted"] is False
-    with factory() as db:
-        assert writer_base.wait_reason(db, user) is not None
-
-
-def test_the_consent_estimate_is_one_posting_with_its_hiring_panels(
-    api: Api, alex: Any, factory: sessionmaker[Session], clock: Any
-) -> None:
-    from app.documents import estimate
-
-    token, user = alex
-    _credential(factory, user, clock)
-    body = api.request("GET", CONSENT, token=token).json()
-    assert body["model"] == "claude-sonnet-5-5"
-    assert body["posting"]["cost"]["currency"] == "USD"
-    with factory() as db:
-        pair = estimate.posting(
-            estimate.profile_chars(db, user),
-            estimate.base_chars(db, user, None),
-            estimate.POSTING_DEFAULT_CHARS,
-            **estimate.limits(),
-        )
-    assert body["posting"]["tokens"]["high"] > pair.high  # the panels are counted
+def test_the_estimates_are_priced_with_the_writers_model_of_the_credential() -> None:
+    assert estimate.model_for(None) is None
+    assert estimate.model_for(CredentialKind.anthropic_api_key) == "claude-sonnet-5-5"
+    assert estimate.model_for(CredentialKind.claude_subscription) == "claude-opus-5-5"
 
 
 # --- building from the profile ------------------------------------------------------------------
 
 
-def test_a_build_waits_for_the_consent_then_the_credential_then_starts(
+def test_a_build_waits_for_the_credential_alone_then_starts(
     api: Api, alex: Any, factory: sessionmaker[Session], clock: Any, queue: RecordingQueue
 ) -> None:
     token, user = alex
@@ -190,9 +123,8 @@ def test_a_build_waits_for_the_consent_then_the_credential_then_starts(
     assert built["is_default"] is True
     assert built["name"] == "My CV"
     assert built["generation"]["status"] == "waiting"
-    assert built["generation"]["wait_reason"] == "consent"
+    assert built["generation"]["wait_reason"] == "credential"
 
-    assert _consent(api, token).status_code == 200
     (row,) = _list(api, token)
     assert row["generation"]["wait_reason"] == "credential"  # nothing sent, nothing counted
     assert not queue.jobs
@@ -215,12 +147,11 @@ def test_a_build_waits_for_the_consent_then_the_credential_then_starts(
         assert generation.token_ceiling == generation.estimate["ceiling"]
 
 
-def test_a_build_with_consent_and_credential_starts_its_run_at_once(
+def test_a_build_with_a_credential_and_no_consent_row_starts_its_run_at_once(
     api: Api, alex: Any, factory: sessionmaker[Session], clock: Any, queue: RecordingQueue
 ) -> None:
     token, user = alex
     _credential(factory, user, clock)
-    _consent(api, token)
     response = _build(api, token, name="  For platform roles  ")
     assert response.status_code == 202
     built = response.json()["base_cv"]
@@ -239,7 +170,6 @@ def test_an_empty_profile_gives_a_skeleton_with_a_note_and_no_generation(
 ) -> None:
     token, user = _person(factory, api, ALEX, clock, profile=False)
     _credential(factory, user, clock)
-    _consent(api, token)
     response = _build(api, token)
     assert response.status_code == 202  # nothing refused
     built = response.json()["base_cv"]

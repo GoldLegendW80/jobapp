@@ -45,6 +45,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
+from app.agents.models import CredentialKind
 from app.documents import store
 from app.ingestion.estimate import F, RunEstimate, text_tokens
 from app.jobs.models import Job
@@ -59,6 +60,8 @@ CONTENT_HIGH_CHARS = 8_000
 POSTING_DEFAULT_CHARS = 6_000  # a posting whose text is not stored yet
 TURNS_HIGH_DEFAULT = 10  # DOCUMENTS_GENERATION_MAX_TURNS
 SUBMITS_HIGH_DEFAULT = 4  # DOCUMENTS_MAX_SUBMITS
+MODEL = "claude-opus-5-5"  # on a subscription, as the writers (writer_cv.MODEL)
+MODEL_API_KEY = "claude-sonnet-5-5"
 
 
 def prompt_chars(name: str) -> int:
@@ -138,6 +141,13 @@ def posting(profile: int, base: int, posting_text: int, **limits: int) -> RunEst
     letter_prompt = prompt_chars("letter") or prompt_chars("cv")
     letter = writer(letter_prompt, reads + CONTENT_LOW_CHARS, **limits)
     return combine([cv, letter])
+
+
+def model_for(kind: CredentialKind | None) -> str | None:
+    """The writers' model on this credential, the one an estimate is priced with; None without."""
+    if kind is None:
+        return None
+    return MODEL_API_KEY if kind is CredentialKind.anthropic_api_key else MODEL
 
 
 def with_panels(pair: RunEstimate, posting_text: int, **limits: int) -> RunEstimate:

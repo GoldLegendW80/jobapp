@@ -34,8 +34,8 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    `token_ceiling`, computed by the caller for the pair, minus the tokens the CV's run spent,
    so a posting's CV and letter share that one ceiling. When that spend is unknown (no run, or
    a count the runner did not write), the letter gets no budget: it is created `failed` with
-   `token_limit` and starts no run (`no_budget`). The consent and the credential are read
-   again first: without either the letter waits with that reason; with the person's runs all
+   `token_limit` and starts no run (`no_budget`). The credential is read again first: without
+   it the letter waits with that reason; with the person's runs all
    busy it stays `queued`; the tick starts it in both cases. A chat, a
    shortening and a letter that already has a version start none: the person's letter is not
    rewritten behind their back. Nor does a posting past `cv_ready` (staged, applied, later or
@@ -48,14 +48,14 @@ of its document's kind (the CV writer, or the letter writer of task D8):
    and starts it: the writer is asked to bring the fields over the template's soft limits under
    them, through the same steps. A version made by a `shorten` generation, or by hand, never
    starts another: the pass runs once, and what still overflows is kept and shown. The pass is
-   part of the posting's spend: it starts only with the person's consent and credential, and its
+   part of the posting's spend: it starts only with the person's credential, and its
    ceiling is the letter's, what the pair has left after the CV's run (`shortening_ceiling`);
    with nothing left, or a spend unknown, there is no pass.
 5. "Make it fit" (`make_fit`, the route `POST /api/documents/{id}/fit`): the person asks for a
    `shorten` generation of a posting CV whose latest version overflows, whoever made that
    version (a writer, a template switch, a hand edit, a shortening). It passes the checks of
-   the pass above and refuses with a reason of `FIT_REFUSALS` instead of skipping: the consent,
-   a credential, a write to draw on and a known ceiling left. That ceiling is what the CV's last
+   the pass above and refuses with a reason of `FIT_REFUSALS` instead of skipping: a
+   credential, a write to draw on and a known ceiling left. That ceiling is what the CV's last
    write has left after its run and after the shortening passes made since
    (`shortening_ceiling`): passes clicked one after another share the one budget the automatic
    pass had. A person whose runs are all busy is refused too: nothing starts a queued pass
@@ -140,7 +140,6 @@ FIT_REFUSALS = (
     "not_shortened",
     "not_drawn",
     "fits",
-    "consent",
     "credential",
     "not_written",
     "spend_unknown",
@@ -657,7 +656,7 @@ def start_letter(
     generation takes the CV's estimate and base CV, what the pair's ceiling has left, and its
     document the CV's template. Returns the run to enqueue, else None: nothing to chain, a
     generation already open for the letter, or a letter left for the tick to start (waiting for
-    the consent or a credential, or `queued` while the person's runs are all busy)."""
+    a credential, or `queued` while the person's runs are all busy)."""
     from app.documents import writer_base  # writer_base imports this module
 
     with sessions() as db:
@@ -880,8 +879,8 @@ def shortening_ceiling(db: Session, parent: DocumentGeneration) -> int | None:
 def _pass_ceiling(
     db: Session, user_id: uuid.UUID, parent: DocumentGeneration | None
 ) -> tuple[DocumentGeneration, int]:
-    """The write a shortening pass draws on and its ceiling, else FitRefusedError: the consent
-    and a credential first (`writer_base.wait_reason`), then a write to draw on and a known
+    """The write a shortening pass draws on and its ceiling, else FitRefusedError: a credential
+    first (`writer_base.wait_reason`), then a write to draw on and a known
     ceiling left."""
     from app.documents import writer_base  # writer_base imports this module
 
@@ -906,7 +905,7 @@ def shorten(
     settings: Settings,
 ) -> uuid.UUID | None:
     """Create and start the one `shorten` generation of an overflowing version that a writer's
-    `posting` generation made, with the consent, a credential and a ceiling left (module
+    `posting` generation made, with a credential and a ceiling left (module
     docstring, 4). Returns the run to enqueue, else None."""
     with sessions() as db:
         found = db.execute(

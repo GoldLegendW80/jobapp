@@ -1,5 +1,5 @@
-"""The base CVs and the consent of the documents module (task D9; SPEC-documents.md, "Base CVs",
-"API"). Included by `routers.py` before D6's `/api/documents/{document_id}`.
+"""The base CVs of the documents module (task D9; SPEC-documents.md, "Base CVs", "API").
+Included by `routers.py` before D6's `/api/documents/{document_id}`.
 
 - `GET /api/documents/base-cvs`: the list, oldest first, with source, template, default mark,
   the date of the last version and the state of the open or last generation of its content (a
@@ -7,8 +7,8 @@
   it never turns a converted CV into "could not be converted").
 - `POST /api/documents/base-cvs {from, name?, copy_of?, language?}`:
   - `from: profile`: a base CV built from the profile (`writer_base.build_from_profile`): the
-    skeleton row at once and its generation, started now when the consent and a credential are
-    there, else `waiting` with `consent` or `credential`. 202. An empty profile gives the
+    skeleton row at once and its generation, started now when a credential is there, else
+    `waiting` with `credential`. 202. An empty profile gives the
     skeleton with a note and no generation: nothing refused.
   - `from: copy`: a copy of one of the person's base CVs (its draft, language and template;
     source `built`), rendered. 201. Another person's id answers 404.
@@ -24,10 +24,6 @@
   default (twice is the same answer); `default: false` is 422 (make another one the default).
 - `DELETE /api/documents/base-cvs/{id}`: 204. The posting documents written from it stay;
   deleting the default makes the oldest other one the default; deleting the last is allowed.
-- `GET /api/documents/consent`: the text, its version, whether it is accepted, and the
-  estimates of one posting and of a typical week at the threshold (`consent.figures`).
-- `POST /api/documents/consent {version}`: records it (422 for another version than the
-  current one), then starts the base CV generations that waited for it.
 
 Every route is the signed in person's: another person's base CV answers 404. Every answer is
 `Cache-Control: private, no-store`. Logs carry ids and codes, never a text.
@@ -44,12 +40,12 @@ from typing import Annotated, Literal
 import anyio.from_thread
 import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 from sqlalchemy.orm import Session
 
 from app import queue as queues
 from app.db import get_session
-from app.documents import consent, generate, render_job, store, writer_base
+from app.documents import generate, render_job, store, writer_base
 from app.documents.models import (
     Author,
     BaseSource,
@@ -214,22 +210,6 @@ class EstimateOut(BaseModel):
     cost: CostOut | None  # an API key only
 
 
-class ConsentOut(BaseModel):
-    version: int
-    text: str
-    accepted: bool
-    accepted_at: datetime | None
-    model: str | None
-    posting: EstimateOut  # one posting's CV and letter, their hiring panels included (D29)
-    cost_note: str
-
-
-class ConsentIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    version: StrictInt = Field(ge=1, le=2**31 - 1)
-
-
 # --- helpers ------------------------------------------------------------------------------------
 
 
@@ -334,20 +314,6 @@ def _estimate_out(found: RunEstimate, model: str | None, priced: bool) -> Estima
         costs = pricing.costs(found, model)
         cost = CostOut(currency=pricing.CURRENCY, low=costs.low, high=costs.high)
     return EstimateOut(tokens=TokensOut(low=found.low, high=found.high), cost=cost)
-
-
-def _consent_out(db: Session, user: User, at: datetime) -> ConsentOut:
-    row = consent.current(db, user.id)
-    figures = consent.figures(db, user.id)
-    return ConsentOut(
-        version=consent.VERSION,
-        text=consent.text(consent.VERSION),
-        accepted=row is not None,
-        accepted_at=row.accepted_at if row is not None else None,
-        model=figures.model,
-        posting=_estimate_out(figures.posting, figures.model, figures.priced),
-        cost_note=pricing.ESTIMATE_NOTE if figures.priced else pricing.QUOTA_NOTE,
-    )
 
 
 # --- base CVs -----------------------------------------------------------------------------------
@@ -479,28 +445,3 @@ def delete_base_cv(document_id: uuid.UUID, user: CurrentUser, request: Request, 
         db.rollback()
         raise _error(status.HTTP_404_NOT_FOUND, NOT_FOUND) from None
     store.commit(db)
-
-
-# --- the consent --------------------------------------------------------------------------------
-
-
-@router.get("/consent", response_model=ConsentOut)
-def read_consent(user: CurrentUser, request: Request, db: Db) -> ConsentOut:
-    return _consent_out(db, user, deps.clock(request))
-
-
-@router.post(
-    "/consent",
-    response_model=ConsentOut,
-    responses={422: {"description": "Not the current version of the text"}},
-)
-def give_consent(body: ConsentIn, user: CurrentUser, request: Request, db: Db) -> ConsentOut:
-    if body.version != consent.VERSION:
-        raise _error(status.HTTP_422_UNPROCESSABLE_CONTENT, consent.OUTDATED)
-    at = deps.clock(request)
-    consent.record(db, user.id, at)
-    runs = writer_base.start_ready(db, user.id, at=at)
-    store.commit(db)
-    _enqueue_runs(request, runs)
-    logger.info("documents.consent", extra={"user_id": str(user.id), "version": consent.VERSION})
-    return _consent_out(db, user, at)

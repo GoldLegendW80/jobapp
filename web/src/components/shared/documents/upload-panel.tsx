@@ -5,10 +5,8 @@ import { Card, CardTitle } from "@/components/ui/card";
 import { StartPanel } from "@/components/shared/ingestion/run-start";
 import { cn } from "@/lib/utils";
 
-import { failureSentence } from "@/features/documents/api/documents-api";
 import { useCvUpload } from "@/features/documents/api/use-cv-upload";
 import { READING_FOR_PROFILE } from "@/features/documents/helpers/upload-cv";
-import { ConsentDialog } from "./consent-dialog";
 import { UploadDropZone } from "./upload-panel/upload-drop-zone";
 import { UploadReading } from "./upload-panel/upload-reading";
 import { UploadResult } from "./upload-panel/upload-result";
@@ -20,9 +18,7 @@ import { UploadStatus } from "./upload-panel/upload-status";
  * profile and an onboarding step mount it. `openHref` says where a converted CV opens.
  *
  * The file goes through ingestion's upload, which reads its text; the conversion starts once
- * the text is there, after the consent of what is sent (asked the first time; declined, a
- * button asks again). The same dialog asks the consent of the Fill my profile run when it is
- * missing (owner, 2026-11-05: one dialog, both texts, each recorded with its own version).
+ * the text is there, with no consent asked (owner, 2026-11-09).
  * "Complete my profile from this CV" is ingestion's start button on that file, with the token
  * range of its estimate; nothing runs until the person clicks it. While the run reads, the
  * panel says so, and when it ends the review opens by itself on the Fill my profile page.
@@ -62,8 +58,7 @@ export function UploadPanel({
 }
 
 /**
- * What follows a CV chosen for conversion: its reading, the consent of what is sent, the
- * converted CV and, with `completeHere`, the start of the run that completes the profile from
+ * What follows a CV chosen for conversion: its reading, the converted CV and, with `completeHere`, the start of the run that completes the profile from
  * it. Nothing shows before a file is chosen. The upload panel draws it under its drop zone; a
  * page that adds files its own way (the welcome wizard) draws it under them.
  */
@@ -76,7 +71,7 @@ export function CvConversion({
   openHref: (baseId: string) => string;
   completeHere?: boolean;
 }): ReactNode {
-  const { consent, runConsent, profileRun, uploadId, cv, agree } = upload;
+  const { profileRun, uploadId, cv } = upload;
   return (
     <>
       {upload.problem !== undefined ? (
@@ -92,8 +87,6 @@ export function CvConversion({
         <UploadReading
           file={upload.file}
           busy={upload.busy || upload.keep.isPending}
-          declined={upload.declined}
-          onConvert={upload.askAgain}
           onKeep={(id) => {
             upload.keep.mutate(id);
           }}
@@ -101,11 +94,6 @@ export function CvConversion({
       ) : null}
       {upload.send.isPending ? (
         <UploadStatus>Sending your file</UploadStatus>
-      ) : null}
-      {consent.isError && uploadId !== undefined ? (
-        <p className="text-sm text-destructive">
-          What is sent could not be loaded. Reload the page to try again.
-        </p>
       ) : null}
 
       {cv !== undefined ? (
@@ -130,25 +118,6 @@ export function CvConversion({
               />
             )
           }
-        />
-      ) : null}
-
-      {upload.asking && consent.data !== undefined && uploadId !== undefined ? (
-        <ConsentDialog
-          consent={consent.data}
-          open
-          busy={agree.isPending || upload.convert.isPending}
-          error={agree.isError ? failureSentence(agree.error) : undefined}
-          onClose={() => {
-            agree.reset();
-            upload.decline();
-          }}
-          onAgree={(version, runVersion) => {
-            agree.mutate({ version, runVersion });
-          }}
-          {...(runConsent.data && !runConsent.data.accepted
-            ? { run: runConsent.data }
-            : {})}
         />
       ) : null}
     </>

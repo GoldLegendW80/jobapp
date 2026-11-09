@@ -2,7 +2,7 @@
 "Templates", Switching; "API"). The shortening of a posting CV's latest version, a template
 switch's included (the automatic pass leaves that one alone); a frozen version untouched and the
 shorter one on top; the checks of every model call, each refused with its sentence and nothing
-created: the consent, a credential, a write to draw on, a known spend, a ceiling left, a free
+created: a credential, a write to draw on, a known spend, a ceiling left, a free
 run; clicks one after another sharing one budget; one open at a time; a letter, a base CV and
 another person's document. The writer's own run is the fake backend's, in `test_writer_cv.py`
 and at the end of this file."""
@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials, runs
 from app.agents.models import AgentRun, RunStatus
 from app.config import get_settings
-from app.documents import auto_router, consent, generate, render_job, store
+from app.documents import auto_router, generate, render_job, store
 from app.documents import content as c
 from app.documents.models import (
     Author,
@@ -295,12 +295,6 @@ def test_a_second_click_while_one_is_open_is_409(alex: Who, api: Api) -> None:
     assert len(shortenings(alex)) == 1
 
 
-def _no_consent(who: Who) -> None:
-    with who.factory() as db:
-        db.execute(sa.text("DELETE FROM document_consents WHERE user_id = :u"), {"u": who.user})
-        db.commit()
-
-
 def _no_credential(who: Who) -> None:
     with who.factory() as db:
         assert credentials.delete(db, who.user)
@@ -348,7 +342,6 @@ def _edited_after(who: Who, job: uuid.UUID) -> uuid.UUID:
 @pytest.mark.parametrize(
     "reason",
     [
-        "consent",
         "credential",
         "not_written",
         "spend_unknown_input",
@@ -392,7 +385,7 @@ def test_each_check_refuses_with_its_sentence_and_creates_nothing(
         assert switched.status_code == 200
     else:
         document = written(alex, job)
-        {"consent": _no_consent, "credential": _no_credential, "runs_busy": _busy}[reason](alex)
+        {"credential": _no_credential, "runs_busy": _busy}[reason](alex)
     queue.jobs.clear()
     response = api.request("POST", fit(document), token=alex.token)
     assert response.status_code == 409, response.text
@@ -460,7 +453,6 @@ def test_the_writer_shortens_a_switched_cv_and_the_sent_version_stays(
     who = writers.person(factory, migrated_url, "e2e-docs-fit-run@example.org")
     monkeypatch.setattr(generate, "RUNTIME", who.runtime())
     with factory() as db:
-        consent.record(db, who.user, AT)
         db.commit()
     document, _, _ = writers.write(who, "documents_cv_overflow")
     revision = writers.document_row(factory, document).draft_revision

@@ -13,8 +13,10 @@
 - `document_generations`: one writer run on a document; at most one waiting, queued or running
   per document (a partial unique index).
 - `document_messages`: the chat of a document, per channel.
-- `document_consents`, `document_settings`: the consent to the writers' use of the profile and
-  the person's writing rules (`settings.DocumentSettings`, defaults when the row is missing).
+- `document_settings`: the person's writing rules (`settings.DocumentSettings`, defaults when
+  the row is missing).
+- `document_consents`: unread and unwritten since D30 removed the documents consent; the table
+  and the wait reason `consent` stay for a later contract migration.
 - `document_user_templates`: the templates captured from an uploaded CV (`upload-<8>`).
 
 Ownership is in the schema: every row carries `user_id`, and a version, a generation and a
@@ -137,6 +139,7 @@ class GenerationStatus(enum.StrEnum):
 
 class GenerationWait(enum.StrEnum):
     daily_ceiling = "daily_ceiling"
+    # Kept for the database only: no writer waits for the documents consent since D30.
     consent = "consent"
     credential = "credential"
     base_cv = "base_cv"
@@ -439,6 +442,7 @@ class DocumentMessage(Base):
     at: Mapped[datetime] = mapped_column(sa.DateTime(timezone=True), nullable=False)
 
 
+# Kept for the database only (D30): nothing reads or writes it until a contract migration.
 class DocumentConsent(Base):
     __tablename__ = "document_consents"
 

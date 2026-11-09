@@ -6,9 +6,10 @@ Included by `routers.py` before D6's `/api/documents/{document_id}`.
 - `POST /api/documents/{id}/messages {text, channel?, script?}`: 202 with the message and the
   generation it started (`chat.post`). 404 for another person's document; 422 for an empty
   message, one over DOCUMENTS_CHAT_MAX_CHARS, or the `design` channel (task D26); 409 while a
-  generation of the document is open, while its row is locked, or without the consent or a
-  model credential (nothing is stored then: the answer says what to settle); 429 when the
-  person's runs are all busy. `script` names the fake backend's stream (tests and journeys),
+  generation of the document is open, while its row is locked, without a model credential, or
+  for offer notes without ingestion's consent (nothing is stored then: the answer says what to
+  settle); 429 when the person's runs are all
+  busy. `script` names the fake backend's stream (tests and journeys),
   ignored on the real model.
 - `GET /api/document-generations/{id}`: one generation of the person's, as the page polls it.
   A chat generation whose run ended without its final hook is settled first (`chat.recover`).
@@ -58,7 +59,11 @@ GENERATION_NOT_FOUND = "Generation not found."
 EMPTY_OR_LONG = "Write a message of 1 to {limit} characters."
 RUNNING = "The assistant is still answering the last message of this document."
 ALL_BUSY = "Your assistants are all busy. Try again in a moment."
-REFUSED = {"consent": chat.NO_CONSENT, "credential": chat.NO_CREDENTIAL}
+REFUSED = {
+    # The offer notes' chat only: ingestion's consent (`offer_notes.refusal`).
+    "consent": "Confirm what is sent to the model first, then send your message again.",
+    "credential": chat.NO_CREDENTIAL,
+}
 NO_CHAT = "A proposal has no chat: edit its text."
 
 
@@ -193,7 +198,7 @@ def list_messages(
     status_code=status.HTTP_202_ACCEPTED,
     responses={
         404: {"description": "Not the person's document"},
-        409: {"description": "A generation runs, or the consent or a credential is missing"},
+        409: {"description": "A generation runs, or a credential or a consent is missing"},
         422: {"description": "Empty or too long"},
         429: {"description": "The person's runs are all busy"},
     },

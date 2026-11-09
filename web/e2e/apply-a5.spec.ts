@@ -17,7 +17,7 @@ import { startReviewFirst } from "./apply-one-click-helpers";
 /**
  * Apply A5, the answer agent, against the real stack through Caddy plus the fake ATS forms
  * server. An invented person with a model credential (a made up key: the worker runs the fake
- * backend), the documents consent, a base CV and a posting whose address is the fake Ashby form
+ * backend), a base CV and a posting whose address is the fake Ashby form
  * has its CV and letter written on the fake backend, ticks the review box and clicks Apply, and the fill
  * runs on the worker. The fake Ashby form asks an open question ("Why Example Robotics?"): the
  * `apply_answer` agent answers it in a run of the agents runtime (the recorded stream
@@ -67,7 +67,7 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("an invented person has a credential, the consent, a base CV and an Ashby posting", async () => {
+test("an invented person has a credential, a base CV and an Ashby posting", async () => {
   await stub.reset();
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
@@ -75,13 +75,6 @@ test("an invented person has a credential, the consent, a base CV and an Ashby p
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
-  const asked = await page.request.get("/api/documents/consent");
-  const { version } = (await asked.json()) as { version: number };
-  const accepted = await page.request.post("/api/documents/consent", {
-    headers: CSRF,
-    data: { version },
-  });
-  expect(accepted.status()).toBe(200);
   const built = await page.request.post("/api/documents/base-cvs", {
     headers: CSRF,
     data: { from: "profile", script: "documents_base_journey" },

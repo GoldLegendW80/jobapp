@@ -137,17 +137,6 @@ test("a fresh person adds reusable answers, sees worker reuse and keeps applicat
         })
       ).status(),
     ).toBe(200);
-    const consent = (await (
-      await page.request.get("/api/documents/consent")
-    ).json()) as { version: number };
-    expect(
-      (
-        await page.request.post("/api/documents/consent", {
-          headers: CSRF,
-          data: { version: consent.version },
-        })
-      ).status(),
-    ).toBe(200);
     const built = await page.request.post("/api/documents/base-cvs", {
       headers: CSRF,
       data: { from: "profile", script: "documents_base_journey" },

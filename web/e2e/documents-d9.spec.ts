@@ -15,8 +15,8 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
 /**
  * Documents D9 against the real stack through Caddy, the worker on the fake model backend (the
  * recorded stream `documents_base_journey`, named by the build's `script`) and the real
- * renderer, one fresh account and only invented data: accept the consent, build a base CV from
- * the invented profile, build a second as a copy, make it the default, render it, download a
+ * renderer, one fresh account and only invented data: save a credential (no consent is asked),
+ * build a base CV from the invented profile, build a second as a copy, make it the default, render it, download a
  * one page PDF whose text holds the invented name, delete the first. The model credential is a
  * made up key the stack's Anthropic stub accepts; nothing reaches Anthropic.
  *
@@ -65,30 +65,16 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("an invented person accepts the consent", async () => {
+test("an invented person saves a credential and is asked no consent", async () => {
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
     data: { kind: "anthropic_api_key", secret: KEY },
   });
   expect(saved.status()).toBe(200);
+  // D30: the documents consent left the api; nothing answers on its old address.
   const asked = await page.request.get("/api/documents/consent");
-  expect(asked.status()).toBe(200);
-  const text = (await asked.json()) as {
-    version: number;
-    accepted: boolean;
-    text: string;
-  };
-  expect(text.accepted).toBe(false);
-  expect(text.text).not.toMatch(/[–—]| - /);
-  const accepted = await page.request.post("/api/documents/consent", {
-    headers: CSRF,
-    data: { version: text.version },
-  });
-  expect(accepted.status()).toBe(200);
-  expect(((await accepted.json()) as { accepted: boolean }).accepted).toBe(
-    true,
-  );
+  expect(asked.status()).not.toBe(200);
 });
 
 test("a base CV is built from the profile and rendered", async () => {

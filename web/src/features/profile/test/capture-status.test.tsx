@@ -121,28 +121,15 @@ describe("uploaded CV capture controls", () => {
     },
   );
 
-  it.each([
-    ["consent", "Confirm what is sent", "/profile/cv"],
-    ["credential", "Add a model credential", "/account"],
-  ] as const)(
+  it.each([["credential", "Add a model credential", "/account"]] as const)(
     "offers the existing %s destination",
     async (reason, label, href) => {
-      const { user } = await show(capture("waiting", { wait_reason: reason }));
+      await show(capture("waiting", { wait_reason: reason }));
       expect(screen.getByText(/To copy your CV's design/)).toBeVisible();
-      if (reason === "consent") {
-        await user.click(screen.getByRole("button", { name: label }));
-        expect(
-          await screen.findByRole("dialog", {
-            name: "What is sent to resume your documents",
-          }),
-        ).toBeVisible();
-        await user.click(screen.getByRole("button", { name: "Not now" }));
-      } else {
-        expect(screen.getByRole("link", { name: label })).toHaveAttribute(
-          "href",
-          href,
-        );
-      }
+      expect(screen.getByRole("link", { name: label })).toHaveAttribute(
+        "href",
+        href,
+      );
       expect(screen.getByRole("button", { name: RETRY })).toHaveAttribute(
         "aria-disabled",
         "true",

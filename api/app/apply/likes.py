@@ -12,11 +12,11 @@ plans. A Like is the application itself:
    with the same title (A2's `company_key` and `title_key`) has an application under way, not
    clicked yet (a clicked one is A2's `same_role`, over 180 days).
 2. The documents the posting lacks are asked of the documents module, as its "Write now" click
-   asks them (trigger `click`: never held by the fit threshold or the daily ceiling, held by the
-   consent and a credential; the documents tick starts it): the CV and its letter, or the letter
+   asks them (trigger `click`: never held by the fit threshold or the daily ceiling, held by a
+   credential; the documents tick starts it): the CV and its letter, or the letter
    alone once a CV is there. An automatic write not started gives way, whatever it waits for
    (`generate.give_way`, as to the click), so the asked one is never held by the daily ceiling,
-   even once a consent or a base CV it waited for comes. A document already there, being
+   even once a credential or a base CV it waited for comes. A document already there, being
    rendered, or written by a running generation or a click, is not asked again: all of it is
    read under the locks of the posting's documents, so no run settles between the read and
    the ask.
@@ -39,7 +39,7 @@ caller rolls back on an error. Logs carry ids and codes only.
 
 `on_apply` is the Apply button's start (owner, 2026-11-05: "Apply with no documents writes them
 and then sends"): under the same locks it asks the documents the posting lacks exactly as step
-2 does (the same writers, fact check, consent and credential waits; a click is never held by the
+2 does (the same writers, fact check and credential wait; a click is never held by the
 threshold or the daily ceiling), then `service.start` with the mode of the click and the kinds
 asked, which the application keeps (`documents_asked`), in the same transaction. The fill waits
 for them as for a Like; an asked document that ends without a version (its writer failed, or the

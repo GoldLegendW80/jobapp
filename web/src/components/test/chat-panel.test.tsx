@@ -18,7 +18,6 @@ import { server } from "@/test/server";
 
 import { drawn } from "@/features/documents/helpers/chat-text";
 import { DocumentView } from "@/components/shared/documents/document-view";
-import type { Consent } from "@/features/documents/api/consent-api";
 import type {
   DocumentOut,
   GenerationDetail,
@@ -135,8 +134,8 @@ function fakeChat(options: { refuse?: string; stoppable?: boolean } = {}) {
   return state;
 }
 
-async function openChat(consent: Partial<Consent> = {}) {
-  const api = fakeDocuments({ consent });
+async function openChat({ credential = true }: { credential?: boolean } = {}) {
+  const api = fakeDocuments({ credential });
   api.documents.set("p", CV);
   api.versions.set("p", [fakeVersion({ number: 1 })]);
   const user = userEvent.setup();
@@ -165,10 +164,7 @@ beforeEach(() => {
 describe("the chat of a document", () => {
   it("sends a message, follows its generation, then shows the answer and its version", async () => {
     const state = fakeChat();
-    const { user, chat, api } = await openChat({
-      accepted: true,
-      model: "claude-opus-5-5",
-    });
+    const { user, chat, api } = await openChat();
     expect(within(chat).getByTestId("document-chat-empty")).toBeVisible();
     await user.type(
       within(chat).getByRole("textbox", { name: "Message" }),
@@ -198,25 +194,9 @@ describe("the chat of a document", () => {
     expect(chat.textContent).not.toMatch(SEPARATOR);
   }, 15_000);
 
-  it("waits for the consent: nothing is sent before it", async () => {
-    const state = fakeChat();
-    const { chat } = await openChat({
-      accepted: false,
-      model: "claude-opus-5-5",
-    });
-    expect(
-      await within(chat).findByRole("button", { name: "Read and confirm" }),
-    ).toBeVisible();
-    expect(
-      within(chat).getByRole("textbox", { name: "Message" }),
-    ).toBeDisabled();
-    expect(within(chat).getByRole("button", { name: "Send" })).toBeDisabled();
-    expect(state.sent).toEqual([]);
-  });
-
   it("without a model credential, points to the Account page", async () => {
     fakeChat();
-    const { chat } = await openChat({ accepted: true, model: null });
+    const { chat } = await openChat({ credential: false });
     expect(
       await within(chat).findByRole("link", {
         name: "Add one on the Account page",
@@ -232,10 +212,7 @@ describe("the chat of a document", () => {
       refuse:
         "The assistant is still answering the last message of this document.",
     });
-    const { user, chat } = await openChat({
-      accepted: true,
-      model: "claude-opus-5-5",
-    });
+    const { user, chat } = await openChat();
     const box = within(chat).getByRole("textbox", { name: "Message" });
     await user.type(box, "and the headline{Enter}");
     expect(
@@ -248,10 +225,7 @@ describe("the chat of a document", () => {
 
   it("counts the characters against the limit", async () => {
     fakeChat();
-    const { user, chat } = await openChat({
-      accepted: true,
-      model: "claude-opus-5-5",
-    });
+    const { user, chat } = await openChat();
     const box = within(chat).getByRole("textbox", { name: "Message" });
     expect(box).toHaveAttribute("maxLength", "2000");
     await user.type(box, "abc");
@@ -260,10 +234,7 @@ describe("the chat of a document", () => {
 
   it("describes the box with the keys that send, each shown as a key", async () => {
     fakeChat();
-    const { chat } = await openChat({
-      accepted: true,
-      model: "claude-opus-5-5",
-    });
+    const { chat } = await openChat();
     const box = within(chat).getByRole("textbox", { name: "Message" });
     expect(box).toHaveAccessibleDescription(
       /^Enter sends, Shift and Enter adds a line\.\s*0 of 2000$/,
@@ -275,10 +246,7 @@ describe("the chat of a document", () => {
 
   it("stops the answer being written, and the document stays as it was", async () => {
     const state = fakeChat({ stoppable: true });
-    const { user, chat } = await openChat({
-      accepted: true,
-      model: "claude-opus-5-5",
-    });
+    const { user, chat } = await openChat();
     await user.type(
       within(chat).getByRole("textbox", { name: "Message" }),
       "shorter summary{Enter}",
@@ -296,10 +264,7 @@ describe("the chat of a document", () => {
 
   it("does not send a message made only of blanks or zero width characters", async () => {
     const state = fakeChat();
-    const { user, chat } = await openChat({
-      accepted: true,
-      model: "claude-opus-5-5",
-    });
+    const { user, chat } = await openChat();
     const box = within(chat).getByRole("textbox", { name: "Message" });
     await user.type(box, "\u200b\u200d \ufeff{Enter}");
     expect(within(chat).getByRole("button", { name: "Send" })).toBeDisabled();

@@ -979,7 +979,7 @@ describe("the wizard", () => {
     fakeSession(member);
     fakeProfile(null);
     fakeOnboarding();
-    const cvs = fakeCvDocuments({ consent: { accepted: false } });
+    const cvs = fakeCvDocuments();
     const files = fakeDocuments();
     fakePrompt();
     fakeRuns();
@@ -1005,8 +1005,7 @@ describe("the wizard", () => {
     expect(await screen.findByText("Your CV")).toBeVisible();
     expect(screen.queryByRole("button", { name: /^This is my CV/ })).toBeNull();
 
-    // The person moves on before the file is read: the conversion still follows, and the
-    // server holds it until the consent.
+    // The person moves on before the file is read: the conversion still follows.
     await user.click(screen.getByRole("button", { name: "Skip this step" }));
     await screen.findByText(/Step 3 of 10/);
     files.items.find((one) => one.name === "Morgan CV.pdf")!.status = "done";

@@ -145,11 +145,11 @@ export const LinkedInNotAllowed: Story = {
   },
 };
 
-/** Waiting for the CV and letter, which wait for the documents consent: the link opens the CV tab. */
+/** Waiting for the CV and letter, which wait for a model credential: the link opens the account. */
 export const WaitingForTheDocuments: Story = {
-  name: "Waiting for the documents consent",
+  name: "Waiting for a model credential",
   beforeEach: () => {
-    apply(applicationIn("queued", { needs: "documents:consent" }));
+    apply(applicationIn("queued", { needs: "documents:credential" }));
   },
 };
 

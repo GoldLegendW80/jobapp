@@ -61,7 +61,7 @@ from app.apply.models import Mode
 from app.apply.router import BUSY, NO_STORE, RefusalOut
 from app.browser import linkedin_guard
 from app.db import get_session
-from app.documents import consent, estimate, store
+from app.documents import estimate, store
 from app.documents import freeze as documents
 from app.documents.base_router import EstimateOut, _estimate_out
 from app.documents.models import Kind
@@ -256,7 +256,7 @@ def preview(body: PreviewIn, request: Request, user: CurrentUser, db: Db) -> Pre
     mode = _mode(review)
     credential = credentials.get(db, user.id)
     kind = CredentialKind(credential.kind) if credential is not None else None
-    model, priced = consent.model_for(kind), pricing.priced(kind)
+    model, priced = estimate.model_for(kind), pricing.priced(kind)
     items: list[ItemOut] = []
     left_out: list[LeftOut] = []
     beyond: list[PostingOut] = []

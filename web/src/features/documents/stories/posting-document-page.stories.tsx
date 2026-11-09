@@ -48,7 +48,7 @@ export const ReadTheWrittenCv: Story = {
         }),
       ],
       [first],
-      { consent: { accepted: true } },
+      {},
     );
   },
 };
@@ -66,7 +66,7 @@ export const AskForAChange: Story = {
         }),
       ],
       [first],
-      { consent: { accepted: true }, messages: CHAT_MESSAGES },
+      { messages: CHAT_MESSAGES },
     );
   },
 };
@@ -102,7 +102,7 @@ export const SeeWhatTheFactCheckCorrected: Story = {
         }),
       ],
       [first],
-      { consent: { accepted: true } },
+      {},
     );
     api.corrections.set("cv-doc", [
       {
@@ -130,12 +130,12 @@ export const WaitWhileTheCvIsWritten: Story = {
 };
 
 /** As a job seeker, I want to know why the writer is not starting, so that I give it what it waits for. */
-export const WaitingForMyConsent: Story = {
+export const WaitingForMyCredential: Story = {
   beforeEach: () => {
     fakeSession(camille);
     fakePostingDocuments(JOB, [
       postingDocument("cv", JOB.id, {
-        generation: { status: "waiting", wait_reason: "consent" },
+        generation: { status: "waiting", wait_reason: "credential" },
       }),
     ]);
   },

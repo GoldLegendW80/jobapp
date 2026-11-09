@@ -7,8 +7,8 @@
  * what the fact check corrected and the version number. The thread, its turns and the prompt are
  * the posting's chat's own (shared/agents/chat); text is plain, never markdown.
  *
- * Nothing is sent before the consent of the current text and a model credential: the panel says
- * which is missing and the composer waits. One message at a time: while one is answered, or while
+ * Nothing is sent before a model credential is saved: the panel says it is missing and the
+ * composer waits. One message at a time: while one is answered, or while
  * the document itself is being written, Send is disabled (the api would answer 409). Stop ends the
  * answer being written (`cancelGeneration`): the document stays as it was. A message with no
  * character drawn (only blanks or zero width characters) is not sent, as the api refuses it.
@@ -20,7 +20,6 @@ import { ChatEmptyState } from "@/components/shared/agents/chat/chat-empty-state
 import { ChatPrompt } from "@/components/shared/agents/chat/chat-prompt";
 import { ChatThread } from "@/components/shared/agents/chat/chat-thread";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 
 import {
   drawn,
@@ -28,7 +27,6 @@ import {
 } from "@/features/documents/helpers/chat-text";
 import { ChatMessages } from "./chat-panel/chat-messages";
 import { KeepRule } from "./chat-panel/keep-rule";
-import { ConsentDialog } from "./consent-dialog";
 import type { PanelProps } from "./document-view";
 import { failureSentence } from "@/features/documents/api/documents-api";
 import {
@@ -38,10 +36,7 @@ import {
   useSendMessage,
   useStopGeneration,
 } from "@/features/documents/api/use-chat";
-import {
-  useAcceptConsent,
-  useConsent,
-} from "@/features/documents/api/use-consent";
+import { useModelCredential } from "@/features/agents/api/use-model-credential";
 import { isOpen } from "@/features/documents/helpers/labels";
 
 /** The api's DOCUMENTS_CHAT_MAX_CHARS. */
@@ -57,10 +52,9 @@ export function ChatPanel({ document, generation }: PanelProps) {
   const composer = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [consenting, setConsenting] = useState(false);
 
   const messages = useMessages(document.id);
-  const consent = useConsent();
+  const credential = useModelCredential();
   const shown = messages.data ?? [];
   const pending = pendingGeneration(shown);
   const followed = useGeneration(pending);
@@ -87,12 +81,6 @@ export function ChatPanel({ document, generation }: PanelProps) {
     seen.current = answerCount;
   }, [answerCount, lastAnswer, messages.isSuccess]);
 
-  const agree = useAcceptConsent({
-    onAccepted: () => {
-      setConsenting(false);
-    },
-  });
-
   const send = useSendMessage(document.id, {
     onStart: () => {
       setError(null);
@@ -114,16 +102,13 @@ export function ChatPanel({ document, generation }: PanelProps) {
     },
   });
 
-  const noConsent = consent.data !== undefined && !consent.data.accepted;
-  const noCredential =
-    consent.data !== undefined && consent.data.model === null;
+  const noCredential = credential.data === null;
   const writing = isOpen(generation);
   const busy = pending !== null || send.isPending;
   const text = draft.trim();
   const canSend =
     messages.isSuccess &&
-    consent.isSuccess &&
-    !noConsent &&
+    credential.isSuccess &&
     !noCredential &&
     !writing &&
     !busy &&
@@ -186,23 +171,7 @@ export function ChatPanel({ document, generation }: PanelProps) {
         messages={shown}
         answering={pending !== null}
       />
-      {noConsent ? (
-        <Alert>
-          <AlertDescription className="flex flex-col items-start gap-2">
-            The chat sends this document, your profile and the conversation to
-            the model. Confirm what is sent first.
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                setConsenting(true);
-              }}
-            >
-              Read and confirm
-            </Button>
-          </AlertDescription>
-        </Alert>
-      ) : noCredential ? (
+      {noCredential ? (
         <Alert>
           <AlertDescription>
             The chat runs with your own model credential, and none is saved yet.{" "}
@@ -226,7 +195,7 @@ export function ChatPanel({ document, generation }: PanelProps) {
         showCount
         hint={hint}
         placeholder="Ask for a change"
-        disabled={noConsent || noCredential}
+        disabled={noCredential}
         canSend={canSend}
         sending={send.isPending}
         onChange={setDraft}
@@ -234,21 +203,6 @@ export function ChatPanel({ document, generation }: PanelProps) {
           if (canSend) send.mutate(text);
         }}
       />
-
-      {consent.data !== undefined ? (
-        <ConsentDialog
-          consent={consent.data}
-          open={consenting}
-          busy={agree.isPending}
-          error={agree.isError ? failureSentence(agree.error) : undefined}
-          onAgree={(version) => {
-            agree.mutate(version);
-          }}
-          onClose={() => {
-            setConsenting(false);
-          }}
-        />
-      ) : null}
     </div>
   );
 }

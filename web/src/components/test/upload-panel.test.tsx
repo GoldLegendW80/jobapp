@@ -77,7 +77,7 @@ function filesAre(files: FakeFiles, status: DocumentStatus, extra = {}) {
 /** The conversion answers `made`, and the list then holds it. */
 function convertsInto(
   api: ReturnType<typeof fakeDocuments>,
-  made: Partial<BaseCv>,
+  made: Partial<BaseCv> = {},
 ) {
   const cv = fakeCv({
     id: "cv-up",
@@ -113,13 +113,6 @@ function panel(options: Parameters<typeof userEvent.setup>[0] = {}) {
   return { user, ...view };
 }
 
-const consents = (api: ReturnType<typeof fakeDocuments>) =>
-  api.requests
-    .filter(
-      (one) => one.method === "POST" && one.path === "/api/documents/consent",
-    )
-    .map((one) => one.body);
-
 const conversions = (api: ReturnType<typeof fakeDocuments>) =>
   api.requests.filter(
     (one) => one.method === "POST" && one.path === "/api/documents/base-cvs",
@@ -127,7 +120,7 @@ const conversions = (api: ReturnType<typeof fakeDocuments>) =>
 
 describe("the upload panel", () => {
   it("sends a PDF through ingestion and says it is reading it", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     const { user } = panel();
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);
@@ -140,7 +133,7 @@ describe("the upload panel", () => {
   });
 
   it("takes a Word document dropped on it", async () => {
-    fakeDocuments({ consent: { accepted: true } });
+    fakeDocuments();
     const files = fakeFiles();
     panel();
     const docx = new File(["PK Morgan Exampleton"], "Morgan CV.docx", {
@@ -168,22 +161,18 @@ describe("the upload panel", () => {
     expect(files.uploads).toEqual([]);
   });
 
-  it("asks for the consent, then converts the file once its text is read", async () => {
+  it("converts the file once its text is read, with no consent asked", async () => {
     const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
-    const made = convertsInto(api, {});
+    const made = convertsInto(api);
     const { user } = panel();
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);
-
-    const dialog = await screen.findByRole("dialog");
-    expect(conversions(api)).toEqual([]); // nothing is sent before the agreement
-    await user.click(within(dialog).getByRole("checkbox"));
-    await user.click(within(dialog).getByRole("button", { name: /^Agree/ }));
 
     await waitFor(() => {
       expect(conversions(api)).toHaveLength(1);
     });
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(conversions(api)[0]?.body).toEqual({
       from: "upload",
       ingestion_document_id: files.items[0]?.id,
@@ -209,26 +198,8 @@ describe("the upload panel", () => {
     });
   });
 
-  it("offers the conversion again when the consent is declined, and sends nothing", async () => {
-    const api = fakeDocuments();
-    const files = fakeFiles();
-    filesAre(files, "done");
-    const { user } = panel();
-    await user.upload(screen.getByTestId("upload-cv-file"), PDF);
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Not now" }));
-    expect(await screen.findByTestId("upload-declined")).toHaveTextContent(
-      "Confirm what is sent to convert Morgan CV.pdf.",
-    );
-    expect(conversions(api)).toEqual([]);
-    await user.click(
-      screen.getByRole("button", { name: "Convert it into my CV" }),
-    );
-    expect(await screen.findByRole("dialog")).toBeVisible();
-  });
-
   it("says what the conversion waits for", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
     convertsInto(api, {
@@ -248,7 +219,7 @@ describe("the upload panel", () => {
   });
 
   it("shows ingestion's own reason when the file could not be read", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "failed", {
       failed_reason: "There is no text in this file.",
@@ -262,7 +233,7 @@ describe("the upload panel", () => {
   });
 
   it("asks to keep a file with a secret warning before converting it", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done", { secret_warning: true });
     const { user } = panel();
@@ -274,7 +245,7 @@ describe("the upload panel", () => {
   });
 
   it("shows the api's sentence when the file cannot be converted", async () => {
-    fakeDocuments({ consent: { accepted: true } });
+    fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
     server.use(
@@ -297,7 +268,7 @@ describe("the upload panel", () => {
   it("starts the run from one button with its token range, then opens the review by itself", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const info = vi.spyOn(toast, "info");
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
     convertsInto(api, { is_default: true });
@@ -344,71 +315,19 @@ describe("the upload panel", () => {
     expect(info).toHaveBeenCalledWith(REVIEW_OPENED);
   });
 
-  it("asks both consents in one dialog, and records each with its own version", async () => {
-    const api = fakeDocuments({ consent: { version: 4 } });
-    const files = fakeFiles();
-    filesAre(files, "done");
-    convertsInto(api, {});
-    const runs = fakeRuns({ consent: { ...RUN_CONSENT, version: 2 } });
-    const { user } = panel();
-    await user.upload(screen.getByTestId("upload-cv-file"), PDF);
-    const dialog = await screen.findByRole("dialog");
-    expect(
-      await within(dialog).findByTestId("run-consent-text"),
-    ).toHaveTextContent(RUN_CONSENT.text);
-    const boxes = within(dialog).getAllByRole("checkbox");
-    expect(boxes).toHaveLength(2);
-    expect(
-      within(dialog).getAllByRole("button", { name: /^Agree/ }),
-    ).toHaveLength(1);
-    expect(dialog.textContent).not.toMatch(SEPARATOR);
-    for (const box of boxes) await user.click(box);
-    await user.click(within(dialog).getByRole("button", { name: /^Agree/ }));
-    await waitFor(() => {
-      expect(runs.sent("POST", "/api/ingestion/consent")).toEqual([
-        {
-          method: "POST",
-          path: "/api/ingestion/consent",
-          body: { version: 2 },
-        },
-      ]);
-    });
-    expect(consents(api)).toEqual([{ version: 4 }]);
-    await waitFor(() => {
-      expect(conversions(api)).toHaveLength(1);
-    });
-    // Both given: the start button needs no other box.
-    const result = await screen.findByTestId("upload-result");
-    expect(
-      await within(result).findByRole("button", {
-        name: /^Complete my profile from this CV \(about/,
-      }),
-    ).toBeEnabled();
-    expect(within(result).queryByRole("checkbox")).toBeNull();
-  });
-
-  it("records only the documents consent when the run's box stays empty, and asks it at the start", async () => {
+  it("asks the run's own consent beside the start button, never a documents consent", async () => {
     const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
-    convertsInto(api, {});
+    convertsInto(api);
     const runs = fakeRuns();
     const { user } = panel();
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);
-    const dialog = await screen.findByRole("dialog");
-    await within(dialog).findByTestId("run-consent-text");
-    await user.click(
-      within(dialog).getByRole("checkbox", {
-        name: "I have read this and I agree to send it",
-      }),
-    );
-    await user.click(within(dialog).getByRole("button", { name: /^Agree/ }));
     await waitFor(() => {
       expect(conversions(api)).toHaveLength(1);
     });
-    expect(consents(api)).toEqual([{ version: 1 }]);
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(runs.sent("POST", "/api/ingestion/consent")).toEqual([]);
-    // Only the other one is asked now, beside the start button.
     const result = await screen.findByTestId("upload-result");
     const start = await within(result).findByRole("button", {
       name: /^Complete my profile from this CV \(about/,

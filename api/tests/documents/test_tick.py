@@ -1,13 +1,13 @@
-"""D29: the documents tick once nothing is written without a click, on a real Postgres at head,
-two e2e people. No test sleeps or reads the clock: every pass gets its `at`.
+"""D29: the documents tick once nothing is written without a click, on a real Postgres at head, two
+e2e people. No test sleeps or reads the clock: every pass gets its `at`.
 
-Nothing writes without a click: a found posting at fit 95 gets nothing, with or without a base
-CV. A generation of trigger `auto` left open from D10 is cancelled once, its document and
-versions untouched. What the tick still does: the clicks that waited for the consent, a
-credential or a base CV start; a click with no base CV builds one from the profile and the CV
-waits for it, then is written from it; a run that ended without its final hook is settled
-after the grace; a held person is left to the next pass; one person's failure never ends the
-pass; the cron queues runs by id."""
+Nothing writes without a click: a found posting at fit 95 gets nothing, with or without a base CV. A
+generation of trigger `auto` left open from D10 is cancelled once, its document and versions
+untouched. What the tick still does: the clicks that waited for a credential or a base CV start, and
+one stored waiting for the documents consent removed by D30 starts at once; a click with no base CV
+builds one from the profile and the CV waits for it, then is written from it; a run that ended
+without its final hook is settled after the grace; a held person is left to the next pass; one
+person's failure never ends the pass; the cron queues runs by id."""
 
 from __future__ import annotations
 
@@ -26,7 +26,6 @@ from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
 from app.documents import (  # noqa: F401 (writers registers the writers)
     auto_router,
-    consent,
     estimate,
     generate,
     render_job,
@@ -69,7 +68,7 @@ POSTING = load("posting_lumen.json")["text"]
 
 
 class World:
-    """One person: profile, consent, credential as asked; postings added with their fit."""
+    """One person: profile, credential and base CV as asked; postings added with their fit."""
 
     def __init__(self, factory: sessionmaker[Session], url: str, email: str, **flags: Any):
         key = new_key()
@@ -87,8 +86,6 @@ class World:
 
                 profile_service.get_profile(db, self.user, AT)
                 db.commit()
-        if flags.get("consent", True):
-            self.consent()
         if flags.get("credential", True):
             self.credential()
         if flags.get("base", True):
@@ -103,11 +100,6 @@ class World:
                 )
                 db.commit()
                 self.base = made.id
-
-    def consent(self) -> None:
-        with self.factory() as db:
-            consent.record(db, self.user, AT)
-            db.commit()
 
     def credential(self) -> None:
         with self.factory() as db:
@@ -336,22 +328,31 @@ def test_an_open_automatic_generation_is_cancelled_once_and_its_document_kept(
 # --- the clicks that waited ---------------------------------------------------------------------
 
 
-def test_a_click_that_waited_for_the_consent_starts_once_it_is_given(
-    factory: sessionmaker[Session], migrated_url: str
+def test_a_click_with_a_credential_and_no_consent_row_starts_at_once(world: World) -> None:
+    posting = world.posting(40)
+    click(world, posting)
+    with world.factory() as db:
+        assert db.scalar(sa.text("SELECT count(*) FROM document_consents")) == 0
+    [found] = world.generations(posting)
+    assert (found["status"], found["wait_reason"]) == (GenerationStatus.running, None)
+
+
+def test_a_click_stored_waiting_for_the_documents_consent_starts_at_the_next_tick(
+    world: World,
 ) -> None:
-    who = World(factory, migrated_url, USER_A, consent=False)
-    posting = who.posting(40)
-    click(who, posting)
-    [waiting] = who.generations(posting)
-    assert (waiting["status"], waiting["wait_reason"]) == (
-        GenerationStatus.waiting,
-        GenerationWait.consent,
-    )
-    assert who.tick() == []
-    who.consent()
-    started = who.tick()
-    [running] = who.generations(posting)
-    assert running["status"] is GenerationStatus.running
+    """D30: a generation left waiting with the reason `consent` before the deploy is written."""
+    posting = world.posting(40)
+    generation_id = click(world, posting)
+    with world.factory() as db:
+        db.execute(
+            sa.update(DocumentGeneration)
+            .where(DocumentGeneration.id == generation_id)
+            .values(status=GenerationStatus.waiting, wait_reason=GenerationWait.consent)
+        )
+        db.commit()
+    started = world.tick()
+    [running] = world.generations(posting)
+    assert (running["status"], running["wait_reason"]) == (GenerationStatus.running, None)
     assert started == [running["run_id"]]
 
 
@@ -383,7 +384,9 @@ def test_a_click_with_no_base_cv_builds_it_first_then_the_cv_from_it(
         assert cv["base_document_id"] == default.id
 
 
-def _auto_base_build(who: World, status: GenerationStatus) -> uuid.UUID:
+def _auto_base_build(
+    who: World, status: GenerationStatus, reason: GenerationWait | None = None
+) -> uuid.UUID:
     """The first base CV D10 built at the tick, left open at the deploy of D29: the skeleton
     "My CV" as the default and its generation of trigger `auto`, not started."""
     from app.documents import writer_base
@@ -394,22 +397,22 @@ def _auto_base_build(who: World, status: GenerationStatus) -> uuid.UUID:
         )
         assert built.generation is not None
         built.generation.status = status
+        built.generation.wait_reason = reason
         store.commit(db)
         return built.document.id
 
 
-@pytest.mark.parametrize("consent_later", [False, True])
+@pytest.mark.parametrize("stored_waiting", [False, True])
 def test_an_automatic_base_cv_build_is_cancelled_never_started_by_the_tick(
-    factory: sessionmaker[Session], migrated_url: str, consent_later: bool
+    factory: sessionmaker[Session], migrated_url: str, stored_waiting: bool
 ) -> None:
-    """Review of D29, item 2 (a): a queued one, or one waiting for a consent given later."""
-    who = World(factory, migrated_url, USER_A, base=False, consent=not consent_later)
-    document = _auto_base_build(
-        who, GenerationStatus.waiting if consent_later else GenerationStatus.queued
+    """Review of D29, item 2 (a): a queued one, or one stored waiting for the consent."""
+    who = World(factory, migrated_url, USER_A, base=False)
+    document = (
+        _auto_base_build(who, GenerationStatus.waiting, GenerationWait.consent)
+        if stored_waiting
+        else _auto_base_build(who, GenerationStatus.queued)
     )
-    if consent_later:
-        assert who.tick() == []
-        who.consent()
     assert who.tick() == []
     [found] = who.generations()
     assert (found["document_id"], found["trigger"], found["status"], found["run_id"]) == (

@@ -13,7 +13,6 @@ import {
   generationKey,
   getGeneration,
 } from "./documents-api";
-import { consentKey } from "./consent-api";
 import { isOpen, POLL_MS } from "../helpers/labels";
 
 /** The conversation of a document's Chat view. */
@@ -48,7 +47,7 @@ export function useRefreshWhenAnswered(documentId: string, ended: boolean) {
 
 /**
  * Sends a message of the Chat view. The message sent joins the cached conversation; on a failure
- * the conversation and the consent are read again.
+ * the conversation is read again.
  */
 export function useSendMessage(
   documentId: string,
@@ -74,7 +73,6 @@ export function useSendMessage(
     onError: (failure) => {
       on.onError(failure);
       void client.invalidateQueries({ queryKey: messagesKey(documentId) });
-      void client.invalidateQueries({ queryKey: consentKey });
     },
   });
 }

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
-from app.documents import consent, generate, store, tick
+from app.documents import generate, store, tick
 from app.documents.models import (
     Author,
     BaseSource,
@@ -65,7 +65,6 @@ class Who:
         give_profile(factory, self.user, clock())
         self.token = api.login_token(email)
         with factory() as db:
-            consent.record(db, self.user, clock())
             self.base = store.create_base(
                 db,
                 self.user,

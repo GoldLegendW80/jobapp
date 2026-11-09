@@ -10,7 +10,6 @@ import { failureSentence } from "@/features/documents/api/documents-api";
 import { useRetryDesignCapture } from "@/features/documents/api/use-design-capture";
 import { isOpen } from "@/features/documents/helpers/labels";
 import { galleryPath } from "@/features/documents/helpers/template-choice";
-import { CaptureConsent } from "./capture-consent";
 
 function sentence(capture: BaseCv["design_generation"]): string {
   if (capture === null) return "Your CV's design has not been copied yet.";
@@ -26,8 +25,6 @@ function sentence(capture: BaseCv["design_generation"]): string {
     case "cancelled":
       return "The design copy stopped. Your current template and content are still available.";
     case "waiting":
-      if (capture.wait_reason === "consent")
-        return "To copy your CV's design, use Confirm what is sent below.";
       if (capture.wait_reason === "credential")
         return "To copy your CV's design, add a model credential in your account.";
       if (capture.wait_reason === "daily_ceiling")
@@ -93,9 +90,6 @@ export function CaptureStatus({ cv }: { cv: BaseCv }) {
             </p>
           ) : null}
         </div>
-        {capture?.status === "waiting" && capture.wait_reason === "consent" ? (
-          <CaptureConsent documentId={cv.id} />
-        ) : null}
         {capture?.status === "waiting" &&
         capture.wait_reason === "credential" ? (
           <Link to="/account" className="underline underline-offset-4">

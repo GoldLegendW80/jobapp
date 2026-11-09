@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import proposals as agent_proposals
 from app.agents.models import AgentRun, ProposalStatus, RunStatus
-from app.documents import consent, interview_prep, rules, store, submit
 from app.documents import content as c
+from app.documents import interview_prep, rules, store, submit
 from app.documents.models import (
     RENDERED_KINDS,
     Author,
@@ -58,7 +58,6 @@ STORY = {
 def alex(factory: sessionmaker[Session], migrated_url: str) -> Person:
     who = person(factory, migrated_url, USER_A)
     with who.factory() as db:
-        consent.record(db, who.user, AT)
         db.commit()
     return who
 
@@ -183,16 +182,10 @@ def test_a_figure_the_profile_does_not_state_is_corrected_and_recorded(alex: Per
     assert {r.field_path for r in accepted.corrections} == {"stories.0.result"}
 
 
-def test_prepare_refuses_without_consent_and_while_one_is_written(
+def test_prepare_starts_with_no_consent_asked_and_refuses_while_one_is_written(
     factory: sessionmaker[Session], migrated_url: str
 ) -> None:
     who = person(factory, migrated_url, USER_A)
-    with who.factory() as db, pytest.raises(interview_prep.PrepRefusedError) as refused:
-        interview_prep.start(db, who.user, who.posting, at=AT, settings=who.settings)
-    assert refused.value.code == "consent"
-    with who.factory() as db:
-        consent.record(db, who.user, AT)
-        db.commit()
     prepare(who)
     with who.factory() as db, pytest.raises(interview_prep.PrepRefusedError) as busy:
         interview_prep.start(db, who.user, who.posting, at=AT, settings=who.settings)

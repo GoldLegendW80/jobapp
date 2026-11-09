@@ -17,7 +17,7 @@ const PAGE = `/jobs/${JOB.id}/interview`;
 describe("the interview preparation page", () => {
   it("prepares on a click and shows the questions, each tagged with where it comes from", async () => {
     fakeSession(member);
-    fakeInterviewPrep(JOB, NOT_PREPARED, { consent: { accepted: true } });
+    fakeInterviewPrep(JOB, NOT_PREPARED);
     const user = userEvent.setup();
     renderApp(PAGE);
 
@@ -39,25 +39,19 @@ describe("the interview preparation page", () => {
     expect(questions).not.toHaveTextContent(/they asked/i);
   });
 
-  it("asks for the consent before preparing when it is missing", async () => {
+  it("prepares on the first click, with no consent asked", async () => {
     fakeSession(member);
-    fakeInterviewPrep(JOB, NOT_PREPARED, { consent: { accepted: false } });
+    fakeInterviewPrep(JOB, NOT_PREPARED);
     const user = userEvent.setup();
     renderApp(PAGE);
 
     await user.click(
       await screen.findByRole("button", { name: "Prepare for the interview" }),
     );
-    const dialog = await screen.findByRole("dialog", {
-      name: "What is sent to prepare your interview",
-    });
-    await user.click(within(dialog).getByRole("checkbox"));
-    await user.click(
-      within(dialog).getByRole("button", { name: "Agree and prepare" }),
-    );
     expect(
       await screen.findByRole("region", { name: "Your stories" }),
     ).toBeVisible();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("proposes the ticked stories for the profile and accepts them only on the click", async () => {

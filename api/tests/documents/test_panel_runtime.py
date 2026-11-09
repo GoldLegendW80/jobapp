@@ -22,13 +22,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.definitions import FinalRun
 from app.agents.models import AgentRun, RunStatus
+from app.documents import content as c
 from app.documents import (  # noqa: F401 (writers registers the writers and the panel)
-    consent,
     design_capture,
     panel,
     writers,
 )
-from app.documents import content as c
 from app.documents.models import (
     DocumentGeneration,
     DocumentPanel,
@@ -103,7 +102,6 @@ def test_a_cv_goes_through_the_whole_panel_on_the_runtime_then_its_letter_starts
 ) -> None:
     who = with_panel(person(factory, migrated_url, USER_A))
     with factory() as db:
-        consent.record(db, who.user, AT)  # so the letter that follows can start
         db.commit()
     document, generation, run = start(who, "documents_cv_valid")
     execute(who, run)

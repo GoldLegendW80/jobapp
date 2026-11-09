@@ -130,6 +130,3 @@ export const savePrep = (
   sendJson(`${documentPath(documentId)}/draft`, "PUT", savedSchema, content, {
     "If-Match": String(revision),
   });
-
-/** The start of the api's sentence when Prepare or Practice waits for the consent. */
-export const CONSENT_REFUSAL = "Confirm what is sent";

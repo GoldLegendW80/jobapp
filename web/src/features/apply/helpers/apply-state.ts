@@ -125,12 +125,9 @@ const BLOCKED: Record<string, string> = {
 /**
  * What a queued application waits for: the api names it in `needs` while it waits. Apply on a
  * posting without documents asks them first (owner, 2026-11-05: "Apply with no documents writes
- * them and then sends"); nothing is written before the documents consent and a credential.
+ * them and then sends"); nothing is written before a credential is saved.
  */
 function waitingLine(needs: string | null, mode?: string): string {
-  if (needs === "documents:consent") {
-    return "Waiting for your CV and letter to be written. Confirm what is sent to the writer in Your CVs, on your profile, first: nothing is written before.";
-  }
   if (needs === "documents:credential") {
     return "Waiting for your CV and letter to be written. Add a model credential in your account first.";
   }

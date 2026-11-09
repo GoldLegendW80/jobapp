@@ -4,7 +4,6 @@ import type { DecisionKind } from "./decisions";
 
 /** Where the person settles what the documents of an application wait for. */
 const DOCUMENTS_WAIT_LINKS = new Map([
-  ["documents:consent", { to: "/profile#your-cv", label: "Open your CVs" }],
   ["documents:credential", { to: "/account", label: "Open your account" }],
 ]);
 

@@ -22,15 +22,13 @@ const meta = {
     docs: {
       description: {
         component:
-          "The upload panel while the file sent is read: reading, failed (and why), or read and waiting for the consent to convert it.",
+          "The upload panel while the file sent is read: reading, failed (and why), or read, its conversion starting.",
       },
     },
   },
   args: {
     file: FILE,
     busy: false,
-    declined: false,
-    onConvert: fn(),
     onKeep: fn(),
   },
 } satisfies Meta<typeof UploadReading>;
@@ -38,14 +36,8 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Read: the conversion waits for the consent. */
-export const Read: Story = { name: "Read, waiting for the consent" };
-
-/** The consent was declined: a button asks again. */
-export const Declined: Story = {
-  name: "The consent declined",
-  args: { declined: true },
-};
+/** Read: the conversion starts, no consent asked. */
+export const Read: Story = { name: "Read, its conversion starting" };
 
 /** Still being read. */
 export const Reading: Story = {

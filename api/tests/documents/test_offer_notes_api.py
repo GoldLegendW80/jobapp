@@ -192,3 +192,22 @@ def test_the_chat_of_the_notes_waits_for_the_reading(api: Api, alex: dict[str, A
         sent.json()["detail"]
         == "The assistant is still answering the last message of this document."
     )
+
+
+def test_the_chat_of_the_notes_without_ingestions_consent_answers_409(
+    api: Api, alex: dict[str, Any], factory: sessionmaker[Session]
+) -> None:
+    document = _read(api, alex).json()["document_id"]
+    with factory() as db:
+        db.execute(
+            sa.text("DELETE FROM ingestion_consents WHERE user_id = :u"), {"u": alex["user"]}
+        )
+        db.commit()
+    sent = api.request(
+        "POST",
+        f"/api/documents/{document}/messages",
+        token=alex["token"],
+        json={"text": "Add a question about the trial period."},
+    )
+    assert sent.status_code == 409
+    assert sent.json()["detail"].startswith("Confirm what is sent to the model first")

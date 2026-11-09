@@ -1,10 +1,11 @@
 """Apply on a posting without documents writes them, then sends (owner, product audit chapter 2,
 answer 5 of 2026-11-05), on a real Postgres with A5's fill on the modelled Ashby form and A6's
 fake submit form: the click asks the CV and the letter as a Like does (`likes.on_apply`), the
-application waits for them, then the gate sends it with the click as the approval; without the
-documents consent nothing is written; a writer that fails ends it with a plain code and nothing
-sent; with the review box ticked it waits for the person's Approve once filled. The writers are
-played by storing the versions they would make: no model, no browser, no company.
+application waits for them, then the gate sends it with the click as the approval; without a
+model credential nothing is written, and with one no consent is asked; a writer that fails ends
+it with a plain code and nothing sent; with the review box ticked it waits for the person's
+Approve once filled. The writers are played by storing the versions they would make: no model, no
+browser, no company.
 """
 
 from __future__ import annotations
@@ -17,6 +18,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.agents import credentials
+from app.agents.crypto import Keyring
+from app.agents.models import CredentialKind
 from app.apply import likes, run
 from app.apply.caps_models import ApplySettings
 from app.apply.models import Mode, State
@@ -33,6 +37,7 @@ from app.documents.models import (
     Origin,
     PanelStatus,
 )
+from tests.agents.conftest import API_KEY, new_key
 from tests.apply import a1_support
 from tests.apply.conftest import AT, Person
 from tests.apply.test_738_one_click import HOUR, answered, authorisations, job
@@ -103,7 +108,7 @@ def agent_runs(db: Session, user_id: uuid.UUID) -> int:
     )
 
 
-def test_the_apply_button_asks_the_missing_documents_and_waits_for_the_consent(
+def test_the_apply_button_asks_the_missing_documents_and_waits_for_a_credential(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, api_app: FastAPI
 ) -> None:
     _password(factory, person_a)
@@ -123,10 +128,10 @@ def test_the_apply_button_asks_the_missing_documents_and_waits_for_the_consent(
     [(kind, generation)] = generations(db, job_id)
     assert (kind, generation.trigger) == (Kind.cv, GenerationTrigger.click)
     assert generation.estimate[generate.LETTER_FOLLOWS] is True
-    # No documents consent yet: the writing waits for it, exactly as "Write now" and a Like do.
+    # No credential yet: the writing waits for it, exactly as "Write now" and a Like do.
     assert (generation.status, generation.wait_reason) == (
         GenerationStatus.waiting,
-        GenerationWait.consent,
+        GenerationWait.credential,
     )
     assert agent_runs(db, person_a.user_id) == 0  # nothing written, nothing spent
     asked = [e.data for e in events(db, app_id) if e.kind == "documents_asked"]
@@ -134,10 +139,48 @@ def test_the_apply_button_asks_the_missing_documents_and_waits_for_the_consent(
     assert run.prepare(db, app_id, AT) == "waiting_documents"
     db.commit()
     found = application(db, app_id)
-    assert (found.state, found.needs) == (State.queued, "documents:consent")
+    assert (found.state, found.needs) == (State.queued, "documents:credential")
     # Apply myself asks nothing: the person fills the form himself.
     assert myself.status_code == 201
     assert generations(db, manual) == []
+
+
+def test_the_apply_button_with_a_credential_and_no_consent_queues_the_writer_at_once(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, api_app: FastAPI
+) -> None:
+    """D30: no consent row, no consent asked; the base CV's writer is queued at once, the CV
+    after it."""
+    _password(factory, person_a)
+    with factory() as other:
+        ring = Keyring.from_text(new_key())
+        credentials.save(
+            other, ring, person_a.user_id, CredentialKind.anthropic_api_key, API_KEY, AT
+        )
+        other.commit()
+    job_id = posting(db, person_a.user_id, form(stub), kinds=())
+    with TestClient(api_app, follow_redirects=False) as client:
+        api = Api(client)
+        token = api.login_token(person_a.email)
+        started = api.post(
+            f"/api/postings/{job_id}/applications", token=token, json={"mode": "apply"}
+        )
+    assert started.status_code == 201, started.text
+    assert db.scalar(sa.text("SELECT count(*) FROM document_consents")) == 0
+    [(kind, generation)] = generations(db, job_id)
+    assert (kind, generation.trigger) == (Kind.cv, GenerationTrigger.click)
+    # No base CV yet: one is built from the profile first (D29), and the CV waits for it alone.
+    assert (generation.status, generation.wait_reason) == (
+        GenerationStatus.waiting,
+        GenerationWait.base_cv,
+    )
+    base_builds = db.execute(
+        sa.text(
+            "SELECT status::text, wait_reason::text FROM document_generations "
+            "WHERE user_id = :u AND mode = 'base_profile'"
+        ),
+        {"u": person_a.user_id},
+    ).all()
+    assert [tuple(row) for row in base_builds] == [("queued", None)]
 
 
 def test_written_then_sent_with_the_click_as_the_approval(

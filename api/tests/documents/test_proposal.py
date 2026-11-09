@@ -17,10 +17,10 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import definitions, failures, runs
-from app.agents.models import RunStatus
+from app.agents import credentials, definitions, failures, runs
+from app.agents.models import CredentialKind, RunStatus
+from app.documents import content as c
 from app.documents import (
-    consent,
     corrections,
     profile_view,
     proposal,
@@ -29,7 +29,6 @@ from app.documents import (
     writer_cv,
     writer_proposal,
 )
-from app.documents import content as c
 from app.documents.models import (
     RENDERED_KINDS,
     DocumentGeneration,
@@ -42,6 +41,7 @@ from app.documents.models import (
 )
 from app.documents.sources import PostingView
 from app.documents.templates import KINDS as TEMPLATE_KINDS
+from tests.agents.conftest import API_KEY
 from tests.agents.g6_helpers import everything_stored
 from tests.documents.canary import find, marker
 from tests.documents.store_support import AT, USER_A, USER_B, db, engine, factory, migrated_url
@@ -76,7 +76,6 @@ def lumen(who: Person) -> Person:
 def alex(factory: sessionmaker[Session], migrated_url: str) -> Person:
     who = lumen(person(factory, migrated_url, USER_A))
     with who.factory() as db:
-        consent.record(db, who.user, AT)
         db.commit()
     return who
 
@@ -403,7 +402,6 @@ def test_a_posting_with_no_text_gets_a_short_generic_proposal(
 ) -> None:
     who = lumen(person(factory, migrated_url, USER_A, posting_text=""))
     with who.factory() as db:
-        consent.record(db, who.user, AT)
         db.commit()
     document, generation = write(who, "documents_proposal_generic")
     found = done(who, document, generation)
@@ -487,19 +485,31 @@ def test_a_contact_that_is_not_one_address_is_refused(alex: Person, contact: str
     assert generations(alex) == []
 
 
-def test_without_the_consent_it_waits_and_the_tick_starts_it_once_given(
+def test_stored_waiting_for_the_consent_the_tick_starts_it(
     factory: sessionmaker[Session], migrated_url: str
 ) -> None:
+    """D30: a writing left waiting with the reason `consent` before the deploy is started."""
     who = lumen(person(factory, migrated_url, USER_A))
+    with factory() as db:
+        credentials.delete(db, who.user)
+        db.commit()
     made = create(who)
     assert made.run_id is None
     assert made.generation is not None
+    with factory() as db:
+        db.execute(
+            sa.update(DocumentGeneration)
+            .where(DocumentGeneration.id == made.generation.id)
+            .values(wait_reason=GenerationWait.consent)
+        )
+        db.commit()
     row = generation_row(factory, made.generation.id)
-    assert row.status is GenerationStatus.waiting
-    assert row.wait_reason is GenerationWait.consent
+    assert (row.status, row.wait_reason) == (GenerationStatus.waiting, GenerationWait.consent)
     assert row.trigger is GenerationTrigger.click
     with factory() as db:
-        consent.record(db, who.user, AT)
+        credentials.save(db, who.keyring, who.user, CredentialKind.anthropic_api_key, API_KEY, AT)
+        db.commit()
+    with factory() as db:
         started = tick.start_clicks(db, who.user, AT, who.settings)
         db.commit()
     [run_id] = started
@@ -550,7 +560,6 @@ def test_the_canary_in_the_facts_the_posting_and_the_address_reaches_no_log_and_
         )
     )
     with who.factory() as db:
-        consent.record(db, who.user, AT)
         db.commit()
     address = f"{planted}@lumen.example"
     caplog.set_level(logging.DEBUG)

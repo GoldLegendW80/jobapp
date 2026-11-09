@@ -18,7 +18,7 @@ import { clearAttempts, newContext, watchErrors } from "./stack";
  * the worker on the fake model backend and the real renderer. The page cannot name a recorded
  * stream, so the build request it sends is given D9's `script` for this invented profile on its
  * way out (the default stream is written for another profile and would end without a result).
- * Open the profile, accept the consent, build a CV from the profile and open its own page, build
+ * Open the profile, build a CV from the profile (no consent is asked) and open its own page, build
  * a second as a copy, make it the default, download the PDF, reload and see the same list.
  *
  * Locally, as documents-d6.spec.ts (AGENTS_FAKE_BACKEND=1 on the worker), then:
@@ -75,7 +75,7 @@ test.afterAll(async () => {
   clearAttempts([person.email]);
 });
 
-test("Your CVs, on the profile page, asks what is sent before anything is built", async () => {
+test("Your CVs, on the profile page, builds on the click with no consent asked", async () => {
   await signUp(page, person);
   const saved = await page.request.put("/api/me/model-credential", {
     headers: CSRF,
@@ -88,22 +88,11 @@ test("Your CVs, on the profile page, asks what is sent before anything is built"
     page.getByRole("heading", { level: 2, name: "Your CVs" }),
   ).toBeVisible();
   await expect(page.getByText("You have no CV yet")).toBeVisible();
-  await expect(
-    page.getByText("Confirm what is sent to build your CV."),
-  ).toBeVisible();
+  expect((await list()).length).toBe(0);
 
   await page.getByRole("button", { name: "Build it from my profile" }).click();
-  const dialog = page.getByRole("dialog", {
-    name: "What is sent to build your CV",
-  });
-  await expect(dialog.getByTestId("consent-text")).toBeVisible();
-  await expect(dialog.getByTestId("consent-estimates")).toContainText(
-    "One posting:",
-  );
-  expect((await list()).length).toBe(0);
-  await dialog.getByRole("checkbox").check();
-  await dialog.getByRole("button", { name: "Agree and build my CV" }).click();
   await expect(page.getByText(/is being built/)).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   keep(EVIDENCE, "building.png", await page.screenshot());
 });
 

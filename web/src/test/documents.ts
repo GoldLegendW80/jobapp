@@ -1,6 +1,6 @@
 /**
  * A fake /api/documents for tests: base CVs kept in memory with the api's rules (one default, the
- * oldest other promoted on a delete, at most `max`), a consent, and the documents behind them.
+ * oldest other promoted on a delete, at most `max`), and the documents behind them.
  * `requests` lists every call that reached it, so a test can assert what was (not) sent.
  */
 import { http, HttpResponse } from "msw";
@@ -10,26 +10,8 @@ import type {
   DocumentOut,
   VersionSummary,
 } from "@/features/documents/api/documents-api";
-import type { Consent } from "@/features/documents/api/consent-api";
 
 import { server } from "./server";
-
-export const CONSENT_TEXT =
-  "The app sends your profile and your base CV to Anthropic to write a CV.";
-
-export function fakeConsent(overrides: Partial<Consent> = {}): Consent {
-  return {
-    version: 1,
-    text: CONSENT_TEXT,
-    accepted: false,
-    accepted_at: null,
-    model: "claude-opus-5-5",
-    posting: { tokens: { low: 12_000, high: 20_000 }, cost: null },
-    cost_note:
-      "On a Claude subscription, tokens count against your quota, not as money.",
-    ...overrides,
-  };
-}
 
 export function fakeVersion(
   overrides: Partial<VersionSummary> = {},
@@ -107,7 +89,6 @@ export interface Call {
 
 export interface FakeDocuments {
   cvs: BaseCv[];
-  consent: Consent;
   max: number;
   requests: Call[];
   /** Per document id, what GET /api/documents/{id} answers instead of the default. */
@@ -116,16 +97,24 @@ export interface FakeDocuments {
   corrections: Map<string, unknown[]>;
 }
 
+const MODEL_CREDENTIAL = {
+  kind: "anthropic_api_key",
+  last4: "e2e1",
+  verified_at: "2026-10-14T09:30:00Z",
+  updated_at: "2026-10-14T09:30:00Z",
+  check: null,
+};
+
 export function fakeDocuments(
   initial: {
     cvs?: BaseCv[];
-    consent?: Partial<Consent>;
     max?: number;
+    /** false: no model credential is saved, so a writer's chat waits for one. */
+    credential?: boolean;
   } = {},
 ): FakeDocuments {
   const state: FakeDocuments = {
     cvs: initial.cvs ?? [],
-    consent: fakeConsent(initial.consent),
     max: initial.max ?? 10,
     requests: [],
     documents: new Map(),
@@ -147,6 +136,14 @@ export function fakeDocuments(
   const find = (id: string) => state.cvs.find((cv) => cv.id === id);
 
   server.use(
+    http.get("*/api/me/model-credential", () =>
+      initial.credential === false
+        ? HttpResponse.json(
+            { detail: "No model credential is saved." },
+            { status: 404 },
+          )
+        : HttpResponse.json(MODEL_CREDENTIAL),
+    ),
     http.get("*/api/documents/base-cvs", async ({ request }) => {
       await note(request);
       return HttpResponse.json({ base_cvs: state.cvs, max: state.max });
@@ -212,19 +209,6 @@ export function fakeDocuments(
       state.cvs = state.cvs.filter((one) => one.id !== cv.id);
       if (cv.is_default && state.cvs[0]) state.cvs[0].is_default = true;
       return new HttpResponse(null, { status: 204 });
-    }),
-    http.get("*/api/documents/consent", async ({ request }) => {
-      await note(request);
-      return HttpResponse.json(state.consent);
-    }),
-    http.post("*/api/documents/consent", async ({ request }) => {
-      await note(request);
-      state.consent = {
-        ...state.consent,
-        accepted: true,
-        accepted_at: "2026-10-14T09:30:00Z",
-      };
-      return HttpResponse.json(state.consent);
     }),
     http.get(
       "*/api/documents/:id/versions/:number",

@@ -53,7 +53,7 @@ const ready = () =>
   });
 const writing = () =>
   application(2, "queued", 1, {
-    needs: "documents:consent",
+    needs: "documents:writing",
     documents: {},
   });
 

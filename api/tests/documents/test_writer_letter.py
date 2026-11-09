@@ -22,7 +22,6 @@ from app.agents import credentials, definitions, failures, fake_backend, runs
 from app.agents import tools as app_tools
 from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.documents import (
-    consent,
     generate,
     render_job,
     store,
@@ -100,7 +99,6 @@ def lumen_posting(who: Person) -> Person:
 def alex(factory: sessionmaker[Session], migrated_url: str) -> Person:
     who = lumen_posting(person(factory, migrated_url, USER_A))
     with who.factory() as db:
-        consent.record(db, who.user, AT)  # what every run needs, the letter's chain included
         db.commit()
     return who
 
@@ -867,28 +865,6 @@ def test_both_kinds_asked_on_an_applied_posting_write_a_letter_and_the_sent_one_
     found = versions(alex.factory, document)
     assert [(v.number, v.frozen_at is not None) for v in found] == [(1, True), (2, False)]
     assert (found[0].content_hash, found[0].content) == (sent.content_hash, sent.content)
-
-
-def test_a_revoked_consent_stops_the_letter_with_its_reason_until_it_is_given_again(
-    alex: Person,
-) -> None:
-    _, _, run = _cv_done(alex)
-    with alex.factory() as db:
-        db.execute(sa.text("DELETE FROM document_consents WHERE user_id = :u"), {"u": alex.user})
-        db.commit()
-    assert _chain(alex, run) is None
-    [letter] = _letter_generations(alex)
-    assert (letter.status, letter.wait_reason, letter.run_id) == (
-        GenerationStatus.waiting,
-        GenerationWait.consent,
-        None,
-    )
-    with alex.factory() as db:
-        consent.record(db, alex.user, AT)
-        db.commit()
-    assert tick.tick(alex.factory, AT, alex.settings, only=[alex.user]) == [
-        generation_row(alex.factory, letter.id).run_id
-    ]
 
 
 def test_a_removed_credential_stops_the_letter_with_its_reason_until_one_is_added(

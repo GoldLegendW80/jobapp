@@ -284,6 +284,13 @@ choice made by the build that stands until the owner says otherwise.
   change no longer says a possible document cost before saving, since no document is written
   without a click.
 
+- 2026-11-09 (D30, issue #768): asked whether to show the documents consent on the posting, the
+  owner answered: "do not ask it at all, remove this consent". No writer or agent of the documents
+  module asks for a consent or waits for one; the model credential is still required. This
+  reverses the consent of D9 and its text version 2 of D29. The table `document_consents` and the
+  wait reason `consent` stay until a contract migration; a generation stored waiting with
+  `consent` is started by the next tick. Ingestion's consent of Fill my profile is not part of it.
+
 ## Interactive job search (2026-10-24, #626)
 
 - **Owner intent:** Find jobs should let the person choose websites and search parameters, then an actual LLM uses Playwright to browse and search those sites, like the owner's Claude Code workflow. This is broader than enabling the narrow company-site finder or platform consent alone.

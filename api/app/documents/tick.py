@@ -26,8 +26,9 @@ held and leaves the person to the next tick, so two passes never start the same 
    one any more, and nothing starts one (`writer_base.start_ready` skips them too).
 2. The base CV builds, uploads and design captures whose reason to wait is gone start
    (`writer_base.start_ready`). Every one of them was asked for by a click or an upload.
-3. The person's clicks ("Write", an Apply, a Like) that waited for the consent, a credential, a
-   base CV being built, or the person's limit of active runs start (`start_clicks`).
+3. The person's clicks ("Write", an Apply, a Like) that waited for a credential, a base CV
+   being built, or the person's limit of active runs start (`start_clicks`), whatever reason
+   they were stored with.
 
 **Never two starts.** A click cancels a generation that has not started, under its document's
 lock. So the pass writes nothing to a generation, and starts none, before it holds the
@@ -220,7 +221,7 @@ def start_clicks(
     db: Session, user_id: uuid.UUID, at: datetime, settings: Settings
 ) -> list[uuid.UUID]:
     """The person's clicks ("Write", an Apply, a Like) that have not started, oldest first:
-    started when the consent and a credential are there and no base CV is being built for them
+    started when a credential is there and no base CV is being built for them
     (`writer_base.click_wait`), else kept waiting with the reason. One that meets the limit of
     active runs stays `queued` for the next tick. Returns the runs to queue after the commit."""
     found = db.scalars(
