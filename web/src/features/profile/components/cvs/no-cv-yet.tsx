@@ -7,16 +7,10 @@ import { Spinner } from "@/components/ui/spinner";
 /** Your CVs before the first one: what a CV is for, and the build from the profile. */
 export function NoCvYet({
   building,
-  consentMissing,
-  consentReady,
-  consentError,
   noExperience,
   onBuild,
 }: {
   building: boolean;
-  consentMissing: boolean;
-  consentReady: boolean;
-  consentError: boolean;
   noExperience: boolean;
   onBuild: () => void;
 }) {
@@ -37,17 +31,7 @@ export function NoCvYet({
                 posting.
               </p>
             ) : null}
-            {consentMissing ? (
-              <p className="text-sm font-medium" data-testid="confirm-line">
-                Confirm what is sent to build your CV.
-              </p>
-            ) : null}
-            {consentError ? (
-              <p className="text-sm text-destructive">
-                What is sent could not be loaded. Reload the page to try again.
-              </p>
-            ) : null}
-            <Button disabled={building || !consentReady} onClick={onBuild}>
+            <Button disabled={building} onClick={onBuild}>
               {building ? (
                 <Spinner aria-hidden="true" role={undefined} />
               ) : null}

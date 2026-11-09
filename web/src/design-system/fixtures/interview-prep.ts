@@ -4,7 +4,6 @@ import type {
   InterviewPrep,
   PrepContent,
 } from "@/features/documents/api/interview-prep-api";
-import type { Consent } from "@/features/documents/api/consent-api";
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { fakeDocuments } from "@/test/documents";
 import { fakeJobDetail } from "@/test/jobs";
@@ -102,29 +101,17 @@ export const NOT_PREPARED: InterviewPrep = {
 };
 
 /**
- * The interview preparation of `job` served from a state the requests change: Prepare (refused
- * once without the consent, then written at once), a practice message and its answer, the kept
+ * The interview preparation of `job` served from a state the requests change: Prepare (written
+ * at once), a practice message and its answer, the kept
  * stories as a proposal accepted or rejected, and a Debrief saved by hand.
  */
-export function fakeInterviewPrep(
-  job: JobDetail,
-  initial: InterviewPrep,
-  options: { consent?: Partial<Consent> } = {},
-) {
+export function fakeInterviewPrep(job: JobDetail, initial: InterviewPrep) {
   fakeJobDetail(job);
-  const docs = fakeDocuments({ consent: options.consent });
+  const docs = fakeDocuments();
   let state: InterviewPrep = initial;
   server.use(
     http.get("*/api/jobs/:id/interview-prep", () => HttpResponse.json(state)),
     http.post("*/api/jobs/:id/interview-prep", () => {
-      if (!docs.consent.accepted)
-        return HttpResponse.json(
-          {
-            detail:
-              "Confirm what is sent to the model first, then click again.",
-          },
-          { status: 409 },
-        );
       state = preparedFor();
       return HttpResponse.json(
         { document_id: "prep-doc", writing: DONE },

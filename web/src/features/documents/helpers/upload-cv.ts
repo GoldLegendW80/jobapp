@@ -10,8 +10,6 @@ export const READING_FOR_PROFILE =
   "Reading your CV for your profile. The review opens by itself when it ends.";
 export const REVIEW_OPENED =
   "The reading of your CV ended. Here is what it proposes for your profile.";
-export const RUN_CONSENT_FAILED =
-  "Your consent to complete your profile could not be recorded. The app asks again when you start.";
 
 /** What the file input accepts: a PDF or a Word document. */
 export const CV_FILE_TYPES =

@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 
 import {
   confirmDocument,
@@ -9,11 +8,6 @@ import {
   listDocuments,
   uploadDocument,
 } from "@/features/ingestion/api/documents-api";
-import {
-  acceptConsent as acceptRunConsent,
-  consentKey as runConsentKey,
-  getConsent as getRunConsent,
-} from "@/features/ingestion/api/runs-api";
 
 import {
   baseCvsKey,
@@ -23,44 +17,28 @@ import {
   type BaseCvs,
 } from "./base-cvs-api";
 import { failureSentence } from "./documents-api";
-import { acceptConsent, consentKey, getConsent } from "./consent-api";
 import { pollInterval } from "../helpers/labels";
 import {
   isCvFile,
   isRead,
   NOT_A_CV,
   READING_POLL_MS,
-  RUN_CONSENT_FAILED,
 } from "../helpers/upload-cv";
 import { useFollowProfileRun } from "./use-follow-profile-run";
 
 /**
  * An uploaded CV on its way to a base CV: the file is sent to ingestion, which reads its text;
- * once read, and once what is sent is agreed to, it is converted, once. `eager` (the welcome
- * wizard) converts it as soon as it is read: the server holds the conversion until the consent,
- * which the dialog still asks for. `problem` is the sentence of the last failure; a new file
- * starts over.
+ * once read, it is converted, once, with no consent asked (owner, 2026-11-09). `problem` is the
+ * sentence of the last failure; a new file starts over.
  */
-export function useCvUpload({ eager = false }: { eager?: boolean } = {}) {
+export function useCvUpload() {
   const client = useQueryClient();
   const [problem, setProblem] = useState<string>();
   const [uploadId, setUploadId] = useState<string>();
   const [baseId, setBaseId] = useState<string>();
-  const [declined, setDeclined] = useState(false);
   /** The file whose conversion was asked for: once per upload. */
   const started = useRef<string>(undefined);
 
-  const consent = useQuery({
-    queryKey: consentKey,
-    queryFn: ({ signal }) => getConsent(signal),
-    enabled: uploadId !== undefined,
-  });
-  // Asked once a file is sent: the consent dialog may show it beside the documents consent.
-  const runConsent = useQuery({
-    queryKey: runConsentKey,
-    queryFn: ({ signal }) => getRunConsent(signal),
-    enabled: uploadId !== undefined,
-  });
   const profileRun = useFollowProfileRun();
   const files = useQuery({
     queryKey: documentsKey,
@@ -108,29 +86,6 @@ export function useCvUpload({ eager = false }: { eager?: boolean } = {}) {
       setProblem(failureSentence(error));
     },
   });
-  // The documents consent first, then the run's when its box was ticked: each its own record.
-  const agree = useMutation({
-    mutationFn: async ({
-      version,
-      runVersion,
-    }: {
-      version: number;
-      runVersion: number | null;
-    }) => {
-      const accepted = await acceptConsent(version);
-      client.setQueryData(consentKey, accepted);
-      if (runVersion === null) return;
-      try {
-        client.setQueryData(runConsentKey, await acceptRunConsent(runVersion));
-      } catch {
-        void client.invalidateQueries({ queryKey: runConsentKey });
-        toast.error(RUN_CONSENT_FAILED);
-      }
-    },
-    onError: () => {
-      void client.invalidateQueries({ queryKey: consentKey });
-    },
-  });
   const keep = useMutation({
     mutationFn: confirmDocument,
     onSuccess: () => client.invalidateQueries({ queryKey: documentsKey }),
@@ -152,7 +107,6 @@ export function useCvUpload({ eager = false }: { eager?: boolean } = {}) {
     setProblem(undefined);
     setUploadId(undefined);
     setBaseId(undefined);
-    setDeclined(false);
     if (!isCvFile(file.name)) {
       setProblem(NOT_A_CV);
       return;
@@ -163,46 +117,27 @@ export function useCvUpload({ eager = false }: { eager?: boolean } = {}) {
   const file = files.data?.items.find((one) => one.id === uploadId);
   const cv = cvs.data?.base_cvs.find((one) => one.id === baseId);
   const read = isRead(file);
-  const accepted = consent.data?.accepted;
   const convertNow = convert.mutate;
-  // The text is read and what is sent agreed to (or `eager`): convert it, once.
+  // The text is read: convert it, once.
   useEffect(() => {
-    if (!read || uploadId === undefined || (!eager && accepted !== true))
-      return;
+    if (!read || uploadId === undefined) return;
     if (started.current === uploadId) return;
     started.current = uploadId;
     convertNow(uploadId);
-  }, [read, uploadId, accepted, eager, convertNow]);
+  }, [read, uploadId, convertNow]);
 
   return {
     problem,
     uploadId,
     baseId,
-    declined,
-    /** The person closed the consent dialog; "Convert it into my CV" asks again. */
-    decline: () => {
-      setDeclined(true);
-    },
-    askAgain: () => {
-      setDeclined(false);
-    },
-    consent,
-    runConsent,
     profileRun,
     file,
     cv,
     send,
     convert,
-    agree,
     keep,
     makeDefault,
     take,
     busy: send.isPending || convert.isPending,
-    /** The consent dialog is due: the text is read and what is sent is not agreed to yet. */
-    asking:
-      read &&
-      accepted === false &&
-      !declined &&
-      (eager || baseId === undefined),
   };
 }

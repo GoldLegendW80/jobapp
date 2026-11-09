@@ -34,7 +34,7 @@ type Story = StoryObj<typeof meta>;
 export const PrepareInOneClick: Story = {
   beforeEach: () => {
     fakeSession(camille);
-    fakeInterviewPrep(JOB, NOT_PREPARED, { consent: { accepted: true } });
+    fakeInterviewPrep(JOB, NOT_PREPARED);
   },
 };
 

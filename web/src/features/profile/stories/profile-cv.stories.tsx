@@ -39,7 +39,7 @@ function camilleCvs(cvs = profileCvs()) {
   fakeDocumentReads();
   fakeSession(camille);
   fakeProfile(camilleProfile());
-  const documents = fakeDocuments({ cvs, consent: { accepted: true } });
+  const documents = fakeDocuments({ cvs });
   fakeGallery(documents);
   fakeCvPages();
   return documents;

@@ -5,18 +5,14 @@ import type { IngestionDocument } from "@/features/ingestion/api/documents-api";
 import { needsKeeping } from "@/features/documents/helpers/upload-cv";
 import { UploadStatus } from "./upload-status";
 
-/** The uploaded file while ingestion reads it, then the click that converts it. */
+/** The uploaded file while ingestion reads it, until its conversion starts. */
 export function UploadReading({
   file,
   busy,
-  declined,
-  onConvert,
   onKeep,
 }: {
   file: IngestionDocument | undefined;
   busy: boolean;
-  declined: boolean;
-  onConvert: () => void;
   onKeep: (id: string) => void;
 }) {
   if (file === undefined || file.status === "pending")
@@ -49,15 +45,5 @@ export function UploadReading({
         </AlertDescription>
       </Alert>
     );
-  if (!declined) return <UploadStatus>Reading your CV</UploadStatus>;
-  return (
-    <div className="flex flex-col items-start gap-2">
-      <p className="text-sm" data-testid="upload-declined">
-        Confirm what is sent to convert <bdi>{file.name}</bdi>.
-      </p>
-      <Button disabled={busy} onClick={onConvert}>
-        Convert it into my CV
-      </Button>
-    </div>
-  );
+  return <UploadStatus>Reading your CV</UploadStatus>;
 }

@@ -37,7 +37,7 @@ export function WizardStep({
   const heading = useRef<HTMLHeadingElement>(null);
   const first = useRef(true);
   // Here, not in Your profile: the CV's conversion goes on when the person moves on.
-  const cv = useCvUpload({ eager: true });
+  const cv = useCvUpload();
 
   useEffect(() => {
     // Each step moved to puts the keyboard on its heading, not the first time.

@@ -6,7 +6,6 @@ import type {
   VersionSummary,
 } from "@/features/documents/api/documents-api";
 import type { PostingDocument } from "@/features/documents/api/posting-documents-api";
-import type { Consent } from "@/features/documents/api/consent-api";
 import type { Template } from "@/features/documents/api/templates-api";
 import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { fakeCv, fakeDocumentOf, fakeDocuments } from "@/test/documents";
@@ -220,17 +219,18 @@ export function postingDocument(
 /**
  * A posting and its documents: the job, the list of its documents, each document with its
  * versions (the latest first) and the image of each version's first page, and what the document
- * view reads besides (`fakeDocumentReads`): the chat's `messages`, under `consent`.
+ * view reads besides (`fakeDocumentReads`): the chat's `messages`, and whether a model
+ * credential is saved (`credential`).
  */
 export function fakePostingDocuments(
   job: JobDetail,
   documents: PostingDocument[],
   history: VersionSummary[] = [],
-  chat: { consent?: Partial<Consent>; messages?: Message[] } = {},
+  chat: { credential?: boolean; messages?: Message[] } = {},
 ) {
   fakeJobDetail(job);
   fakeDocumentReads(chat.messages);
-  const api = fakeDocuments({ cvs: [fakeCv()], consent: chat.consent });
+  const api = fakeDocuments({ cvs: [fakeCv()], credential: chat.credential });
   for (const one of documents) {
     api.documents.set(one.id, one);
     api.versions.set(one.id, one.latest ? [one.latest, ...history] : []);
@@ -252,13 +252,16 @@ export function fakeOneDocument(
   document: DocumentOut,
   options: {
     versions?: VersionSummary[];
-    consent?: Partial<Consent>;
+    credential?: boolean;
     messages?: Message[];
     corrections?: unknown[];
   } = {},
 ) {
   fakeDocumentReads(options.messages);
-  const api = fakeDocuments({ cvs: [fakeCv()], consent: options.consent });
+  const api = fakeDocuments({
+    cvs: [fakeCv()],
+    credential: options.credential,
+  });
   api.documents.set(document.id, document);
   api.versions.set(
     document.id,

@@ -33,7 +33,6 @@ const meta = {
   args: { document: CV, generation: null },
   beforeEach: () => {
     fakeOneDocument(CV, {
-      consent: { accepted: true },
       messages: CHAT_MESSAGES,
     });
   },

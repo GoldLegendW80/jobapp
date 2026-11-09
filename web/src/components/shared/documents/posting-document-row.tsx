@@ -39,7 +39,7 @@ const PREVIEW_WIDTH = 160;
 
 /** Where each wait reason is settled, for the link under the sentence. */
 const WAIT_LINKS: Record<WaitReason, { to: string; label: string } | null> = {
-  consent: { to: "/profile#your-cv", label: "Open your CVs" },
+  consent: null,
   credential: { to: "/account", label: "Open your account" },
   base_cv: { to: "/profile#your-cv", label: "Open your CVs" },
   daily_ceiling: null,

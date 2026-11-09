@@ -34,7 +34,7 @@ type Story = StoryObj<typeof meta>;
 /** Invited to an interview: Prepare is the primary action. */
 export const Invited: Story = {
   beforeEach: () => {
-    fakeInterviewPrep(INVITED, NOT_PREPARED, { consent: { accepted: true } });
+    fakeInterviewPrep(INVITED, NOT_PREPARED);
   },
 };
 

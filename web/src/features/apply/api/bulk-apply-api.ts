@@ -6,7 +6,7 @@
  */
 import { z } from "zod";
 
-import { estimateSchema } from "@/features/documents/api/consent-api";
+import { estimateSchema } from "@/features/documents/api/estimate-api";
 import { noticesSchema } from "@/features/jobs/api/notices-api";
 import { request } from "@/lib/api";
 

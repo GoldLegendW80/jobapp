@@ -52,7 +52,6 @@ const meta = {
   beforeEach: () => {
     fakeOneDocument(CV, {
       versions: [latest, first],
-      consent: { accepted: true },
     });
   },
 } satisfies Meta<typeof DocumentView>;
@@ -69,7 +68,6 @@ export const AfterAChange: Story = {
   beforeEach: () => {
     fakeOneDocument(CV, {
       versions: [latest, first],
-      consent: { accepted: true },
       messages: CHAT_MESSAGES,
     });
   },

@@ -48,7 +48,7 @@ export const ReadTheWrittenCv: Story = {
         }),
       ],
       [first],
-      { consent: { accepted: true } },
+      {},
     );
   },
 };
@@ -66,7 +66,7 @@ export const AskForAChange: Story = {
         }),
       ],
       [first],
-      { consent: { accepted: true }, messages: CHAT_MESSAGES },
+      { messages: CHAT_MESSAGES },
     );
   },
 };
@@ -102,7 +102,7 @@ export const SeeWhatTheFactCheckCorrected: Story = {
         }),
       ],
       [first],
-      { consent: { accepted: true } },
+      {},
     );
     api.corrections.set("cv-doc", [
       {

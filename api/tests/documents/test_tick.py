@@ -328,13 +328,13 @@ def test_an_open_automatic_generation_is_cancelled_once_and_its_document_kept(
 # --- the clicks that waited ---------------------------------------------------------------------
 
 
-def test_a_click_with_a_credential_and_no_consent_row_waits_for_nothing(world: World) -> None:
+def test_a_click_with_a_credential_and_no_consent_row_starts_at_once(world: World) -> None:
     posting = world.posting(40)
     click(world, posting)
     with world.factory() as db:
         assert db.scalar(sa.text("SELECT count(*) FROM document_consents")) == 0
     [found] = world.generations(posting)
-    assert (found["status"], found["wait_reason"]) == (GenerationStatus.queued, None)
+    assert (found["status"], found["wait_reason"]) == (GenerationStatus.running, None)
 
 
 def test_a_click_stored_waiting_for_the_documents_consent_starts_at_the_next_tick(

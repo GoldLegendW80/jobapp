@@ -979,7 +979,7 @@ describe("the wizard", () => {
     fakeSession(member);
     fakeProfile(null);
     fakeOnboarding();
-    const cvs = fakeCvDocuments({ consent: { accepted: false } });
+    const cvs = fakeCvDocuments();
     const files = fakeDocuments();
     fakePrompt();
     fakeRuns();

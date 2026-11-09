@@ -127,7 +127,7 @@ const conversions = (api: ReturnType<typeof fakeDocuments>) =>
 
 describe("the upload panel", () => {
   it("sends a PDF through ingestion and says it is reading it", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     const { user } = panel();
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);
@@ -140,7 +140,7 @@ describe("the upload panel", () => {
   });
 
   it("takes a Word document dropped on it", async () => {
-    fakeDocuments({ consent: { accepted: true } });
+    fakeDocuments();
     const files = fakeFiles();
     panel();
     const docx = new File(["PK Morgan Exampleton"], "Morgan CV.docx", {
@@ -172,7 +172,7 @@ describe("the upload panel", () => {
     const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
-    const made = convertsInto(api, {});
+    const made = convertsInto(api);
     const { user } = panel();
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);
 
@@ -228,7 +228,7 @@ describe("the upload panel", () => {
   });
 
   it("says what the conversion waits for", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
     convertsInto(api, {
@@ -248,7 +248,7 @@ describe("the upload panel", () => {
   });
 
   it("shows ingestion's own reason when the file could not be read", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "failed", {
       failed_reason: "There is no text in this file.",
@@ -262,7 +262,7 @@ describe("the upload panel", () => {
   });
 
   it("asks to keep a file with a secret warning before converting it", async () => {
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done", { secret_warning: true });
     const { user } = panel();
@@ -274,7 +274,7 @@ describe("the upload panel", () => {
   });
 
   it("shows the api's sentence when the file cannot be converted", async () => {
-    fakeDocuments({ consent: { accepted: true } });
+    fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
     server.use(
@@ -297,7 +297,7 @@ describe("the upload panel", () => {
   it("starts the run from one button with its token range, then opens the review by itself", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const info = vi.spyOn(toast, "info");
-    const api = fakeDocuments({ consent: { accepted: true } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
     convertsInto(api, { is_default: true });
@@ -345,10 +345,10 @@ describe("the upload panel", () => {
   });
 
   it("asks both consents in one dialog, and records each with its own version", async () => {
-    const api = fakeDocuments({ consent: { version: 4 } });
+    const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
-    convertsInto(api, {});
+    convertsInto(api);
     const runs = fakeRuns({ consent: { ...RUN_CONSENT, version: 2 } });
     const { user } = panel();
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);
@@ -391,7 +391,7 @@ describe("the upload panel", () => {
     const api = fakeDocuments();
     const files = fakeFiles();
     filesAre(files, "done");
-    convertsInto(api, {});
+    convertsInto(api);
     const runs = fakeRuns();
     const { user } = panel();
     await user.upload(screen.getByTestId("upload-cv-file"), PDF);

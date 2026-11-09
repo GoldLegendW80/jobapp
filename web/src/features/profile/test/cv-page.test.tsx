@@ -37,7 +37,6 @@ describe("the page of one CV", () => {
         fakeCv({ id: "a", name: "Main CV" }),
         fakeCv({ id: "b", name: "Other", is_default: false }),
       ],
-      consent: { accepted: true },
     });
     api.documents.set(
       "a",
@@ -76,7 +75,6 @@ describe("the page of one CV", () => {
         fakeCv({ id: "a", name: "Main CV" }),
         fakeCv({ id: "b", name: "Other", is_default: false }),
       ],
-      consent: { accepted: true },
     });
     const { user } = await openCv("/profile/cv/b");
     await user.click(
@@ -116,7 +114,7 @@ describe("the page of one CV", () => {
         error: null,
       },
     });
-    setup({ cvs: [building], consent: { accepted: true } });
+    setup({ cvs: [building] });
     await openCv("/profile/cv/a");
     expect(
       await screen.findByText("Your first CV is being built from your profile"),
@@ -125,7 +123,7 @@ describe("the page of one CV", () => {
   });
 
   it("answers a CV that does not exist", async () => {
-    setup({ cvs: [fakeCv({ id: "a" })], consent: { accepted: true } });
+    setup({ cvs: [fakeCv({ id: "a" })] });
     await openCv("/profile/cv/nope");
     expect(
       await screen.findByRole("heading", { name: "This CV does not exist" }),
@@ -142,7 +140,6 @@ describe("the page of one CV", () => {
         fakeCv({ id: "a", name: "Main CV" }),
         fakeCv({ id: "b", name: "Other", is_default: false }),
       ],
-      consent: { accepted: true },
     });
     const { user, location } = await openCv("/profile/cv/b");
     await user.click(screen.getByRole("button", { name: "More actions" }));

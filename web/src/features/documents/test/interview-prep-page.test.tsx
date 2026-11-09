@@ -17,7 +17,7 @@ const PAGE = `/jobs/${JOB.id}/interview`;
 describe("the interview preparation page", () => {
   it("prepares on a click and shows the questions, each tagged with where it comes from", async () => {
     fakeSession(member);
-    fakeInterviewPrep(JOB, NOT_PREPARED, { consent: { accepted: true } });
+    fakeInterviewPrep(JOB, NOT_PREPARED);
     const user = userEvent.setup();
     renderApp(PAGE);
 
@@ -41,7 +41,7 @@ describe("the interview preparation page", () => {
 
   it("asks for the consent before preparing when it is missing", async () => {
     fakeSession(member);
-    fakeInterviewPrep(JOB, NOT_PREPARED, { consent: { accepted: false } });
+    fakeInterviewPrep(JOB, NOT_PREPARED);
     const user = userEvent.setup();
     renderApp(PAGE);
 

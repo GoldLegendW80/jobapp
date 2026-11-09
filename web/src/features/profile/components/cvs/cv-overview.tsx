@@ -16,9 +16,6 @@ export function CvOverview({
   cvs,
   max,
   building,
-  consentMissing,
-  consentReady,
-  consentError,
   noExperience,
   onNew,
   onBuild,
@@ -26,9 +23,6 @@ export function CvOverview({
   cvs: BaseCv[];
   max: number;
   building: boolean;
-  consentMissing: boolean;
-  consentReady: boolean;
-  consentError: boolean;
   noExperience: boolean;
   onNew: () => void;
   onBuild: () => void;
@@ -53,9 +47,6 @@ export function CvOverview({
       {cvs.length === 0 ? (
         <NoCvYet
           building={building}
-          consentMissing={consentMissing}
-          consentReady={consentReady}
-          consentError={consentError}
           noExperience={noExperience}
           onBuild={onBuild}
         />

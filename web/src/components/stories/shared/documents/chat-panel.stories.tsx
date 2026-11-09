@@ -44,7 +44,7 @@ const meta = {
   },
   args: { document: CV, generation: null },
   beforeEach: () => {
-    fakeOneDocument(CV, { consent: { accepted: true } });
+    fakeOneDocument(CV);
   },
 } satisfies Meta<typeof ChatPanel>;
 
@@ -59,7 +59,6 @@ export const Answered: Story = {
   name: "A change answered",
   beforeEach: () => {
     fakeOneDocument(CV, {
-      consent: { accepted: true },
       messages: CHAT_MESSAGES,
     });
   },
@@ -69,7 +68,7 @@ export const Answered: Story = {
 export const LongConversation: Story = {
   name: "A long conversation",
   beforeEach: () => {
-    fakeOneDocument(CV, { consent: { accepted: true }, messages: LONG });
+    fakeOneDocument(CV, { messages: LONG });
   },
 };
 
@@ -78,7 +77,6 @@ export const BeingAnswered: Story = {
   name: "An answer being written",
   beforeEach: () => {
     fakeOneDocument(CV, {
-      consent: { accepted: true },
       messages: CHAT_MESSAGES.slice(0, 1),
     });
     server.use(
@@ -115,7 +113,7 @@ export const NoConsent: Story = {
 export const NoCredential: Story = {
   name: "Without a model credential",
   beforeEach: () => {
-    fakeOneDocument(CV, { consent: { accepted: true, model: null } });
+    fakeOneDocument(CV, { credential: false });
   },
 };
 
@@ -123,7 +121,7 @@ export const NoCredential: Story = {
 export const CouldNotLoad: Story = {
   name: "Could not be loaded",
   beforeEach: () => {
-    fakeOneDocument(CV, { consent: { accepted: true } });
+    fakeOneDocument(CV);
     server.use(
       http.get("*/api/documents/:id/messages", () =>
         HttpResponse.json({ detail: "The service is busy." }, { status: 503 }),
