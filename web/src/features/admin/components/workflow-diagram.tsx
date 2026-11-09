@@ -93,7 +93,7 @@ function route(a: FlowNode, b: FlowNode): Route {
       vertical: true,
     };
   }
-  // Off centre, so a return never meets a downward arrow leaving the same box.
+  // Off centre, so a return does not meet a downward arrow leaving the same box.
   const x1 = left(a) + NODE_W * 0.35;
   const y1 = top(a) + NODE_H;
   const x2 = left(b) + NODE_W * 0.65;

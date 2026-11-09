@@ -12,6 +12,7 @@ import {
   changesOf,
   REVERT_NOTE,
   type AgentCategory,
+  type AgentFlow,
   type AgentPage,
   type AgentSummary,
   type Editable,
@@ -396,6 +397,73 @@ describe("the list", () => {
       screen.queryByRole("heading", { name: /^Profile and import/ }),
     ).toBeNull();
     noDashes(container.textContent);
+  });
+
+  it("draws each category's workflow above its table, in the same section, and none without one", async () => {
+    fakeSession(admin);
+    const flow: AgentFlow = {
+      nodes: [
+        {
+          id: "sweep",
+          kind: "system",
+          label: "Sweep",
+          column: 0,
+          row: 0,
+          note: "",
+        },
+        {
+          id: "browser_discovery",
+          kind: "agent",
+          label: "browser_discovery",
+          column: 1,
+          row: 0,
+          note: "",
+        },
+      ],
+      edges: [
+        {
+          from: "sweep",
+          to: "browser_discovery",
+          label: "one run per website",
+        },
+      ],
+    };
+    fakeAgents(
+      makePage(),
+      undefined,
+      [SUMMARY, agent("triage", "jobs")],
+      CATEGORIES.map((category) =>
+        category.key === "finding" ? { ...category, flow } : category,
+      ),
+    );
+    renderApp("/admin/agents");
+    const table = await screen.findByRole("table", {
+      name: "Finding jobs, by name",
+    });
+    const finding = screen.getByRole("region", { name: "Finding jobs (1)" });
+    const figure = within(finding).getByRole("figure", {
+      name: "Finding jobs, workflow",
+    });
+    expect(
+      figure.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // The drawing's agent opens the same page as its row.
+    expect(
+      within(figure).getByRole("link", { name: "browser_discovery" }),
+    ).toHaveAttribute("href", "/admin/agents/browser_discovery");
+    expect(
+      within(figure).getByText(
+        "From Sweep to browser_discovery: one run per website.",
+      ),
+    ).toBeInTheDocument();
+    // The table is unchanged: its row and its columns.
+    expect(
+      within(table)
+        .getAllByRole("columnheader")
+        .map((head) => head.textContent),
+    ).toEqual(["Agent", "Module", "Model", "Version", "Last run"]);
+    const jobs = screen.getByRole("region", { name: "Jobs and chat (1)" });
+    expect(within(jobs).queryByRole("figure")).toBeNull();
   });
 
   it("shows no Test section when the api lists no test agent, as in production", async () => {
