@@ -20,8 +20,9 @@ person's apply lock and the application's row lock, the checks of the spec in or
 5. `caps.check`: the person's pause, company caps, and Full auto's one per company rule and
    safety ceiling (A11; each refusal leaves the application `ready`);
 6. documents: `documents.current` returns the versions the hash covers, else `documents_changed`
-   (a newer version written since the fill: nothing frozen, nothing refused on content). In Full
-   auto, apply's own rule (`documents_need_review`);
+   (a newer version written since the fill: nothing frozen, nothing refused on content, in any
+   mode: the person's Like in Full auto or Apply click is the approval of the documents as they
+   are, owner 2026-11-09);
 7. Full auto only: `full_auto.checks` (A13a: the fit threshold, a supported source, nothing left,
    no captcha, never apply in the posting's text; A13c: the check by model passed on the agent's
    free text, `model_check.code`).
@@ -116,6 +117,7 @@ SENTENCES = {
         "A newer version of your documents was written after this form was filled, so nothing "
         "was sent. Cancel this application and apply again to send the new version."
     ),
+    # No gate refuses with it since 2026-11-09: kept so a stored refusal still reads.
     "documents_review": "Your documents need a look before they are sent.",
     "manual": "You apply yourself to this one: the app does not click Submit.",
     # LinkedIn's guard on a form on LinkedIn (browser B10, caps.linkedin_refusal).
@@ -445,9 +447,9 @@ def documents_code(db: Session, application: Application) -> str | None:
 
 
 def documents_need_review(versions: dict[str, Any]) -> bool:
-    """The rule on the documents of every send no person looked at, Full auto and one click
-    Apply (SPEC-apply, guardrail 6): a version that overflows
-    its page or carries corrections goes to the person. Unknown fit counts as an overflow."""
+    """Review first's notice on the queue card: a version that overflows its page or carries
+    corrections asks the person to look before approving. Unknown fit counts as an overflow.
+    No gate refuses on it (SPEC-apply, guardrail 6; owner, 2026-11-09)."""
     for record in (versions or {}).values():
         if not isinstance(record, dict):
             return True
@@ -528,11 +530,6 @@ def decide(
         return refused(code)
     if code := documents_code(db, application):
         return refused(code)
-    # Guardrail 6 holds for every send no person looked at: Full auto and one click Apply.
-    if application.mode in (Mode.full_auto, Mode.direct) and documents_need_review(
-        application.document_versions
-    ):
-        return refused("documents_review")
     if application.mode is Mode.full_auto and (
         code := full_auto.checks(db, application, posting, now)
     ):

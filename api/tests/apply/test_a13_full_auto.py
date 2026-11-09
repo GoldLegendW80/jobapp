@@ -313,6 +313,16 @@ def _overflow(db: Session, person: Person, app_id: uuid.UUID) -> None:
     found.document_versions = versions
 
 
+def _letter_corrected(db: Session, person: Person, app_id: uuid.UUID) -> None:
+    found = db.get(Application, app_id)
+    assert found is not None
+    letter = found.document_versions["letter"]
+    found.document_versions = {
+        **found.document_versions,
+        "letter": {**letter, "corrections": ["A claim the fact check changed"]},
+    }
+
+
 def _text_rule(db: Session, person: Person, app_id: uuid.UUID) -> None:
     db.commit()
     rules(db, person.user_id, "No warehouse roles: warehouse")
@@ -326,7 +336,6 @@ CHECKS = [
     ("agent_designated", _designated),
     ("captcha_seen", _captcha),
     ("unsupported_source", _source),
-    ("documents_review", _overflow),
     ("never_apply_text", _text_rule),
 ]
 
@@ -350,6 +359,24 @@ def test_each_full_auto_check_sends_the_item_to_the_queue_with_its_reason(
     assert gate.SENTENCES[code]
     [row] = authorisations(db, app_id)
     assert row.used_at is None  # refused: never spent
+
+
+@pytest.mark.parametrize("spoil", [_overflow, _letter_corrected])
+def test_documents_that_overflow_or_carry_corrections_are_sent_after_the_hold(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, spoil: Any
+) -> None:
+    """The Like in Full auto is the approval of the documents as they are: no review stop
+    (owner, 2026-11-09)."""
+    turn_on(db, person_a)
+    app_id = filled(db, factory, person_a, stub)
+    spoil(db, person_a, app_id)
+    db.commit()
+    assert gate.documents_need_review(application(db, app_id).document_versions)
+    assert job(factory, stub, app_id, AT + HOUR)[0] == "held"
+    written, form = job(factory, stub, app_id, AT + HOUR + HOLD)
+    assert written == "submitted"
+    assert [c["what"] for c in form.gate_clicks] == ["submit"]
+    assert application(db, app_id).mode is Mode.full_auto
 
 
 def test_a_check_failing_after_the_decision_stops_the_click(

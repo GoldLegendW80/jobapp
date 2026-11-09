@@ -146,7 +146,6 @@ describe("what waits for the person instead", () => {
       "a question left, a captcha or a sign in",
       "a free text answer the app wrote itself, unless the app's own check of it passed",
       "a term your never apply rules exclude, in the posting's text",
-      "a CV or letter that runs over its page or has a correction to look at",
       "a second application to the same company within 45 days",
       "anything past the safety ceiling of 12 submissions a day",
     ]);

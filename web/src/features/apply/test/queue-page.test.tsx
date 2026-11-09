@@ -98,6 +98,54 @@ describe("the review queue page", () => {
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
 
+  it("asks a look at the documents in Review first only", async () => {
+    const documents = {
+      cv: { number: 2, fit: "one_page", corrections: 0 },
+      letter: { number: 2, fit: "overflow", corrections: 2 },
+    };
+    // documents_review true as an api before 2026-11-09 sent it for every mode.
+    fakeQueue([
+      queueItem(1, "filling", {
+        mode: "direct",
+        title: "Field Engineer",
+        documents,
+        documents_review: true,
+      }),
+      queueItem(2, "held", {
+        mode: "full_auto",
+        title: "Robotics Engineer",
+        hold_until: "2026-11-09T10:15:00Z",
+        documents,
+        documents_review: true,
+      }),
+      queueItem(3, "ready", {
+        title: "Data Engineer",
+        documents,
+        documents_review: true,
+      }),
+    ]);
+    renderApp(PATH);
+
+    const underWay = await screen.findByRole("region", {
+      name: /Under way \(2\)/,
+    });
+    for (const title of [/Field Engineer/, /Robotics Engineer/]) {
+      const sent = within(underWay).getByRole("article", { name: title });
+      expect(sent).not.toHaveTextContent("Review these documents");
+      expect(sent).not.toHaveTextContent("to look at");
+      const letter = within(sent).getByRole("link", {
+        name: "Letter version 2: runs over one page",
+      });
+      expect(letter.closest("li")).not.toHaveClass("text-warning");
+    }
+    const review = card("Data Engineer");
+    expect(review).toHaveTextContent("Review these documents before approval.");
+    const letter = within(review).getByRole("link", {
+      name: "Letter version 2: runs over one page, 2 corrections to look at",
+    });
+    expect(letter.closest("li")).toHaveClass("text-warning");
+  });
+
   it("edits an answer, then approves the form as it is now", async () => {
     const item = queueItem(1, "ready", { left: 1, required_left: 1 });
     const api = fakeQueue([item], {

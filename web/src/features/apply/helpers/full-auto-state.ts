@@ -71,7 +71,6 @@ export function waitsForYou(settings: ApplySettings): string[] {
     "a question left, a captcha or a sign in",
     "a free text answer the app wrote itself, unless the app's own check of it passed",
     "a term your never apply rules exclude, in the posting's text",
-    "a CV or letter that runs over its page or has a correction to look at",
     `a second application to the same company within ${days(settings.company_days)}`,
     `anything past the safety ceiling of ${settings.safety_ceiling} submissions a day`,
   ];

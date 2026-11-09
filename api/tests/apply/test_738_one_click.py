@@ -23,7 +23,7 @@ from tests.apply import test_a14_email as a14
 from tests.apply.a5_support import FakeAgent
 from tests.apply.conftest import AT, Person
 from tests.apply.test_a5_run import WHY, application, events, fill, run_ashby, services, started
-from tests.apply.test_a6_gate import run_submit, stub
+from tests.apply.test_a6_gate import approve, run_submit, stub
 from tests.apply.test_a13_full_auto import (
     HOUR,
     WEEK,
@@ -363,32 +363,89 @@ def _overflowing(db: Session, app_id: uuid.UUID) -> None:
     db.commit()
 
 
-def _corrected(db: Session, app_id: uuid.UUID) -> None:
+def _letter_corrected(db: Session, app_id: uuid.UUID) -> None:
     found = application(db, app_id)
+    letter = found.document_versions["letter"]
     found.document_versions = {
-        k: {**v, "corrections": ["A claim the fact check changed"]}
-        for k, v in found.document_versions.items()
+        **found.document_versions,
+        "letter": {**letter, "corrections": ["A claim the fact check changed"] * 2},
     }
     db.commit()
 
 
-@pytest.mark.parametrize("spoil", [_overflowing, _corrected])
-def test_documents_that_need_a_look_are_never_sent_by_one_click(
+@pytest.mark.parametrize("spoil", [_overflowing, _letter_corrected])
+def test_documents_that_overflow_or_carry_corrections_are_sent_by_one_click(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str, spoil: Any
 ) -> None:
-    """Guardrail 6 holds for `direct`: the item goes to review with its reason, no click."""
+    """The Apply click is the approval of the documents as they are: no review stop (owner,
+    2026-11-09), the gate decides the item allowed and its code clicks Submit."""
     low_fit(db, person_a)
     app_id = filled(db, factory, person_a, stub)
     spoil(db, app_id)
-    assert model_check.request_for(db, app_id, AT + HOUR) == "refused_anyway"
+    assert gate.documents_need_review(application(db, app_id).document_versions)
+    assert model_check.request_for(db, app_id, AT + HOUR) == "not_needed"
     db.rollback()
     written, form = job(factory, stub, app_id, AT + HOUR)
-    assert (written, form.gate_clicks) == ("documents_review", [])
-    reviewed(db, app_id, "documents_review")
-    assert gate.SENTENCES["documents_review"]
-    written, form = job(factory, stub, app_id, AT + 2 * HOUR)
-    assert form.gate_clicks == []
-    assert written != "submitted"
+    assert (written, form.gate_clicks) == ("approved", [])
+    [decision] = [e for e in events(db, app_id) if e.kind == "decision"]
+    assert (decision.data["outcome"], decision.data["code"]) == ("approved", None)
+    assert application(db, app_id).mode is Mode.direct
+    written, form = job(factory, stub, app_id, AT + HOUR)
+    assert written == "submitted"
+    assert [c["what"] for c in form.gate_clicks] == ["submit"]
+
+
+def test_the_check_by_model_still_runs_beside_documents_that_overflow(
+    db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    low_fit(db, person_a)
+    app_id = filled(db, factory, person_a, stub)
+    agent_wrote(db, app_id)
+    _overflowing(db, app_id)
+    found = model_check.request_for(db, app_id, AT + HOUR)
+    assert not isinstance(found, str), found
+
+
+@pytest.mark.parametrize(
+    ("mode", "asked"), [(Mode.direct, False), (Mode.full_auto, False), (Mode.review, True)]
+)
+def test_the_queue_asks_a_look_at_the_documents_in_review_first_only(
+    api: Api,
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    stub: str,
+    mode: Mode,
+    asked: bool,
+) -> None:
+    app_id = filled(db, factory, person_a, stub, mode=mode)
+    _letter_corrected(db, app_id)
+    token = api.login_token(person_a.email)
+    items = api.get("/api/apply/queue", token=token).json()["items"]
+    [card] = [item for item in items if item["id"] == str(app_id)]
+    assert card["mode"] == mode.value
+    assert card["documents"]["letter"]["corrections"] == 2
+    assert card["documents_review"] is asked
+
+
+def test_an_older_documents_review_refusal_reads_and_waits_for_the_persons_approve(
+    api: Api, db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
+) -> None:
+    """Refused by the gate before 2026-11-09: handed to Review first, nothing sends it by itself;
+    its reason still reads and the person's Approve passes the gate."""
+    app_id = filled(db, factory, person_a, stub)
+    _letter_corrected(db, app_id)
+    full_auto.to_review(db, application(db, app_id), "documents_review", AT + HOUR)
+    db.commit()
+    assert app_id not in submit.due(db, AT + 2 * HOUR)
+    token = api.login_token(person_a.email)
+    [card] = api.get("/api/apply/queue", token=token).json()["items"]
+    assert card["reason"] == {
+        "code": "documents_review",
+        "sentence": "Your documents need a look before they are sent.",
+    }
+    assert (card["mode"], card["documents_review"]) == ("review", True)
+    assert approve(factory, person_a, app_id, now=AT + 2 * HOUR).passed
 
 
 def test_a_review_only_site_says_why_once_the_form_is_filled(
