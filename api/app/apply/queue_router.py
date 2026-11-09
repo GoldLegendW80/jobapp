@@ -10,10 +10,10 @@
   (`queued`, `filling`, `approved`, `held`, `submitting`), oldest first within each; Apply myself
   is never in it. Each card holds the company and the title, the newest "before" screenshot,
   the count of fields left (and of those required), the documents filled with their check
-  (`documents_review`: Full auto's rule, a page overflow or a correction), and the reason a
-  `ready` item came back (`error_code`, else the code of its last refused decision), with its
-  sentence. Full auto (A13b): a Full auto item `ready` for the app's decision is under way; a
-  rehearsal waiting for its answer to "Does this look right?"
+  (`documents_review`: in Review first only, a page overflow or a correction asks a look), and
+  the reason a `ready` item came back (`error_code`, else the code of its last refused
+  decision), with its sentence. Full auto (A13b): a Full auto item `ready` for the app's
+  decision is under way; a rehearsal waiting for its answer to "Does this look right?"
   (`rehearsed`, `mode` full_auto, no No recorded) waits for the person too (`rehearsal`
   true); a `held` item carries the end of its hold (`hold_until`); `now` is the server's
   time, so a countdown never reads the page's clock.
@@ -368,7 +368,9 @@ def read_queue(request: Request, user: CurrentUser, db: Db) -> QueueOut:
                 left=open_left,
                 required_left=required_left,
                 documents=_documents(versions),
-                documents_review=bool(versions) and gate.documents_need_review(versions),
+                documents_review=application.mode is Mode.review
+                and bool(versions)
+                and gate.documents_need_review(versions),
                 reason=_reason(application, refused),
                 rehearsal=application.state is S.rehearsed,
                 hold_until=(

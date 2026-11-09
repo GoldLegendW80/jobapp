@@ -4,6 +4,7 @@ import { queueItem } from "@/test/apply-queue";
 
 import { serverOffset } from "../helpers/full-auto-state";
 import {
+  asksDocumentLook,
   canCancel,
   canReject,
   checkLine,
@@ -56,6 +57,21 @@ describe("the line of a document and its check", () => {
   ] as const)("%s %s %s %s", (kind, number, fit, corrections, line) => {
     expect(checkLine(kind, { number, fit, corrections })).toBe(line);
     expect(line).not.toMatch(SEPARATOR);
+  });
+
+  it("leaves the corrections out when nobody is asked to look", () => {
+    const check = { number: 2, fit: "one_page", corrections: 2 };
+    expect(checkLine("letter", check, false)).toBe(
+      "Letter version 2: fits on one page",
+    );
+  });
+
+  it.each([
+    ["review", true],
+    ["full_auto", false],
+    ["direct", false],
+  ])("asks a look at the documents of a %s item: %s", (mode, asks) => {
+    expect(asksDocumentLook(queueItem(1, "ready", { mode }))).toBe(asks);
   });
 });
 

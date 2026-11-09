@@ -173,7 +173,7 @@ document_versions(id uuid pk, document_id uuid not null fk documents on delete c
           number int not null, content jsonb not null, content_schema int not null, content_hash bytea not null,
           language document_language not null,
           template_slug text not null, template_version int not null,
-          origin enum version_origin(generated, edited, chat, restored, template, uploaded, legacy) not null,
+          origin enum version_origin(generated, edited, chat, restored, template, uploaded, legacy, panel) not null,
           generation_id uuid null fk document_generations on delete set null,
           profile_revision int null,
           corrections jsonb not null default '[]',             -- see "The corrections record"

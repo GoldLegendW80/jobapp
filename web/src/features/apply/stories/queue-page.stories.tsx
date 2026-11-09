@@ -116,6 +116,22 @@ export const FollowApplicationsUnderWay: Story = {
   },
 };
 
+/** As a job seeker who clicked Apply, I want the card of an application the assistant sends by itself to list its documents without asking me to review them, so that my click stays the only approval it needs. */
+export const DocumentsOfAnApplicationSentByItself: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeQueue([
+      application(3, "filling", 2, {
+        mode: "direct",
+        documents: {
+          cv: { number: 2, fit: "one_page", corrections: 0 },
+          letter: { number: 2, fit: "one_page", corrections: 2 },
+        },
+      }),
+    ]);
+  },
+};
+
 /** As a job seeker, I want to watch the assistant fill and send my applications in my browser, so that I see what it does and can take over. */
 export const WatchApplicationsInTheBrowser: Story = {
   beforeEach: () => {

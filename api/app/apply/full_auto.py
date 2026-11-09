@@ -218,7 +218,7 @@ def checks(
     db: Session, application: Application, posting: Job, now: datetime | None = None
 ) -> str | None:
     """Full auto's own checks (SPEC-apply, "Guardrails" 6 and 7), the code of the first that
-    fails, or None. The documents' rule is the gate's (`gate.documents_need_review`)."""
+    fails, or None. A document's fit or corrections stop nothing (owner, 2026-11-09)."""
     if application.ats == "email":
         from app.apply.email import addresses, own_company
 

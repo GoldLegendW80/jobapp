@@ -30,6 +30,7 @@ export const ORIGIN_LABELS: Record<Origin, string> = {
   template: "Template or language change",
   uploaded: "Converted from your file",
   legacy: "Imported",
+  panel: "Improved by the hiring panel",
 };
 
 /** A bundled slug as a name ("photo-columns" is "Photo columns"); the person's own are "From your CV". */

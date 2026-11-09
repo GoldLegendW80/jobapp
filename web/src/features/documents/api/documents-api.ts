@@ -48,6 +48,7 @@ export const ORIGINS = [
   "template",
   "uploaded",
   "legacy",
+  "panel",
 ] as const;
 export type Origin = (typeof ORIGINS)[number];
 export type Channel = "content" | "design";

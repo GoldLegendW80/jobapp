@@ -356,6 +356,7 @@ choice made by the build that stands until the owner says otherwise.
   Built as the image's managed policy: every chrome:// page blocked but chrome://policy,
   chrome://sandbox, the new tab page and the browser's own UI; chrome://policy's test page off; no extension installed; saved flags and saved test policies
   dropped before every start.
+- 2026-11-09 (A21, issue #773), the owner, on a one click Apply card that asked him to review its documents: "I don't want it in full auto". No document review stop where the person's Like in Full auto or click on Apply is the approval: guardrail 6's rule (a version over its page or with corrections goes back to the person) goes for Full auto and one click Apply; Review first still asks a look before its Approve.
 
 ## Likes (2026-10-21)
 

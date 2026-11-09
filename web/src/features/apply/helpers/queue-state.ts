@@ -152,10 +152,23 @@ const FITS: Record<string, string> = {
 export const needsLook = (check: DocumentCheck) =>
   check.fit !== "one_page" || check.corrections > 0;
 
-/** "CV version 3: fits on one page", "Letter version 2: runs over one page, 1 correction to look at". */
-export function checkLine(kind: string, check: DocumentCheck): string {
+/**
+ * Only Review first asks the person to look at the documents before approving: in Full auto and
+ * one click Apply the Like or the click is the approval of them as they are (owner, 2026-11-09).
+ */
+export const asksDocumentLook = (item: QueueItem) => item.mode === "review";
+
+/**
+ * "CV version 3: fits on one page", "Letter version 2: runs over one page, 1 correction to look
+ * at"; without `toLookAt`, the corrections are left out.
+ */
+export function checkLine(
+  kind: string,
+  check: DocumentCheck,
+  toLookAt = true,
+): string {
   const parts = [FITS[check.fit ?? ""] ?? "page not checked yet"];
-  if (check.corrections > 0) {
+  if (toLookAt && check.corrections > 0) {
     parts.push(
       check.corrections === 1
         ? "1 correction to look at"
