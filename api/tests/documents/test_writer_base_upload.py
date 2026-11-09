@@ -4,8 +4,8 @@ correction, the profile's default replaced), what the file does not state remove
 recorded (a team size, a title's seniority word, an employer and its entry, a month, a
 language), the same claim passing with the file and corrected without it, a French CV written in
 French, a CV with little text, a second upload, the file deleted before and after, waiting for
-the consent and the credential, the design capture's hook, the bound run and its tool, and the
-canary in the file. Real Postgres at head."""
+the credential (one stored waiting for the consent waits for nothing else), the design
+capture's hook, the bound run and its tool, and the canary in the file. Real Postgres at head."""
 
 from __future__ import annotations
 
@@ -26,15 +26,14 @@ from app.agents.crypto import Keyring
 from app.agents.definitions import FinalRun
 from app.agents.models import AgentRun, CredentialKind
 from app.agents.tools import Scope
+from app.documents import content as c
 from app.documents import (  # noqa: F401
-    consent,
     design_capture,
     generate,
     store,
     writer_base,
     writers,
 )
-from app.documents import content as c
 from app.documents.models import (
     BaseSource,
     Document,
@@ -110,13 +109,13 @@ def convert(
     upload_id: uuid.UUID,
     script: str,
     *,
-    consented: bool = True,
+    credential: bool = True,
     run: bool = True,
 ) -> tuple[uuid.UUID, uuid.UUID]:
     """The base CV converted from `upload_id` and its run executed: (document, generation)."""
     with who.factory() as db:
-        if consented and not consent.has_consented(db, who.user):
-            consent.record(db, who.user, AT)
+        if not credential:
+            credentials.delete(db, who.user)
         built = writer_base.build_from_upload(db, who.user, upload_id, at=AT)
         assert built.generation is not None
         runs = writer_base.start_ready(db, who.user, at=AT, script=script, settings=who.settings)
@@ -338,11 +337,10 @@ def test_the_file_deleted_before_the_run_fails_the_generation_and_leaves_the_bas
     who = person(factory, migrated_url, USER_A)
     upload = add_upload(factory, who.user, MORGAN)
     document_id, generation_id = convert(
-        who, upload, "documents_base_upload_valid", consented=False
+        who, upload, "documents_base_upload_valid", credential=False
     )
     with factory() as db:
         db.execute(sa.delete(IngestionDocument).where(IngestionDocument.id == upload))
-        consent.record(db, who.user, AT)
         assert writer_base.start_ready(db, who.user, at=AT, settings=who.settings) == []
         db.commit()
     generation = generation_row(factory, generation_id)
@@ -351,20 +349,20 @@ def test_the_file_deleted_before_the_run_fails_the_generation_and_leaves_the_bas
     assert hooks == []
 
 
-def test_without_consent_or_credential_the_conversion_waits_and_nothing_is_sent(
+def test_without_a_credential_the_conversion_waits_and_nothing_is_sent(
     factory: sessionmaker[Session], migrated_url: str, hooks: list[uuid.UUID]
 ) -> None:
     who = person(factory, migrated_url, USER_A)
     upload = add_upload(factory, who.user, MORGAN)
-    _, generation_id = convert(who, upload, "documents_base_upload_valid", consented=False)
-    generation = generation_row(factory, generation_id)
-    assert (generation.status, generation.wait_reason) == (
-        GenerationStatus.waiting,
-        GenerationWait.consent,
-    )
+    _, generation_id = convert(who, upload, "documents_base_upload_valid", credential=False)
     with factory() as db:
-        consent.record(db, who.user, AT)
-        credentials.delete(db, who.user)
+        # A conversion stored waiting for the documents consent before D30 waits for the
+        # credential alone once read again.
+        db.execute(
+            sa.update(DocumentGeneration)
+            .where(DocumentGeneration.id == generation_id)
+            .values(wait_reason=GenerationWait.consent)
+        )
         assert writer_base.start_ready(db, who.user, at=AT, settings=who.settings) == []
         db.commit()
     generation = generation_row(factory, generation_id)
@@ -512,7 +510,6 @@ def _morgan_converts(
         ).scalar_one()
         profile_service.import_profile(db, user, export.stored_sections(), None, None, AT)
         credentials.save(db, keyring, user, CredentialKind.anthropic_api_key, API_KEY, AT)
-        consent.record(db, user, AT)
         db.commit()
     upload = add_upload(factory, user, text)
     with factory() as db:

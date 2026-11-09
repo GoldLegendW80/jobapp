@@ -65,7 +65,8 @@ from app.jobs.models import Job, JobFile, JobStatus
 logger = logging.getLogger("app.documents")
 
 # Why a document is not there yet (`Slot.coming`): a generation waiting has its own
-# `GenerationWait` value (daily_ceiling, consent, credential, base_cv); these two are the others.
+# `GenerationWait` value (credential, base_cv, or one stored before D29 or D30); these two are the
+# others.
 WRITING = "writing"  # a generation is queued or running
 RENDERING = "rendering"  # the draft is queued or being rendered
 

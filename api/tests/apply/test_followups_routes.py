@@ -23,7 +23,6 @@ from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.apply import followup_agent, followup_service, followups, followups_router
 from app.apply import gate as apply_gate
 from app.apply.followup_models import FollowUp
-from app.documents import consent
 from app.mail import drafts
 from app.mail import gate as mail_gate
 from app.mail.draft_models import MailDraft, MailSend
@@ -81,7 +80,6 @@ def sent_rows(factory: sessionmaker[Session], posting_id: uuid.UUID) -> list[Fol
 
 def ready_to_write(factory: sessionmaker[Session], user_id: uuid.UUID) -> None:
     with factory() as db:
-        consent.record(db, user_id, AT)
         ring = Keyring.from_text(new_key())
         credentials.save(db, ring, user_id, CredentialKind.anthropic_api_key, API_KEY, AT)
         db.commit()
@@ -200,7 +198,8 @@ def test_a_draft_is_written_on_a_click_with_the_consent_and_a_credential(
         return True
 
     monkeypatch.setattr(app.state.queue, "enqueue", enqueue)
-    assert api.post(f"{PATH}/{job}/draft", token=token).json()["code"] == "consent"
+    # No consent is ever asked (D30): only the credential is missing.
+    assert api.post(f"{PATH}/{job}/draft", token=token).json()["code"] == "credential"
     ready_to_write(factory, a)
     started = api.post(f"{PATH}/{job}/draft", token=token)
     assert started.status_code == 202, started.text

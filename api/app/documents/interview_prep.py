@@ -10,8 +10,8 @@ versions, the hand edits and restores of router.py. Nothing writes it without th
   of `documents_interview_prep`, which reads the posting, the CV and letter as they were sent
   (`sent_documents`), the profile, and the hiring panel's record of them (`panel_record`), and
   submits through D7's `submit.handle`: the stories and the answers to the gaps are claims, so
-  the fact check corrects any figure the profile does not state and records it. Without the
-  consent or a credential, with a writing open, or with the person's runs all busy, nothing is
+  the fact check corrects any figure the profile does not state and records it. Without a
+  credential, with a writing open, or with the person's runs all busy, nothing is
   stored (`PrepRefusedError`). A new preparation keeps the debrief the person wrote (`on_final`).
 - **Practice** (`post_practice`): the person's message in the channel `practice` and a `chat`
   generation answered by one run of `documents_interview_practice`, which asks one question at
@@ -73,7 +73,7 @@ STORED = "Stored. Your work is done: answer with one short line."
 
 
 class PrepRefusedError(Exception):
-    """Nothing was started: `code` is `consent`, `credential`, `busy` or `runs_busy`."""
+    """Nothing was started: `code` is `credential`, `busy` or `runs_busy`."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)

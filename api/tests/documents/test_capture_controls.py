@@ -132,12 +132,10 @@ def test_retry_commits_before_queue_and_only_sends_run_id(world: Any, queue: Any
     ]
 
 
-@pytest.mark.parametrize("reason", ["consent", "credential", "no_bytes"])
+@pytest.mark.parametrize("reason", ["credential", "no_bytes"])
 def test_retry_waits_or_fails_without_starting_a_model(world: Any, queue: Any, reason: str) -> None:
     with world.factory() as db:
-        if reason == "consent":
-            db.execute(sa.text("DELETE FROM document_consents WHERE user_id=:u"), {"u": world.user})
-        elif reason == "credential":
+        if reason == "credential":
             from app.agents import credentials
 
             credentials.delete(db, world.user)

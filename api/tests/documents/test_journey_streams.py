@@ -19,7 +19,6 @@ from app.agents import credentials, fake_backend
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
 from app.documents import (
-    consent,
     estimate,
     generate,
     store,
@@ -92,7 +91,6 @@ def morgan(factory: sessionmaker[Session], migrated_url: str) -> Person:
         ).scalar_one()
         profile_service.import_profile(db, user, export.stored_sections(), None, None, AT)
         credentials.save(db, keyring, user, CredentialKind.anthropic_api_key, API_KEY, AT)
-        consent.record(db, user, AT)
         built = writer_base.build_from_profile(db, user, at=AT)
         assert built.generation is not None
         started = writer_base.start_ready(

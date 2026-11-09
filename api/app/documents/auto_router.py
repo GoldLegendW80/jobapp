@@ -6,8 +6,8 @@ one of these clicks, an Apply or a Like (owner, 2026-11-06).
 - `POST /api/jobs/{id}/documents/write {kinds, base_document_id?}`: a click. It writes the
   posting's CV, its letter, or both, whatever the fit. A generation of trigger `auto` of the
   same document left from before D29 that has not started gives way to it (cancelled). Started
-  at once when the consent and a credential are there, else `waiting` with `consent` or
-  `credential` (nothing spends without both; the tick starts it once they exist). A person with
+  at once when a credential is there, else `waiting` with `credential` (nothing spends without
+  it; the tick starts it once it exists). A person with
   no base CV gets one built from the profile first (`writer_base.click_wait`): the CV waits with
   `base_cv` and the tick starts it once the base CV is written. With both kinds, the CV is
   written now and the letter follows it once the new CV and its hiring panel are done (D8's
@@ -18,7 +18,7 @@ one of these clicks, an Apply or a Like (owner, 2026-11-06).
   posting's own address read first (jobs/liveness_check.py, SPEC-jobs "Liveness").
 - `POST /api/documents/{id}/fit`: "Make it fit", a click. The `shorten` generation of a posting's
   CV whose latest version overflows, whoever made that version (a template switch included),
-  started at once (`generate.make_fit`). It needs the consent, a credential, a write of the CV
+  started at once (`generate.make_fit`). It needs a credential, a write of the CV
   to draw on and a known ceiling left; each missing one is a 409 with the sentence of
   `FIT_REFUSED`, nothing created. A frozen latest version stays as it is: the shorter one is a
   new version on top. 202 with the generation; 404 for another person's document; 409 while one
@@ -79,10 +79,6 @@ FIT_REFUSED = {
         "The page of this version is not drawn yet. Wait for the preview, then try again.",
     ),
     "fits": (status.HTTP_409_CONFLICT, "This CV already fits on one page."),
-    "consent": (
-        status.HTTP_409_CONFLICT,
-        "Confirm what is sent to the writer first, in the CV tab of your profile.",
-    ),
     "credential": (status.HTTP_409_CONFLICT, "Add a model credential in your account first."),
     "not_written": (
         status.HTTP_409_CONFLICT,

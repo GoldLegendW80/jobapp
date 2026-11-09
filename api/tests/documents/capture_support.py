@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.definitions import FinalRun
 from app.agents.models import RunStatus
-from app.documents import consent, generate, store, submit, writer_base
 from app.documents import content as content_types
+from app.documents import generate, store, submit, writer_base
 from app.documents.models import (
     BaseSource,
     Document,
@@ -42,7 +42,6 @@ def world(alex: Any, factory: sessionmaker[Session], api: Api, app: FastAPI, clo
             sa.text("UPDATE ingestion_documents SET bytes=:b WHERE id=:i"),
             {"b": b"%PDF-1.7 invented scheduler fixture", "i": upload},
         )
-        consent.record(db, user, clock())
         base = store.create_base(
             db,
             user,

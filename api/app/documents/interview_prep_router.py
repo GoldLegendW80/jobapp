@@ -4,7 +4,7 @@
   Prepare), its writing, the Practice chat and the pending proposal of the kept stories when it
   holds stories of this posting.
 - `POST /api/jobs/{job_id}/interview-prep`: Prepare, on the person's click (202). 409 without
-  the consent or a credential, or while a writing or a practice turn runs; 429 when the
+  a credential, or while a writing or a practice turn runs; 429 when the
   person's runs are all busy. Nothing is stored then.
 - `POST /api/documents/{id}/practice {text}`: a practice message and its answer's run (202).
   422 for an empty or long message; 409 and 429 as Prepare.
@@ -42,7 +42,6 @@ logger = logging.getLogger("app.documents.interview_prep")
 router = APIRouter(tags=["documents"], dependencies=[Depends(_private)])
 
 REFUSED = {
-    "consent": "Confirm what is sent to the model first, then click again.",
     "credential": "Add a model credential on the Account page first, then click again.",
     "busy": "The preparation is being written or a practice answer is coming. Wait for it.",
 }

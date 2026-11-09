@@ -21,7 +21,7 @@ from app.agents import credentials, definitions, failures, fake_backend, runs
 from app.agents import tools as app_tools
 from app.agents.definitions import FinalRun
 from app.agents.models import RunStatus
-from app.documents import consent, corrections, generate, render_job, store, submit, writer_cv
+from app.documents import corrections, generate, render_job, store, submit, writer_cv
 from app.documents.models import (
     Author,
     BaseSource,
@@ -396,12 +396,6 @@ def test_a_cancel_keeps_nothing_even_after_an_accepted_submit(alex: Person) -> N
 # --- the overflow and its one shortening pass ---------------------------------------------------
 
 
-def _consent(who: Person) -> None:
-    with who.factory() as db:
-        consent.record(db, who.user, AT)
-        db.commit()
-
-
 def _overflow(
     who: Person, spent: dict[str, int | None] | None = None, credential: bool = True
 ) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID]:
@@ -436,7 +430,6 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
 ) -> None:
     monkeypatch.setattr(generate, "RUNTIME", alex.runtime())
     assert render_job.on_overflow is generate.on_overflow
-    _consent(alex)
     document, _, cv_run = _overflow(alex)
     renderer = FakeRenderer(pages=2)
     agents = _shortenings(alex)
@@ -490,7 +483,6 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
 @pytest.mark.parametrize(
     ("missing", "spent"),
     [
-        ("consent", None),
         ("credential", None),
         ("token_ceiling", {"input_tokens": CEILING - 200, "output_tokens": 200}),
         ("token_ceiling", {"input_tokens": CEILING, "output_tokens": 1}),
@@ -499,7 +491,7 @@ def test_an_overflow_starts_one_shortening_pass_and_only_one(
         ("spend_unknown", {"input_tokens": None, "output_tokens": None}),
     ],
 )
-def test_the_shortening_pass_needs_the_consent_and_a_known_ceiling_left(
+def test_the_shortening_pass_needs_a_credential_and_a_known_ceiling_left(
     alex: Person,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -507,8 +499,6 @@ def test_the_shortening_pass_needs_the_consent_and_a_known_ceiling_left(
     spent: dict[str, int | None] | None,
 ) -> None:
     monkeypatch.setattr(generate, "RUNTIME", alex.runtime())
-    if missing != "consent":
-        _consent(alex)
     caplog.set_level(logging.INFO, logger="app.documents")
     document, _, _ = _overflow(alex, spent, credential=missing != "credential")
     assert _shortenings(alex) == []
@@ -521,7 +511,6 @@ def test_one_token_left_is_a_shortening_pass_of_one_token(
     alex: Person, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(generate, "RUNTIME", alex.runtime())
-    _consent(alex)
     _overflow(alex, {"input_tokens": CEILING - 201, "output_tokens": 200})
     [agent] = _shortenings(alex)
     assert run_row(alex.factory, uuid.UUID(agent["args"][0])).input["token_budget"] == 1
@@ -541,7 +530,6 @@ def test_a_move_to_applied_waits_behind_the_shortening_pass_and_both_commit(
     """The shortening pass holds the CV, then its run's row needs the posting; a move to applied
     locks the posting, then the freeze locks the CV. With the CV locked first, a circle Postgres
     broke. The pass now takes the posting first."""
-    _consent(alex)
     document, generation, _ = write(alex, "documents_cv_overflow")
     _done(alex, document, generation)
     [overflowing] = versions(alex.factory, document)

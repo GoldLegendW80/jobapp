@@ -18,10 +18,10 @@ into one request with the person's messages and bounds the whole again (REQUEST_
   not held by a secret warning the person has not confirmed, as every run of ingestion skips
   it). The default base CV first, then the uploads, newest first, then the other base CVs; an
   upload a read base CV was converted from is read as that base CV. At most DOC_MAX characters
-  each, DOCS_MAX together, DOCS_COUNT_MAX documents. A document goes only under the consent that
+  each, DOCS_MAX together, DOCS_COUNT_MAX documents. An upload goes only under the consent that
   already sends it to Anthropic (decision of 2026-10-10, "Explicit consent the first time a run
-  sends documents"): an upload under Fill my profile's (`ingestion.estimate_router`), a base CV
-  under the documents module's (`documents.consent`).
+  sends documents"), Fill my profile's (`ingestion.estimate_router`); a base CV goes as the
+  writers send it, with no consent asked.
 
 **Left out, because it never helps choose a job and must never steer one:** the EEO self
 identification answers and their policy, every consent flag and consent row (the background and
@@ -319,11 +319,11 @@ def _uploads(db: Session, user_id: uuid.UUID, skip: set[uuid.UUID]) -> list[Docu
 def documents(
     db: Session,
     user_id: uuid.UUID,
-    consents: Callable[[Session, uuid.UUID], tuple[bool, bool]] | None = None,
+    consent: Callable[[Session, uuid.UUID], bool] | None = None,
 ) -> tuple[DocumentText, ...]:
     """The documents' text the agent reads, in order and within the caps (module docstring)."""
-    uploads_allowed, base_allowed = (consents or _consents)(db, user_id)
-    bases = _base_cvs(db, user_id) if base_allowed else []
+    uploads_allowed = (consent or _consent)(db, user_id)
+    bases = _base_cvs(db, user_id)
     skip = {source for _, source, _ in bases if source is not None}
     uploads = _uploads(db, user_id, skip) if uploads_allowed else []
     ordered = [one for default, _, one in bases if default]
@@ -339,9 +339,8 @@ def documents(
     return tuple(out)
 
 
-def _consents(db: Session, user_id: uuid.UUID) -> tuple[bool, bool]:
-    """(Fill my profile's consent, the documents module's consent), each to its current text."""
-    from app.documents import consent as documents_consent
+def _consent(db: Session, user_id: uuid.UUID) -> bool:
+    """Fill my profile's consent, to its current text."""
     from app.ingestion import estimate_router
 
-    return estimate_router.has_consented(db, user_id), documents_consent.has_consented(db, user_id)
+    return estimate_router.has_consented(db, user_id)

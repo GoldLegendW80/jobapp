@@ -26,6 +26,7 @@ from app.documents.models import (
     BaseSource,
     Channel,
     Document,
+    DocumentConsent,
     DocumentGeneration,
     DocumentPanel,
     DocumentUserTemplate,
@@ -986,10 +987,6 @@ def test_the_settings_have_defaults_until_saved(db: Session) -> None:
     store.save_settings(db, user, saved, AT)
     store.save_settings(db, user, saved, AT)
     assert store.settings(db, user) == saved
-    store.accept_consent(db, user, 1, AT)
-    store.accept_consent(db, user, 1, AT)
-    assert store.consented(db, user, 1)
-    assert not store.consented(db, user, 2)
 
 
 # --- isolation and deletes ----------------------------------------------------------------------
@@ -1002,7 +999,8 @@ def _everything(db: Session, user: uuid.UUID, slug: str) -> dict[str, Any]:
     generation = _generation(db, user, document)
     store.add_message(db, user, document.id, Role.user, "hello", at=AT)
     store.save_settings(db, user, DocumentSettings(no_dash_separators=True), AT)
-    store.accept_consent(db, user, 1, AT)
+    # A row kept from before D30, so the delete below still clears the table.
+    db.add(DocumentConsent(user_id=user, text_version=1, accepted_at=AT))
     db.add(_template(user, slug))
     db.flush()
     found = store.version(db, user, document.id, number)
@@ -1031,7 +1029,6 @@ def test_one_user_never_reads_or_writes_the_others_documents(db: Session) -> Non
     assert store.posting_documents(db, b, mine["document"].posting_id) == []
     assert store.open_generation(db, b, doc) is None
     assert store.settings(db, b) == DocumentSettings()
-    assert not store.consented(db, b, 1)
     writes = [
         lambda: store.save_draft(db, b, doc, CV, 2, Author.user, at=AT),
         lambda: store.set_language(db, b, doc, Language.fr, AT),

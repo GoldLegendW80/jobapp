@@ -6,8 +6,8 @@ summary" changes the summary only; "say I managed 20 people" is written, then co
 the answer says so and suggests the profile; "use the photo columns template" switches with the
 content unchanged; an unknown template lists the gallery; a message while the person edits is kept
 as a version; a frozen version stays as it was; a base CV keeps its fixed block. Refused: an empty
-or too long message, the design channel, a second message while one runs, a message without the
-consent or a credential (nothing stored), another person's chat (404). The 201st message prunes
+or too long message, the design channel, a second message while one runs, a message without a
+credential (nothing stored), another person's chat (404). The 201st message prunes
 the oldest; the canary of a message reaches no log, no arq argument and no run event; a tool the
 chat writer does not have is refused; a run whose hook was missed is settled by the next read."""
 
@@ -30,7 +30,7 @@ from app.agents import credentials, definitions
 from app.agents.crypto import Keyring
 from app.agents.models import AgentEvent, AgentRun, CredentialKind, RunStatus
 from app.agents.runner import RunContext
-from app.documents import chat, consent, generate, store, templates, writers  # noqa: F401
+from app.documents import chat, generate, store, templates, writers  # noqa: F401
 from app.documents import content as c
 from app.documents.corrections import Correction
 from app.documents.models import (
@@ -103,7 +103,6 @@ class Who:
         email: str,
         clock: Any,
         *,
-        consented: bool = True,
         credential: bool = True,
     ) -> None:
         self.factory = factory
@@ -111,8 +110,6 @@ class Who:
         give_profile(factory, self.user, clock())
         self.token = api.login_token(email)
         with factory() as db:
-            if consented:
-                consent.record(db, self.user, clock())
             if credential:
                 credentials.save(
                     db,
@@ -464,26 +461,12 @@ def test_a_second_message_while_one_runs_is_409(api: Api, alex: Who, queue: Reco
     assert len([job for job in queue.jobs if job["function"] == "run_agent"]) == 1
 
 
-@pytest.mark.parametrize(
-    ("consented", "credential", "detail"),
-    [
-        (False, True, chat.NO_CONSENT),
-        (True, False, chat.NO_CREDENTIAL),
-        (False, False, chat.NO_CONSENT),
-    ],
-)
-def test_without_the_consent_or_a_credential_nothing_is_stored_and_no_model_is_called(
-    factory: Any,
-    api: Api,
-    clock: Any,
-    queue: RecordingQueue,
-    consented: bool,
-    credential: bool,
-    detail: str,
+def test_without_a_credential_nothing_is_stored_and_no_model_is_called(
+    factory: Any, api: Api, clock: Any, queue: RecordingQueue
 ) -> None:
-    who = Who(factory, api, ALEX, clock, consented=consented, credential=credential)
+    who = Who(factory, api, ALEX, clock, credential=False)
     sent = _send(api, who, "shorter summary", "valid")
-    assert (sent.status_code, sent.json()["detail"]) == (409, detail)
+    assert (sent.status_code, sent.json()["detail"]) == (409, chat.NO_CREDENTIAL)
     assert _messages(api, who) == []
     assert queue.jobs == []
     with factory() as db:

@@ -25,7 +25,6 @@ from app.agents import credentials, failures
 from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.documents import (
     base_router,
-    consent,
     design_capture,
     design_check,
     fidelity,
@@ -150,7 +149,6 @@ def uploaded_base(who: Person, raw: bytes | None = PDF, mime: str = "application
                 sa.text("UPDATE ingestion_documents SET bytes = :b WHERE id = :i"),
                 {"b": raw, "i": upload},
             )
-        consent.record(db, who.user, AT)
         base = store.create_base(
             db,
             who.user,

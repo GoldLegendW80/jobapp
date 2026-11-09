@@ -1,6 +1,7 @@
 """What the job titles agent reads of the person's documents (app/profile/titles_input.py,
-`documents`): the text the app already keeps, never a file parsed again, under the consent that
-sends it to Anthropic, in order and within its caps. Real Postgres; no model."""
+`documents`): the text the app already keeps, never a file parsed again, an upload under the
+consent of Fill my profile and a base CV with no consent asked (D30), in order and within its
+caps. Real Postgres; no model."""
 
 from __future__ import annotations
 
@@ -8,10 +9,8 @@ import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.documents import consent as documents_consent
 from app.documents import store
 from app.documents.models import BaseSource
 from app.ingestion import estimate_router
@@ -28,13 +27,11 @@ def person(factory: sessionmaker[Session], email: str = EMAIL) -> uuid.UUID:
     return make_user(factory, email=email, name=email.split("@")[0]).id
 
 
-def consent(factory: sessionmaker[Session], user_id: uuid.UUID, *, uploads: bool, cvs: bool):
+def consent(factory: sessionmaker[Session], user_id: uuid.UUID) -> None:
+    """Fill my profile's consent, the only one the uploads wait for."""
     with factory() as db:
-        if uploads:
-            version = estimate_router.CONSENT_VERSION
-            db.add(IngestionConsent(user_id=user_id, text_version=version))
-        if cvs:
-            store.accept_consent(db, user_id, documents_consent.VERSION, T0)
+        version = estimate_router.CONSENT_VERSION
+        db.add(IngestionConsent(user_id=user_id, text_version=version))
         db.commit()
 
 
@@ -111,10 +108,8 @@ def test_uploads_are_read_newest_first_only_under_the_consent_of_fill_my_profile
     user_id = person(factory)
     upload(factory, user_id, "Older notes: SQL and dbt.", name="old.txt", minutes=1)
     upload(factory, user_id, "Newer notes: Python.", name="new.txt", minutes=2)
-    assert read(factory, user_id) == []  # no consent yet: nothing goes
-    consent(factory, user_id, uploads=False, cvs=True)
-    assert read(factory, user_id) == []  # the documents module's consent covers base CVs only
-    consent(factory, user_id, uploads=True, cvs=False)
+    assert read(factory, user_id) == []  # no consent yet: no upload goes
+    consent(factory, user_id)
     assert read(factory, user_id) == [
         ("upload", "new.txt", "Newer notes: Python."),
         ("upload", "old.txt", "Older notes: SQL and dbt."),
@@ -125,22 +120,31 @@ def test_an_upload_not_read_or_held_by_a_secret_warning_is_left_out(
     factory: sessionmaker[Session],
 ) -> None:
     user_id = person(factory)
-    consent(factory, user_id, uploads=True, cvs=False)
+    consent(factory, user_id)
     upload(factory, user_id, None, name="pending.pdf", status=TextStatus.pending)
     upload(factory, user_id, None, name="failed.pdf", status=TextStatus.failed)
     upload(factory, user_id, "token sk-xxx", name="secret.txt", secret=True)
     upload(factory, user_id, "Confirmed notes.", name="confirmed.txt", secret=True, confirmed=True)
     other = person(factory, OTHER)
-    consent(factory, other, uploads=True, cvs=False)
+    consent(factory, other)
     upload(factory, other, "Someone else's CV.", name="other.txt")
     assert read(factory, user_id) == [("upload", "confirmed.txt", "Confirmed notes.")]
+
+
+def test_a_base_cv_is_read_with_no_consent_asked(factory: sessionmaker[Session]) -> None:
+    user_id = person(factory)
+    base_cv(factory, user_id, "Built", "Analyst", minutes=1)
+    upload(factory, user_id, "Notes: SQL.", name="notes.txt", minutes=2)
+    found = read(factory, user_id)
+    assert len(found) == 1
+    assert found[0][0] != "upload"
 
 
 def test_the_default_base_cv_comes_first_and_stands_for_the_upload_it_came_from(
     factory: sessionmaker[Session],
 ) -> None:
     user_id = person(factory)
-    consent(factory, user_id, uploads=True, cvs=True)
+    consent(factory, user_id)
     cv_file = upload(factory, user_id, "Raw CV text.", name="cv.pdf", minutes=1)
     upload(factory, user_id, "A cover letter.", name="letter.txt", minutes=2)
     base_cv(factory, user_id, "Built", "Analyst", minutes=3)  # the default: the first one
@@ -163,7 +167,7 @@ def test_each_document_and_all_of_them_stay_within_their_caps(
     factory: sessionmaker[Session],
 ) -> None:
     user_id = person(factory)
-    consent(factory, user_id, uploads=True, cvs=False)
+    consent(factory, user_id)
     for n in range(titles_input.DOCS_COUNT_MAX + 2):
         upload(factory, user_id, f"{n}" * (titles_input.DOC_MAX + 500), name=f"{n}.txt", minutes=n)
     found = read(factory, user_id)
@@ -181,17 +185,16 @@ def test_a_document_s_spaces_and_control_characters_are_made_short(
     factory: sessionmaker[Session],
 ) -> None:
     user_id = person(factory)
-    consent(factory, user_id, uploads=True, cvs=False)
+    consent(factory, user_id)
     upload(factory, user_id, "Data\t\t engineer\x0b\n\n\n\n  SQL   dbt  \n", name="cv.txt")
     assert read(factory, user_id) == [("upload", "cv.txt", "Data engineer\n\nSQL dbt")]
 
 
-@pytest.mark.parametrize("cvs", [True, False])
 def test_the_run_reads_the_documents_and_a_document_alone_is_enough(
-    factory: sessionmaker[Session], cvs: bool
+    factory: sessionmaker[Session],
 ) -> None:
     user_id = person(factory)
-    consent(factory, user_id, uploads=True, cvs=cvs)
+    consent(factory, user_id)
     upload(factory, user_id, "Data engineer at Example Robotics, SQL and dbt.", name="cv.pdf")
     with factory() as db:
         request = titles._request(db, user_id, None)

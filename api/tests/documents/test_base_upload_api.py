@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, CredentialKind
-from app.documents import base_router, consent, store
+from app.documents import base_router, store
 from app.documents.models import BaseSource, DocumentGeneration
 from tests.agents.conftest import API_KEY, new_key
 from tests.documents.conftest import load
@@ -135,23 +135,19 @@ def test_an_upload_is_converted_into_the_default_base_cv(
     assert made["is_default"]
     assert (made["generation"]["status"], made["generation"]["wait_reason"]) == (
         "waiting",
-        "consent",
+        "credential",
     )
     assert sorted((row["name"], row["is_default"]) for row in _list(api, token)) == [
         ("From my profile", False),
         ("Morgan CV", True),
     ]
-    assert queue.jobs == []  # nothing is sent before the consent
+    assert queue.jobs == []  # nothing is sent before a credential, and no consent is asked
 
 
 def test_the_conversion_waits_for_a_credential_then_starts(
     api: Api, alex: Any, factory: sessionmaker[Session], clock: Any, queue: RecordingQueue
 ) -> None:
     token, user = alex
-    accepted = api.request(
-        "POST", "/api/documents/consent", token=token, json={"version": consent.VERSION}
-    )
-    assert accepted.status_code == 200
     response = _convert(api, token, _upload(factory, user, mime=DOCX), language="fr")
     generation = response.json()["base_cv"]["generation"]
     assert (generation["status"], generation["wait_reason"]) == ("waiting", "credential")

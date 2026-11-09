@@ -14,10 +14,10 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import definitions
+from app.agents import credentials, definitions
 from app.agents.models import AgentRun
-from app.documents import consent, store, writer_base, writers  # noqa: F401 (registers)
 from app.documents import content as c
+from app.documents import store, writer_base, writers  # noqa: F401 (registers)
 from app.documents.models import (
     BaseSource,
     Document,
@@ -47,11 +47,9 @@ def printed(content: dict[str, Any]) -> str:
     return "\n".join(text for _, text in c.text_fields(c.parse("base", content)))
 
 
-def _build(who: Person, script: str, *, consented: bool = True) -> tuple[uuid.UUID, uuid.UUID]:
+def _build(who: Person, script: str) -> tuple[uuid.UUID, uuid.UUID]:
     """A base CV built from the profile and its run started: (document id, generation id)."""
     with who.factory() as db:
-        if consented:
-            consent.record(db, who.user, AT)
         built = writer_base.build_from_profile(db, who.user, at=AT)
         assert built.generation is not None
         runs = writer_base.start_ready(db, who.user, at=AT, script=script, settings=who.settings)
@@ -111,11 +109,12 @@ def test_an_invented_team_size_kept_by_the_writer_is_removed_by_code(
     assert any(record.get("by") == "code" for record in version.corrections)
 
 
-def test_without_consent_nothing_starts_and_nothing_is_sent(
+def test_without_a_credential_nothing_starts_and_nothing_is_sent(
     factory: sessionmaker[Session], migrated_url: str
 ) -> None:
     who = person(factory, migrated_url, USER_A)
     with factory() as db:
+        credentials.delete(db, who.user)
         built = writer_base.build_from_profile(db, who.user, at=AT)
         assert writer_base.start_ready(db, who.user, at=AT, settings=who.settings) == []
         db.commit()
@@ -123,7 +122,7 @@ def test_without_consent_nothing_starts_and_nothing_is_sent(
         generation_id = built.generation.id
     generation = generation_row(factory, generation_id)
     assert generation.status is GenerationStatus.waiting
-    assert generation.wait_reason is GenerationWait.consent
+    assert generation.wait_reason is GenerationWait.credential
     assert generation.run_id is None
     with factory() as db:
         assert db.scalar(sa.select(sa.func.count()).select_from(AgentRun)) == 0
@@ -135,7 +134,6 @@ def test_the_run_is_bound_to_its_own_base_cv_only(
     alex = person(factory, migrated_url, USER_A)
     blake = person(factory, migrated_url, USER_B)
     with factory() as db:
-        consent.record(db, alex.user, AT)
         built = writer_base.build_from_profile(db, alex.user, at=AT)
         (run_id,) = writer_base.start_ready(db, alex.user, at=AT, settings=alex.settings)
         db.commit()
@@ -171,7 +169,6 @@ def test_a_second_start_of_the_same_generation_starts_nothing(
 ) -> None:
     who = person(factory, migrated_url, USER_A)
     with factory() as db:
-        consent.record(db, who.user, AT)
         writer_base.build_from_profile(db, who.user, at=AT)
         first = writer_base.start_ready(db, who.user, at=AT, settings=who.settings)
         db.commit()
@@ -188,7 +185,6 @@ def test_the_canary_in_the_facts_reaches_no_log_and_no_event(
     who = person(factory, migrated_url, USER_A, facts_extra=f"Planted fact {planted}.")
     caplog.set_level(logging.DEBUG)
     with factory() as db:
-        consent.record(db, who.user, AT)
         built = writer_base.build_from_profile(db, who.user, at=AT)
         (run_id,) = writer_base.start_ready(
             db, who.user, at=AT, script="documents_base_valid", settings=who.settings

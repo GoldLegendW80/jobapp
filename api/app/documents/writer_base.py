@@ -19,14 +19,13 @@ SPEC-documents.md, "Base CVs", "The writers", "Waiting, never failing").
 writer never writes an employer, a title, a date, a school or a language.
 
 **The build** (`build_from_profile`): a base CV row with the skeleton (the fixed block, nothing
-written yet), then a generation of mode `base_profile`, `queued`, or `waiting` with `consent`
-(no consent of the current text) or `credential` (no model credential). A profile without an
-employer gives the skeleton with a note to fill the profile, and no generation: nothing is
-refused, and nothing is sent. `start_ready` starts every open base generation of a person whose
-reason to wait is gone (after the consent, after a credential is added: D10's tick calls it
-too). When the run ends, `_on_final` settles the generation with D7's `generate.settle` (a
-version with its corrections, the draft replaced unless the person wrote it since) and queues
-its render.
+written yet), then a generation of mode `base_profile`, `queued`, or `waiting` with
+`credential` (no model credential). A profile without an employer gives the skeleton with a note
+to fill the profile, and no generation: nothing is refused, and nothing is sent. `start_ready`
+starts every open base generation of a person whose reason to wait is gone (after a credential
+is added: D10's tick calls it too), whatever reason it was stored with. When the run ends,
+`_on_final` settles the generation with D7's `generate.settle` (a version with its corrections,
+the draft replaced unless the person wrote it since) and queues its render.
 
 **An upload** (task D24, mode `base_upload`): `build_from_upload` makes the base CV of an
 ingestion document of the person (`source_document_id`, `base_source = uploaded`, empty until
@@ -69,8 +68,8 @@ from app.agents import credentials, definitions
 from app.agents import runs as agent_runs
 from app.agents.models import AgentRun, CredentialKind
 from app.config import Settings, get_settings
+from app.documents import content as c
 from app.documents import (
-    consent,
     design_capture,
     estimate,
     generate,
@@ -82,7 +81,6 @@ from app.documents import (
     submit,
     upload,
 )
-from app.documents import content as c
 from app.documents.corrections import Correction
 from app.documents.models import (
     Author,
@@ -362,8 +360,6 @@ def skeleton(view: profile_view.ProfileView) -> c.BaseCvContent:
 
 def wait_reason(db: Session, user_id: uuid.UUID) -> GenerationWait | None:
     """Why a base generation of this person cannot start now, None when it can."""
-    if not consent.has_consented(db, user_id):
-        return GenerationWait.consent
     if credentials.get(db, user_id) is None:
         return GenerationWait.credential
     return None
@@ -376,8 +372,7 @@ def click_wait(db: Session, user_id: uuid.UUID, at: datetime) -> GenerationWait 
     `base_cv` until it is written, then the letter follows the CV as always. A default base CV
     built from the profile that was never written (no version, no open generation: D10's
     automatic build cancelled at the deploy) counts as none: it is built for the click. The
-    consent and the credential come first: without them nothing is written, the base CV
-    included.
+    credential comes first: without it nothing is written, the base CV included.
 
     Two clicks at once (two Apply, a click and a Like, a click and the tick) build one base CV:
     everything is read under lock 1 (`store.lock_person`), which every caller takes before its

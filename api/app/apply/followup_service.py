@@ -35,7 +35,6 @@ from app.apply import email as apply_email
 from app.apply.caps_models import ApplySettings
 from app.apply.followup_models import FollowUp
 from app.apply.models import Application, Mode, State
-from app.documents import consent
 from app.documents import freeze as documents
 from app.documents.profile_view import build
 from app.documents.sources import PostingView, sources_for
@@ -381,8 +380,6 @@ def start_draft(db: Session, user_id: uuid.UUID, posting_id: uuid.UUID, now: dat
     row = _open_row(db, user_id, posting_id, now)
     if _writing(db, row):
         raise RefusedError("running")
-    if not consent.has_consented(db, user_id):
-        raise RefusedError("consent")
     if credentials.get(db, user_id) is None:
         raise RefusedError("credential")
     data = {"follow_up_id": str(row.id), "token_budget": TOKEN_BUDGET}

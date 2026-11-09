@@ -180,16 +180,16 @@ def test_a_like_without_documents_asks_the_cv_and_its_letter(
     [(kind, generation)] = generations(db, job)
     assert (kind, generation.trigger) == (Kind.cv, GenerationTrigger.click)
     assert generation.estimate[generate.LETTER_FOLLOWS] is True
-    # No consent yet: the click waits for it, as "Write now" does, and so does the application.
+    # No credential yet: the click waits for it, as "Write now" does, and so does the application.
     assert (generation.status, generation.wait_reason) == (
         GenerationStatus.waiting,
-        GenerationWait.consent,
+        GenerationWait.credential,
     )
-    assert documents.current(db, person_a.user_id, job).cv.coming == "consent"
+    assert documents.current(db, person_a.user_id, job).cv.coming == "credential"
     assert run.prepare(db, liked.application.id, AT) == "waiting_documents"
     db.commit()
     [found] = applications(db, person_a.user_id)
-    assert (found.state, found.needs) == (State.queued, "documents:consent")
+    assert (found.state, found.needs) == (State.queued, "documents:credential")
 
 
 def test_documents_that_never_come_end_the_application_blocked(
@@ -254,10 +254,10 @@ def test_an_automatic_write_not_started_gives_way(
     held = _auto(db, person_a.user_id, job, status=status, wait_reason=reason)
     assert like(db, person_a, job).documents == (Kind.cv, Kind.letter)
     found = generations(db, job)
-    # No consent yet: the click waits for it, never for the daily ceiling.
+    # No credential yet: the click waits for it, never for the daily ceiling.
     assert {(g.id == held.id, g.trigger, g.status, g.wait_reason) for _, g in found} == {
         (True, GenerationTrigger.auto, GenerationStatus.cancelled, None),
-        (False, GenerationTrigger.click, GenerationStatus.waiting, GenerationWait.consent),
+        (False, GenerationTrigger.click, GenerationStatus.waiting, GenerationWait.credential),
     }
 
 
@@ -393,24 +393,22 @@ def test_the_like_reads_the_documents_under_their_locks(
     assert refused == ["LockNotAvailable", "LockNotAvailable"]
 
 
-def test_a_like_before_the_consent_writes_once_the_consent_is_given_and_nothing_else_is(
+def test_a_like_with_a_credential_and_no_consent_writes_and_nothing_else_is(
     factory: sessionmaker[Session], migrated_url: str, stub: str
 ) -> None:
-    """Documents D29: nothing is written without a click. The Like's click waits for the
-    consent; once it comes, the tick starts the Like's CV, and a posting nobody clicked gets
-    nothing whatever its fit."""
-    who = World(factory, migrated_url, "e2e-apply-consent@example.org", consent=False)
+    """Documents D29 and D30: nothing is written without a click, and the Like's click waits for
+    no consent: it is queued at once, the tick starts the Like's CV, and a posting nobody clicked
+    gets nothing whatever its fit."""
+    who = World(factory, migrated_url, "e2e-apply-consent@example.org")
     first, liked = who.posting(95), who.posting(90)
     who.set_job(liked, url=form(stub))
     who.tick()
     assert posting_cv(who.generations()) == []
     with factory() as db:
         assert likes.on_like(db, who.user, liked, now=AT).documents == (Kind.cv, Kind.letter)
-    who.tick()
-    assert {(g["trigger"], g["wait_reason"]) for g in posting_cv(who.generations(liked))} == {
-        (GenerationTrigger.click, GenerationWait.consent)
-    }
-    who.consent()
+    assert {
+        (g["trigger"], g["status"], g["wait_reason"]) for g in posting_cv(who.generations(liked))
+    } == {(GenerationTrigger.click, GenerationStatus.queued, None)}
     who.tick()
     assert {
         (g["trigger"], g["status"], g["wait_reason"]) for g in posting_cv(who.generations(liked))

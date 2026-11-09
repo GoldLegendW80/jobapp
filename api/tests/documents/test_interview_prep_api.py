@@ -1,5 +1,5 @@
-"""Interview preparation through the app, two e2e people: the read before and after Prepare,
-Prepare refused without the consent then started (202, the run queued), a second click while it
+"""Interview preparation through the app, two e2e people: the read before and after Prepare, Prepare
+started on the first click with no consent asked (202, the run queued), a second click while it
 runs (409), the Practice message (empty 422, started 202), the stories kept (none chosen 422), a
 hand edit with the Debrief (a version, notes on the claims only), the posting's CV and letter
 list without it, and B's posting and preparation answering 404 to A everywhere."""
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
-from app.documents import consent, store
+from app.documents import store
 from app.documents.models import Author, Kind
 from tests.agents.conftest import API_KEY, new_key
 from tests.documents.render_support import RecordingQueue, give_profile
@@ -75,19 +75,13 @@ def _url(who: dict[str, Any]) -> str:
     return f"/api/jobs/{who['posting']}/interview-prep"
 
 
-def _consent(factory: sessionmaker[Session], who: dict[str, Any], clock: Any) -> None:
-    with factory() as db:
-        consent.record(db, who["user"], clock())
-        db.commit()
-
-
 def _prepared(api: Api, who: dict[str, Any]) -> str:
     started = api.request("POST", _url(who), token=who["token"])
     assert started.status_code == 202, started.text
     return str(started.json()["document_id"])
 
 
-def test_prepare_starts_on_the_click_once_the_consent_is_there(
+def test_prepare_starts_on_the_first_click_with_no_consent_asked(
     api: Api, alex: dict[str, Any], factory: sessionmaker[Session], clock: Any,
     queue: RecordingQueue,
 ) -> None:  # fmt: skip
@@ -95,11 +89,8 @@ def test_prepare_starts_on_the_click_once_the_consent_is_there(
     assert before.status_code == 200, before.text
     assert before.headers["cache-control"] == "private, no-store"
     assert before.json()["document"] is None
-    refused = api.request("POST", _url(alex), token=alex["token"])
-    assert refused.status_code == 409
-    assert refused.json()["detail"].startswith("Confirm what is sent")
-    assert api.get(_url(alex), token=alex["token"]).json()["document"] is None  # nothing stored
-    _consent(factory, alex, clock)
+    with factory() as db:
+        assert db.scalar(sa.text("SELECT count(*) FROM document_consents")) == 0
     document = _prepared(api, alex)
     assert len(queue.jobs) == 1
     again = api.request("POST", _url(alex), token=alex["token"])
@@ -116,7 +107,6 @@ def test_prepare_starts_on_the_click_once_the_consent_is_there(
 def test_practice_and_stories_refuse_what_they_cannot_take(
     api: Api, alex: dict[str, Any], factory: sessionmaker[Session], clock: Any
 ) -> None:
-    _consent(factory, alex, clock)
     document = _prepared(api, alex)
     empty = api.request(
         "POST", f"/api/documents/{document}/practice", token=alex["token"], json={"text": "  "}
@@ -188,7 +178,6 @@ def test_bs_preparation_answers_404_to_a(
     api: Api, alex: dict[str, Any], blake: dict[str, Any], factory: sessionmaker[Session],
     clock: Any,
 ) -> None:  # fmt: skip
-    _consent(factory, blake, clock)
     document = _prepared(api, blake)
     token = alex["token"]
     assert api.get(_url(blake), token=token).status_code == 404

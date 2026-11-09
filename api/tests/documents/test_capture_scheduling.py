@@ -203,7 +203,7 @@ def prepared(world: Any) -> uuid.UUID:
         return generation.id
 
 
-@pytest.mark.parametrize("gone", ["credential", "consent", "bytes", "source"])
+@pytest.mark.parametrize("gone", ["credential", "bytes", "source"])
 def test_prepared_capture_rechecks_its_binding_and_permission(
     world: Any, gone: str, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -214,8 +214,6 @@ def test_prepared_capture_rechecks_its_binding_and_permission(
             from app.agents import credentials
 
             credentials.delete(db, world.user)
-        elif gone == "consent":
-            db.execute(sa.text("DELETE FROM document_consents WHERE user_id=:u"), {"u": world.user})
         elif gone == "source":
             db.execute(sa.delete(IngestionDocument).where(IngestionDocument.id == world.upload))
         else:
