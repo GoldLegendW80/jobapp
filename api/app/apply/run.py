@@ -1136,6 +1136,7 @@ async def _answer_left(
         posting_company=plan.posting_company,
         posting_text=plan.posting_text,
         letter_text=plan.letter_text,
+        flow=agent.application_flow(plan.application_id, plan.mode),
     )
     try:
         reply = await services.answer_agent(request)
@@ -1286,6 +1287,7 @@ async def _drive_generic(
     adapter.person_answers = plan.person_answers
     factory = _FallbackSession if strategy is not None else forms.FormSession
     session = factory(adapter, tools, plan.context, str(plan.user_id))
+    session.flow = agent.application_flow(plan.application_id, plan.mode)
     session.clock = lambda: services.clock().timestamp()
     session.deadline = plan.form_deadline
     review_reason = "frame_origin_unverified" if strategy and "frame" in strategy else None

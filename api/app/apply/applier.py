@@ -435,6 +435,8 @@ class ApplySession:
     # "confirm" after the gate's click: the agent reads the page only.
     review: bool = False
     phase: str = "fill"
+    # Its run in Activity (agents A10): the apply agent runs on a click on Apply only.
+    flow: runs.WorkflowRef | None = None
     filled: list[dict[str, Any]] = field(default_factory=list, repr=False)
     ready: dict[str, Any] | None = field(default=None, repr=False)
     title: str = ""
@@ -1439,6 +1441,7 @@ async def apply(services: Services, application_id: uuid.UUID) -> str:
             alive=alive,
             review=brief.review,
             traced=lambda: db(lambda s: step_sent(s, application_id, fill.clock())),
+            flow=runs.WorkflowRef("application", application_id, "apply"),
         )
         ran = Ran(stopped="no_agent")
         if services.agent is not None:
@@ -1617,7 +1620,9 @@ class RuntimeApplier:
             if credentials.get(db, user_id) is None:
                 return "no_credential"
             try:
-                return runs.create_run(db, user_id, NAME, None, data, MODEL, context.clock()).id
+                return runs.create_run(
+                    db, user_id, NAME, None, data, MODEL, context.clock(), session.flow
+                ).id
             except runs.ActiveRunsError:
                 return "busy"
 

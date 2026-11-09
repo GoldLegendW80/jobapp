@@ -144,4 +144,6 @@ async def start_first_sweep(
 ) -> sweep.Begun[uuid.UUID]:
     """The first sweep, through the jobs module's own start (`sweep.begin`, the start of
     POST /api/jobs/sweeps): started and queued, the one already running, or why none started."""
-    return await sweep.begin(sessions, queue, user_id, now, lambda row: row.id)
+    return await sweep.begin(
+        sessions, queue, user_id, now, lambda row: row.id, started_by=sweep.ONBOARDING
+    )

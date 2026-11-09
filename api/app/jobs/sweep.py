@@ -96,6 +96,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import queue as queues
+from app.agents.runs import WorkflowRef
 from app.identity.models import User
 from app.jobs import schedule, scoring, service, signals
 from app.jobs import slug as slugs
@@ -144,6 +145,8 @@ SEARCH_INVALID = (
     "Open the Search tab of your profile and save it again."
 )
 QUEUE_DOWN = "The sweep could not be queued. Try again in a minute."
+# `started_by` of the frozen scope of the first sweep, started at the end of onboarding.
+ONBOARDING = "onboarding"
 
 
 # --- filters ------------------------------------------------------------------------------------
@@ -562,6 +565,18 @@ class Plan:
     commits: "Commits | None" = None
     # One parse of a big answer at a time for the whole run (`parse_one`), set by run_sweep.
     parsing: asyncio.Semaphore | None = None
+
+    @property
+    def flow(self) -> WorkflowRef:
+        """The sweep's run in Activity (agents A10): its websites' agents and its reader."""
+        scope = self.search_scope or {}
+        scheduled = scope.get("trigger") == SweepTrigger.schedule.value
+        onboarding = scope.get("started_by") == ONBOARDING
+        return WorkflowRef(
+            "job_search",
+            self.sweep_id,
+            "schedule" if scheduled else "onboarding" if onboarding else "search",
+        )
 
 
 @dataclass
@@ -1501,6 +1516,7 @@ def start(
     user_id: uuid.UUID,
     trigger: SweepTrigger,
     now: datetime,
+    started_by: str | None = None,
 ) -> Sweep:
     """A new running sweep for the user, after failing a stale one of theirs. Raises
     service.SweepRunningError when one is running; the caller commits."""
@@ -1510,6 +1526,8 @@ def start(
     reap_stale(db, now, user_id)
     row = service.start_sweep(db, user_id, trigger, now)
     scope = freeze_scope(profile, trigger, now)
+    if started_by:
+        scope["started_by"] = started_by
     row.stats = {**row.stats, "search_scope": scope, "sources": initial_sources(scope)}
     db.flush()
     return row
@@ -1542,6 +1560,7 @@ def _insert[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
+    started_by: str | None = None,
 ) -> Begun[T]:
     with sessions() as db:
         profile = db.execute(
@@ -1558,14 +1577,14 @@ def _insert[T](
         if not has_sources(search):
             return Begun("no_websites")
         try:
-            row = start(db, user_id, SweepTrigger.manual, now)
+            row = start(db, user_id, SweepTrigger.manual, now, started_by)
             begun = Begun("started", row.id, view(row))
             db.commit()
         except service.SweepRunningError:
             db.rollback()
             running = service.running_sweep(db, user_id)
             if running is None:  # finished between the insert and this read
-                return _insert(sessions, user_id, now, view, profile_revision)
+                return _insert(sessions, user_id, now, view, profile_revision, started_by)
             return Begun("running", running.id)
     return begun
 
@@ -1577,13 +1596,16 @@ async def begin[T](
     now: datetime,
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
+    started_by: str | None = None,
 ) -> Begun[T]:
     """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps
     and of the first login wizard's Start (opportunities O5). No sweep without an enabled
     website (`no_websites`), or with a
     search section that no longer validates; the running one when the user has one; a queue
     that is down fails the new sweep at once, so it never blocks the next try."""
-    begun = await asyncio.to_thread(_insert, sessions, user_id, now, view, profile_revision)
+    begun = await asyncio.to_thread(
+        _insert, sessions, user_id, now, view, profile_revision, started_by
+    )
     if begun.outcome != "started" or begun.sweep_id is None:
         return begun
     try:

@@ -128,6 +128,21 @@ class WorkflowRef:
     trigger: str | None = None
 
 
+def joining(db: Session, run_id: uuid.UUID | None) -> WorkflowRef | None:
+    """The workflow run of another agent run, for a step that joins it (the hiring panel joins
+    the writer run it reviews): its workflow and its workflow run, never its trigger. None when
+    that run recorded no workflow (an older run)."""
+    if run_id is None:
+        return None
+    found = db.execute(
+        sa.select(AgentRun.workflow, AgentRun.workflow_run_id).where(AgentRun.id == run_id)
+    ).one_or_none()
+    if found is None or found.workflow is None:
+        return None
+    # A run recorded with no id of its own is its workflow run (`workflows.group_of`).
+    return WorkflowRef(found.workflow, found.workflow_run_id or run_id)
+
+
 def create_run(
     db: Session,
     user_id: uuid.UUID,

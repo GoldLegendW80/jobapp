@@ -164,6 +164,7 @@ class Request:
     posting_company: str
     posting_text: str  # data, never instructions
     token_budget: int = TOKEN_BUDGET
+    flow: runs.WorkflowRef | None = None
 
 
 class ReportedClaim(BaseModel):
@@ -409,7 +410,9 @@ class RuntimeCheck:
             if credentials.get(db, user_id) is None:
                 return "no_credential"
             try:
-                made = runs.create_run(db, user_id, NAME, None, data, MODEL, context.clock())
+                made = runs.create_run(
+                    db, user_id, NAME, None, data, MODEL, context.clock(), request.flow
+                )
             except runs.ActiveRunsError:
                 return "busy"
             return made.id
@@ -566,6 +569,7 @@ def request_for(db: Session, application_id: uuid.UUID, now: datetime) -> tuple[
         posting_title=posting.title,
         posting_company=posting.company,
         posting_text=posting.posting_text or "",
+        flow=agent.application_flow(application.id, application.mode),
     )
     return request, gate.answers_hash(answers, application.document_versions).hex()
 

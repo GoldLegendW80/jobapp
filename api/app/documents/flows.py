@@ -3,14 +3,20 @@
 One click writes a posting's documents: the generations it makes share their posting and the
 moment of the click (one transaction). They form one workflow run, named by the first of them,
 so the CV, the letter and their rebuilds show as one run of "Documents for a posting". A
-generation made alone (a later Write of the letter only) is a run of its own.
+generation made alone (a later Write of the letter only) is a run of its own. A base CV built
+from the profile for a click with no base CV joins that click's run: the click's CV waits for it.
 """
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.agents.runs import WorkflowRef
-from app.documents.models import Document, DocumentGeneration, GenerationTrigger
+from app.documents.models import (
+    Document,
+    DocumentGeneration,
+    GenerationMode,
+    GenerationTrigger,
+)
 
 
 def posting_flow(db: Session, generation: DocumentGeneration) -> WorkflowRef:
@@ -34,3 +40,42 @@ def posting_flow(db: Session, generation: DocumentGeneration) -> WorkflowRef:
         # A click on Write; an Apply or a Like is not told apart on the generation (`auto`).
         "write" if generation.trigger == GenerationTrigger.click else None,
     )
+
+
+def base_flow(db: Session, generation: DocumentGeneration) -> WorkflowRef:
+    if (
+        generation.mode is GenerationMode.base_profile
+        and generation.trigger is GenerationTrigger.click
+    ):
+        # `writer_base.click_wait` builds it in the click's transaction, at the click's moment.
+        posting = db.scalar(
+            sa.select(DocumentGeneration)
+            .where(
+                DocumentGeneration.user_id == generation.user_id,
+                DocumentGeneration.created_at == generation.created_at,
+                DocumentGeneration.mode == GenerationMode.posting,
+            )
+            .order_by(DocumentGeneration.id)
+            .limit(1)
+        )
+        if posting is not None:
+            return posting_flow(db, posting)
+    return WorkflowRef("base_cv", generation.document_id, "new_base")
+
+
+def capture_flow(db: Session, generation: DocumentGeneration) -> WorkflowRef:
+    """The first design capture of an upload joins its conversion's Base CV run; a later one is
+    a click on Retry the design capture, a run of its own."""
+    earlier = db.scalar(
+        sa.select(DocumentGeneration.id)
+        .where(
+            DocumentGeneration.user_id == generation.user_id,
+            DocumentGeneration.document_id == generation.document_id,
+            DocumentGeneration.mode == GenerationMode.template_capture,
+            DocumentGeneration.created_at < generation.created_at,
+        )
+        .limit(1)
+    )
+    if earlier is None:
+        return WorkflowRef("base_cv", generation.document_id)
+    return WorkflowRef("base_cv", generation.id, "capture")

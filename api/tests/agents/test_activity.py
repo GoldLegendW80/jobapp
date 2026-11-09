@@ -12,7 +12,11 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents import catalog, runs, workflows
 from app.agents.models import AgentRun, RunStatus
+from app.apply import agent as apply_agent
+from app.apply.models import Mode
 from app.identity.models import User
+from app.jobs import sweep
+from app.jobs.models import SweepTrigger
 from tests.agents.conftest import ALICE, BOB
 from tests.identity.api_helpers import Api
 
@@ -177,17 +181,30 @@ def test_each_person_reads_only_their_own_runs(
 RECORDING = {
     "app/agents/chat.py": {("job_chat", "message")},
     "app/agents/operator.py": {("assess", "with_agent")},
+    "app/apply/agent.py": {("application", "apply"), ("application", "like")},
+    "app/apply/applier.py": {("application", "apply")},
     "app/apply/followup_service.py": {("follow_up", "draft")},
+    "app/apply/site_profile.py": {("site_profile", "site")},
     "app/documents/chat.py": {("document_chat", "chat")},
-    "app/documents/flows.py": {("posting_documents", "write")},
+    "app/documents/flows.py": {
+        ("base_cv", ""),
+        ("base_cv", "capture"),
+        ("base_cv", "new_base"),
+        ("posting_documents", "write"),
+    },
     "app/documents/interview_prep.py": {
         ("interview_prep", "prepare"),
         ("interview_prep", "practice"),
     },
     "app/documents/offer_notes.py": {("offer_letter", "notes_chat"), ("offer_letter", "offer")},
-    "app/documents/writer_base.py": {("base_cv", "new_base")},
     "app/ingestion/engine.py": {("fill_profile", "read")},
     "app/jobs/assess_router.py": {("assess", "assess")},
+    "app/jobs/reader.py": {("posting_reading", "backlog")},
+    "app/jobs/sweep.py": {
+        ("job_search", "onboarding"),
+        ("job_search", "schedule"),
+        ("job_search", "search"),
+    },
     "app/profile/about.py": {("about_you", "about")},
     "app/profile/titles.py": {("job_titles", "titles_tick"), ("job_titles", "ideas")},
 }
@@ -228,8 +245,10 @@ def test_every_starter_records_a_workflow_and_a_trigger_activity_draws() -> None
     for pairs in seen.values():
         for workflow, trigger in pairs:
             assert workflow in workflows.BY_KEY, workflow
-            # Each trigger has its box in the workflow's graph, where the run page marks it.
-            assert workflows.TRIGGERS[trigger].node in workflows.BY_KEY[workflow].nodes, trigger
+            # Each trigger has its box in the workflow's graph, where the run page marks it; a
+            # step that joins a run started by another records none.
+            if trigger:
+                assert workflows.TRIGGERS[trigger].node in workflows.BY_KEY[workflow].nodes
 
 
 def test_a_runs_trigger_is_its_first_steps_when_a_later_step_records_none(
@@ -247,3 +266,56 @@ def test_a_runs_trigger_is_its_first_steps_when_a_later_step_records_none(
         "words": "Your click on Write",
         "node": "click",
     }
+
+
+def test_a_step_joins_the_workflow_run_of_the_run_it_follows_without_its_trigger(
+    factory: sessionmaker[Session],
+) -> None:
+    me = _user(factory, ALICE)
+    click = uuid.uuid4()
+    writer = _run(
+        factory, me, "documents_cv", 0, flow=runs.WorkflowRef("posting_documents", click, "write")
+    )
+    alone = _run(
+        factory,
+        me,
+        "posting_reader",
+        1,
+        flow=runs.WorkflowRef("posting_reading", trigger="backlog"),
+    )
+    older = _run(factory, me, "documents_cv", 2)
+    with factory() as db:
+        assert runs.joining(db, writer) == runs.WorkflowRef("posting_documents", click)
+        # A run recorded with no id of its own is its workflow run.
+        assert runs.joining(db, alone) == runs.WorkflowRef("posting_reading", alone)
+        assert runs.joining(db, older) is None
+        assert runs.joining(db, None) is None
+
+
+def _plan(scope: dict[str, Any] | None) -> sweep.Plan:
+    return sweep.Plan(uuid.uuid4(), uuid.uuid4(), [], None, None, search_scope=scope)  # type: ignore[arg-type]
+
+
+def test_a_sweeps_agents_record_its_run_with_its_trigger(factory: sessionmaker[Session]) -> None:
+    by_hand = _plan({"trigger": "manual"})
+    assert by_hand.flow == runs.WorkflowRef("job_search", by_hand.sweep_id, "search")
+    assert _plan({"trigger": "schedule"}).flow.trigger == "schedule"
+    assert _plan({"trigger": "manual", "started_by": sweep.ONBOARDING}).flow.trigger == "onboarding"
+    assert _plan(None).flow.trigger == "search"
+    me = _user(factory, ALICE)
+    with factory() as db:
+        first = sweep.start(db, me, SweepTrigger.manual, T0, sweep.ONBOARDING)
+        assert first.stats["search_scope"]["started_by"] == "onboarding"
+        db.rollback()
+        other = sweep.start(db, me, SweepTrigger.manual, T0)
+        assert "started_by" not in other.stats["search_scope"]
+        db.rollback()
+
+
+def test_an_applications_agents_record_its_run_a_like_in_full_auto_else_apply() -> None:
+    application = uuid.uuid4()
+    assert apply_agent.application_flow(application, Mode.full_auto) == runs.WorkflowRef(
+        "application", application, "like"
+    )
+    for mode in (Mode.direct, Mode.review, Mode.manual):
+        assert apply_agent.application_flow(application, mode).trigger == "apply"

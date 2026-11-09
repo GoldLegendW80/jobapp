@@ -328,6 +328,8 @@ class _Site:
     source_id: str = ""
     host: str = ""
     sent: set[str] = field(default_factory=set)
+    # The sweep's run in Activity (agents A10), recorded by the website's agent run.
+    flow: Any = None
 
     def _sort(self, title: str, location: str, url: str) -> set[str]:
         """Where a posting read goes: unwanted, of another contract, or kept. A posting of the
@@ -589,6 +591,7 @@ async def _one(
         commits=getattr(plan, "commits", None),
         source_id=entry["source_id"],
         host=entry.get("host") or "",
+        flow=getattr(plan, "flow", None),
     )
     try:
         code = await _website(runner, plan, context, planned.scope, site, deadline, turn)
@@ -779,6 +782,7 @@ async def _search(
                 interactive=scope,
                 on_verified=None if site.commits is None else site.verified,
                 landed="" if landed == scope.start else landed,
+                flow=site.flow,
             )
             ran = await agent(session)
             site.input_tokens += ran.input_tokens

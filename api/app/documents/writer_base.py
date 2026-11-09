@@ -73,6 +73,7 @@ from app.documents import (
     consent,
     design_capture,
     estimate,
+    flows,
     generate,
     panel,
     panel_hold,
@@ -688,7 +689,7 @@ def start(
         BASE_WRITER.validate_input(data),
         BASE_WRITER.model,
         at,
-        flow=agent_runs.WorkflowRef("base_cv", generation.document_id, "new_base"),
+        flow=flows.base_flow(db, generation),
     )
     generation.run_id = run.id
     generation.status = GenerationStatus.running
