@@ -10,10 +10,10 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import catalog, runs, workflows
+from app.agents import activity_steps, catalog, runs, workflows
 from app.agents.models import AgentRun, RunStatus
 from app.apply import agent as apply_agent
-from app.apply.models import Mode
+from app.apply.models import Mode, State
 from app.identity.models import User
 from app.ingestion.plan import StepKind
 from app.ingestion.runs_models import IngestionRun, IngestionRunStep, StepStatus
@@ -441,3 +441,7 @@ def test_an_ingestion_runs_steps_not_started_show_as_waiting(
         ("agent", "document_transcribe", "running"),
         ("system", "profile_extract", "waiting"),
     ]
+
+
+def test_every_application_state_has_its_words_on_the_application_step() -> None:
+    assert set(activity_steps._APPLICATION_STATE) == set(State)

@@ -57,6 +57,7 @@ _APPLICATION_STATE = {
     State.rehearsed: "Rehearsed, not sent",
     State.cancelled: "Cancelled",
     State.blocked: "Blocked",
+    State.posting_closed: "The posting closed",
 }
 # The agent each ingestion step and each waiting generation runs, by kind.
 _INGESTION_AGENT = {"transcribe": "document_transcribe", "extract": "profile_extract"}
