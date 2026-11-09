@@ -257,7 +257,9 @@ def test_each_workflow_draws_every_agent_of_its_category_and_only_registered_one
             if node.kind != "agent":
                 continue
             assert node.id in agents, f"{node.id} is drawn in {key} and not registered"
-            assert node.label == node.id
+            # A plain name on the card, the registered name in the link.
+            assert node.label == catalog.NAMES[node.id]
+            assert "_" not in node.label
             assert node.id not in drawn, f"{node.id} is drawn twice"
             drawn[node.id] = key
     product = {
@@ -266,6 +268,7 @@ def test_each_workflow_draws_every_agent_of_its_category_and_only_registered_one
         if definitions.module_of(name).startswith("app.") and not agent.test_only
     }
     assert product - set(drawn) == set(), "registered agents drawn in no workflow"
+    assert set(catalog.NAMES) == product
     assert set(drawn) <= product
     for name, key in drawn.items():
         assert catalog.CATEGORY_OF[name] == key, name
@@ -294,10 +297,18 @@ def test_each_workflow_is_laid_out_and_worded_for_its_drawing() -> None:
             assert not DASH.search(node.label + node.note), (key, node)
             # A box with no arrow says why, as the proposal writer nothing starts yet.
             assert node.id in linked or node.note, (key, node.id)
+        # A group's agents run side by side under one step: one column, one card.
+        groups: dict[str, set[int]] = {}
+        for node in flow.nodes:
+            if node.group:
+                groups.setdefault(node.group, set()).add(node.column)
+        assert all(len(columns) == 1 for columns in groups.values()), (key, groups)
     proposal = next(n for n in catalog.FLOWS["documents"].nodes if n.id == "documents_proposal")
     assert proposal.note == "Not started by the app yet"
     edges = catalog.FLOWS["documents"].edges
     assert not [e for e in edges if "documents_proposal" in (e.source, e.target)]
+    reviewers = [n.id for n in catalog.FLOWS["documents"].nodes if n.group == "Hiring panel"]
+    assert len(reviewers) == 7
 
 
 def test_the_list_serves_each_categorys_workflow(api: Api, admin: str) -> None:
@@ -305,7 +316,7 @@ def test_the_list_serves_each_categorys_workflow(api: Api, admin: str) -> None:
     flows = {category["key"]: category["flow"] for category in body["categories"]}
     assert flows["test"] is None
     finding = flows["finding"]
-    assert {"id": "browser_discovery", "kind": "agent", "label": "browser_discovery"}.items() <= (
+    assert {"id": "browser_discovery", "kind": "agent", "label": "Website search"}.items() <= (
         next(node for node in finding["nodes"] if node["id"] == "browser_discovery").items()
     )
     assert {"from": "sweep", "to": "posting_reader", "label": "then reads its postings"} in (

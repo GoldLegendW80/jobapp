@@ -166,6 +166,8 @@ class Node:
     column: int
     row: int
     note: str = ""
+    # Agents that run side by side under one step share a group: drawn as one card listing them.
+    group: str = ""
 
 
 @dataclass(frozen=True)
@@ -184,8 +186,48 @@ class Flow:
     edges: tuple[Edge, ...]
 
 
-def _agent(name: str, column: int, row: int, note: str = "") -> Node:
-    return Node(name, "agent", name, column, row, note)
+# The plain name of each agent on its card; its registered name stays the link and the tooltip.
+NAMES: dict[str, str] = {
+    "apply_agent": "Apply agent",
+    "apply_answer": "Answer writer",
+    "apply_check": "Answer checker",
+    "apply_form": "Form filler",
+    "apply_followup": "Follow up writer",
+    "browser_discovery": "Website search",
+    "document_transcribe": "Page transcriber",
+    "documents_base": "Base CV writer",
+    "documents_chat_base": "Base CV chat",
+    "documents_chat_cv": "CV chat",
+    "documents_chat_letter": "Letter chat",
+    "documents_chat_offer_notes": "Offer notes chat",
+    "documents_cv": "CV writer",
+    "documents_design": "Design capture",
+    "documents_interview_practice": "Interview practice",
+    "documents_interview_prep": "Interview prep writer",
+    "documents_letter": "Letter writer",
+    "documents_offer_read": "Offer letter reader",
+    "documents_panel_manager": "Hiring panel: hiring manager",
+    "documents_panel_merge": "Hiring panel: merge",
+    "documents_panel_reader_ceo": "Hiring panel: reader, the CEO",
+    "documents_panel_reader_manager": "Hiring panel: reader, hiring manager",
+    "documents_panel_reader_recruiter": "Hiring panel: reader, the recruiter",
+    "documents_panel_reader_rival": "Hiring panel: reader, another applicant",
+    "documents_panel_reader_teammate": "Hiring panel: reader, the teammate",
+    "documents_panel_screen": "Hiring panel: automated screen",
+    "documents_proposal": "Proposal writer",
+    "job_chat": "Job chat",
+    "jobs_assess": "Posting assessor",
+    "posting_reader": "Posting reader",
+    "profile_extract": "Profile extractor",
+    "profile_interpret": "About you reader",
+    "profile_titles": "Job title suggester",
+    "triage": "Triage",
+}
+_PANEL_GROUP = "Hiring panel"
+
+
+def _agent(name: str, column: int, row: int, note: str = "", group: str = "") -> Node:
+    return Node(name, "agent", NAMES[name], column, row, note, group)
 
 
 def _step(kind: str, key: str, label: str, column: int, row: int) -> Node:
@@ -311,7 +353,7 @@ FLOWS: dict[str, Flow] = {
             _step("system", "panel", "Hiring panel job", 2, 0),
             _step("data", "notes", "Offer notes", 2, 10),
             _step("data", "prep", "Interview prep", 2, 12),
-            *(_agent(name, 3, index) for index, name in enumerate(_PANEL)),
+            *(_agent(name, 3, index, group=_PANEL_GROUP) for index, name in enumerate(_PANEL)),
             _agent("documents_chat_offer_notes", 3, 11),
             _agent("documents_interview_practice", 3, 13),
             _agent("documents_panel_merge", 4, 3),

@@ -1,5 +1,6 @@
 import type {
   AgentCategory,
+  AgentFlow,
   AgentPage,
   AgentSummary,
   Editable,
@@ -51,10 +52,12 @@ const CATEGORIES: Omit<AgentCategory, "flow">[] = [
   },
 ];
 
+const FLOWS: Record<string, AgentFlow | undefined> = AGENT_FLOWS;
+
 /** The groups of the list with the workflow drawn above each table (agents A9). */
 export const AGENT_CATEGORIES: AgentCategory[] = CATEGORIES.map((category) => ({
   ...category,
-  flow: AGENT_FLOWS[category.key] ?? null,
+  flow: FLOWS[category.key] ?? null,
 }));
 
 const summary = (

@@ -38,6 +38,8 @@ export const flowNodeSchema = z.object({
   column: z.number().int().min(0),
   row: z.number().int().min(0),
   note: z.string().default(""),
+  /** Agents that run side by side under one step share it: one card lists them. */
+  group: z.string().default(""),
 });
 export type FlowNode = z.infer<typeof flowNodeSchema>;
 

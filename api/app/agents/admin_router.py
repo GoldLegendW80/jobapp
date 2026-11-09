@@ -130,6 +130,8 @@ class FlowNodeOut(BaseModel):
     column: int
     row: int
     note: str
+    # Agents of one group run side by side under one step, drawn as one card.
+    group: str
 
 
 class FlowEdgeOut(BaseModel):

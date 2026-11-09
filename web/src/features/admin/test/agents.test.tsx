@@ -410,6 +410,7 @@ describe("the list", () => {
           column: 0,
           row: 0,
           note: "",
+          group: "",
         },
         {
           id: "browser_discovery",
@@ -418,6 +419,7 @@ describe("the list", () => {
           column: 1,
           row: 0,
           note: "",
+          group: "",
         },
       ],
       edges: [
