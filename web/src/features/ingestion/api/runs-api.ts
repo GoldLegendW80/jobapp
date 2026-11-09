@@ -284,10 +284,19 @@ export function getRun(id: string, signal?: AbortSignal): Promise<Run> {
  * estimate the dialog shows. The server compares it with the estimate of now and creates no run
  * when they differ (`startRefusal` reads that answer).
  */
-export function startRun(selection: Selection, quoteId: string): Promise<Run> {
+/** `startedFrom` names onboarding's Build my profile, the run's trigger on Activity. */
+export function startRun(
+  selection: Selection,
+  quoteId: string,
+  startedFrom?: "onboarding",
+): Promise<Run> {
   return request(RUNS, {
     method: "POST",
-    body: { ...selection, quote_id: quoteId },
+    body: {
+      ...selection,
+      quote_id: quoteId,
+      ...(startedFrom ? { started_from: startedFrom } : {}),
+    },
     timeoutMs: TIMEOUT_MS,
     validate: (body) => runSchema.parse(body),
   });

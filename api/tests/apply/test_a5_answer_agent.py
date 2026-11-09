@@ -392,6 +392,10 @@ def test_a_fill_answers_the_open_question_through_an_apply_answer_run(
     assert set(made.input) == {"request", "token_budget"}
     assert made.input["token_budget"] == agent.TOKEN_BUDGET
     assert made.model == "claude-sonnet-5-5"  # an API key
+    # Activity: a step of the application's run, triggered as its mode says
+    recorded = runs.WorkflowRef(made.workflow, made.workflow_run_id, made.workflow_trigger)
+    assert recorded == agent.application_flow(app_id, found.mode)
+    assert recorded.run_id == app_id
     assert runs_of(db, person_b.user_id) == []
     # the prompt is A's: A's posting, never B's; the system prompt says data is not instructions
     (backend,) = runtime.backends.made

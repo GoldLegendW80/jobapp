@@ -1,11 +1,14 @@
-"""The workflow run of a posting's documents (Activity, agents A10): one per click."""
+"""The workflow run of a posting's documents (Activity, agents A10): one per click; a base CV
+a click builds first joins it, and a design capture joins its conversion's run once."""
 
+import uuid
 from datetime import timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.documents import generate, store
+from app.agents.runs import WorkflowRef
+from app.documents import flows, generate, store
 from app.documents.models import (
     DocumentGeneration,
     GenerationMode,
@@ -17,6 +20,7 @@ from tests.documents.store_support import AT, engine, factory, migrated_url
 from tests.documents.writer_support import (
     CEILING,
     ESTIMATE,
+    Person,
     person,
     run_row,
     start,
@@ -63,3 +67,51 @@ def test_the_cv_and_letter_of_one_click_are_one_workflow_run_and_a_later_letter_
         alone, later_id = run.id, later.id
     row = run_row(factory, alone)
     assert (row.workflow_run_id, row.workflow_trigger) == (later_id, None)
+
+
+def _generation(
+    who: Person, mode: GenerationMode, trigger: GenerationTrigger, minutes: int = 0
+) -> DocumentGeneration:
+    return DocumentGeneration(
+        id=uuid.uuid4(),
+        user_id=who.user,
+        document_id=who.base,
+        mode=mode,
+        trigger=trigger,
+        estimate=ESTIMATE,
+        token_ceiling=CEILING,
+        status=GenerationStatus.done,
+        created_at=AT + timedelta(minutes=minutes),
+    )
+
+
+def test_a_base_cv_a_click_builds_first_joins_that_clicks_run_and_any_other_is_its_own(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = person(factory, migrated_url, USER)
+    _, cv_generation, _ = start(who, None)
+    with factory() as db:
+        # Built in the click's transaction, at the click's moment (`writer_base.click_wait`).
+        first = _generation(who, GenerationMode.base_profile, GenerationTrigger.click)
+        assert flows.base_flow(db, first) == WorkflowRef(
+            "posting_documents", cv_generation, "write"
+        )
+        # A base CV the documents tick builds later, or the Base CV page's, is its own run.
+        later = _generation(who, GenerationMode.base_profile, GenerationTrigger.click, 5)
+        assert flows.base_flow(db, later) == WorkflowRef("base_cv", who.base, "new_base")
+        page = _generation(who, GenerationMode.base_profile, GenerationTrigger.auto)
+        assert flows.base_flow(db, page) == WorkflowRef("base_cv", who.base, "new_base")
+
+
+def test_the_first_design_capture_joins_its_base_cvs_run_and_a_retry_is_its_own(
+    factory: sessionmaker[Session], migrated_url: str
+) -> None:
+    who = person(factory, migrated_url, USER)
+    with factory() as db:
+        first = _generation(who, GenerationMode.template_capture, GenerationTrigger.auto)
+        assert flows.capture_flow(db, first) == WorkflowRef("base_cv", who.base)
+        db.add(first)
+        db.flush()
+        again = _generation(who, GenerationMode.template_capture, GenerationTrigger.click, 30)
+        assert flows.capture_flow(db, again) == WorkflowRef("base_cv", again.id, "capture")
+        db.rollback()

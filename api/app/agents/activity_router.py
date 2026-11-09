@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.concurrency import run_in_threadpool
 
-from app.agents import catalog, workflows
+from app.agents import activity_steps, catalog, workflows
 from app.agents.models import AgentRun, RunStatus
 from app.agents.runs_router import CurrentUser, _no_store, sessions_of
 from app.jobs.models import Job
@@ -308,10 +308,9 @@ def _detail(
         tokens_out = [row.output_tokens for row in group.rows if row.output_tokens is not None]
         costs = [float(row.cost_usd) for row in group.rows if row.cost_usd is not None]
         kinds = {row.credential_kind.value for row in group.rows if row.credential_kind}
-        return WorkflowRunDetail(
-            **_summary(group, subjects),
-            flow=_flow_out(workflow),
-            steps=[
+        agents = [
+            (
+                row.started_at or row.created_at,
                 StepOut(
                     id=str(row.id),
                     kind="agent",
@@ -326,9 +325,24 @@ def _detail(
                     else None,
                     private=bool(definitions.get(row.agent) and definitions[row.agent].private_io),
                     note=None,
-                )
-                for row in group.rows
-            ],
+                ),
+            )
+            for row in group.rows
+        ]
+        system = [
+            StepOut(**step)
+            for step in activity_steps.system_steps(
+                db, user_id, group.workflow, group.key, [row.id for row in group.rows]
+            )
+        ]
+        timed = agents + [(step.started_at, step) for step in system if step.started_at]
+        timed.sort(key=lambda pair: pair[0])
+        # The steps to come last, in the order their run will take them.
+        later = [step for step in system if not step.started_at]
+        return WorkflowRunDetail(
+            **_summary(group, subjects),
+            flow=_flow_out(workflow),
+            steps=[step for _, step in timed] + later,
             input_tokens=sum(tokens_in) if tokens_in else None,
             output_tokens=sum(tokens_out) if tokens_out else None,
             cost_usd=round(sum(costs), 6) if costs else None,

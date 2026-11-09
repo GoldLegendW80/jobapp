@@ -1105,6 +1105,7 @@ describe("the wizard", () => {
     ).toBeVisible();
     expect(runs.sent("POST", "/api/ingestion/runs")[0]?.body).toMatchObject({
       document_ids: ["d1", "d2"],
+      started_from: "onboarding",
     });
     // Every pending item is sent: the server takes what adds or fills an empty place.
     expect(additions.accepted).toEqual([

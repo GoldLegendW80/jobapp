@@ -437,6 +437,12 @@ def test_a_passed_check_lets_the_decision_go_on_and_records_its_spend(
     assert (made.user_id, made.input_tokens, made.output_tokens) == (person_a.user_id, 6_200, 156)
     assert made.cost_usd is not None
     assert made.credential_kind is CredentialKind.anthropic_api_key
+    # Activity: a step of the application's run, which a Like in Full auto triggered
+    assert (made.workflow, made.workflow_run_id, made.workflow_trigger) == (
+        "application",
+        app_id,
+        "like",
+    )
 
     # the hold, then the click: the stored pass is read again before it, no second call
     form = submit_ashby()

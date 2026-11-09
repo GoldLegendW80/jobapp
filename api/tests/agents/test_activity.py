@@ -15,6 +15,9 @@ from app.agents.models import AgentRun, RunStatus
 from app.apply import agent as apply_agent
 from app.apply.models import Mode
 from app.identity.models import User
+from app.ingestion.plan import StepKind
+from app.ingestion.runs_models import IngestionRun, IngestionRunStep, StepStatus
+from app.ingestion.runs_models import RunStatus as IngestionStatus
 from app.jobs import sweep
 from app.jobs.models import SweepTrigger
 from tests.agents.conftest import ALICE, BOB
@@ -197,7 +200,7 @@ RECORDING = {
         ("interview_prep", "practice"),
     },
     "app/documents/offer_notes.py": {("offer_letter", "notes_chat"), ("offer_letter", "offer")},
-    "app/ingestion/engine.py": {("fill_profile", "read")},
+    "app/ingestion/engine.py": {("fill_profile", "read"), ("fill_profile", "onboarding_read")},
     "app/jobs/assess_router.py": {("assess", "assess")},
     "app/jobs/reader.py": {("posting_reading", "backlog")},
     "app/jobs/sweep.py": {
@@ -269,7 +272,7 @@ def test_a_runs_trigger_is_its_first_steps_when_a_later_step_records_none(
 
 
 def test_a_step_joins_the_workflow_run_of_the_run_it_follows_without_its_trigger(
-    factory: sessionmaker[Session],
+    factory: sessionmaker[Session], alice: str
 ) -> None:
     me = _user(factory, ALICE)
     click = uuid.uuid4()
@@ -296,7 +299,9 @@ def _plan(scope: dict[str, Any] | None) -> sweep.Plan:
     return sweep.Plan(uuid.uuid4(), uuid.uuid4(), [], None, None, search_scope=scope)  # type: ignore[arg-type]
 
 
-def test_a_sweeps_agents_record_its_run_with_its_trigger(factory: sessionmaker[Session]) -> None:
+def test_a_sweeps_agents_record_its_run_with_its_trigger(
+    factory: sessionmaker[Session], alice: str
+) -> None:
     by_hand = _plan({"trigger": "manual"})
     assert by_hand.flow == runs.WorkflowRef("job_search", by_hand.sweep_id, "search")
     assert _plan({"trigger": "schedule"}).flow.trigger == "schedule"
@@ -319,3 +324,120 @@ def test_an_applications_agents_record_its_run_a_like_in_full_auto_else_apply() 
     )
     for mode in (Mode.direct, Mode.review, Mode.manual):
         assert apply_agent.application_flow(application, mode).trigger == "apply"
+
+
+def test_a_sweeps_run_shows_the_sweep_and_its_sources_from_their_rows_and_waiting_websites(
+    factory: sessionmaker[Session], api: Api, alice: str, bob: str
+) -> None:
+    me = _user(factory, ALICE)
+    with factory() as db:
+        row = sweep.start(db, me, SweepTrigger.manual, T0)
+        row.stats = {
+            **row.stats,
+            "sources": [
+                {
+                    "source_id": "a",
+                    "kind": "arbeitnow",
+                    "phase": "done",
+                    "outcome": "complete",
+                    "found": 4,
+                },
+                {
+                    "source_id": "b",
+                    "mode": "llm_browser",
+                    "host": "jobs.example.org",
+                    "phase": "running",
+                    "outcome": None,
+                },
+                {
+                    "source_id": "c",
+                    "mode": "llm_browser",
+                    "host": "careers.example.org",
+                    "phase": "pending",
+                    "outcome": "not_attempted",
+                },
+            ],
+            "reading": {"read": 2, "refused": 0, "failed": 0, "left": 1},
+        }
+        db.commit()
+        sweep_id = row.id
+    agent_run = _run(
+        factory,
+        me,
+        "browser_discovery",
+        1,
+        flow=runs.WorkflowRef("job_search", sweep_id, "search"),
+        status=RunStatus.running,
+    )
+    detail = api.get(f"/api/activity/runs/{sweep_id}", token=alice).json()
+    steps = [(s["kind"], s["node"], s["name"], s["status"], s["note"]) for s in detail["steps"]]
+    assert steps == [
+        ("system", "sweep", "Sweep", "running", "2 postings read, 1 left"),
+        ("agent", "browser_discovery", "Website search", "running", None),
+        ("system", "sweep", "arbeitnow", "success", "4 found"),
+        ("system", "browser_discovery", "careers.example.org", "waiting", None),
+    ]
+    assert detail["steps"][1]["id"] == str(agent_run)
+    assert detail["steps"][-1]["started_at"] is None
+    # Another person's sweep id is not found, and its rows are never read.
+    assert api.get(f"/api/activity/runs/{sweep_id}", token=bob).status_code == 404
+
+
+def test_an_ingestion_runs_steps_not_started_show_as_waiting(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    run_id = uuid.uuid4()
+    with factory() as db:
+        db.add(
+            IngestionRun(
+                id=run_id,
+                user_id=me,
+                document_ids=[uuid.uuid4()],
+                base_revision=0,
+                status=IngestionStatus.running,
+                deadline_at=T0 + timedelta(hours=1),
+                estimate_low=1,
+                estimate_high=2,
+                token_ceiling=4,
+                tokens_spent=0,
+                ceiling_history=[],
+                created_at=T0,
+            )
+        )
+        for position, kind in enumerate((StepKind.transcribe, StepKind.extract)):
+            db.add(
+                IngestionRunStep(
+                    ingestion_run_id=run_id,
+                    position=position,
+                    kind=kind,
+                    document_id=uuid.uuid4(),
+                    sha256=b"\0" * 32,
+                    part=None if kind is StepKind.transcribe else 0,
+                    image_positions=[0] if kind is StepKind.transcribe else None,
+                    identity_hash="0" * 64,
+                )
+            )
+        db.commit()
+    _run(
+        factory,
+        me,
+        "document_transcribe",
+        1,
+        flow=runs.WorkflowRef("fill_profile", run_id, "onboarding_read"),
+        status=RunStatus.running,
+    )
+    with factory() as db:
+        db.execute(
+            sa.update(IngestionRunStep)
+            .where(IngestionRunStep.ingestion_run_id == run_id, IngestionRunStep.position == 0)
+            .values(status=StepStatus.running)
+        )
+        db.commit()
+    detail = api.get(f"/api/activity/runs/{run_id}", token=alice).json()
+    assert detail["trigger"]["words"] == "Your click on Build my profile"
+    assert [(s["kind"], s["node"], s["status"]) for s in detail["steps"]] == [
+        ("system", "run", "running"),
+        ("agent", "document_transcribe", "running"),
+        ("system", "profile_extract", "waiting"),
+    ]

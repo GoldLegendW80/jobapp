@@ -6,13 +6,14 @@ import json
 import math
 import random
 import threading
+import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 import sqlalchemy as sa
 
-from app.agents import credentials
+from app.agents import credentials, runs
 from app.agents.models import AgentEvent, CredentialKind
 from app.browser import finder, sources
 from app.browser.client import BrowserError
@@ -142,8 +143,14 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
     )
     backend = Recording()  # after the monkeypatch: the model chooses the saved value
     context = dataclasses.replace(runtime.context(), backend_factory=lambda: backend)
+    flow = runs.WorkflowRef("job_search", uuid.uuid4(), "search")
+
+    def in_a_sweep(plan: SimpleNamespace, _: object) -> SimpleNamespace:
+        plan.flow = flow
+        return plan
+
     entries, _, leases, tools, progress = asyncio.run(
-        execute(selected(), alice, finder.RuntimeFinder(lambda: context))
+        execute(selected(), alice, finder.RuntimeFinder(lambda: context), prepare=in_a_sweep)
     )
     [entry] = entries
     assert entry["source_id"] == sweep._source_id("llm_browser", BASE)
@@ -166,6 +173,8 @@ def test_selected_source_uses_real_runtime_and_keeps_private_scope_out_of_events
     assert leases.released == ["lease-1"]
     [made] = runs_of(runtime.factory, alice)
     assert made.agent == finder.INTERACTIVE_NAME
+    # Activity: the website's agent run is a step of its sweep's run.
+    assert runs.WorkflowRef(made.workflow, made.workflow_run_id, made.workflow_trigger) == flow
     assert made.model == (finder.MODEL if subscription else finder.MODEL_API_KEY)
     # The agent of a website has no token or turn budget (jobs J18): its input is its key.
     assert set(made.input) == {"request"}

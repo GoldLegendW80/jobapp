@@ -717,3 +717,35 @@ def test_deleting_a_document_read_by_a_step_and_one_no_step_has_read(
     assert delete(api, alice, ready[0]).status_code == 204
     assert delete(api, alice, other).status_code == 204
     assert sorted(str(one.id) for one in rows(factory)) == sorted(ready[1:])
+
+
+@pytest.mark.parametrize(
+    ("started_from", "trigger"), [(None, "read"), ("onboarding", "onboarding_read")]
+)
+def test_a_run_onboarding_started_records_its_own_trigger_on_its_agent_runs(
+    factory: sessionmaker[Session],
+    api: Api,
+    alice: str,
+    ready: list[str],
+    started_from: str | None,
+    trigger: str,
+) -> None:
+    more = {"started_from": started_from} if started_from else {}
+    response = start(api, alice, ready, **more)
+    assert response.status_code == 201, response.text
+    run_id = uuid.UUID(response.json()["id"])
+    with factory() as db:
+        assert db.get(IngestionRun, run_id).started_from == started_from  # type: ignore[union-attr]
+        recorded = db.execute(
+            sa.select(AgentRun.workflow, AgentRun.workflow_run_id, AgentRun.workflow_trigger)
+        ).all()
+    assert recorded
+    assert set(recorded) == {("fill_profile", run_id, trigger)}
+
+
+def test_a_start_from_anywhere_but_onboarding_answers_422(
+    factory: sessionmaker[Session], api: Api, alice: str, ready: list[str]
+) -> None:
+    response = start(api, alice, ready, started_from="settings")
+    assert response.status_code == 422
+    assert runs(factory) == 0

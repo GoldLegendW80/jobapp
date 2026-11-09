@@ -235,6 +235,7 @@ TRIGGERS: dict[str, Trigger] = {
     "prepare": Trigger("Your click on Prepare", "prepare"),
     "practice": Trigger("Your practice message", "practice"),
     "read": Trigger("Your click on Start reading", "read"),
+    "onboarding_read": Trigger("Your click on Build my profile", "read"),
     "about": Trigger("Done on a part of About you", "about"),
     "ideas": Trigger("Your click on More ideas", "ideas"),
     "titles_tick": Trigger("The titles tick, after a profile change", "titles_tick"),

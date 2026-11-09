@@ -47,6 +47,7 @@ from tests.documents.writer_support import (
     execute,
     give_cv_text,
     person,
+    run_row,
     start,
     start_letter,
 )
@@ -126,6 +127,17 @@ def test_a_cv_goes_through_the_whole_panel_on_the_runtime_then_its_letter_starts
     ]
     assert (found.reviewed_version, found.rebuilt_version) == (1, 2)
     assert len(found.run_ids) == len(panel.ROLES) + 3  # the merge, the rebuild, the screen again
+    # Activity: every agent of the panel joins the writer's run, without a trigger of its own.
+    writer = run_row(factory, run)
+    with factory() as db:
+        joined = db.execute(
+            sa.select(AgentRun.workflow, AgentRun.workflow_run_id, AgentRun.workflow_trigger).where(
+                AgentRun.agent.like("documents_panel_%")
+            )
+        ).all()
+    assert len(joined) >= len(panel.ROLES)
+    assert set(joined) == {(writer.workflow, writer.workflow_run_id, None)}
+    assert writer.workflow == "posting_documents"
 
     first, rebuilt = versions_of(factory, document)
     assert (first.origin, rebuilt.origin) == (Origin.generated, Origin.panel)
