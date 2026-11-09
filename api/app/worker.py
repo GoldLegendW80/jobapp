@@ -28,10 +28,11 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
   the queue. The apply fill's answer agent (`apply_answer`) is not counted: it runs inside the
   fill, in this process, one fill per slot of the one person's browser, a website's finder
-  likewise, so the worker holds at most four Claude Code processes (about 145 MiB plus 4 x 240
-  MiB measured in A2 and A5, within the 1536m limit; two browsers at once, 2026-11-06, not
-  measured on the Jetson yet). Tried once: a run whose worker died is never started again behind the
-  user's back.
+  likewise, so the worker holds at most four Claude Code processes, five with a sweep's posting
+  reading run (one for the whole worker, reader.SWEEP_READS_AT_ONCE): about 145 MiB plus 5 x 240
+  MiB measured in A2 and A5, within the 1536m limit (two browsers at once, 2026-11-06, and the
+  reading, 2026-11-09, not measured on the Jetson yet). Tried once: a run whose worker died is
+  never started again behind the user's back.
 - apply_decide(application_id): the decision of one `ready` Full auto item, its check by model
   (`apply_check`, one agent run in this process) first (apply A13c, app/apply/submit.py
   `decision`), queued by the apply tick. Here, not on the apply queue, so a call of up to 120 s

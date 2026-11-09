@@ -1,9 +1,12 @@
 """The posting reader (app/jobs/reader.py, reader_tools.py; jobs J19, issue #764), against real
 Postgres: the words, quotes and cut tables; what a save stores, drops and keeps (hand set
-fields, duplicates, the VIE website's contract, the fit again); a sweep that reads the postings
-it stored with the fake agent backend, one without a credential, one out of time; the backlog
-read once, given up after three attempts, never during the person's sweep. Postings, employers
-and places are invented."""
+fields, duplicates, the VIE website's contract, the fit again, a text not shown whole never
+cut); a save in a fresh worker registers no agent; a sweep that reads the postings it stored
+with the fake agent backend, one without a credential, one out of time, one stopped by a
+provider failure, two sharing the worker's one reading slot; the backlog read once, given up
+after three attempts failed for their own content, an attempt given back for any other
+failure, a pause after one, never during the person's sweep. Postings, employers and places
+are invented."""
 
 import asyncio
 import dataclasses
