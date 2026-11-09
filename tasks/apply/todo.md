@@ -30,7 +30,7 @@ Task ids use the prefix `A`. Branches are `apply/a<n>-<slug>`. Every block's iss
 - Company caps are the person's own entries (the owner enters the two he knows); the pace per ATS host is global (one submission every 3 minutes, 20 a day; LinkedIn's own pace, one every 10 minutes and 15 a day) because every person shares the Jetson's address.
 - Screenshots: "before" and "after" kept as long as the application; step and error images 30 days.
 - Full auto's rehearsals and every `dry_run` go through the whole gate and stop before the click.
-- Documents never block (their decision): apply stores the fit and the corrections of the versions it sends and shows them; only Full auto uses them (an overflowing version or a non empty `corrections` goes to the review queue). The freeze (`documents.freeze`) is called in the transaction that records the submission, after the click, never at the decision, and never refuses; `submit_unknown` freezes the sent versions too, since the files may have been received.
+- Documents never block (their decision): apply stores the fit and the corrections of the versions it sends and shows them; only Review first's queue card asks a look at them; Full auto and one click Apply send them as they are (A21, owner 2026-11-09). The freeze (`documents.freeze`) is called in the transaction that records the submission, after the click, never at the decision, and never refuses; `submit_unknown` freezes the sent versions too, since the files may have been received.
 - A migration chains on the head of `main` when it merges; the orchestrator renumbers it if another module merged first (the rule of documents' D5 and mail's N9). The numbers 0017 and 0018 below are the expected ones, not fixed ones.
 
 ## Who owns which shared file
