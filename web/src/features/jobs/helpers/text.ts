@@ -59,6 +59,8 @@ const FIELD_LABELS: Record<string, string> = {
   pay_max: "pay",
   pay_currency: "pay",
   pay_period: "pay",
+  published_on: "published date",
+  description: "description",
 };
 
 /** One line for an event of the timeline. */
@@ -75,7 +77,9 @@ export function describeEvent(
           ? " (rescore)"
           : data.via === "agent"
             ? " (agent proposal accepted)"
-            : "";
+            : data.via === "reader"
+              ? " (posting read)"
+              : "";
   switch (kind) {
     case "created":
       return data.via === "import" ? "Imported" : "Added";
@@ -105,6 +109,10 @@ export function describeEvent(
               ),
             ]
           : [];
+      if (data.via === "reader")
+        return names.length
+          ? `Read the posting and set the ${names.join(", ")}`
+          : "Read the posting";
       return names.length ? `Edited the ${names.join(", ")}` : "Edited";
     }
     case "import":

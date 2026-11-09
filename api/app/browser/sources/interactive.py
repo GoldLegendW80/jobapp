@@ -69,6 +69,7 @@ from urllib.parse import urlsplit
 from app.browser import finder
 from app.browser.client import BrowserError, held_in
 from app.browser.leases import StoreUnavailableError
+from app.browser.nature import nature_contract
 from app.browser.sources import (
     ERRORS,
     PAGE_BUDGET_S,
@@ -78,7 +79,6 @@ from app.browser.sources import (
 )
 from app.jobs import sweep
 from app.jobs.importer import kind
-from app.jobs.models import ContractType
 from app.jobs.schemas import SEARCHES_LISTED
 from app.profile import matching
 from app.profile.plain_terms import typed_words
@@ -224,25 +224,6 @@ class Searches:
     places_left_out: int = 0
     # The contract every posting of the website has by nature (`nature_contract`, B21).
     nature: str | None = None
-
-
-# Job websites whose every posting has one contract by nature (B21, owner 2026-11-04), by the
-# start's exact host: the VIE website (`mon-vie-via.businessfrance.fr`, whose postings `kind`
-# reads as VIE from their address), and its stand in for the tests on `.test`, a name reserved
-# by RFC 6761 that is never a public host. Ticking one is the person's choice of that contract,
-# so its postings are never dropped as of another contract.
-NATURE_CONTRACTS = {
-    "mon-vie-via.businessfrance.fr": ContractType.VIE.value,
-    "mon-vie-via.businessfrance.test": ContractType.VIE.value,
-}
-
-
-def nature_contract(start: str) -> str | None:
-    """The contract a website's postings have by nature, read from its start address."""
-    try:
-        return NATURE_CONTRACTS.get((urlsplit(start).hostname or "").rstrip("."))
-    except ValueError:
-        return None
 
 
 def _carried(

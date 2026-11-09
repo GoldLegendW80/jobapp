@@ -1,0 +1,189 @@
+{
+ "description": "The posting reader (jobs J19): reads the postings of its run and saves the facts of posting 0, shaped as the VIE website's example of issue #764 (invented): its location, monthly pay, published date, company and description, a contract its website fixes, and a work mode whose quote is not in the text; the default stream.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000701",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__read_postings",
+     "mcp__app__save_posting_facts"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000701",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_reader_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_reader_01",
+       "name": "mcp__app__read_postings",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 200,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000702",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_reader_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_reader_02",
+       "name": "mcp__app__save_posting_facts",
+       "input": {
+        "index": 0,
+        "location": {
+         "value": "Barcelona, Spain",
+         "quote": "ESPAGNE (BARCELONE)"
+        },
+        "pay": {
+         "min": 2689,
+         "max": 2689,
+         "currency": "EUR",
+         "period": "month",
+         "quote": "REMUNERATION MENSUELLE : 2688.86 €"
+        },
+        "published_on": {
+         "value": "2026-10-20",
+         "quote": "Publiée le 20/10/2026"
+        },
+        "company": {
+         "value": "Exemple Robotique Iberica",
+         "quote": "d'Exemple Robotique Iberica"
+        },
+        "contract_type": {
+         "value": "CDD",
+         "quote": "Durée : 12 mois"
+        },
+        "work_mode": {
+         "value": "remote",
+         "quote": "Full remote from anywhere"
+        },
+        "description": {
+         "start": "Description de la mission Au sein",
+         "end": "MENSUELLE : 2688.86 € Télétravail : Oui"
+        }
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 200,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000703",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_reader_3",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Postings saved."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 200,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 2400,
+    "duration_api_ms": 2100,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000007ff",
+    "result": "Postings saved.",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0389,
+    "usage": {
+     "input_tokens": 17300,
+     "output_tokens": 428,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "modelUsage": {
+     "{model}": {
+      "inputTokens": 17300,
+      "outputTokens": 428,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.0389,
+      "contextWindow": 200000
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

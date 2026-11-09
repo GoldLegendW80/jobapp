@@ -144,6 +144,26 @@ describe("describeEvent", () => {
       "Edited the company, contract type, link",
     ],
     ["edit", {}, "Edited"],
+    [
+      "edit",
+      {
+        via: "reader",
+        changes: {
+          location: {},
+          pay_min: {},
+          pay_max: {},
+          published_on: {},
+          description: {},
+        },
+      },
+      "Read the posting and set the location, pay, published date, description",
+    ],
+    ["edit", { via: "reader", changes: {} }, "Read the posting"],
+    [
+      "fit",
+      { from: 60, to: 72, manual: false, via: "reader" },
+      "Fit changed from 60 to 72 (posting read)",
+    ],
     ["import", { changed: ["notes"] }, "Updated by an import"],
     ["brand_new", {}, "Brand new"],
   ])("%s %j", (kind, data, text) => {

@@ -718,6 +718,7 @@ def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
             "echo",
             "job_chat",
             "jobs_assess",
+            "posting_reader",
             "profile_interpret",
             "profile_titles",
             "triage",

@@ -19,7 +19,9 @@ One sweep, `run_sweep(sweep_id)`:
    hook (app/browser/sources, `Runner.websites`) runs every ticked website through the
    interactive finder (app/browser/finder.py), one website after the other, as long as they
    take (B20, owner 2026-11-04): only BROWSER_SEARCH_MAX_S from the sweep's start, the guard
-   against a dead process below arq's own timeout, and the run's Cancel end them. A hook that
+   against a dead process below arq's own timeout, and the run's Cancel end them. Then the
+   postings this sweep stored are read by the posting reader (app/jobs/reader.py, jobs J19) within
+   its own bound, its failures never the sweep's. A hook that
    raises ends alone (logged, each one): the others run to their end, then the
    sweep fails as it did when that hook ran alone, and the websites do not start. A commit that
    does not settle lets go of the row (`Commits.unsettled`): the others stop at their next page,
@@ -390,6 +392,9 @@ class Stats:
     schedule_slot: str | None = None
     # One entry per frozen selected source; pre-v1 rows retain reader-only entries.
     sources: list[dict[str, Any]] = field(default_factory=list)
+    # The reading of the postings this sweep stored (jobs J19, reader.SweepReader): read,
+    # refused, failed, left, and why it stopped (`skipped`); empty when nothing was to read.
+    reading: dict[str, Any] = field(default_factory=dict)
 
     def as_json(self) -> dict[str, Any]:
         return asdict(self)
@@ -818,6 +823,9 @@ Clock = Callable[[], datetime]
 # sweep's monotonic deadline. It stores what it finds through `plan.commits`.
 BrowserHook = Callable[[Plan, Stats, Callable[[], Awaitable[None]], float], Awaitable[None]]
 FeedHook = BrowserHook
+# The reading of the postings the sweep stored (app/jobs/reader.py `SweepReader`), once every
+# source ended: given the plan, the stats and the sweep's monotonic deadline.
+ReaderHook = Callable[[Plan, Stats, float], Awaitable[None]]
 
 # How many big answers a sweep parses at once (`parse_one`).
 PARSES_AT_ONCE = 1
@@ -860,11 +868,13 @@ async def run_sweep(
     alerts: BrowserHook | None = None,
     feeds: FeedHook | None = None,
     apis: Sequence[BrowserHook | None] = (),
+    reader: ReaderHook | None = None,
 ) -> None:
     """Run one sweep to its end (module docstring): `alerts`, `feeds` and the `apis` side by
     side within `timeout_s` of the start, then `browser` until `browser_s` from the start (B20:
-    no time cap of its own). Never raises for a website's failure; any other error fails the
-    sweep and is re-raised only for cancellation."""
+    no time cap of its own), then `reader` on the postings stored, within its own bound. Never
+    raises for a website's failure nor for the reading; any other error fails the sweep and is
+    re-raised only for cancellation."""
     plan = await asyncio.to_thread(claim, sessions, sweep_id, clock())
     if plan is None:
         return
@@ -909,6 +919,8 @@ async def run_sweep(
                 # website starts.
                 if browser is not None and not commits.unsettled:
                     await browser(plan, stats, progress, started + browser_s)
+                if reader is not None and not commits.unsettled:
+                    await _read_postings(reader, plan, stats, started + browser_s)
             finally:
                 beating.cancel()
         stats.duration = round(time.monotonic() - started, 2)
@@ -978,6 +990,18 @@ async def _side_by_side(
                 group.create_task(one(hook))
     if errors:
         raise errors[0]
+
+
+async def _read_postings(reader: ReaderHook, plan: Plan, stats: Stats, deadline: float) -> None:
+    """The reading phase (jobs J19): what it raises is logged and ends it alone, so a sweep never
+    fails because of it; the postings it did not read stay for the backlog."""
+    try:
+        await reader(plan, stats, deadline)
+    except Exception as error:
+        logger.warning(
+            "sweep reading failed",
+            extra={"sweep_id": str(plan.sweep_id), "error_type": type(error).__name__},
+        )
 
 
 def _hook_name(hook: BrowserHook) -> str:
