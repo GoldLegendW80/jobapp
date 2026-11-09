@@ -549,8 +549,8 @@ def test_a_lease_of_900_seconds_in_the_api_copy_does_not_cut_the_search():
 
 
 @pytest.mark.parametrize("kind", list(CredentialKind))
-@pytest.mark.parametrize("definition", [finder.BROWSER_FINDER, finder.INTERACTIVE_FINDER])
-def test_both_search_agents_run_sonnet_for_every_credential_kind(kind, definition):
+def test_the_search_agent_runs_sonnet_for_every_credential_kind(kind):
+    definition = finder.INTERACTIVE_FINDER
     assert definition.model == "claude-sonnet-5-5"
     assert definition.model_for(kind) == "claude-sonnet-5-5"
     assert definition.model_for(None) == "claude-sonnet-5-5"

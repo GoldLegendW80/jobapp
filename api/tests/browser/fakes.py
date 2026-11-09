@@ -50,18 +50,6 @@ class FakeTools:
         return {"ok": True, "url": self.current, "snapshot": self.pages[self.current]}
 
 
-class RedirectTools(FakeTools):
-    """FakeTools whose pages end on another address: `moved` maps a requested URL to it."""
-
-    def __init__(self, pages_: dict[str, str], moved: dict[str, str]) -> None:
-        super().__init__(pages_)
-        self.moved = moved
-
-    async def snapshot(self) -> dict[str, Any]:
-        done = await super().snapshot()
-        return done | {"url": self.moved.get(self.current, self.current)}
-
-
 class FakeLeases:
     """The lease store of one person's sweep: `slots` leases at once (BROWSER_SLOTS 1 by default,
     the websites one after the other as the tests sharing one fake page expect), else a place

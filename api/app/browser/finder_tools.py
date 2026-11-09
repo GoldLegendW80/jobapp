@@ -1,10 +1,10 @@
-"""The tools of the finder agent (app/browser/finder.py), registered with
+"""The tools of the search agent (app/browser/finder.py), registered with
 `app.agents.tools.register` (worker only: this module imports the Claude Agent SDK). What each
 acts on is the session of the run it is bound to (`Scope.run_id`), which `RuntimeFinder` holds
 while that run lasts; a run without a session is answered with an error and nothing is touched.
 The browser tools are shared with One click Apply's agent (apply A19, `app/apply/applier.py`):
 `tool_sessions.session_of` finds that run's session, which answers the same methods; the
-reports are the finder's only.
+reports are the search agent's only.
 """
 
 from __future__ import annotations
@@ -221,5 +221,5 @@ def _factory(name: str) -> app_tools.Factory:
     return make
 
 
-for _name in dict.fromkeys((*finder.TOOLS, *finder.INTERACTIVE_TOOLS)):
+for _name in finder.INTERACTIVE_TOOLS:
     app_tools.register(_name, _factory(_name))

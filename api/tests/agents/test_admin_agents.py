@@ -193,7 +193,6 @@ def test_every_registered_agent_has_a_category_from_the_fixed_list() -> None:
     assert set(catalog.CATEGORY_OF) <= set(agents), "a category names an agent that is gone"
     expected = {
         "browser_discovery": "finding",
-        "browser_finder": "finding",
         "apply_form": "applying",
         "apply_answer": "applying",
         "apply_check": "applying",
@@ -694,8 +693,7 @@ def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
         "apply_check": agents["apply_decide"] - margin,
         "apply_form": form_agent.APPLY_FORM.wall_time_s,  # the fill's form deadline
         "apply_answer": leases.LEASE_MAX_S["apply_fill"],  # the fill's browser lease
-        "browser_finder": sweep.BROWSER_SEARCH_MAX_S,  # the sweep's own bound
-        "browser_discovery": sweep.BROWSER_SEARCH_MAX_S,
+        "browser_discovery": sweep.BROWSER_SEARCH_MAX_S,  # the sweep's own bound
         "profile_extract": engine.RUN_TIME.total_seconds(),  # the ingestion run's deadline
         "document_transcribe": engine.RUN_TIME.total_seconds(),
     }
@@ -873,6 +871,37 @@ def test_the_recent_runs_name_the_person_of_each_run_to_an_admin_only(
     refused = api.get(f"{AGENTS}/echo", token=member)
     assert refused.status_code == 404
     assert "e2e-other@example.org" not in refused.text
+
+
+def test_a_stored_run_of_a_removed_agent_still_shows_and_the_tab_does_not_fail_on_it(
+    api: Api, admin: str, factory: sessionmaker[Session]
+) -> None:
+    """Browser B22 removed `browser_finder`: its runs stay in the database, the person's run
+    history lists and opens them, and the Agents tab no longer lists it nor fails on them."""
+    with factory() as db:
+        ada = db.scalars(sa.select(User.id).where(User.email == "e2e-admin@example.org")).one()
+    gone = new_run(factory, ada, data={"request": "0" * 32}, agent="browser_finder")
+    with factory() as db, db.begin():
+        db.execute(
+            sa.update(AgentRun)
+            .where(AgentRun.id == gone)
+            .values(status=RunStatus.done, started_at=now(), finished_at=now())
+        )
+    assert "browser_finder" not in catalog.load()
+    history = api.get("/api/agents/runs", token=admin)
+    assert history.status_code == 200, history.text
+    assert [(r["id"], r["agent"]) for r in history.json()["items"]] == [
+        (str(gone), "browser_finder")
+    ]
+    one = api.get(f"/api/agents/runs/{gone}", token=admin)
+    assert one.status_code == 200, one.text
+    assert (one.json()["agent"], one.json()["status"]) == ("browser_finder", "done")
+    listed = api.get(AGENTS, token=admin)
+    assert listed.status_code == 200, listed.text
+    assert "browser_finder" not in [item["name"] for item in listed.json()["items"]]
+    page = api.get(f"{AGENTS}/browser_finder", token=admin)
+    assert page.status_code == 404
+    assert page.json()["detail"] == "No agent has this name."
 
 
 def _run_echo(

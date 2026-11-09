@@ -104,10 +104,9 @@ def test_a_website_s_run_has_no_turn_token_or_time_cap(
     alice,  # noqa: F811
 ):
     """Jobs J18, owner 2026-10-27 "no limit", and B20, owner 2026-11-04 "as long as it takes":
-    the runtime's max_turns of the agent of a website is the raised ceiling, not the 40 of a
-    careers page, its input carries no token budget (the runner sets none), its wall time is the
-    sweep job's outer bound of a day, and its first message holds every saved title and place
-    and no seconds left."""
+    the runtime's max_turns of the agent of a website is the raised ceiling, its input carries no
+    token budget (the runner sets none), its wall time is the sweep job's outer bound of a day,
+    and its first message holds every saved title and place and no seconds left."""
     from tests.browser.runtime_support import runs_of
 
     runtime.give_key(alice)
@@ -129,7 +128,6 @@ def test_a_website_s_run_has_no_turn_token_or_time_cap(
     assert backend.max_turns == finder.INTERACTIVE_MAX_TURNS == 10_000
     assert finder.INTERACTIVE_FINDER.max_turns == finder.INTERACTIVE_MAX_TURNS
     assert finder.INTERACTIVE_FINDER.wall_time_s == finder.INTERACTIVE_WALL_TIME_S == 86_400
-    assert finder.BROWSER_FINDER.max_turns == finder.MAX_TURNS == 40  # a careers page keeps it
     first = json.loads(backend.prompt)["search_scope"]
     assert (first["titles"], first["places"], first["filters"]) == (["robot"], [], {"remote": "1"})
     assert "seconds_left" not in first  # no time cap to tell (B20)
@@ -142,11 +140,10 @@ def test_a_website_s_run_has_no_turn_token_or_time_cap(
     assert {"apply_form"} == runner.TURN_BUDGETED  # no input lowers this agent's max_turns
 
 
-def test_scope_is_immutable_and_legacy_tools_and_model_schemas_stay_restricted():
+def test_scope_is_immutable_and_model_schemas_stay_restricted():
     scope = finder.InteractiveScope(BASE, ("robot",), (), (("remote", "1"),))
     with pytest.raises(dataclasses.FrozenInstanceError):
         scope.titles = ("different",)
-    assert "browser_click" not in finder.BROWSER_FINDER.tools
     for name in finder.INTERACTIVE_TOOLS:
         assert "_discovery" not in finder_tools.SCHEMAS[name]["properties"]
         assert "_discovery_scope" not in finder_tools.SCHEMAS[name]["properties"]

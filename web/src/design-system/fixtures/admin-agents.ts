@@ -14,8 +14,7 @@ export const AGENT_CATEGORIES: AgentCategory[] = [
   {
     key: "finding",
     title: "Finding jobs",
-    sentence:
-      "These agents search job websites and company careers pages for postings.",
+    sentence: "These agents search job websites for postings.",
   },
   {
     key: "applying",
@@ -187,7 +186,7 @@ const SAVED: Partial<Editable> = {
 export const AGENT_PAGE: AgentPage = {
   name: "browser_discovery",
   module: "app.browser.finder",
-  starter: "A job search sweep, one website or careers page at a time",
+  starter: "A job search sweep, one run per website",
   flags: [
     "Private: its inputs and outputs are never stored, only their sizes and counts.",
     "Internal: started by the app itself, never by a person.",
