@@ -23,7 +23,8 @@ jobs(id uuid pk, user_id fk users cascade, slug text, company text, title text, 
      fit int null, fit_overridden bool, competencies text[], gaps text[], description text,
      posting_text text, published_on date null, found_on date, applied_on date null,
      notes text, legacy jsonb (unmapped CSV columns), signals jsonb null, text_fingerprint bigint null,
-     closes_on date null, created_at, updated_at,
+     closes_on date null, read_at timestamptz null, read_attempts smallint (the posting reader, below),
+     created_at, updated_at,
 
      notes text, legacy jsonb (unmapped CSV columns), liveness jsonb null (the last check of its
      address, [Liveness](#liveness-owner-2026-11-07)), created_at, updated_at,
@@ -68,6 +69,18 @@ A sweep reads the ticked alert e-mails ([SPEC-mail, "Job alert e-mails: a narrow
 - Runs in the `worker` container (first use of Redis as a queue, with RQ or arq; the choice is recorded in the plan), one sweep per user at a time, progress visible in the UI ("Websites searched": a website counts once its phase is done), a summary at the end.
 - Automatic sweeps per user, off by default: the user turns them on and picks weekdays, one to four local times and a time zone (`search.sweep_schedule`); a worker tick every 5 minutes starts each due slot once, daylight saving time handled.
 - `never_apply` rules from the profile mark matching rows `skipped` with the rule as the note. They are the person's own rules only: the app adds no rule of its own about a kind of role (owner, 2026-11-05). Sweeps and apply share `jobs/never_apply.py`: accents, case, compatibility forms, hidden characters and lookalike letters are folded, and a term at the start or end of a glued word also matches. The original title, company and rule note stay unchanged.
+
+## Posting reader (owner, 2026-11-09, #764)
+
+An agent reads each posting's text and fills its location, pay (min, max, currency, period), work mode, contract type, published date, company and a clean description (owner: "I want that it's an agent that create the jobs in the database"; [decisions](docs/decisions.md#interactive-job-search-2026-10-24-626)). Every source's postings are read (job websites, company boards, feeds, LinkedIn, alert e-mails).
+
+- The agent `posting_reader` (`api/app/jobs/reader.py`, its prompt `prompts/reader.md`, its tools `reader_tools.py`) runs on the agents runtime as the ingestion agents do: internal, bound in code to at most 10 postings of one person (their ids in the run's input, checked to be hers and to hold a text), private (events hold tool names and sizes, never a value), on `claude-sonnet-5-5` for both kinds of credential. `read_postings` returns the bound postings by index with their text (at most 15,000 characters each) and the fields set by hand; `save_posting_facts` saves one posting's facts and takes an index, never an id.
+- Grounding: each value comes with a quote of the posting text, found in it as the finder compares words (case, accents, spacing and punctuation aside); a value whose quote is not there is dropped and counted, never stored. Checks: a location of one line and at most 300 characters, a company of at most 200, the work mode and contract type of their enums, a published date in ISO form from 2000 to the day of the read, a pay of whole numbers (cents rounded by the agent) that `pay.stated_pay` accepts with a quote holding a digit.
+- Clean description: the agent gives the first and last words (3 to 30) of the posting's own text; the text is cut from the first match of the first to the last match of the last after it, and a cut under 300 characters is refused. The cut becomes the posting text, its first 300 characters the description, and the fit is computed again as a rescore does, a fit set by hand kept.
+- Kept as they are: a field named in an `edit` event of Edit details (the four pay columns as one); a company or location that would make the posting the same as another of the person's; the contract of a website whose every posting has one by nature (the VIE website, B21). The reader writes what it changed as one `edit` event with `"via": "reader"` (History: "Read the posting and set the ..."), which never counts as set by hand, and `read_at`.
+- During the sweep: once every source ended, the postings it stored are read in batches, two runs at once in the sweep's own job (never on the agents queue), within 10 minutes and a minute before the sweep's own bound. Postings not read by then stay for the backlog; the reading never fails a sweep, and without a credential it is skipped at once. `stats.reading` counts read, refused (values dropped), failed and left.
+- The backlog: a cron of the agents queue each minute starts one run of up to 10 saved postings not read yet as its own `run_agent` job, one such run at a time for the whole app, for a person with a credential, no reading run and no sweep running, the person whose last reading is the oldest first. Each run given a posting counts an attempt; after 3 the posting is no longer read. A posting without text is never read. Existing rows start unread (migration 0047), so every saved posting is read once.
+- The code readers (`opportunities/pay.py`, the finder's labels and claims, `work_mode_of`) stay as they are: they give the first values when a posting is stored and remain when no reader runs.
 
 ## Job feeds (2026-10-30)
 
