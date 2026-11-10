@@ -82,7 +82,7 @@ from app.agents import credentials, definitions, runs
 from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.documents import brief as briefs
 from app.documents import content as c
-from app.documents import estimate, panel_hold, store
+from app.documents import estimate, flows, panel_hold, store
 from app.documents.models import (
     Document,
     DocumentGeneration,
@@ -568,6 +568,12 @@ def _stopped(db: Session, run_id: uuid.UUID) -> str:
     return "cancelled" if row.status is RunStatus.cancelled else "error"
 
 
+def _writer_run(db: Session, panel_id: uuid.UUID | None) -> uuid.UUID | None:
+    if panel_id is None:
+        return None
+    return db.scalar(sa.select(DocumentPanel.source_run_id).where(DocumentPanel.id == panel_id))
+
+
 @dataclass
 class RuntimeCall:
     """`Call` on the agents runtime: one run of the named agent, executed in this process (the
@@ -578,6 +584,8 @@ class RuntimeCall:
     context: Any
     scripts: dict[str, str | list[str]] = field(default_factory=dict)
     _calls: dict[str, int] = field(default_factory=dict)
+    # The panel its runs review for: they join its writer run's workflow run (Activity, A10).
+    panel_id: uuid.UUID | None = None
 
     def _script(self, agent: str) -> str | None:
         found = self.scripts.get(agent)
@@ -607,6 +615,7 @@ class RuntimeCall:
                     data.model_dump(exclude_none=True),
                     MODEL,
                     context.clock(),
+                    flow=runs.joining(db, _writer_run(db, self.panel_id)),
                 )
             except runs.ActiveRunsError:
                 return "busy"
@@ -1048,13 +1057,17 @@ def _start_rebuild(
         )
     except store.GenerationOpenError:
         return "rebuild_busy"
+    base = document.scope == Scope.base
+    flow = flows.panel_flow(db, base, loaded.source_run_id)
     try:
-        if document.scope == Scope.base:
+        if base:
             run = writer_base.start(
-                db, generation, at=at, script=script, settings=settings, panel=key
+                db, generation, at=at, script=script, settings=settings, panel=key, flow=flow
             )
         else:
-            run = generate.start(db, generation, at=at, script=script, settings=settings, panel=key)
+            run = generate.start(
+                db, generation, at=at, script=script, settings=settings, panel=key, flow=flow
+            )
     except runs.ActiveRunsError:
         generation.status = GenerationStatus.cancelled
         generation.finished_at = at
@@ -1516,7 +1529,7 @@ async def job(
         await generate._send(context, send, "documents.panel.not_queued", panel_id=str(turn))
 
     steps = Steps(
-        call=RuntimeCall(context, dict(scripts or {})),
+        call=RuntimeCall(context, dict(scripts or {}), panel_id=panel_id),
         execute=execute,
         sessions=context.sessions,
         clock=context.clock,

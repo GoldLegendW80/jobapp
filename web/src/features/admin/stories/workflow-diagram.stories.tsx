@@ -4,7 +4,10 @@ import { userEvent, within } from "storybook/test";
 import { AGENT_FLOWS } from "@/design-system/fixtures/agent-flows";
 import { withApp } from "@/design-system/with-app";
 
-import { WorkflowDiagram, type NodeRun } from "../components/workflow-diagram";
+import {
+  WorkflowDiagram,
+  type NodeRun,
+} from "@/components/shared/agents/workflow-diagram";
 
 const meta = {
   title: "Pages/Admin/Workflow diagram",

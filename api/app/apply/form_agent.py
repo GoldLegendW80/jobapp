@@ -150,6 +150,7 @@ class FormSession:
     signin_over: bool = False  # a wall the run stops at: a hand off not signed in, or a refusal
     deadline: float | None = None  # on `clock`: the end of the run's wall time
     clock: Callable[[], float] = time.monotonic
+    flow: runs.WorkflowRef | None = None  # its run in Activity (agents A10)
 
     async def prefill(self) -> None:
         """With no credential, fill this visible step using the shared source resolver.
@@ -482,7 +483,9 @@ class RuntimeFormAgent:
             if credentials.get(db, user_id) is None:
                 return "no_credential"
             try:
-                made = runs.create_run(db, user_id, NAME, None, data, MODEL, context.clock())
+                made = runs.create_run(
+                    db, user_id, NAME, None, data, MODEL, context.clock(), session.flow
+                )
             except runs.ActiveRunsError:
                 return "busy"
             return made.id

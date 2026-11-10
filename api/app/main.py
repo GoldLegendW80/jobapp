@@ -14,8 +14,8 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
 
 from app import health
+from app.agents import activity_router, chat_router, proposals_router, token_check
 from app.agents import admin_router as agents_admin_router
-from app.agents import chat_router, proposals_router, token_check
 from app.agents import router as agents_router
 from app.agents import runs_router as agent_runs_router
 from app.agents.crypto import Keyring
@@ -322,6 +322,7 @@ def create_app(
     app.include_router(jobs_router)
     app.include_router(jobs_assess_router)
     app.include_router(agents_router.router)
+    app.include_router(activity_router.router)
     app.include_router(agent_runs_router.router)
     app.include_router(proposals_router.router)
     app.include_router(chat_router.router)

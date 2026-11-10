@@ -1,4 +1,5 @@
 import {
+  Activity,
   Briefcase,
   Compass,
   Send,
@@ -19,4 +20,5 @@ export const MAIN_TABS: readonly {
   { to: "/discover", label: "Discover", icon: Compass },
   { to: "/applications", label: "Applications", icon: Send, counts: true },
   { to: "/profile", label: "Profile", icon: UserRound },
+  { to: "/activity", label: "Activity", icon: Activity },
 ];

@@ -280,7 +280,9 @@ class RuntimeAnswerAgent:
             if credentials.get(db, user_id) is None:
                 return "no_credential"
             try:
-                made = runs.create_run(db, user_id, NAME, None, data, MODEL, context.clock())
+                made = runs.create_run(
+                    db, user_id, NAME, None, data, MODEL, context.clock(), request.flow
+                )
             except runs.ActiveRunsError:
                 return "busy"
             return made.id

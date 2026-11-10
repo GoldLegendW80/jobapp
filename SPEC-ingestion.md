@@ -62,6 +62,7 @@ ingestion_runs(id uuid, user_id fk cascade, document_ids uuid[] (1 to 30), base_
                estimate_low bigint, estimate_high bigint, token_ceiling bigint,
                tokens_spent bigint, ceiling_history jsonb,
                created_at, finished_at null,
+               started_from text null (onboarding, 0049: Activity's trigger),
                unique(user_id) where status in (running, paused),
                index(user_id, created_at))
 ingestion_run_steps(id uuid, ingestion_run_id fk cascade, position int,

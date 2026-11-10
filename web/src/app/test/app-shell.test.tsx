@@ -8,7 +8,7 @@ import { phoneScreen } from "@/test/media";
 import { renderApp } from "@/test/render";
 import { server } from "@/test/server";
 
-const TABS = ["Jobs", "Discover", "Applications", "Profile"];
+const TABS = ["Jobs", "Discover", "Applications", "Profile", "Activity"];
 
 const mainNav = () => screen.getByRole("navigation", { name: "Main" });
 const tabs = () =>
@@ -43,31 +43,36 @@ describe("the shell on a wide screen", () => {
     ).toBe("");
   });
 
-  it("has Activity in the account menu, and Admin in the header, not in the menu", async () => {
+  it("has Activity in the main navigation, not in the account menu, and Admin in the header", async () => {
     fakeSession(admin);
     const user = userEvent.setup();
     await openJobs();
     expect(
       within(mainNav()).getByRole("link", { name: "Admin" }),
     ).toHaveAttribute("href", "/admin/users");
+    expect(
+      within(mainNav()).getByRole("link", { name: "Activity" }),
+    ).toHaveAttribute("href", "/activity");
     const menu = await openAccountMenu(user);
     expect(
-      within(menu).getByRole("menuitem", { name: "Activity" }),
-    ).toHaveAttribute("href", "/runs");
+      within(menu).queryByRole("menuitem", { name: "Activity" }),
+    ).not.toBeInTheDocument();
     expect(
       within(menu).queryByRole("menuitem", { name: "Admin" }),
     ).not.toBeInTheDocument();
   });
 
-  it("opens the runs from Activity", async () => {
+  it("opens the workflow runs from Activity", async () => {
     fakeSession(member);
     const user = userEvent.setup();
     const { location } = await openJobs();
-    const menu = await openAccountMenu(user);
-    await user.click(within(menu).getByRole("menuitem", { name: "Activity" }));
+    await user.click(within(mainNav()).getByRole("link", { name: "Activity" }));
     await waitFor(() => {
-      expect(location()).toBe("/runs");
+      expect(location()).toBe("/activity");
     });
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Activity" }),
+    ).toBeInTheDocument();
   });
 
   it("keeps Admin current on every admin page, not only the one it opens", async () => {
@@ -144,15 +149,18 @@ describe("the shell on a phone", () => {
     ).toBeInTheDocument();
   });
 
-  it("puts Activity and, for an admin, Admin in the account menu", async () => {
+  it("puts Activity in the bar and, for an admin, Admin in the account menu", async () => {
     phoneScreen();
     fakeSession(admin);
     const user = userEvent.setup();
     await openJobs();
+    expect(
+      within(mainNav()).getByRole("link", { name: "Activity" }),
+    ).toHaveAttribute("href", "/activity");
     const menu = await openAccountMenu(user);
     expect(
-      within(menu).getByRole("menuitem", { name: "Activity" }),
-    ).toHaveAttribute("href", "/runs");
+      within(menu).queryByRole("menuitem", { name: "Activity" }),
+    ).not.toBeInTheDocument();
     expect(
       within(menu).getByRole("menuitem", { name: "Admin" }),
     ).toHaveAttribute("href", "/admin/users");
@@ -165,7 +173,7 @@ describe("the shell on a phone", () => {
     await openJobs();
     const menu = await openAccountMenu(user);
     expect(
-      within(menu).getByRole("menuitem", { name: "Activity" }),
+      within(menu).getByRole("menuitem", { name: "Account" }),
     ).toBeInTheDocument();
     expect(
       within(menu).queryByRole("menuitem", { name: "Admin" }),
@@ -178,7 +186,7 @@ describe("the shell on a phone", () => {
     const user = userEvent.setup();
     await openJobs();
     const order: string[] = [];
-    for (let i = 0; i < 7; i += 1) {
+    for (let i = 0; i < 3 + TABS.length; i += 1) {
       await user.tab();
       const focused = document.activeElement as HTMLElement;
       order.push(focused.getAttribute("aria-label") ?? focused.textContent);

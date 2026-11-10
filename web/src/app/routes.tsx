@@ -37,14 +37,19 @@ const AdminUsersPage = lazy(() =>
     default: m.AdminUsersPage,
   })),
 );
-const RunPage = lazy(() =>
-  import("@/features/agents/pages/runs-page").then((m) => ({
-    default: m.RunPage,
+const ActivityPage = lazy(() =>
+  import("@/features/agents/pages/activity-page").then((m) => ({
+    default: m.ActivityPage,
   })),
 );
-const RunsPage = lazy(() =>
-  import("@/features/agents/pages/runs-page").then((m) => ({
-    default: m.RunsPage,
+const WorkflowRunPage = lazy(() =>
+  import("@/features/agents/pages/workflow-run-page").then((m) => ({
+    default: m.WorkflowRunPage,
+  })),
+);
+const RunRedirect = lazy(() =>
+  import("@/features/agents/pages/run-redirect").then((m) => ({
+    default: m.RunRedirect,
   })),
 );
 const QueuePage = lazy(() =>
@@ -220,8 +225,11 @@ export const routes: RouteObject[] = [
               },
               { path: "profile/cv/:id", element: <CvPage /> },
               { path: "profile/fill", element: <FillPage /> },
-              { path: "runs", element: <RunsPage /> },
-              { path: "runs/:id", element: <RunPage /> },
+              { path: "activity", element: <ActivityPage /> },
+              { path: "activity/runs/:id", element: <WorkflowRunPage /> },
+              { path: "activity/:workflow", element: <ActivityPage /> },
+              { path: "runs", element: <Navigate to="/activity" replace /> },
+              { path: "runs/:id", element: <RunRedirect /> },
               { path: "applications", element: <QueuePage /> },
               { path: "settings/search", element: <SearchSettingsPage /> },
               {

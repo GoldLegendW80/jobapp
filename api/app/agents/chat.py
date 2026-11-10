@@ -220,7 +220,14 @@ def send(
     if busy is not None:
         raise ThreadBusyError(busy.id)
     run = runs.create_run(
-        db, user_id, AGENT.name, thread.job_id, {"thread_id": str(thread.id)}, AGENT.model, now
+        db,
+        user_id,
+        AGENT.name,
+        thread.job_id,
+        {"thread_id": str(thread.id)},
+        AGENT.model,
+        now,
+        flow=runs.WorkflowRef("job_chat", trigger="message"),
     )
     message = AgentMessage(
         thread_id=thread.id, role=MessageRole.user, content={"text": text}, run_id=run.id, at=now

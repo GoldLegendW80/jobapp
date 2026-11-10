@@ -10,6 +10,7 @@ import {
   type Browser,
   type Lease,
 } from "@/features/browser/api/browser-api";
+import { SEARCH_RUN_ID, searchRunOf } from "@/design-system/fixtures/activity";
 import { createQueryClient } from "@/lib/query";
 import { routes } from "@/app/routes";
 import { admin, fakeSession } from "@/test/auth";
@@ -33,6 +34,15 @@ const LEASE_ID = "3c5d7e9f-1a2b-4c3d-8e4f-5a6b7c8d9e0f";
 const LEASE_STARTED = "2026-10-29T09:00:00Z";
 const RUN_STARTED = "2026-10-29T09:00:03Z";
 const AFTER_RUN = "2026-10-29T09:05:00Z";
+// The sweep's workflow run, with this website's search open.
+const RUN_PAGE = `/activity/runs/${SEARCH_RUN_ID}?step=${ID}`;
+const FLOW_STATUS = {
+  queued: "queued",
+  running: "running",
+  done: "success",
+  failed: "failure",
+  cancelled: "cancelled",
+} as const;
 
 function run(changes: Partial<Run> = {}): Run {
   return {
@@ -92,6 +102,9 @@ function fakeApi(state: { detail: Run; browser: Browser }): Calls {
     seen.calls.push(`${request.method} ${new URL(request.url).pathname}`);
   };
   server.use(
+    http.get(`*/api/activity/runs/${SEARCH_RUN_ID}`, () =>
+      HttpResponse.json(searchRunOf(ID, FLOW_STATUS[state.detail.status])),
+    ),
     http.get(`*/api/agents/runs/${ID}`, () =>
       HttpResponse.json({
         ...state.detail,
@@ -140,7 +153,7 @@ describe("a running website search", () => {
   it("shows the live view of the sweep lease, watching, with Take over", async () => {
     const opened = fakeScreens();
     const { calls } = fakeApi({ detail: run(), browser: mine(lease()) });
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     const view = await connected(opened);
     await panel();
     expect(view.screen.viewOnly).toBe(true);
@@ -178,7 +191,7 @@ describe("a running website search", () => {
       ),
     };
     fakeApi(state);
-    const { client } = renderApp(`/runs/${ID}`);
+    const { client } = renderApp(RUN_PAGE);
     await connected(opened);
     const sentence =
       "The assistant needs your help on jobs.example.org. Choose Use the browser myself, do what the page asks, then Let the assistant continue.";
@@ -206,7 +219,7 @@ describe("a running website search", () => {
         lease({ state: "waiting_person", wait_reason: "takeover" }),
       ),
     });
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     await connected(opened);
     await panel();
     expect(screen.queryByTestId("run-ask-person")).toBeNull();
@@ -219,7 +232,7 @@ describe("a running website search", () => {
       browser: mine(lease()),
     });
     const user = userEvent.setup();
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     const view = await connected(opened);
     await user.click(
       await screen.findByRole("button", { name: "Use the browser myself" }),
@@ -254,7 +267,7 @@ describe("a running website search", () => {
       browser: mine(lease({ state: "starting" })),
     };
     fakeApi(state);
-    const { client } = renderApp(`/runs/${ID}`);
+    const { client } = renderApp(RUN_PAGE);
     expect(await screen.findByText(STARTING)).toBeInTheDocument();
     expect(screen.queryByTestId("live-screen")).toBeNull();
     expect(opened).toHaveLength(0);
@@ -269,7 +282,7 @@ describe("a running website search", () => {
   it("says the browser is starting before the search has its lease", async () => {
     const opened = fakeScreens();
     fakeApi({ detail: run(), browser: mine(null) });
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     expect(await screen.findByText(STARTING)).toBeInTheDocument();
     await panel();
     expect(screen.queryByText(ELSEWHERE)).toBeNull();
@@ -279,7 +292,7 @@ describe("a running website search", () => {
   it("reads the browser again every 3 seconds", async () => {
     fakeScreens();
     fakeApi({ detail: run(), browser: mine(lease()) });
-    const { client } = renderApp(`/runs/${ID}`);
+    const { client } = renderApp(RUN_PAGE);
     await panel();
     await waitFor(() => {
       expect(
@@ -307,7 +320,7 @@ describe("a running website search", () => {
     const client = createQueryClient();
     client.setQueryData(browserQueryKey, mine(lease({ id: "old-website" })));
     const router = createMemoryRouter(routes, {
-      initialEntries: [`/runs/${ID}`],
+      initialEntries: [RUN_PAGE],
     });
     render(
       <QueryClientProvider client={client}>
@@ -338,7 +351,7 @@ describe("a running website search", () => {
     const client = createQueryClient();
     client.setQueryData(browserQueryKey, mine(lease({ id: "old-website" })));
     const router = createMemoryRouter(routes, {
-      initialEntries: [`/runs/${ID}`],
+      initialEntries: [RUN_PAGE],
     });
     render(
       <QueryClientProvider client={client}>
@@ -365,7 +378,7 @@ describe("a running website search", () => {
     const opened = fakeScreens();
     const state = { detail: run(), browser: mine(lease()) };
     fakeApi(state);
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     const view = await connected(opened);
     await panel();
     state.detail = run({ status: "done", finished_at: AFTER_RUN });
@@ -386,7 +399,7 @@ describe("a running website search", () => {
     const opened = fakeScreens();
     const state = { detail: run(), browser: mine(lease()) };
     fakeApi(state);
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     await connected(opened);
     await panel();
     const take = await screen.findByRole("button", {
@@ -416,7 +429,7 @@ describe("a running website search", () => {
     const opened = fakeScreens();
     const state = { detail: run(), browser: mine(lease()) };
     fakeApi(state);
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     await connected(opened);
     await panel();
     const title = screen.getByRole("heading", { level: 1 });
@@ -446,7 +459,7 @@ describe("a website search that is not running", () => {
       detail: run({ status: "queued", started_at: null }),
       browser: mine(lease()),
     });
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     expect(await screen.findByText(STARTING)).toBeInTheDocument();
     await panel();
     expect(screen.queryByText(ELSEWHERE)).toBeNull();
@@ -462,7 +475,7 @@ describe("a website search that is not running", () => {
         detail: run({ status, finished_at: AFTER_RUN }),
         browser: mine(lease()),
       });
-      renderApp(`/runs/${ID}`);
+      renderApp(RUN_PAGE);
       expect(await screen.findByText(ELSEWHERE)).toBeInTheDocument();
       await panel();
       expect(screen.queryByText(STARTING)).toBeNull();
@@ -496,7 +509,7 @@ describe("a running website search whose browser is not its lease", () => {
   ])("shows the line and no view for %s", async (_, browser) => {
     const opened = fakeScreens();
     fakeApi({ detail: run(), browser });
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     expect(await screen.findByText(ELSEWHERE)).toBeInTheDocument();
     await panel();
     expect(screen.queryByText(STARTING)).toBeNull();
@@ -512,7 +525,7 @@ describe("a running website search whose browser is not its lease", () => {
         lease({ purpose: "look", automation: false, state: "starting" }),
       ),
     });
-    renderApp(`/runs/${ID}`);
+    renderApp(RUN_PAGE);
     expect(await screen.findByText(ELSEWHERE)).toBeInTheDocument();
     expect(opened).toHaveLength(0);
   });
@@ -527,7 +540,7 @@ describe("another agent's run", () => {
         detail: run({ agent: "job_assessor", status }),
         browser: mine(lease()),
       });
-      renderApp(`/runs/${ID}`);
+      renderApp(RUN_PAGE);
       await panel();
       expect(screen.queryByText(STARTING)).toBeNull();
       expect(screen.queryByText(ELSEWHERE)).toBeNull();

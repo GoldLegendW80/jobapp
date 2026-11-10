@@ -77,7 +77,8 @@ const panel = () => page.getByTestId("run-panel");
 const steps = (on: Page = page) =>
   on.getByTestId("run-panel").getByRole("list", { name: "Steps" });
 const writing = (on: Page = page) => steps(on).locator("[data-live=true]");
-const answers = (on: Page = page) => steps(on).locator("[data-kind=text]");
+const answers = (on: Page = page) =>
+  steps(on).locator(":scope > [data-kind=text]");
 const badge = () => panel().locator("[data-slot=badge]");
 
 const chat = () => page.getByRole("dialog", { name: "Chat about this job" });
@@ -189,7 +190,7 @@ test("the answer grows in the run panel, then the stored step takes its place", 
   expect(saved.status()).toBe(200);
 
   const id = await startRun("long_answer", QUESTION);
-  await page.goto(`/runs/${id}`);
+  await page.goto(`/activity/runs/${id}?step=${id}`);
   await expect(panel()).toBeVisible();
   const seen = await watch(
     page,
@@ -232,14 +233,14 @@ test("the answer grows in the run panel, then the stored step takes its place", 
 
 test("a second tab opened in the middle gets the text so far and the same answer", async () => {
   const id = await startRun("long_answer", QUESTION);
-  await page.goto(`/runs/${id}`);
+  await page.goto(`/activity/runs/${id}?step=${id}`);
   await expect
     .poll(async () => (await body(writing()).textContent())?.length ?? 0, {
       timeout: 20_000,
     })
     .toBeGreaterThan(150);
   const second = await context.newPage();
-  await second.goto(`/runs/${id}`);
+  await second.goto(`/activity/runs/${id}?step=${id}`);
   await expect(writing(second)).toBeVisible();
   const first = (await body(writing(second)).textContent()) ?? "";
   // Its first sight of the answer is everything written so far, not the first few characters.
@@ -255,7 +256,7 @@ test("a second tab opened in the middle gets the text so far and the same answer
 
 test("a network loss in the middle of the answer ends with the whole text once", async () => {
   const id = await startRun("long_answer", QUESTION);
-  await page.goto(`/runs/${id}`);
+  await page.goto(`/activity/runs/${id}?step=${id}`);
   const seen = await watch(
     page,
     "[data-testid=run-panel] [data-kind=text] p:last-of-type",
@@ -317,7 +318,7 @@ test("a network loss in the middle of the answer ends with the whole text once",
 
 test("a cancel in the middle of the answer stops it", async () => {
   const id = await startRun("long_answer", QUESTION);
-  await page.goto(`/runs/${id}`);
+  await page.goto(`/activity/runs/${id}?step=${id}`);
   await expect
     .poll(async () => (await body(writing()).textContent())?.length ?? 0, {
       timeout: 20_000,

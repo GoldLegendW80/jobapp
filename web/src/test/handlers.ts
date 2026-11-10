@@ -184,6 +184,9 @@ export const handlers = [
   http.get("*/api/browser/sites", () => HttpResponse.json({ sites: [] })),
   // No agent run and no proposal yet (job detail's Agent assessment section).
   http.get("*/api/agents/runs", () => HttpResponse.json({ items: [] })),
+  // No workflow run yet (Activity).
+  http.get("*/api/activity/workflows", () => HttpResponse.json({ items: [] })),
+  http.get("*/api/activity/runs", () => HttpResponse.json({ items: [] })),
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),
   // No chat thread yet (job detail's Chat panel).
   http.get("*/api/agents/threads", () => HttpResponse.json({ items: [] })),

@@ -161,7 +161,18 @@ def create_run(
             raise Refused(status.HTTP_404_NOT_FOUND, JOB_NOT_FOUND)
         label = RunJobOut(id=job.id, company=job.company, title=job.title) if job else None
         try:
-            row = runs.create_run(db, user_id, agent.name, job_id, data, agent.model, now)
+            row = runs.create_run(
+                db,
+                user_id,
+                agent.name,
+                job_id,
+                data,
+                agent.model,
+                now,
+                flow=runs.WorkflowRef("assess", trigger="with_agent")
+                if agent.name == "triage"
+                else None,
+            )
         except runs.ActiveRunsError:
             db.rollback()
             raise _too_many() from None

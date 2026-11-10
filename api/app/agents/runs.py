@@ -117,6 +117,32 @@ def append_event(
     db.flush()
 
 
+@dataclass(frozen=True)
+class WorkflowRef:
+    """The workflow run an agent run belongs to (Activity, A10): the workflow's key
+    (`workflows.WORKFLOWS`), the id of the thing it groups (a sweep, an ingestion run, an
+    application, the first run of a click) and how it was triggered (`workflows.TRIGGERS`)."""
+
+    workflow: str
+    run_id: uuid.UUID | None = None
+    trigger: str | None = None
+
+
+def joining(db: Session, run_id: uuid.UUID | None) -> WorkflowRef | None:
+    """The workflow run of another agent run, for a step that joins it (the hiring panel joins
+    the writer run it reviews): its workflow and its workflow run, never its trigger. None when
+    that run recorded no workflow (an older run)."""
+    if run_id is None:
+        return None
+    found = db.execute(
+        sa.select(AgentRun.workflow, AgentRun.workflow_run_id).where(AgentRun.id == run_id)
+    ).one_or_none()
+    if found is None or found.workflow is None:
+        return None
+    # A run recorded with no id of its own is its workflow run (`workflows.group_of`).
+    return WorkflowRef(found.workflow, found.workflow_run_id or run_id)
+
+
 def create_run(
     db: Session,
     user_id: uuid.UUID,
@@ -125,6 +151,7 @@ def create_run(
     data: dict[str, Any],
     model: str,
     now: datetime,
+    flow: WorkflowRef | None = None,
 ) -> AgentRun:
     """A queued run and its first event. Raises ActiveRunsError over ACTIVE_PER_USER. The caller
     commits, then enqueues."""
@@ -140,6 +167,9 @@ def create_run(
         input=data,
         model=model,
         created_at=now,
+        workflow=flow.workflow if flow else None,
+        workflow_run_id=flow.run_id if flow else None,
+        workflow_trigger=flow.trigger if flow else None,
     )
     db.add(run)
     db.flush()
