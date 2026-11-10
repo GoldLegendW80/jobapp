@@ -1,7 +1,8 @@
-"""The notes on an offer letter through the api, two e2e people: read before any notes, a click
-that starts the reading (202, its run queued), the refusals (an upload not read yet, another
-person's upload or posting, no consent, a reading open), the notes left out of the posting's CV
-and letter, their chat through the documents chat, and B's notes 404 to A. Real Postgres."""
+"""The notes on an offer letter through the api, two e2e people: read before any notes, a click that
+starts the reading (202, its run queued), the refusals (an upload not read yet, another person's
+upload or posting, no credential, a reading open; no consent asked), the notes left out of the
+posting's CV and letter, their chat through the documents chat, and B's notes 404 to A. Real
+Postgres."""
 
 from __future__ import annotations
 
@@ -17,8 +18,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import credentials
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind
+from app.documents import chat
 from app.documents.models import Document, Kind
-from app.ingestion.estimate_router import record_consent
 from tests.agents.conftest import API_KEY, new_key
 from tests.documents.render_support import RecordingQueue, give_profile
 from tests.identity.api_helpers import Api, make_user
@@ -43,8 +44,8 @@ def queue(app: FastAPI) -> RecordingQueue:
 
 
 def _person(factory: sessionmaker[Session], api: Api, email: str, clock: Any) -> dict[str, Any]:
-    """A person with a profile, a credential, ingestion's consent, a posting at interview and
-    an uploaded letter whose text ingestion read."""
+    """A person with a profile, a credential and no consent, a posting at interview and an
+    uploaded letter whose text ingestion read."""
     user = make_user(factory, email=email, name=email.split("@")[0])
     give_profile(factory, user.id, clock())
     with factory() as db:
@@ -63,7 +64,6 @@ def _person(factory: sessionmaker[Session], api: Api, email: str, clock: Any) ->
             ),
             {"u": user.id, "h": hashlib.sha256(email.encode()).digest(), "t": LETTER},
         ).scalar_one()
-        record_consent(db, user.id)
         credentials.save(
             db,
             Keyring.from_text(new_key()),
@@ -134,7 +134,7 @@ def test_a_click_reads_the_letter_and_queues_its_run(
         assert list(kinds) == [Kind.offer_notes]
 
 
-def test_a_letter_not_read_yet_or_without_consent_starts_nothing(
+def test_a_letter_not_read_yet_or_without_a_credential_starts_nothing(
     api: Api, alex: dict[str, Any], factory: sessionmaker[Session], queue: RecordingQueue
 ) -> None:
     with factory() as db:
@@ -151,13 +151,13 @@ def test_a_letter_not_read_yet_or_without_consent_starts_nothing(
             sa.text("UPDATE ingestion_documents SET text_status = 'done' WHERE id = :d"),
             {"d": alex["letter"]},
         )
-        db.execute(
-            sa.text("DELETE FROM ingestion_consents WHERE user_id = :u"), {"u": alex["user"]}
-        )
+        credentials.delete(db, alex["user"])
         db.commit()
     answer = _read(api, alex)
     assert answer.status_code == 409
-    assert answer.json()["detail"].startswith("Confirm what is sent to the model first")
+    assert answer.json()["detail"] == (
+        "Add a model credential on the Account page first, then read the letter again."
+    )
     assert queue.jobs == []
     assert api.get(path(alex["posting"]), token=alex["token"]).json()["document_id"] is None
 
@@ -194,14 +194,52 @@ def test_the_chat_of_the_notes_waits_for_the_reading(api: Api, alex: dict[str, A
     )
 
 
-def test_the_chat_of_the_notes_without_ingestions_consent_answers_409(
+def _reading_done(factory: sessionmaker[Session], who: dict[str, Any]) -> None:
+    with factory() as db:
+        db.execute(
+            sa.text("UPDATE agent_runs SET status = 'done' WHERE user_id = :u"), {"u": who["user"]}
+        )
+        db.execute(
+            sa.text("UPDATE document_generations SET status = 'done' WHERE user_id = :u"),
+            {"u": who["user"]},
+        )
+        db.commit()
+
+
+def _consents(factory: sessionmaker[Session], who: dict[str, Any]) -> int:
+    with factory() as db:
+        return db.scalar(
+            sa.text("SELECT count(*) FROM ingestion_consents WHERE user_id = :u"),
+            {"u": who["user"]},
+        )
+
+
+def test_without_any_consent_the_reading_starts_and_its_chat_answers(
+    api: Api, alex: dict[str, Any], factory: sessionmaker[Session], queue: RecordingQueue
+) -> None:
+    assert _consents(factory, alex) == 0
+    read = _read(api, alex)
+    assert read.status_code == 202, read.text
+    _reading_done(factory, alex)
+    sent = api.request(
+        "POST",
+        f"/api/documents/{read.json()['document_id']}/messages",
+        token=alex["token"],
+        json={"text": "Add a question about the trial period."},
+    )
+    assert sent.status_code == 202, sent.text
+    assert sent.json()["generation"]["mode"] == "chat"
+    assert [job["function"] for job in queue.jobs] == ["run_agent", "run_agent"]
+    assert _consents(factory, alex) == 0
+
+
+def test_the_chat_of_the_notes_without_a_credential_answers_409(
     api: Api, alex: dict[str, Any], factory: sessionmaker[Session]
 ) -> None:
     document = _read(api, alex).json()["document_id"]
+    _reading_done(factory, alex)
     with factory() as db:
-        db.execute(
-            sa.text("DELETE FROM ingestion_consents WHERE user_id = :u"), {"u": alex["user"]}
-        )
+        credentials.delete(db, alex["user"])
         db.commit()
     sent = api.request(
         "POST",
@@ -210,4 +248,4 @@ def test_the_chat_of_the_notes_without_ingestions_consent_answers_409(
         json={"text": "Add a question about the trial period."},
     )
     assert sent.status_code == 409
-    assert sent.json()["detail"].startswith("Confirm what is sent to the model first")
+    assert sent.json()["detail"] == chat.NO_CREDENTIAL

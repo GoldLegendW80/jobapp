@@ -2,11 +2,11 @@
 
 The person uploads the offer letter they received through ingestion's upload, so its parsing,
 its secret check and its deletion are ingestion's. Their click (`read`) writes the posting's
-document of kind `offer_notes` from it with one run of `documents_offer_read`, under ingestion's
-consent (`refusal`): each clause in plain words beside its own words, what differs from the
-posting's stated pay and from the person's `search.compensation` (`pay_context`), and questions
-for a lawyer, in the letter's own language. No field holds a verdict or a score, the prompt
-forbids both and any web search, and a submit that tells the person to sign is refused
+document of kind `offer_notes` from it with one run of `documents_offer_read`, with no consent
+asked, only the model credential (`refusal`): each clause in plain words beside its own words, what
+differs from the posting's stated pay and from the person's `search.compensation` (`pay_context`),
+and questions for a lawyer, in the letter's own language. No field holds a verdict or a score, the
+prompt forbids both and any web search, and a submit that tells the person to sign is refused
 (`VERDICT`). The dash rule applies to every field but the quotes, which stay word for word.
 
 A message in the chat of the notes reaches `post_message` through `chat.post`: the documents
@@ -58,7 +58,6 @@ from app.documents.models import (
 from app.documents.settings import DocumentSettings
 from app.documents.writer_cv import LANGUAGES, setting
 from app.ingestion.estimate import CHARS_PER_TOKEN
-from app.ingestion.estimate_router import has_consented
 from app.ingestion.models import IngestionDocument
 from app.jobs.models import Job
 from app.opportunities.pay import pay_text
@@ -95,7 +94,7 @@ VERDICT = re.compile(
 
 
 class OfferRefusedError(Exception):
-    """`reason`: `consent` or `credential`, missing before any model call."""
+    """`reason`: `credential`, missing before any model call."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -104,8 +103,6 @@ class OfferRefusedError(Exception):
 
 def refusal(db: Session, user_id: uuid.UUID) -> str | None:
     """What the person must settle before a run reads their letter, None when nothing."""
-    if not has_consented(db, user_id):
-        return "consent"
     if credentials.get(db, user_id) is None:
         return "credential"
     return None
@@ -542,8 +539,8 @@ def post_message(
     script: str | None,
     settings: Settings,
 ) -> chat.Posted:
-    """`chat.post` for the notes, the document locked by it: the message and its run, under
-    the same consent as the reading."""
+    """`chat.post` for the notes, the document locked by it: the message and its run, with the
+    same check as the reading."""
     user_id = document.user_id
     reason = refusal(db, user_id)
     if reason is not None:
