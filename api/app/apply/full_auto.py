@@ -8,17 +8,17 @@ that) are rehearsals (`dry_run`).
 
 The order, after the documents and the fill (A5), every step through the gate:
 
-1. `decide`, which the decision job (`submit.decision`, on the agents queue) runs for a `ready`
-   Full auto item (`submit.due` lists them):
-   under the gate's locks, the Like never decided before (a `full_auto_like` row of this
-   application already written sends it to the review queue with `authorisation_used`: one Like
-   gives at most one click), still valid (`LIKE_VALID` after it, and Full auto on since
-   before it, else the review queue with `authorisation_expired` or `full_auto_off` and no
-   authorisation row), then the `full_auto_like` authorisation written, bound to the hash of the
-   filled answers and the documents, expiring 7 days after the Like, and `gate.decide` with it:
-   the gate's checks, then `checks` (Full auto's own). A pass spends the row and moves the item
-   to `held`, the end of its hold in the `decision` event (`hold_s`, never below
-   `APPLY_HOLD_S`; a rehearsal has none).
+1. `decide`, which the decision job (`submit.decision`, on the agents queue) runs for a `ready` Full
+   auto item (`submit.due` lists them): under the gate's locks, the Like never decided before (a
+   `full_auto_like` row of this application already written sends it to the review queue with
+   `authorisation_used`: one Like gives at most one click; the row a refusal by the old document
+   rule left unspent is decided once more when `resend` moved the item back, A22), still valid
+   (`LIKE_VALID` after it, and Full auto on since before it, else the review queue with
+   `authorisation_expired` or `full_auto_off` and no authorisation row), then the `full_auto_like`
+   authorisation written, bound to the hash of the filled answers and the documents, expiring 7 days
+   after the Like, and `gate.decide` with it: the gate's checks, then `checks` (Full auto's own). A
+   pass spends the row and moves the item to `held`, the end of its hold in the `decision` event
+   (`hold_s`, never below `APPLY_HOLD_S`; a rehearsal has none).
 2. The hold: `submit.due` asks the submit lease only once it ended; Cancel (`gate.cancel`), the
    person's pause and the administrator's pause stop it.
 3. The submit lease: `submit.recheck` with Full auto's lines (`recheck`: Full auto still on, the
@@ -330,10 +330,18 @@ def _decided(db: Session, application: Application) -> bool:
     return found is not None
 
 
+def _moved_back(db: Session, application: Application) -> Authorisation | None:
+    """The Like's own authorisation, when the old document rule stopped it and `resend` moved
+    the item back: decided once more with it, never a new one."""
+    from app.apply import resend
+
+    return resend.reusable(db, application, AuthorisationKind.full_auto_like)
+
+
 def before_gate(db: Session, application: Application, now: datetime) -> str | None:
     """The refusals `decide` makes before the gate's own: the Like decided once already, too old,
     or Full auto off since before it. The check by model reads them too, to spare its call."""
-    if _decided(db, application):
+    if _decided(db, application) and _moved_back(db, application) is None:
         return "authorisation_used"
     if now >= application.created_at + LIKE_VALID:
         return "authorisation_expired"
@@ -362,6 +370,9 @@ def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any)
         to_review(db, application, code, now)
         gate._event(db, application, "decision", now, outcome="refused", code=code)
         return code
+    if (moved := _moved_back(db, application)) is not None:
+        decision = gate.decide(db, user_id, moved.id, now, switches=switches)
+        return decision.state.value if decision.passed else (decision.code or "refused")
     authorisation = Authorisation(
         id=uuid.uuid4(),
         user_id=user_id,

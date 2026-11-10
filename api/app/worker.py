@@ -977,7 +977,9 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     """Queues a fill for every application waiting for one, the submit of every approved one
     (apply A6) and the decision of every `ready` Full auto one on the agents queue (A13c).
     First it writes the end of every Apply myself session that ended without it (A9,
-    `manual.recover_ended`: a busy posting, a worker restart). Answers a count, nothing else."""
+    `manual.recover_ended`: a busy posting, a worker restart). With Redis, it moves back the items
+    the old document rule stopped (A22, `resend.run`, which finds nothing once done). Answers a
+    count, nothing else."""
     from app.apply import manual as apply_manual
     from app.apply import run as apply_run
     from app.apply import submit as apply_submit_run
@@ -993,6 +995,10 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     redis: ArqRedis | None = ctx.get("redis")
     if redis is None:
         return 0
+    from app.apply import resend as apply_resend
+
+    # The items it moves back are `ready` in their own mode again: the next tick decides them.
+    await asyncio.to_thread(apply_resend.run, sessions_of(ctx), ctx.get("clock", utcnow)())
     # Email dispatch belongs to the API process, whose send key the worker cannot hold.
     from app.apply.models import Application
 
