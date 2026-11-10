@@ -228,7 +228,10 @@ def test_without_any_consent_the_reading_starts_and_its_chat_answers(
         json={"text": "Add a question about the trial period."},
     )
     assert sent.status_code == 202, sent.text
-    assert sent.json()["generation"]["mode"] == "chat"
+    assert (sent.json()["generation"]["status"], sent.json()["message"]["role"]) == (
+        "running",
+        "user",
+    )
     assert [job["function"] for job in queue.jobs] == ["run_agent", "run_agent"]
     assert _consents(factory, alex) == 0
 
