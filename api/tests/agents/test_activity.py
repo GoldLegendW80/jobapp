@@ -768,3 +768,155 @@ def test_the_activity_count_is_the_callers_runs_under_way_their_own_steps_includ
     assert _under_way(api, alice) == 0
     assert _under_way(api, bob) == 1
     assert api.get("/api/activity/count").status_code == 401
+
+
+def _ended(api: Api, token: str) -> list[tuple[str, str]]:
+    answer = api.get("/api/activity/count", token=token).json()["ended"]
+    listed = api.get("/api/activity/runs", token=token, params={"limit": 100}).json()["items"]
+    ends = {i["id"]: i["finished_at"] for i in listed if i["status"] not in ("running", "queued")}
+    # The same end as the list gives each run.
+    assert all(ends[one["id"]] == one["finished_at"] for one in answer)
+    return [(one["id"], one["finished_at"]) for one in answer]
+
+
+def test_the_count_names_the_callers_runs_that_ended_last_newest_end_first(
+    factory: sessionmaker[Session], api: Api, alice: str, bob: str
+) -> None:
+    me, bobs = _user(factory, ALICE), _user(factory, BOB)
+    assert _ended(api, alice) == []
+    chats = [
+        _run(factory, me, "job_chat", minute, status=status)
+        for minute, status in enumerate([RunStatus.done, RunStatus.failed, RunStatus.cancelled] * 4)
+    ]
+    running = _run(factory, me, "job_chat", 20, status=RunStatus.running)
+    # Another person's run, ended last, with the id of Alice's run under way.
+    _run(
+        factory,
+        bobs,
+        "job_chat",
+        30,
+        flow=runs.WorkflowRef("job_chat", running),
+    )
+    ended = _ended(api, alice)
+    assert len(ended) == 10
+    assert [one for one, _ in ended] == [str(run) for run in reversed(chats)][:10]
+    assert ended[0][1] == "2026-11-09T08:11:30Z"
+    assert _ended(api, bob) == [(str(running), "2026-11-09T08:30:30Z")]
+
+    # A sweep ends when its own row does, after its agents.
+    with factory() as db:
+        sweep_id = sweep.start(db, me, SweepTrigger.manual, T0).id
+        db.commit()
+    _run(factory, me, "browser_discovery", 21, flow=runs.WorkflowRef("job_search", sweep_id))
+    assert str(sweep_id) not in dict(_ended(api, alice))
+    with factory() as db:
+        db.execute(
+            sa.update(Sweep)
+            .where(Sweep.id == sweep_id)
+            .values(status=SweepStatus.done, finished_at=T0 + timedelta(minutes=25))
+        )
+        db.commit()
+    assert _ended(api, alice)[0] == (str(sweep_id), "2026-11-09T08:25:00Z")
+    assert api.get("/api/activity/count").status_code == 401
+
+
+def _fail(factory: sessionmaker[Session], run_id: uuid.UUID, error: str | None) -> None:
+    with factory() as db:
+        db.execute(sa.update(AgentRun).where(AgentRun.id == run_id).values(error=error))
+        db.commit()
+
+
+def _ending(api: Api, token: str, key: object) -> tuple[str, str | None, int | None]:
+    run = api.get(f"/api/activity/runs/{key}", token=token).json()
+    return run["status"], run["reason"], run["new_postings"]
+
+
+def test_a_failed_run_says_why_in_its_first_failed_steps_words(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    chat = _run(factory, me, "job_chat", 0, status=RunStatus.failed)
+    _fail(factory, chat, "The run reached its limit of 30 turns.")
+    assert _ending(api, alice, chat) == (
+        "failure",
+        "Job chat: The run reached its limit of 30 turns.",
+        None,
+    )
+    silent = _run(factory, me, "job_chat", 1, status=RunStatus.failed)
+    assert _ending(api, alice, silent) == ("failure", "Job chat failed.", None)
+    long = _run(factory, me, "job_chat", 2, status=RunStatus.failed)
+    _fail(factory, long, "Word " * 200)
+    reason = _ending(api, alice, long)[1]
+    assert reason is not None
+    assert len(reason) == 300
+    assert reason.endswith("Word…")
+    done = _run(factory, me, "job_chat", 3)
+    _fail(factory, done, "A message left from an earlier try.")
+    assert _ending(api, alice, done) == ("success", None, None)
+    stopped = _run(factory, me, "job_chat", 4, status=RunStatus.cancelled)
+    assert _ending(api, alice, stopped) == ("cancelled", None, None)
+
+    # An application refused by the site says so.
+    posting = add_job(factory, me, "Example Robotics", "Platform engineer")
+    with factory() as db:
+        refused = application(db, me, posting, state=State.refused_by_site).id
+        db.commit()
+    _run(factory, me, "apply_agent", 5, flow=runs.WorkflowRef("application", refused, "apply"))
+    assert _ending(api, alice, refused) == ("failure", "Application: Refused by the site", None)
+
+
+def test_a_job_search_says_how_many_postings_it_added_and_why_it_stopped(
+    factory: sessionmaker[Session], api: Api, alice: str
+) -> None:
+    me = _user(factory, ALICE)
+    with factory() as db:
+        row = sweep.start(db, me, SweepTrigger.manual, T0)
+        row.stats = {**row.stats, "new": 12}
+        db.commit()
+        found = row.id
+    _run(factory, me, "browser_discovery", 1, flow=runs.WorkflowRef("job_search", found))
+    with factory() as db:
+        db.execute(
+            sa.update(Sweep)
+            .where(Sweep.id == found)
+            .values(status=SweepStatus.done, finished_at=T0 + timedelta(minutes=5))
+        )
+        db.commit()
+    assert _ending(api, alice, found) == ("success", None, 12)
+
+    # Stopped by the worker's end after it added three: the sweep's own words.
+    with factory() as db:
+        row = sweep.start(db, me, SweepTrigger.manual, T0 + timedelta(hours=1))
+        row.stats = {**row.stats, "new": 3}
+        db.commit()
+        crashed = row.id
+    _run(factory, me, "browser_discovery", 61, flow=runs.WorkflowRef("job_search", crashed))
+    sweep.fail_sweep(factory, crashed, sweep.CRASHED, T0 + timedelta(hours=1, minutes=3))
+    assert _ending(api, alice, crashed) == ("failure", f"Sweep: {sweep.CRASHED}", 3)
+
+    # A website search that failed in a sweep that ended: the search's own words.
+    with factory() as db:
+        row = sweep.start(db, me, SweepTrigger.manual, T0 + timedelta(hours=2))
+        db.commit()
+        partial = row.id
+    website = _run(
+        factory,
+        me,
+        "browser_discovery",
+        121,
+        flow=runs.WorkflowRef("job_search", partial),
+        status=RunStatus.failed,
+    )
+    _fail(factory, website, "The run took longer than its limit of 20 minutes and was stopped.")
+    with factory() as db:
+        db.execute(
+            sa.update(Sweep)
+            .where(Sweep.id == partial)
+            .values(status=SweepStatus.done, finished_at=T0 + timedelta(hours=2, minutes=30))
+        )
+        db.commit()
+    assert _ending(api, alice, partial) == (
+        "failure",
+        "Website search: The run took longer than its limit of 20 minutes and was stopped.",
+        None,
+    )

@@ -74,6 +74,10 @@ class Found:
     steps: list[dict[str, Any]] = field(default_factory=list)
     subject: str | None = None
     job_id: uuid.UUID | None = None
+    # The words of a failed step of the app's own, by its step id: why it failed.
+    reasons: dict[str, str] = field(default_factory=dict)
+    # A sweep's count of the postings it added.
+    added: int | None = None
 
 
 def _step(
@@ -183,11 +187,23 @@ def _sweep_steps(key: uuid.UUID, row: Any) -> list[dict[str, Any]]:
 
 def _sweeps(db: Session, user_id: uuid.UUID, keys: Sequence[uuid.UUID]) -> dict[uuid.UUID, Found]:
     rows = db.execute(
-        sa.select(Sweep.id, Sweep.status, Sweep.started_at, Sweep.finished_at, Sweep.stats).where(
-            Sweep.id.in_(keys), Sweep.user_id == user_id
-        )
+        sa.select(
+            Sweep.id, Sweep.status, Sweep.started_at, Sweep.finished_at, Sweep.stats, Sweep.error
+        ).where(Sweep.id.in_(keys), Sweep.user_id == user_id)
     ).all()
-    return {row.id: Found(_sweep_steps(row.id, row), search_words(row.stats or {})) for row in rows}
+    found: dict[uuid.UUID, Found] = {}
+    for row in rows:
+        stats = row.stats or {}
+        added = stats.get("new")
+        found[row.id] = Found(
+            _sweep_steps(row.id, row),
+            search_words(stats),
+            reasons={f"sweep:{row.id}": row.error}
+            if row.status is SweepStatus.failed and row.error
+            else {},
+            added=added if isinstance(added, int) and not isinstance(added, bool) else None,
+        )
+    return found
 
 
 def _ingestions(
@@ -341,7 +357,8 @@ def _applications(
             _APPLICATION_STATE[row.state],
         )
         subject = f"{row.title} at {row.company}" if row.job_id else None
-        found[row.id] = Found([step], subject, row.job_id)
+        said = {step["id"]: step["note"]} if status == "failure" else {}
+        found[row.id] = Found([step], subject, row.job_id, reasons=said)
     return found
 
 
