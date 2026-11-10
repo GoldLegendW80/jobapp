@@ -343,7 +343,7 @@ Migration **0015 (D5)**, the only one of this plan: the seven tables of the spec
 | D23 | to create | Privacy proof and limits | S | D6 to D26 | none | 13 |
 | D28 | none | The design capture copies an upload by measurement | L | D27 | none | after D27 |
 | D30 | #768 | No documents consent | M | none | none | after D29 |
-| D31 | #778 | The offer letter reader asks no consent | S | none | none | after D30 |
+| D31 | #778 | The offer letter reader asks no consent | S | D30 | none | after D30 |
 | Checkpoint D | to create | The owner's own profile, after D13, after D25c and after D23 | human | D13, D25c, then D23 | none | after 8, 11 and 13 |
 
 Thirty tasks (D0 to D26, with D4 split into D4a and D4b and D25 into D25a, D25b and D25c) and a checkpoint. No task is L. Twenty two are M and eight are S (D0 included); each M is sized for one agent run of about 90 tool calls.
