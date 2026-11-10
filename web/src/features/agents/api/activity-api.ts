@@ -100,12 +100,26 @@ export const workflowRunDetailSchema = workflowRunSchema.extend({
   output_tokens: z.number().int().nullable(),
   cost_usd: z.number().nullable(),
   credential_kind: z.enum(credentialKinds).nullable(),
+  /** Why a failed run failed, in the words of its first failed step. */
+  reason: z.string().nullable().catch(null),
+  /** A job search's count of the postings it added. */
+  new_postings: z.number().int().nonnegative().nullable().catch(null),
 });
 export type WorkflowRunDetail = z.infer<typeof workflowRunDetailSchema>;
 
 const workflowListSchema = z.object({ items: z.array(workflowSchema) });
 const workflowRunListSchema = z.object({ items: z.array(workflowRunSchema) });
-const underWaySchema = z.object({ under_way: z.number().int().nonnegative() });
+const endedSchema = z.object({
+  id: z.string().min(1),
+  finished_at: z.string(),
+});
+export type EndedRun = z.infer<typeof endedSchema>;
+const underWaySchema = z.object({
+  under_way: z.number().int().nonnegative(),
+  /** The runs that ended last, newest end first: the toast of a run's end reads them. */
+  ended: z.array(endedSchema).catch([]),
+});
+export type ActivityCount = z.infer<typeof underWaySchema>;
 
 export const activityKey = ["activity"] as const;
 export const workflowsKey = [...activityKey, "workflows"] as const;
@@ -149,12 +163,12 @@ export function getWorkflowRun(
   });
 }
 
-/** How many of the person's workflow runs are under way (running, queued or waiting). */
-export async function getActivityCount(signal?: AbortSignal): Promise<number> {
-  const body = await request("/activity/count", {
+/** How many of the person's workflow runs are under way (running, queued or waiting), and
+ * those that ended last. */
+export function getActivityCount(signal?: AbortSignal): Promise<ActivityCount> {
+  return request("/activity/count", {
     signal,
     timeoutMs: 15_000,
     validate: (data) => underWaySchema.parse(data),
   });
-  return body.under_way;
 }

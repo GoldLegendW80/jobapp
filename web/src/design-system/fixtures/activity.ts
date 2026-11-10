@@ -3,6 +3,7 @@ import { delay, http, HttpResponse } from "msw";
 import type { AgentFlow } from "@/features/admin/api/agents-api";
 import {
   ACTIVE_FLOW_STATUSES,
+  type EndedRun,
   type FlowStatus,
   type FlowStep,
   type Workflow,
@@ -268,6 +269,8 @@ export function searchRunOf(
     output_tokens: null,
     cost_usd: null,
     credential_kind: null,
+    reason: status === "failure" ? "Website search failed." : null,
+    new_postings: done ? 4 : 1,
   };
 }
 
@@ -356,6 +359,8 @@ export const RUN_UNDER_WAY: WorkflowRunDetail = {
   output_tokens: 3904,
   cost_usd: 0.3121,
   credential_kind: "claude_subscription",
+  reason: null,
+  new_postings: null,
 };
 
 /** An application whose answer writer failed: the run stopped there. */
@@ -391,6 +396,8 @@ export const FAILED_RUN: WorkflowRunDetail = {
   output_tokens: 1210,
   cost_usd: 0.0934,
   credential_kind: "anthropic_api_key",
+  reason: "Answer writer: The run reached its limit of 40 turns.",
+  new_postings: null,
 };
 
 /** A Fill my profile run that read a CV: the extractor's log keeps names and sizes only. */
@@ -439,6 +446,8 @@ export const PRIVATE_RUN: WorkflowRunDetail = {
   output_tokens: 2260,
   cost_usd: 0.1409,
   credential_kind: "claude_subscription",
+  reason: null,
+  new_postings: null,
 };
 
 /** A posting triaged on a click on Assess with agent: one agent step, its log a posting check. */
@@ -461,6 +470,8 @@ export const ASSESS_RUN: WorkflowRunDetail = {
   output_tokens: 612,
   cost_usd: 0.0841,
   credential_kind: "claude_subscription",
+  reason: null,
+  new_postings: null,
 };
 
 /** A scheduled sweep: two websites searched side by side, then the new postings read. */
@@ -521,6 +532,8 @@ export const SWEEP_RUN: WorkflowRunDetail = {
   output_tokens: 8410,
   cost_usd: null,
   credential_kind: "claude_subscription",
+  reason: null,
+  new_postings: 12,
 };
 
 /** A week of activity, newest first. */
@@ -639,6 +652,18 @@ export const PRIVATE_STEPS: RunStep[] = [
  * The fake /api/activity for a story: the workflows, the runs (one workflow's when asked), one
  * run's detail; and the agent step's log through the fake /api/agents.
  */
+/** The runs that ended last, newest end first, as /api/activity/count names them. */
+export function endedOf(runs: WorkflowRun[]): EndedRun[] {
+  return runs
+    .flatMap((one) =>
+      !ACTIVE_FLOW_STATUSES.has(one.status) && one.finished_at
+        ? [{ id: one.id, finished_at: one.finished_at }]
+        : [],
+    )
+    .sort((a, b) => Date.parse(b.finished_at) - Date.parse(a.finished_at))
+    .slice(0, 10);
+}
+
 export function fakeActivityApi(
   options: {
     runs?: WorkflowRun[];
@@ -665,6 +690,7 @@ export function fakeActivityApi(
       HttpResponse.json({
         under_way: runs.filter((one) => ACTIVE_FLOW_STATUSES.has(one.status))
           .length,
+        ended: endedOf(runs),
       }),
     ),
     http.get("*/api/activity/runs", async ({ request }) => {
