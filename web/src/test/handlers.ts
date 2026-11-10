@@ -187,7 +187,9 @@ export const handlers = [
   // No workflow run yet (Activity).
   http.get("*/api/activity/workflows", () => HttpResponse.json({ items: [] })),
   http.get("*/api/activity/runs", () => HttpResponse.json({ items: [] })),
-  http.get("*/api/activity/count", () => HttpResponse.json({ under_way: 0 })),
+  http.get("*/api/activity/count", () =>
+    HttpResponse.json({ under_way: 0, ended: [] }),
+  ),
   http.get("*/api/proposals", () => HttpResponse.json({ items: [] })),
   // No chat thread yet (job detail's Chat panel).
   http.get("*/api/agents/threads", () => HttpResponse.json({ items: [] })),

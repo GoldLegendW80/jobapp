@@ -9,5 +9,5 @@ import { useActivityCount } from "../api/use-activity";
  */
 export function ActivityCount() {
   const query = useActivityCount();
-  return <CountBadge count={query.data ?? 0} words="under way" />;
+  return <CountBadge count={query.data?.under_way ?? 0} words="under way" />;
 }

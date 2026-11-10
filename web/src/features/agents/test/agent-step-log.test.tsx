@@ -76,6 +76,8 @@ const workflowRun = (
   output_tokens: null,
   cost_usd: null,
   credential_kind: null,
+  reason: null,
+  new_postings: null,
 });
 
 function step(seq: number, kind: string, data: Record<string, unknown> = {}) {
