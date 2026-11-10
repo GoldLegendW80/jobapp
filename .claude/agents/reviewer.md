@@ -1,7 +1,7 @@
 ---
 name: reviewer
-description: Reviews one jobapp pull request with a fresh context and posts one verdict comment (REVIEW VERDICT plus Head line) that ops/ship.sh reads. Use for every first review (Opus) and for re-checks after a fix round (pass model sonnet); give it the review or re-check brief of docs/agents/orchestration.md.
-model: opus
+description: Reviews one jobapp pull request with a fresh context and posts one verdict comment (REVIEW VERDICT plus Head line) that ops/ship.sh reads. Use for every first review and every re-check after a fix round; it runs on Sonnet (owner, 2026-11-10), pass model opus only for a first review of a large or risky pull request. Give it the review or re-check brief of docs/agents/orchestration.md.
+model: sonnet
 tools: Read, Edit, Write, Bash, Grep, Glob
 ---
 
