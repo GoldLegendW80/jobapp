@@ -361,8 +361,8 @@ status `interview`, or the later `rejected` and `closed`; no new status), the po
 ingestion's upload (`POST /api/ingestion/documents`, PDF or DOCX, its parser sandbox, its secret
 check), so the file keeps ingestion's retention and deletion: deleting it there leaves the notes,
 unlinked. Their click (`POST /api/documents/offer-notes/{posting_id}`, `offer_notes.read`) runs
-`documents_offer_read` once, under ingestion's consent and the person's own credential (409 for
-either missing, nothing stored), and writes the posting's document of kind `offer_notes`
+`documents_offer_read` once, with no consent asked (D31), under the person's own credential (409
+when it is missing, nothing stored), and writes the posting's document of kind `offer_notes`
 (migration 0045, text only, `source_document_id` the letter): a summary, each clause (its title,
 its own words quoted, what it means in plain words), what differs from the posting's stated pay
 (`opportunities/pay.py`) and from the person's `search.compensation`, and questions for a
@@ -376,7 +376,7 @@ score, the prompt forbids both and any outside fact, and a submit that tells the
 or calls signing safe is refused back to the agent (`offer_notes.VERDICT`, English and French;
 wording outside that list rests on the prompt). The page says the notes are not legal advice.
 Their chat is the documents chat (`chat.post` hands the message to `offer_notes.post_message`:
-the agent `documents_chat_offer_notes`, the same consent as the reading; a version of origin
+the agent `documents_chat_offer_notes`, the same credential check as the reading; a version of origin
 `chat` per change). `GET /api/documents/offer-notes/{posting_id}` answers the notes, the newest
 reading, the letter's name, what they were compared with and `truncated` (with `read_chars`);
 it settles first a chat change whose run ended without its hook (`chat.recover`), so the notes

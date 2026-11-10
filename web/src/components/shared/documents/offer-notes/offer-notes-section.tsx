@@ -1,8 +1,8 @@
 /**
  * "Offer" on a posting's page (SPEC-documents.md, "Reading an offer"): from the interview on,
  * "Read an offer" takes the letter the person received (a PDF or a Word file, through
- * ingestion's upload), asks ingestion's consent the first time, and the notes the assistant
- * writes on it show here, with their chat. Nothing is read without that click.
+ * ingestion's upload), with no consent asked, and the notes the assistant writes on it show
+ * here, with their chat. Nothing is read without that click.
  */
 import { FileUp } from "lucide-react";
 import { useRef } from "react";
@@ -134,7 +134,7 @@ function OfferSection({ job }: { job: JobDetail }) {
 
 /** Where the chosen letter stands before its reading starts. */
 function Steps({ reader }: { reader: ReturnType<typeof useReadOffer> }) {
-  const { file, consent } = reader;
+  const { file } = reader;
   if (reader.problem !== undefined)
     return (
       <Alert variant="destructive">
@@ -166,24 +166,6 @@ function Steps({ reader }: { reader: ReturnType<typeof useReadOffer> }) {
             }}
           >
             Keep it
-          </Button>
-        </AlertDescription>
-      </Alert>
-    );
-  if (reader.asking && consent.data !== undefined)
-    return (
-      <Alert data-testid="offer-consent">
-        <AlertTitle>What is sent to read the letter</AlertTitle>
-        <AlertDescription className="flex flex-col items-start gap-2">
-          <span className="whitespace-pre-line">{consent.data.text}</span>
-          <Button
-            size="sm"
-            disabled={reader.agree.isPending}
-            onClick={() => {
-              reader.agree.mutate(consent.data.version);
-            }}
-          >
-            Agree and read the letter
           </Button>
         </AlertDescription>
       </Alert>

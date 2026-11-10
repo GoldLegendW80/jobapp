@@ -1,7 +1,7 @@
 /**
  * The chat of the notes on an offer letter: the documents chat (its messages, its generation
  * followed until it ends, Stop), in a sheet opened from the notes. The api answers what to
- * settle when ingestion's consent or a credential is missing; the reading asked for both first.
+ * settle when the model credential is missing; no consent is asked.
  */
 import { MessageSquare } from "lucide-react";
 import { useRef, useState } from "react";

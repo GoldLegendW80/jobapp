@@ -412,7 +412,7 @@ def test_fill_empty_through_the_api_prefers_the_cv_wherever_it_stands_in_the_run
     api: Api, me: tuple[uuid.UUID, str], factory: Factory, settings: Settings
 ) -> None:
     from tests.ingestion import merge_helpers as mh
-    from tests.profile.test_titles_reading import base_cv, consent
+    from tests.profile.test_titles_reading import base_cv
 
     user, token = me
     export = "Jane Doe\nGenAI and data engineer\nExample Robotics, Engineer, 2021 to 2023\n"
@@ -444,7 +444,6 @@ def test_fill_empty_through_the_api_prefers_the_cv_wherever_it_stands_in_the_run
             ],
         ],
     )
-    consent(factory, user, uploads=False, cvs=True)
     base_cv(factory, user, "My CV", "GenAI Engineer", source=cv_id)
     path = f"/api/ingestion/runs/{run_id}/accept-additions"
     pending = [str(one.id) for one in mh.proposals_of(factory, user, run_id)]

@@ -9,8 +9,8 @@ Included by `routers.py` before D6's `/api/documents/{document_id}`.
 - `POST /api/documents/offer-notes/{posting_id} {ingestion_document_id, script?}`: read that
   upload of the person's, 202 with the notes. 404 for a posting or an upload that is not the
   person's; 422 for an upload that cannot be read (not read yet, failed, pages of pictures, not
-  a PDF or a Word file, a secret warning not kept), with a sentence for each; 409 without
-  ingestion's consent or a model credential, while the notes are being written, or while their
+  a PDF or a Word file, a secret warning not kept), with a sentence for each; 409 without a
+  model credential (no consent is asked), while the notes are being written, or while their
   row is locked; 429 when the person's runs are all busy. `script` names the fake backend's
   stream (tests and journeys), ignored on the real model.
 
@@ -52,7 +52,6 @@ UNREADABLE = {
 }
 UNREAD = "The letter could not be read. Upload it again, or another file."
 REFUSED = {
-    "consent": "Confirm what is sent to the model first, then read the letter again.",
     "credential": "Add a model credential on the Account page first, then read the letter again.",
 }
 RUNNING = "The notes are being written. Try again once they are done."
@@ -136,7 +135,7 @@ def read_notes(posting_id: uuid.UUID, user: CurrentUser, request: Request, db: D
     status_code=status.HTTP_202_ACCEPTED,
     responses={
         404: {"description": "Not the person's posting or upload"},
-        409: {"description": "The consent or a credential is missing, or the notes are busy"},
+        409: {"description": "A credential is missing, or the notes are busy"},
         422: {"description": "The upload cannot be read"},
         429: {"description": "The person's runs are all busy"},
     },
