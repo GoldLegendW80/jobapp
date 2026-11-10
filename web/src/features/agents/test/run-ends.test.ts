@@ -28,6 +28,8 @@ describe("newlyEnded", () => {
     expect(
       newlyEnded(baseline, [
         at("c", "2026-11-10T09:00:00Z"),
+        // Seen ended at first sight, then started and ended again: still one toast per run.
+        at("a", "2026-11-10T09:10:00Z"),
         at("b", "2026-11-10T08:30:00Z"),
         at("old", "2026-11-10T07:00:00Z"),
         at("same", "2026-11-10T08:30:00Z"),

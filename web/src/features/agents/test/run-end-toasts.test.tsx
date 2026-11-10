@@ -57,6 +57,23 @@ function fakeActivity(answers: ActivityCount[], runs: WorkflowRunDetail[]) {
 
 const toasts = () => document.querySelectorAll("[data-sonner-toast]");
 
+// A run that ends after the one a test expects no toast for: its toast shows that the count
+// was read and acted on, so the absence of the other is not a read that had not landed yet.
+const CONTROL: WorkflowRunDetail = {
+  ...SEARCH,
+  id: "control-run",
+  workflow_title: "Job chat",
+  subject: null,
+  new_postings: null,
+};
+const ENDED_CONTROL = { id: CONTROL.id, finished_at: "2026-11-10T10:00:00Z" };
+
+async function onlyTheControl(calls: { summaries: string[] }) {
+  expect(await screen.findByText("Job chat: Succeeded")).toBeVisible();
+  expect(toasts()).toHaveLength(1);
+  expect(calls.summaries).toEqual([CONTROL.id]);
+}
+
 async function openAt(path: string) {
   const app = renderApp(path);
   await screen.findByRole("navigation", { name: "Main" });
@@ -156,36 +173,38 @@ describe("the toast of a run's end", () => {
 
   it("shows none for a run that had ended when the page opened", async () => {
     const calls = fakeActivity(
-      [{ under_way: 0, ended: [ENDED_SEARCH, OLD] }],
-      [SEARCH],
+      [
+        { under_way: 1, ended: [ENDED_SEARCH, OLD] },
+        { under_way: 1, ended: [ENDED_SEARCH, OLD] },
+        { under_way: 0, ended: [ENDED_CONTROL, ENDED_SEARCH, OLD] },
+      ],
+      [SEARCH, CONTROL],
     );
     const app = await openAt("/jobs");
     await firstCountRead(app);
     await readCount(app);
     await readCount(app);
-    expect(toasts()).toHaveLength(0);
-    expect(calls.summaries).toEqual([]);
+    await onlyTheControl(calls);
   });
 
   it("shows none for an older run that comes back into the list", async () => {
     const older = { id: "older-run", finished_at: "2026-11-10T07:00:00Z" };
     const calls = fakeActivity(
       [
-        { under_way: 0, ended: [OLD] },
-        { under_way: 0, ended: [older] },
+        { under_way: 1, ended: [OLD] },
+        { under_way: 0, ended: [ENDED_CONTROL, older] },
       ],
-      [{ ...SEARCH, id: older.id }],
+      [{ ...SEARCH, id: older.id }, CONTROL],
     );
     const app = await openAt("/jobs");
     await firstCountRead(app);
     await readCount(app);
-    expect(toasts()).toHaveLength(0);
-    expect(calls.summaries).toEqual([]);
+    await onlyTheControl(calls);
   });
 
   it("does not show a run's toast again after a reload", async () => {
-    const ended = { under_way: 0, ended: [ENDED_SEARCH, OLD] };
-    fakeActivity([{ under_way: 1, ended: [OLD] }, ended], [SEARCH]);
+    const ended = { under_way: 1, ended: [ENDED_SEARCH, OLD] };
+    fakeActivity([{ under_way: 2, ended: [OLD] }, ended], [SEARCH]);
     const first = await openAt("/jobs");
     await firstCountRead(first);
     await readCount(first);
@@ -195,13 +214,14 @@ describe("the toast of a run's end", () => {
       toast.dismiss();
     });
 
-    const again = fakeActivity([ended], [SEARCH]);
+    const again = fakeActivity(
+      [ended, { under_way: 0, ended: [ENDED_CONTROL, ENDED_SEARCH, OLD] }],
+      [SEARCH, CONTROL],
+    );
     const reloaded = await openAt("/jobs");
     await firstCountRead(reloaded);
     await readCount(reloaded);
-    await readCount(reloaded);
-    expect(screen.queryByText("Job search: Succeeded")).not.toBeInTheDocument();
-    expect(again.summaries).toEqual([]);
+    await onlyTheControl(again);
   });
 
   it("does not show a run another tab of this browser announced", async () => {
@@ -211,17 +231,17 @@ describe("the toast of a run's end", () => {
     );
     const calls = fakeActivity(
       [
-        { under_way: 1, ended: [OLD] },
-        { under_way: 0, ended: [ENDED_SEARCH, OLD] },
+        { under_way: 2, ended: [OLD] },
+        { under_way: 1, ended: [ENDED_SEARCH, OLD] },
+        { under_way: 0, ended: [ENDED_CONTROL, ENDED_SEARCH, OLD] },
       ],
-      [SEARCH],
+      [SEARCH, CONTROL],
     );
     const app = await openAt("/jobs");
     await firstCountRead(app);
     await readCount(app);
     await readCount(app);
-    expect(toasts()).toHaveLength(0);
-    expect(calls.summaries).toEqual([]);
+    await onlyTheControl(calls);
   });
 
   it("reads a summary that failed again at the next count", async () => {
