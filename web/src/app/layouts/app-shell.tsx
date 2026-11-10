@@ -49,7 +49,7 @@ export function AppShell() {
               {MAIN_TABS.map((tab) => (
                 <PillNavLink key={tab.to} to={tab.to}>
                   {tab.label}
-                  {tab.counts ? <TabCounts /> : null}
+                  {tab.counts ? <TabCounts of={tab.counts} /> : null}
                 </PillNavLink>
               ))}
               {admin ? (

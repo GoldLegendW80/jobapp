@@ -95,6 +95,10 @@ class WorkflowRunList(BaseModel):
     items: list[WorkflowRunOut]
 
 
+class UnderWay(BaseModel):
+    under_way: int
+
+
 class StepOut(BaseModel):
     id: str
     kind: str
@@ -320,19 +324,28 @@ def _summary(group: _Group, steps: Sequence[StepOut], subject: SubjectOut | None
 
 
 class _Read:
-    """Each group's steps and subject, its app's own rows read once for all the groups."""
+    """Each group's steps and subject, its app's own rows read once for all the groups; a count
+    reads no subject."""
 
-    def __init__(self, db: Session, user_id: uuid.UUID, groups: list[_Group]) -> None:
+    def __init__(
+        self, db: Session, user_id: uuid.UUID, groups: list[_Group], subjects: bool = True
+    ) -> None:
         self.found = activity_steps.read(
             db, user_id, [(g.workflow, g.key, [row.id for row in g.rows]) for g in groups]
         )
-        self.subjects = _subjects(db, user_id, groups)
+        self.subjects = _subjects(db, user_id, groups) if subjects else {}
         self.definitions = catalog.load()
 
-    def of(self, group: _Group) -> tuple[list[StepOut], dict[str, Any]]:
+    def _found_steps(self, group: _Group) -> tuple[activity_steps.Found, list[StepOut]]:
         found = self.found.get(group.key) or activity_steps.Found()
-        steps = _steps(group, workflows.BY_KEY[group.workflow], found, self.definitions)
+        return found, _steps(group, workflows.BY_KEY[group.workflow], found, self.definitions)
+
+    def of(self, group: _Group) -> tuple[list[StepOut], dict[str, Any]]:
+        found, steps = self._found_steps(group)
         return steps, _summary(group, steps, _subject(group, found, self.subjects))
+
+    def under_way(self, group: _Group) -> bool:
+        return _status(self._found_steps(group)[1]) in ACTIVE
 
 
 def _scan(db: Session, user_id: uuid.UUID) -> Sequence[sa.Row[Any]]:
@@ -363,6 +376,20 @@ async def list_workflow_runs(
 ) -> WorkflowRunList:
     """The caller's workflow runs, newest first: all of them, or one workflow's."""
     return await run_in_threadpool(_list, sessions_of(request), user.id, workflow, limit)
+
+
+def _count(sessions: sessionmaker[Session], user_id: uuid.UUID) -> int:
+    with sessions() as db:
+        groups = _group(_scan(db, user_id))
+        read = _Read(db, user_id, groups, subjects=False)
+        return sum(1 for group in groups if read.under_way(group))
+
+
+@router.get("/count", response_model=UnderWay, dependencies=[Depends(_no_store)])
+async def count_under_way(user: CurrentUser, request: Request) -> UnderWay:
+    """How many of the caller's workflow runs the list shows under way: the Activity tab's
+    count, read on a short interval."""
+    return UnderWay(under_way=await run_in_threadpool(_count, sessions_of(request), user.id))
 
 
 def _detail(

@@ -28,6 +28,9 @@ const flowStatus = z.enum(flowStatuses).catch("skipped");
 // While a workflow run is under way, its statuses and durations are read again this often.
 export const ACTIVITY_POLL_MS = 2000;
 
+// The Activity tab's count is read again this often, only while the document is visible.
+export const ACTIVITY_COUNT_POLL_MS = 15_000;
+
 export const ACTIVE_FLOW_STATUSES: ReadonlySet<FlowStatus> = new Set([
   "waiting",
   "queued",
@@ -102,6 +105,7 @@ export type WorkflowRunDetail = z.infer<typeof workflowRunDetailSchema>;
 
 const workflowListSchema = z.object({ items: z.array(workflowSchema) });
 const workflowRunListSchema = z.object({ items: z.array(workflowRunSchema) });
+const underWaySchema = z.object({ under_way: z.number().int().nonnegative() });
 
 export const activityKey = ["activity"] as const;
 export const workflowsKey = [...activityKey, "workflows"] as const;
@@ -109,6 +113,7 @@ export const workflowRunsKey = (workflow: string | null) =>
   [...activityKey, "runs", workflow ?? "all"] as const;
 export const workflowRunKey = (id: string) =>
   [...activityKey, "run", id] as const;
+export const activityCountKey = [...activityKey, "count"] as const;
 
 export async function listWorkflows(signal?: AbortSignal): Promise<Workflow[]> {
   const body = await request("/activity/workflows", {
@@ -142,4 +147,14 @@ export function getWorkflowRun(
     timeoutMs: 15_000,
     validate: (data) => workflowRunDetailSchema.parse(data),
   });
+}
+
+/** How many of the person's workflow runs are under way (running, queued or waiting). */
+export async function getActivityCount(signal?: AbortSignal): Promise<number> {
+  const body = await request("/activity/count", {
+    signal,
+    timeoutMs: 15_000,
+    validate: (data) => underWaySchema.parse(data),
+  });
+  return body.under_way;
 }

@@ -661,6 +661,12 @@ export function fakeActivityApi(
     http.get("*/api/activity/workflows", () =>
       HttpResponse.json({ items: WORKFLOWS }),
     ),
+    http.get("*/api/activity/count", () =>
+      HttpResponse.json({
+        under_way: runs.filter((one) => ACTIVE_FLOW_STATUSES.has(one.status))
+          .length,
+      }),
+    ),
     http.get("*/api/activity/runs", async ({ request }) => {
       if (options.loading) await delay("infinite");
       const workflow = new URL(request.url).searchParams.get("workflow");

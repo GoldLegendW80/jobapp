@@ -8,13 +8,15 @@ import {
 } from "@/components/ui/navigation-menu";
 
 import { NeedsYouDot } from "@/components/shared/apply/needs-person";
+import { ActivityCount } from "@/features/agents/components/activity-count";
 import { QueueCount } from "@/features/apply/components/queue-count";
 import { cn } from "@/lib/utils";
 
-import { MAIN_TABS } from "./main-tabs";
+import { MAIN_TABS, type TabCount } from "./main-tabs";
 
-/** The Applications counts, after its label so a screen reader reads them in its name. */
-export function TabCounts() {
+/** A tab's counts, after its label so a screen reader reads them in its name. */
+export function TabCounts({ of }: { of: TabCount }) {
+  if (of === "activity") return <ActivityCount />;
   return (
     <>
       <QueueCount />
@@ -66,7 +68,7 @@ export function BottomNav() {
                   {counts ? (
                     // Over the icon's top right corner; its words stay after the label.
                     <span className="pointer-events-none absolute top-1 left-1/2 flex items-center">
-                      <TabCounts />
+                      <TabCounts of={counts} />
                     </span>
                   ) : null}
                 </Link>

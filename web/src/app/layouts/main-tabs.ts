@@ -7,18 +7,26 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+export type TabCount = "applications" | "activity";
+
 /** The main navigation, in its order at every width: the header's on a wide screen (Admin
  * follows for an admin), the bottom tab bar's on a phone. */
 export const MAIN_TABS: readonly {
   to: string;
   label: string;
   icon: LucideIcon;
-  /** Applications: how many wait for the person, and the dot of those that need them. */
-  counts?: true;
+  /** The counts after the label (`TabCounts`): Applications, how many wait for the person and
+   * the dot of those that need them; Activity, how many workflow runs are under way. */
+  counts?: TabCount;
 }[] = [
   { to: "/jobs", label: "Jobs", icon: Briefcase },
   { to: "/discover", label: "Discover", icon: Compass },
-  { to: "/applications", label: "Applications", icon: Send, counts: true },
+  {
+    to: "/applications",
+    label: "Applications",
+    icon: Send,
+    counts: "applications",
+  },
   { to: "/profile", label: "Profile", icon: UserRound },
-  { to: "/activity", label: "Activity", icon: Activity },
+  { to: "/activity", label: "Activity", icon: Activity, counts: "activity" },
 ];
