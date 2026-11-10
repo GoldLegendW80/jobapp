@@ -811,8 +811,11 @@ async def _search(
             signed_out = await _signed_out(pages, session, base_url)
             if session.stopped:
                 return session.stopped
+            if ran.stopped in ("no_credential", "cancelled"):
+                # The person's Cancel of the website's run is never retried (sweep.NOT_RETRIED).
+                return "agent_cancelled" if ran.stopped == "cancelled" else "no_credential"
             if ran.stopped:
-                return "no_credential" if ran.stopped == "no_credential" else "agent_failed"
+                return "agent_failed"
             code = outcome(session)
             return SIGNIN_WALL if signed_out and code is not None else code
     except TimeoutError:

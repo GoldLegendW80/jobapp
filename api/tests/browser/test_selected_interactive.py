@@ -556,10 +556,21 @@ def test_a_wall_page_reaches_the_agent_and_never_ends_the_website_by_itself():
     assert "observe" not in [event[0] for event in policy.events]
 
 
-@pytest.mark.parametrize("stopped", ["token_budget", "turn_limit", "error", "cancelled", "busy"])
-def test_runtime_budget_or_failure_is_reported_without_borrowing_legacy_storage(stopped):
+@pytest.mark.parametrize(
+    ("stopped", "reason"),
+    [
+        ("token_budget", "agent_failed"),
+        ("turn_limit", "agent_failed"),
+        ("error", "agent_failed"),
+        ("busy", "agent_failed"),
+        # The person's Cancel is theirs, never retried (B24).
+        ("cancelled", "agent_cancelled"),
+    ],
+)
+def test_runtime_budget_or_failure_is_reported_without_borrowing_legacy_storage(stopped, reason):
     """The agent of a website has no budget of its own (jobs J18): a runtime stop of any kind,
-    a ceiling of the runtime included, is the assistant stopping early."""
+    a ceiling of the runtime included, is the assistant stopping early; the person's Cancel is
+    said as theirs."""
 
     async def script(session):
         return finder.Ran(stopped=stopped)
@@ -567,7 +578,7 @@ def test_runtime_budget_or_failure_is_reported_without_borrowing_legacy_storage(
     entries, _, leases, _, _ = asyncio.run(
         execute(selected(), "e2e-person", ScriptedFinder(script))
     )
-    assert entries[0]["reason"] == "agent_failed"
+    assert entries[0]["reason"] == reason
     assert leases.released == ["lease-1"]
 
 
