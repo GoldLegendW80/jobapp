@@ -32,7 +32,7 @@ ones are in `when/`. Merge and deploy mechanics: CONTRIBUTING.md, steps 4 to 7 (
 4. **Pull request.** The body says `Closes #<issue>` (or `Refs #<issue>` for a slice) and, when
    it needs another open pull request first, `Depends on #<n>` as line 1. `ops/ship.sh` reads
    both.
-5. **First review.** A fresh reviewer (`.claude/agents/reviewer.md`, on Opus), with the reviewer
+5. **First review.** A fresh reviewer (`.claude/agents/reviewer.md`, on Sonnet since 2026-11-10; Opus only for a large or risky pull request), with the reviewer
    brief. It posts `REVIEW VERDICT: APPROVE` or `REQUEST CHANGES` with a `Head:` line, and pushes
    mechanical fixups itself.
 6. **Fix agent.** On REQUEST CHANGES, a FRESH agent (never the builder resumed) with the fix
