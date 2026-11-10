@@ -998,7 +998,7 @@ async def apply_tick(ctx: dict[str, Any]) -> int:
     from app.apply import resend as apply_resend
 
     # The items it moves back are `ready` in their own mode again: the next tick decides them.
-    await asyncio.to_thread(apply_resend.run, sessions_of(ctx), ctx.get("clock", utcnow)())
+    await asyncio.to_thread(apply_resend.run, sessions_of(ctx), clock_of(ctx)())
     # Email dispatch belongs to the API process, whose send key the worker cannot hold.
     from app.apply.models import Application
 

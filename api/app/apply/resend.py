@@ -194,18 +194,26 @@ def move(
 
 def run(sessions: sessionmaker[Session], now: datetime) -> int:
     """Every item the old rule stopped, each in its own transaction; one whose posting is busy is
-    left to the next tick. Returns how many were moved back or kept."""
+    left to the next tick, and one that raises is logged and skipped: this never fails the tick.
+    Returns how many were moved back or kept."""
     with sessions() as db:
         found = [tuple(row) for row in db.execute(stopped())]
     done = 0
     for application_id, user_id, authorisation_id in found:
-        with sessions() as db:
-            try:
-                written = move(db, user_id, application_id, authorisation_id, now)
-                db.commit()
-            except jobs_service.JobBusyError:
-                db.rollback()
-                continue
+        try:
+            with sessions() as db:
+                try:
+                    written = move(db, user_id, application_id, authorisation_id, now)
+                    db.commit()
+                except jobs_service.JobBusyError:
+                    db.rollback()
+                    continue
+        except Exception as error:
+            logger.warning(
+                "apply.resend.failed",
+                extra={"application_id": str(application_id), "error": type(error).__name__},
+            )
+            continue
         done += written is not None
         if written is not None:
             logger.info(

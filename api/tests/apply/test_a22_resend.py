@@ -395,6 +395,45 @@ def test_a_list_read_before_another_run_moved_the_item_moves_nothing(
     assert kinds(db, app_id).count(resend.MOVED) == 1
 
 
+def test_one_item_raising_leaves_the_others_moved_and_the_tick_whole(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    person_b: Person,
+    stub: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broken = full_auto_stopped(db, factory, person_a, stub)
+    fine = one_click_stopped(db, factory, person_b, stub)
+    real = resend.move
+
+    def move(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, *rest: Any) -> Any:
+        if application_id == broken:
+            raise RuntimeError("a value that must not be logged")
+        return real(db, user_id, application_id, *rest)
+
+    monkeypatch.setattr(resend, "move", move)
+    assert resent(factory) == 1
+    assert application(db, fine).mode is Mode.direct
+    assert resend.MOVED not in kinds(db, broken)
+
+    queued: list[str] = []
+
+    class Pool:
+        async def enqueue_job(self, name: str, *args: Any, **kwargs: Any) -> str:
+            queued.append(name)
+            return "job"
+
+        async def delete(self, *args: Any) -> None:
+            return None
+
+    ctx = {"sessions": factory, "redis": Pool(), "clock": lambda: LATER}
+    assert fine in submit.due(db, LATER)
+    asyncio.run(worker.apply_tick(ctx))
+    assert queued, "the tick still queues the work of the items that were moved"
+    assert resend.MOVED not in kinds(db, broken)
+
+
 def test_the_tick_runs_it(
     db: Session, factory: sessionmaker[Session], person_a: Person, stub: str
 ) -> None:
