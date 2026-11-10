@@ -15,13 +15,14 @@ model ever clicks Submit: the one click path stays the private one of `apply/gat
 
 The order, every step through the gate, as Full auto's (`full_auto.py`) without its own rules:
 
-1. `decide`, which the decision job (`submit.decision`) runs for a `ready` direct item
-   (`submit.due` lists them): under the gate's locks, the click never decided before (one click
-   gives at most one Submit), not older than `CLICK_VALID`, then the `apply_click` row written
-   and `gate.decide` with it: the gate's checks (the kill switches, never apply, LinkedIn's
+1. `decide`, which the decision job (`submit.decision`) runs for a `ready` direct item (`submit.due`
+   lists them): under the gate's locks, the click never decided before (one click gives at most one
+   Submit; the row a refusal by the old document rule left unspent is decided once more when
+   `resend` moved the item back, A22), not older than `CLICK_VALID`, then the `apply_click` row
+   written and `gate.decide` with it: the gate's checks (the kill switches, never apply, LinkedIn's
    consent and checkpoint pause, duplicates, the person's pause, company caps and the safety
-   ceiling, the documents still the ones filled), then `checks` (this module's). A pass spends
-   the row and moves the item to `approved` at once: there is no hold.
+   ceiling, the documents still the ones filled), then `checks` (this module's). A pass spends the
+   row and moves the item to `approved` at once: there is no hold.
 2. The submit lease, as for an approved Review first item: the pace per host (a wait keeps the
    authorisation), the read back of every value, the kill switches and `recheck` again just
    before the click.
@@ -91,10 +92,18 @@ def _decided(db: Session, application: Application) -> bool:
     return found is not None
 
 
+def _moved_back(db: Session, application: Application) -> Authorisation | None:
+    """The click's own authorisation, when the old document rule stopped it and `resend` moved
+    the item back: decided once more with it, never a new one."""
+    from app.apply import resend
+
+    return resend.reusable(db, application, AuthorisationKind.apply_click)
+
+
 def before_gate(db: Session, application: Application, now: datetime) -> str | None:
     """The refusals `decide` makes before the gate's own: the click decided once already, or
     older than `CLICK_VALID`. The check by model reads them too, to spare its call."""
-    if _decided(db, application):
+    if _decided(db, application) and _moved_back(db, application) is None:
         return "authorisation_used"
     if now >= application.created_at + CLICK_VALID:
         return "authorisation_expired"
@@ -154,6 +163,9 @@ def decide(db: Session, application_id: uuid.UUID, now: datetime, switches: Any)
         full_auto.to_review(db, application, code, now)
         gate._event(db, application, "decision", now, outcome="refused", code=code)
         return code
+    if (moved := _moved_back(db, application)) is not None:
+        decision = gate.decide(db, user_id, moved.id, now, switches=switches)
+        return decision.state.value if decision.passed else (decision.code or "refused")
     authorisation = Authorisation(
         id=uuid.uuid4(),
         user_id=user_id,

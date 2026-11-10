@@ -908,7 +908,7 @@ def test_a_decision_cut_by_a_worker_stop_is_queued_again_at_the_next_tick(
             again = await pool.enqueue_job(
                 "apply_decide", str(app_id), _job_id=job_id, _queue_name=queues.AGENTS
             )
-            await worker.apply_tick({"sessions": factory, "redis": pool})
+            await worker.apply_tick({"sessions": factory, "redis": pool, "clock": lambda: AT})
             return kept, again is None, await pool.exists(job_key_prefix + job_id)
         finally:
             await pool.aclose()
@@ -959,7 +959,7 @@ def test_a_decision_a_killed_worker_left_in_progress_is_queued_again_once_the_ne
             kept_ms = int(worker.build_worker(spec, settings, {}).in_progress_timeout_s * 1000)
             await pool.psetex(in_progress_key_prefix + job_id, kept_ms, b"1")
             await pool.psetex(elsewhere, kept_ms, b"1")
-            await worker.apply_tick({"sessions": factory, "redis": pool})
+            await worker.apply_tick({"sessions": factory, "redis": pool, "clock": lambda: AT})
             refused = await pool.zscore(queues.AGENTS, job_id) is not None
             stop = asyncio.Event()
             failure: list[BaseException] = []
@@ -980,7 +980,7 @@ def test_a_decision_a_killed_worker_left_in_progress_is_queued_again_once_the_ne
                 raise failure[0]
             cleared = not await pool.exists(in_progress_key_prefix + job_id)
             stays = bool(await pool.exists(elsewhere))
-            await worker.apply_tick({"sessions": factory, "redis": pool})
+            await worker.apply_tick({"sessions": factory, "redis": pool, "clock": lambda: AT})
             return kept_ms, refused, cleared, stays, await pool.exists(job_key_prefix + job_id)
         finally:
             await pool.aclose()
