@@ -442,3 +442,18 @@ Owner request of 2026-11-10, issue #780; branch `browser/B23-screenshot-and-slot
 - `api/app/browser/sources/interactive.py`: a website the store makes wait while no website of its sweep holds a lease reads what holds the browser (`_held_elsewhere`, the store's `current`): another person's lease or one of the person's own (a fill, a sign in) is `browser_busy` as decided; nothing is the browser being freed, asked again every 5 s, 30 times (`FREEING_POLL_S`, `FREEING_TRIES`), then `browser_busy`. `api/tests/browser/test_b23_slot_wait.py` reproduces the sweep on a real Redis and browserd's own lease logic.
 
 **Not changed:** LinkedIn's pacing and its stop on a refusal (no retry, the 30 minute cooldown).
+
+### B24: one retry for a failed source in a sweep, never blocking the others
+
+Owner request of 2026-11-10, issue #785; branch `browser/B24-one-retry`, on B23 (#784). Decision: "One retry of a failed source" in [decisions](../../docs/decisions.md) (Interactive job search); spec: [SPEC-jobs, Sweep](../../SPEC-jobs.md#sweep).
+
+**Owner words (2026-11-10).** "si le run fail pour la recherche d'un job, je veux un seul nouvel essai. cela ne doit pas bloquer les autres."
+
+**As built:**
+- `api/app/jobs/sweep.py`: each hook's run records the sources it bound (`bind_source`, `_BOUND`); a source that ended `failed` or `partial` on a code of `RETRIED` is run once more by that hook on a plan holding it alone (`_retry`, `_narrowed`): the sources that make no browser call once the side by side step ended, beside the websites, within SWEEP_TIMEOUT_S (none starts within `RETRY_MIN_S` of it, a retry still running at it ends `time_budget`); the websites once their first attempts ended. The entry carries the first attempt's counts and says `attempt` 2 and `first_attempt`, or `not_retried` (`no_time`, `not_started`). Codes not in `RETRIED` are not retried (`NOT_RETRIED` lists the person's and the limits'; a test keeps every known code in one list).
+- `api/app/browser/sources/linkedin_guest.py`: a planned retry is not sent while LinkedIn's cooldown runs (`_cooling`, `linkedin_cooldown`).
+- `api/app/browser/sources/interactive.py`: the person's Cancel of a website's run ends it `agent_cancelled` (was `agent_failed`), never retried; worded in `web/src/features/jobs/helpers/labels.ts`.
+- `api/app/agents/activity_steps.py`: a source's step notes "tried twice" or "not tried again" with why; a website's retry is its second agent step.
+- Tests: `api/tests/jobs/test_b24_one_retry.py`, `api/tests/browser/test_b24_retry_slot.py` (one browser, real Redis and browserd's lease logic), `api/tests/agents/test_activity.py`.
+
+**Open:** LinkedIn's retry after a rate limit almost never runs, since its 30 minute cooldown outlasts the 15 minute deadline of the sources that make no browser call; a source `not_started` behind a stop of the websites gets no attempt in the retry pass.

@@ -228,6 +228,9 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
     "The assistant stopped before the end. Postings saved before are kept.",
+  // The person cancelled the website's run in Activity (browser B24): never searched again.
+  agent_cancelled:
+    "You cancelled the search of this website. Postings saved before are kept.",
   // A company careers page's page cap (app/browser/finder.py), or LinkedIn's in sweeps before
   // 2026-10-28; the agent of a job website has no cap (owner, 2026-10-27 and 2026-10-28).
   page_budget:

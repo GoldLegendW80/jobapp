@@ -21,7 +21,8 @@ One sweep, `run_sweep(sweep_id)`:
    take (B20, owner 2026-11-04): only BROWSER_SEARCH_MAX_S from the sweep's start, the guard
    against a dead process below arq's own timeout, and the run's Cancel end them. Then the
    postings this sweep stored are read by the posting reader (app/jobs/reader.py, jobs J19) within
-   its own bound, its failures never the sweep's. A hook that
+   its own bound, its failures never the sweep's. A source that failed is tried once more after
+   the others' first attempt (browser B24, `_retry`, below). A hook that
    raises ends alone (logged, each one): the others run to their end, then the
    sweep fails as it did when that hook ran alone, and the websites do not start. A commit that
    does not settle lets go of the row (`Commits.unsettled`): the others stop at their next page,
@@ -77,6 +78,7 @@ Nothing here logs posting texts.
 
 import asyncio
 import contextlib
+import contextvars
 import copy
 import hashlib
 import json
@@ -408,14 +410,29 @@ class Stats:
         return Stats(**copy.deepcopy(self.as_json()))
 
 
+# The source ids the hook running in this task bound (`bind_source`): a retry goes to that hook.
+_BOUND: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar("bound", default=None)
+
+
 def bind_source(
     stats: Stats, mode: str, key: Sequence[str], entry: dict[str, Any]
 ) -> dict[str, Any]:
     """Reuse the frozen slot; pre-v1 readers keep their original unbound entry format."""
     source_id = _source_id(mode, *key)
+    bound = _BOUND.get()
+    if bound is not None:
+        bound.add(source_id)
     for selected in stats.sources:
         if selected.get("source_id") == source_id:
+            # A retry (B24) keeps what the first attempt stored: its postings count as any others.
+            carried = (
+                {name: selected[name] for name in SOURCE_COUNTERS if name in selected}
+                | {"attempt": 2}
+                if selected.get("first_attempt") is not None
+                else {}
+            )
             selected.update(entry, phase="running", outcome=None, reason=None)
+            selected.update(carried)
             return selected
     stats.sources.append(entry)
     return entry
@@ -841,6 +858,8 @@ FeedHook = BrowserHook
 # The reading of the postings the sweep stored (app/jobs/reader.py `SweepReader`), once every
 # source ended: given the plan, the stats and the sweep's monotonic deadline.
 ReaderHook = Callable[[Plan, Stats, float], Awaitable[None]]
+# A hook that ran, with the sources it bound (`bind_source`): what its retry is for (`_retry`).
+Ran = tuple[BrowserHook, set[str]]
 
 # How many big answers a sweep parses at once (`parse_one`).
 PARSES_AT_ONCE = 1
@@ -926,14 +945,28 @@ async def run_sweep(
                 # The sources that make no browser call side by side, within their own
                 # deadline; a source still running at it fails the sweep, as before B20.
                 async with asyncio.timeout(timeout_s):
-                    await _side_by_side(
+                    ran = await _side_by_side(
                         [alerts, feeds, *apis], plan, stats, progress, started + timeout_s
                     )
-                # Then the job websites, as long as they take (B20, owner 2026-11-04), told the
-                # sweep's own bound. A commit that outlived its wait let go of the row: no
-                # website starts.
-                if browser is not None and not commits.unsettled:
-                    await browser(plan, stats, progress, started + browser_s)
+                # Their retries (B24) beside the websites, within the same deadline.
+                retrying = asyncio.create_task(
+                    _retry(ran, plan, stats, progress, started + timeout_s)
+                )
+                try:
+                    # Then the job websites, as long as they take (B20, owner 2026-11-04), told
+                    # the sweep's own bound, and their retries. A commit that outlived its wait
+                    # let go of the row: no website starts.
+                    if browser is not None and not commits.unsettled:
+                        websites = await _bound_by(
+                            browser, plan, stats, progress, started + browser_s
+                        )
+                        if not commits.unsettled:
+                            await _retry([websites], plan, stats, progress, started + browser_s)
+                except BaseException:
+                    retrying.cancel()
+                    await asyncio.gather(retrying, return_exceptions=True)
+                    raise
+                await retrying
                 if reader is not None and not commits.unsettled:
                     await _read_postings(reader, plan, stats, started + browser_s)
             finally:
@@ -976,14 +1009,19 @@ async def _side_by_side(
     stats: Stats,
     progress: Callable[[], Awaitable[None]],
     deadline: float,
-) -> None:
+) -> list[Ran]:
     """Run `hooks` (None skipped) at the same time, each to its own end: one that raises never
     stops the others, and the first error is raised once they all ended (the sweep then fails as
     when that hook ran alone). A cancellation (the sweep's time limit, the worker stopping)
-    cancels every one of them and returns only once they all ended: no task outlives the run."""
+    cancels every one of them and returns only once they all ended: no task outlives the run.
+    Returns each hook with the sources it bound, for their retry (`_retry`)."""
     errors: list[Exception] = []
+    ran: list[Ran] = []
 
     async def one(hook: BrowserHook) -> None:
+        bound: set[str] = set()
+        ran.append((hook, bound))
+        _BOUND.set(bound)  # this task's own context
         try:
             await hook(plan, stats, progress, deadline)
         except Exception as error:  # the first is raised below, once the others ended
@@ -1005,6 +1043,249 @@ async def _side_by_side(
                 group.create_task(one(hook))
     if errors:
         raise errors[0]
+    return ran
+
+
+async def _bound_by(
+    hook: BrowserHook,
+    plan: Any,
+    stats: Stats,
+    progress: Callable[[], Awaitable[None]],
+    deadline: float,
+) -> Ran:
+    """Run `hook` and say which sources it bound."""
+    bound: set[str] = set()
+    token = _BOUND.set(bound)
+    try:
+        await hook(plan, stats, progress, deadline)
+    finally:
+        _BOUND.reset(token)
+    return hook, bound
+
+
+# --- one retry of a source that failed (browser B24) ---------------------------------------------
+#
+# The owner (2026-11-10, #785): "si le run fail pour la recherche d'un job, je veux un seul nouvel
+# essai. cela ne doit pas bloquer les autres." A source whose first attempt ended on a failure a
+# second attempt can change (RETRIED) runs once more, by the hook that ran it, on a plan holding
+# the sources to retry alone (`_narrowed`), once every other source of its step had its first
+# attempt: the sources that make no browser call once the side by side step ended, beside the
+# websites and within the sweep's SWEEP_TIMEOUT_S; the websites once their first attempts ended,
+# each waiting for the person's browser as any website. A retry follows its source's own rules:
+# LinkedIn's public job search is retried only once its cooldown is over (linkedin_guest.run).
+# Its entry carries what the first attempt stored (`bind_source`), says `attempt` 2 and the first
+# attempt's outcome (`first_attempt`). A source not retried for a rule of the run keeps its first
+# outcome and says why (`not_retried`). A failure caused by the person or by a limit is never
+# retried (NOT_RETRIED), nor any code not listed; a cancelled sweep retries nothing.
+
+RETRIED = frozenset(
+    {
+        # The browser, its pages and the website's agent.
+        "agent_failed",
+        "browser_busy",
+        "browser_unavailable",
+        "page_failed",
+        "layout_changed",
+        "lease_budget",
+        "nothing_reported",
+        "no_search_box",
+        "search_refused",
+        "unsupported_interaction",
+        # LinkedIn's public job search, once its cooldown is over.
+        "linkedin_rate_limited",
+        # A job feed or a company board.
+        "upstream_error",
+        "timeout",
+        "network",
+        "invalid_response",
+        "feed_failed",
+        # The alert e-mails.
+        "mail_unavailable",
+        "mail_failed",
+    }
+)
+NOT_RETRIED = frozenset(
+    {
+        # The person's to solve: a credential, a sign in, a security check, a cookie banner, a
+        # permission, a key, a browser the person took, a Cancel, the saved criteria.
+        "no_credential",
+        "signin_wall",
+        "platform_signin",
+        "linkedin_signin",
+        "no_job_list",
+        "security_check",
+        "cookie_wall",
+        "linkedin_checkpoint",
+        "permission_unavailable",
+        "permission_checkpoint",
+        "permission_revoked",
+        "linkedin_off",
+        "linkedin_paused",
+        "mail_not_connected",
+        "mail_needs_reconnect",
+        "no_key",
+        "key_unreadable",
+        "key_refused",
+        "lease_ended",
+        "agent_cancelled",
+        "unsupported_criteria",
+        "no_titles",
+        "guard_failed",
+        # A limit, or a host's refusal a second ask within minutes meets again.
+        "token_budget",
+        "page_budget",
+        "time_budget",
+        "time_limit",
+        "page_cap",
+        "too_large",
+        "rate_limited",
+        "blocked",
+        "not_found",
+        "host_rate_limited",
+        "linkedin_daily",
+        "platform_daily",
+        "linkedin_searched_once",
+        "bad_address",
+        # The run's own state.
+        "store_failed",
+        "store_refused",
+        "not_started",
+        "finding_persistence_pending",
+    }
+)
+# A retry is not started this close to the bound of its step.
+RETRY_MIN_S = 60.0
+FAILED = ("failed", "partial")
+
+
+def retry_planned(stats: Stats, source_id: str) -> dict[str, Any] | None:
+    """The entry of `source_id` when its retry is planned and not yet bound."""
+    for entry in stats.sources:
+        if entry.get("source_id") == source_id and entry.get("first_attempt") is not None:
+            return entry if entry.get("attempt") != 2 else None
+    return None
+
+
+def not_retried(entry: dict[str, Any], reason: str) -> None:
+    """Its retry refused by a rule of the source or of the run: the first attempt stands. Set to
+    None, never removed: a write keeps the stored row's keys the run's entry lacks."""
+    first = entry.get("first_attempt")
+    if isinstance(first, dict) and entry.get("attempt") == 2:
+        entry.update(
+            phase="done", outcome=first["outcome"], reason=first["reason"], error=first["reason"]
+        )
+    entry.update(attempt=1, first_attempt=None, not_retried=reason)
+
+
+def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
+    return [
+        entry
+        for entry in stats.sources
+        if entry.get("source_id") in bound
+        and entry.get("phase") == "done"
+        and entry.get("outcome") in FAILED
+        and entry.get("reason") in RETRIED
+        and entry.get("first_attempt") is None
+        and entry.get("not_retried") is None
+    ]
+
+
+def _narrowed(plan: Any, ids: set[str]) -> Any:
+    """The plan of a retry: the same, its search holding only the sources of `ids`."""
+    search = plan.search
+    alerts = search.alert_emails
+    off = {key: False for key in alert_keys(search) if _source_id("mail", key) not in ids}
+    boards_ = search.company_boards
+    rest = copy.copy(plan)
+    rest.search = search.model_copy(
+        update={
+            "alert_emails": alerts.model_copy(update=off),
+            "job_feeds": [name for name in search.job_feeds if _source_id("api", name) in ids],
+            "company_boards": None
+            if boards_ is None
+            else [b for b in boards_ if _source_id("api", b.ats, b.board) in ids],
+            "interactive_sites": [
+                site
+                for site in search.interactive_sites
+                if _source_id("api", site.url) in ids or _source_id("llm_browser", site.url) in ids
+            ],
+        }
+    )
+    return rest
+
+
+async def _retry(
+    ran: Sequence[Ran],
+    plan: Plan,
+    stats: Stats,
+    progress: Callable[[], Awaitable[None]],
+    deadline: float,
+) -> None:
+    """The one retry of the sources of `ran` that failed (above), side by side, within
+    `deadline`. Never raises but for a cancellation: a hook that raises or outlives the deadline
+    ends its retried sources there (`page_failed`, `time_budget`)."""
+    planned = [(hook, _failed(stats, bound)) for hook, bound in ran]
+    planned = [(hook, entries) for hook, entries in planned if entries]
+    if not planned or plan.search is None or abandoned(plan):
+        return
+    every = [entry for _, entries in planned for entry in entries]
+    if deadline - time.monotonic() < RETRY_MIN_S:
+        for entry in every:
+            not_retried(entry, "no_time")
+        await progress()
+        return
+    for entry in every:
+        entry["first_attempt"] = {
+            "outcome": entry.get("outcome"),
+            "reason": entry.get("reason"),
+            "found": entry.get("found", 0),
+            "postings": entry.get("postings", 0),
+        }
+    await progress()
+    timed_out = False
+
+    async def one(hook: BrowserHook, entries: list[dict[str, Any]]) -> None:
+        narrowed = _narrowed(plan, {entry["source_id"] for entry in entries})
+        try:
+            await hook(narrowed, stats, progress, deadline)
+        except Exception as error:
+            logger.exception(
+                "sweep source retry failed",
+                extra={
+                    "sweep_id": str(getattr(plan, "sweep_id", None)),
+                    "source": _hook_name(hook),
+                    "error_type": type(error).__name__,
+                },
+            )
+
+    try:
+        async with asyncio.timeout(max(0.0, deadline - time.monotonic())):
+            async with asyncio.TaskGroup() as group:
+                for hook, entries in planned:
+                    group.create_task(one(hook, entries))
+    except TimeoutError:
+        timed_out = True
+    for entry in every:
+        await _retried(plan, stats, entry, timed_out)
+    await progress()
+
+
+async def _retried(plan: Plan, stats: Stats, entry: dict[str, Any], timed_out: bool) -> None:
+    """How a planned retry ended: never started (a stop, a rule of its source), cut by the
+    deadline or a raise, or ended by its source."""
+    if entry.get("attempt") != 2:
+        if entry.get("first_attempt") is not None:
+            not_retried(entry, "not_started")
+        return
+    if entry.get("phase") == "running":
+        commits = getattr(plan, "commits", None)
+        if commits is not None:
+            await commits.settle(entry["source_id"])
+        entry["error"] = "time_budget" if timed_out else "page_failed"
+        finish_source(entry)
+        release_board(stats, entry["source_id"])
+    elif entry.get("reason") == "not_started":
+        not_retried(entry, "not_started")
 
 
 async def _read_postings(reader: ReaderHook, plan: Plan, stats: Stats, deadline: float) -> None:

@@ -47,10 +47,11 @@ gives its one permission (linkedin_guard), which this source checks too.
   WEBSITES_MIN_S when a website read in the browser is ticked (they start after the sources
   that make no browser call, so they keep that much), whatever the number of those websites.
 - Stop: HTTP 429 or 999, or a redirect to LinkedIn's sign in or security pages, ends the source
-  at once `linkedin_rate_limited`, with what was stored kept; no retry. It also starts
-  LinkedIn's cooldown: for COOLDOWN_S no sweep of any person sends LinkedIn a request (a Redis
-  key per host, RedisCooldown, read before every request); while it lasts the source ends
-  `linkedin_rate_limited` without a request. It records no LinkedIn checkpoint: the calls carry
+  at once `linkedin_rate_limited`, with what was stored kept. It also starts LinkedIn's
+  cooldown: for COOLDOWN_S no sweep of any person sends LinkedIn a request (a Redis key per
+  host, RedisCooldown, read before every request); while it lasts the source ends
+  `linkedin_rate_limited` without a request, and the sweep's one retry of a failed source (B24)
+  is not sent (`linkedin_cooldown`, `_cooling`). It records no LinkedIn checkpoint: the calls carry
   no account, so the 7 day pause of the person's account (and of Easy Apply) is not started by
   an anonymous refusal. Any other unexpected answer ends it `page_failed`, as does a request
   that takes longer than REQUEST_S in all; a posting gone (404) is skipped. Once the sweep let
@@ -162,6 +163,7 @@ STOPPED = frozenset({429, 999})
 RATE_LIMITED = "linkedin_rate_limited"
 COOLDOWN_S = 1800.0
 COOLDOWN_KEY = "jobapp:browser:linkedin-guest-cooldown:"
+COOLING = "linkedin_cooldown"  # a retry not sent: the cooldown still runs (B24)
 WALL_SEGMENTS = frozenset({"authwall", "login", "uas", "checkpoint", "signup"})
 _JOB_ID = re.compile(r"urn:li:jobPosting:([0-9]{1,24})$")
 _VIEW = re.compile(r"/jobs/view/(?:[^/?#]*-)?([0-9]{1,24})/?$")
@@ -795,6 +797,11 @@ async def run(
         return None
     stop: str | None = None
     for index, site in enumerate(api):
+        retry = sweep.retry_planned(stats, sweep._source_id(MODE, site.url))
+        if retry is not None and await _cooling(runner):
+            sweep.not_retried(retry, COOLING)
+            await progress()
+            continue
         entry = sweep.bind_source(
             stats,
             MODE,
@@ -834,6 +841,18 @@ async def run(
         sweep.release_board(stats, entry["source_id"])
         await progress()
     return stop
+
+
+async def _cooling(runner: Runner) -> bool:
+    """Whether LinkedIn's cooldown still runs, a store that cannot say included: a retry (B24,
+    sweep.RETRIED) is sent only once it is over."""
+    from app.browser import platform_policy
+
+    key = platform_policy.pace_key(KIND, linkedin.host(runner.base_url), runner.base_url)
+    try:
+        return await runner.guest_cooldown.active(key)
+    except StoreUnavailableError:
+        return True
 
 
 def time_limit(now: float, deadline: float, websites: int) -> float:

@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
 from app.browser import finder
-from app.jobs import sweep
+from app.jobs import feeds, sweep
 from app.jobs.models import Job, Sweep, SweepTrigger
 from app.profile.models import Profile
 from tests.jobs.test_scoring import skills as make_skills
@@ -132,7 +132,16 @@ def each_website(
 
     async def hook(plan: sweep.Plan, stats: sweep.Stats, progress: Any, deadline: float) -> None:
         del deadline
-        sites = [entry for entry in stats.sources if entry.get("host")]
+        # The websites alone, as sweep._summary counts them: since browser B24 an alert e-mail,
+        # feed or board retry runs beside the websites, so its entry is never this hook's.
+        sites = [
+            entry
+            for entry in stats.sources
+            if entry.get("host")
+            and entry.get("mode") != "mail"
+            and not (entry.get("mode") == "api" and entry.get("kind") in feeds.FEED_NAMES)
+            and entry.get("kind") != "board"
+        ]
         for index, entry in enumerate(sites):
             entry.update(phase="running", outcome=None, reason=None)
             stats.current_board = entry["source_id"]

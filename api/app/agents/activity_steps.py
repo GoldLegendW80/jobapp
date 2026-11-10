@@ -32,6 +32,12 @@ _SWEEP = {
     SweepStatus.failed: "failure",
 }
 _SOURCE = {"complete": "success", "no_matches": "success", "partial": "failure"}
+# Why a source that failed was not tried again (sweep.not_retried).
+_NOT_RETRIED = {
+    "linkedin_cooldown": "not tried again, LinkedIn asked the app to wait",
+    "no_time": "not tried again, no time left",
+    "not_started": "not tried again",
+}
 _INGESTION = {
     IngestionStatus.running: "running",
     IngestionStatus.paused: "waiting",
@@ -172,17 +178,21 @@ def _sweep_steps(key: uuid.UUID, row: Any) -> list[dict[str, Any]]:
         node = "browser_discovery" if source.get("mode") == "llm_browser" else "sweep"
         if node == "browser_discovery" and status != "waiting":
             continue
-        found = source.get("found")
-        steps.append(
-            _step(
-                f"source:{key}:{index}",
-                node,
-                name,
-                status,
-                note=f"{found} found" if isinstance(found, int) else None,
-            )
-        )
+        steps.append(_step(f"source:{key}:{index}", node, name, status, note=_source_note(source)))
     return steps
+
+
+def _source_note(source: Mapping[str, Any]) -> str | None:
+    """What a source found, and its one retry (browser B24, sweep.RETRIED): a website's retry is
+    its second agent step."""
+    found = source.get("found")
+    parts = [f"{found} found"] if isinstance(found, int) else []
+    if source.get("attempt") == 2:
+        parts.append("tried twice")
+    why = _NOT_RETRIED.get(str(source.get("not_retried")))
+    if why is not None:
+        parts.append(why)
+    return ", ".join(parts) or None
 
 
 def _sweeps(db: Session, user_id: uuid.UUID, keys: Sequence[uuid.UUID]) -> dict[uuid.UUID, Found]:

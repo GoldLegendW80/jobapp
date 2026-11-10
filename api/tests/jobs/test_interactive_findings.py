@@ -477,8 +477,9 @@ def test_an_agent_failure_after_a_batch_keeps_what_was_stored(
 
     row = run(factory, new_sweep(factory, alice), runner(script))
     entry = entry_of(row)
-    assert (entry["found"], entry["postings"], entry["outcome"]) == (1, 1, "partial")
-    assert entry["error"] == "agent_failed"
+    # Its one retry (B24) read the same posting again: found twice, stored once.
+    assert (entry["found"], entry["postings"], entry["outcome"]) == (2, 1, "partial")
+    assert (entry["error"], entry["attempt"]) == ("agent_failed", 2)
     assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
     assert_counts_agree(factory, row, alice)
 
@@ -584,9 +585,11 @@ def test_a_commit_whose_tool_call_is_cancelled_finishes_before_the_next_source(
     finally:
         held.release.set()
     assert row.status is SweepStatus.done
-    assert seen_at_second_start == [(1, 0)]  # counted before the second website began
+    # Counted before the second website began. Neither session counted a report of its own (the
+    # call was torn down), so each was tried once more (B24): the retry found the posting again.
+    assert seen_at_second_start == [(1, 0), (1, 0)]
     first, _ = (s for s in row.stats["sources"] if s.get("mode") == "llm_browser")
-    assert (first["found"], first["postings"]) == (1, 1)
+    assert (first["found"], first["postings"], first["attempt"]) == (2, 1, 2)
     assert row.stats["new"] == 1
     assert [job.title for job in jobs_of(factory, alice)] == ["Robot Engineer"]
 
