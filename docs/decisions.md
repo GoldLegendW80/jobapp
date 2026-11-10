@@ -359,6 +359,7 @@ choice made by the build that stands until the owner says otherwise.
   chrome://sandbox, the new tab page and the browser's own UI; chrome://policy's test page off; no extension installed; saved flags and saved test policies
   dropped before every start.
 - 2026-11-09 (A21, issue #773), the owner, on a one click Apply card that asked him to review its documents: "I don't want it in full auto". No document review stop where the person's Like in Full auto or click on Apply is the approval: guardrail 6's rule (a version over its page or with corrections goes back to the person) goes for Full auto and one click Apply; Review first still asks a look before its Approve.
+- 2026-11-10 (A22, issue #777), asked whether the applications the old document rule had already stopped and handed to Review first should go back to sending by themselves, the owner answered: "yes". Each one still waiting goes back to its own mode once, by itself after the deploy, only while its Like or Apply click is unspent, not expired and bound to the same answers and documents (a Like: Full auto still on); the gate decides it again with every check and Full auto's hold; otherwise it waits for Approve with the reason. Every move is an event of the application's history.
 
 ## Likes (2026-10-21)
 

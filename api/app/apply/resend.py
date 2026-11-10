@@ -26,7 +26,7 @@ import uuid
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from app.apply.models import (
     Application,
@@ -82,8 +82,9 @@ def _last_decisions() -> sa.Select[tuple[int]]:
 
 def stopped() -> sa.Select[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]:
     """(application, person, authorisation) of every item `run` has still to look at."""
-    marked = sa.select(ApplicationEvent.application_id).where(
-        ApplicationEvent.kind.in_((MOVED, KEPT))
+    marker = aliased(ApplicationEvent)
+    marked = sa.exists().where(
+        marker.application_id == Application.id, marker.kind.in_((MOVED, KEPT))
     )
     named = sa.cast(ApplicationEvent.data["authorisation_id"].astext, sa.Uuid)
     return (
@@ -110,7 +111,7 @@ def stopped() -> sa.Select[tuple[uuid.UUID, uuid.UUID, uuid.UUID]]:
             Authorisation.kind.in_(tuple(MODE_OF_KIND)),
             Application.state == State.ready,
             Application.mode == Mode.review,
-            Application.id.not_in(marked),
+            ~marked,
         )
         .order_by(Application.updated_at, Application.id)
     )
@@ -195,7 +196,7 @@ def run(sessions: sessionmaker[Session], now: datetime) -> int:
     """Every item the old rule stopped, each in its own transaction; one whose posting is busy is
     left to the next tick. Returns how many were moved back or kept."""
     with sessions() as db:
-        found = list(db.execute(stopped()).tuples())
+        found = [tuple(row) for row in db.execute(stopped())]
     done = 0
     for application_id, user_id, authorisation_id in found:
         with sessions() as db:
