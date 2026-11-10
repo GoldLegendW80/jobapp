@@ -91,6 +91,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("app.browser.sources.interactive")
 
+FREEING_POLL_S = 5.0
+# 150 s in all: browserd's longest end of a lease, its profile measured within MEASURE_S (120 s).
+FREEING_TRIES = 30
 SIGNIN_CODE = "platform_signin"  # guard.SIGNIN, the sources' code of a sign in page
 # What a sign in page is told by (platform_policy.wall), and the code of a website whose search
 # ended on one nobody solved while it was read signed in (`_signed_out`).
@@ -427,9 +430,10 @@ class _Slots:
     browsers at once, owner 2026-11-06): the next website starts once the one before it holds
     its lease or ended, so they start in run order and as many run as browserd has free slots.
     A website the lease store makes wait while another website of the sweep holds a lease asks
-    again once one of them ends; with none holding one it is `browser_busy`, as before. A stop
-    (STOPS_SWEEP) lets the websites that run end, and those still waiting for a slot do not
-    start (`not_started`)."""
+    again once one of them ends; with none holding one it is `browser_busy` when a lease that is
+    none of the sweep's holds the browser (a fill, a sign in, another person), else it asks again
+    while the browser is freed (`_website`, browser B23). A stop (STOPS_SWEEP) lets the websites
+    that run end, and those still waiting for a slot do not start (`not_started`)."""
 
     def __init__(self, stop: str | None = None) -> None:
         self.holding = 0
@@ -626,6 +630,7 @@ async def _website(
     # The website's hosts: its platform's family (B19, finder.lease_hosts), else its own host.
     hosts = finder.lease_hosts(scope.start)
     slots, ready = turn if turn is not None else (_Slots(), asyncio.Event())
+    freeing = 0
     while True:
         seen = slots.ended
         got = await runner.leases.acquire(
@@ -635,8 +640,13 @@ async def _website(
             break
         held = None if got.lease is None else ""
         await runner._give_back(str(plan.user_id), held, context.source_id)
-        if held is not None or not await slots.wait_end(seen):
+        if held is not None:
             return "browser_busy"
+        if not await slots.wait_end(seen):
+            if freeing >= FREEING_TRIES or await _held_elsewhere(runner, str(plan.user_id)):
+                return "browser_busy"
+            freeing += 1
+            await runner.sleep(FREEING_POLL_S)
         if slots.stop:
             return "not_started"
     slots.took(ready)
@@ -666,6 +676,16 @@ async def _website(
         return await _search(runner.finder, pages, scope, str(plan.user_id), site, runner.base_url)
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
+
+
+async def _held_elsewhere(runner: Runner, user: str) -> bool:
+    """Whether a lease that is none of this sweep's holds the browser, when no website of the
+    sweep holds one: another person's, or one of the person's own (a fill, a sign in, Look),
+    since the sweep's websites give theirs back before they end. False while nothing holds it:
+    browserd still ends the last window (Chromium closing, the profile measured), past the
+    api's own wait for that end (client.END_TIMEOUT_S), and refuses a start until then."""
+    view = await runner.leases.current(user)
+    return view.held_by_other or view.lease is not None or bool(view.leases)
 
 
 # The app's own refusals of an agent's search (B19): browserd's, and the api's of an address
