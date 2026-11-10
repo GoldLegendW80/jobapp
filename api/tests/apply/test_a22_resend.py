@@ -7,6 +7,7 @@ submission counted here is a call of the fake form's `gate_click`; no browser, n
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -402,6 +403,7 @@ def test_one_item_raising_leaves_the_others_moved_and_the_tick_whole(
     person_b: Person,
     stub: str,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     broken = full_auto_stopped(db, factory, person_a, stub)
     fine = one_click_stopped(db, factory, person_b, stub)
@@ -413,7 +415,12 @@ def test_one_item_raising_leaves_the_others_moved_and_the_tick_whole(
         return real(db, user_id, application_id, *rest)
 
     monkeypatch.setattr(resend, "move", move)
-    assert resent(factory) == 1
+    with caplog.at_level(logging.DEBUG):
+        assert resent(factory) == 1
+    (failed,) = [record for record in caplog.records if record.msg == "apply.resend.failed"]
+    assert (failed.application_id, failed.error) == (str(broken), "RuntimeError")
+    assert "must not be logged" not in caplog.text
+    assert all("must not be logged" not in str(vars(record)) for record in caplog.records)
     assert application(db, fine).mode is Mode.direct
     assert resend.MOVED not in kinds(db, broken)
 
