@@ -11,6 +11,8 @@ the way the SDK calls them. Invented hosts only.
 """
 
 import asyncio
+import base64
+import io
 import json
 import random
 import uuid
@@ -19,10 +21,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from PIL import Image
 
 from app.agents import tools as app_tools
 from app.agents.models import CredentialKind
-from app.browser import finder, finder_tools, platform_policy, sources
+from app.browser import finder, finder_tools, platform_policy, screenshot, sources
 from app.jobs import sweep
 from app.profile.schemas import SearchSection
 from tests.browser.fakes import FakeLeases, ScriptedFinder
@@ -234,12 +237,19 @@ async def report(session: finder.FinderSession) -> None:
 # --- the screenshot ------------------------------------------------------------------------------
 
 
+def _png(width: int, height: int) -> str:
+    pixels = random.Random(7).randbytes(width * height * 3)  # noqa: S311  a fixed page
+    out = io.BytesIO()
+    Image.frombytes("RGB", (width, height), pixels).save(out, "PNG")
+    return base64.b64encode(out.getvalue()).decode("ascii")
+
+
 @pytest.mark.parametrize(
     ("data", "image"),
     [
-        ("iVBOR" + "A" * 100, True),
-        ("A" * finder.SHOT_MAX, True),  # at the bound
-        ("A" * (finder.SHOT_MAX + 1), False),  # one past it: text, never a cut image
+        (_png(160, 100), True),
+        (_png(1440, 900), True),  # random pixels: over 1 MiB as base64, the bound of B23
+        ("iVBOR" + "A" * 100, False),  # no image: text, never a cut image
     ],
 )
 def test_the_screenshot_reaches_the_model_as_an_image_block_bounded(data: str, image: bool):
@@ -254,10 +264,13 @@ def test_the_screenshot_reaches_the_model_as_an_image_block_bounded(data: str, i
     entry, _, _ = run(selected(), site, script)
     [result] = seen
     if image:
-        assert result == {"content": [{"type": "image", "data": data, "mimeType": "image/png"}]}
+        [block] = result["content"]
+        assert (block["type"], block["mimeType"]) == ("image", "image/jpeg")
+        assert len(base64.b64decode(block["data"])) <= screenshot.SHOT_BYTES
+        assert block["data"] == screenshot.for_model(data)
     else:
         assert result.get("is_error") is True
-        assert "too large" in text_of(result)
+        assert text_of(result) == screenshot.UNREAD
     assert ("browser_take_screenshot", {"type": "png"}) in site.calls  # no model argument
     assert entry["error"] == "finding_persistence_pending"  # the agent went on
 
