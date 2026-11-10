@@ -21,7 +21,8 @@ One sweep, `run_sweep(sweep_id)`:
    take (B20, owner 2026-11-04): only BROWSER_SEARCH_MAX_S from the sweep's start, the guard
    against a dead process below arq's own timeout, and the run's Cancel end them. Then the
    postings this sweep stored are read by the posting reader (app/jobs/reader.py, jobs J19) within
-   its own bound, its failures never the sweep's. A hook that
+   its own bound, its failures never the sweep's. A source that failed is tried once more after
+   the others' first attempt (browser B24, `_retry`, below). A hook that
    raises ends alone (logged, each one): the others run to their end, then the
    sweep fails as it did when that hook ran alone, and the websites do not start. A commit that
    does not settle lets go of the row (`Commits.unsettled`): the others stop at their next page,
