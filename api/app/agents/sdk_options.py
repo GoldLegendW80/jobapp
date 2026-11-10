@@ -64,6 +64,10 @@ FORBIDDEN_TOOLS = (
     "Write",
 )
 
+# The longest line Claude Code may write to the SDK, one message that may echo a tool's answer:
+# the SDK's 1 MiB ended a search on a screenshot (CLIJSONDecodeError, browser B23); still a bound.
+MAX_BUFFER_SIZE = 8 * 1024 * 1024
+
 # Inherited variables the CLI process keeps; every other one is overridden with "".
 ENV_KEEP = frozenset(
     {
@@ -100,8 +104,10 @@ def full_name(name: str) -> str:
 def fixed() -> dict[str, Any]:
     """The options of every run that no definition changes: no built-in tool (`tools=[]`, and
     each one denied by name), no permission prompt, no settings, CLAUDE.md or skills
-    (`setting_sources=[]`), only the MCP servers the runner names, adaptive thinking."""
+    (`setting_sources=[]`), only the MCP servers the runner names, adaptive thinking, and a
+    line of at most MAX_BUFFER_SIZE bytes from Claude Code."""
     return {
+        "max_buffer_size": MAX_BUFFER_SIZE,
         "tools": [],
         "disallowed_tools": list(FORBIDDEN_TOOLS),
         "permission_mode": PERMISSION_MODE,

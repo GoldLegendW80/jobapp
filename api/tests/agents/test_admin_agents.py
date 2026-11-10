@@ -1081,7 +1081,14 @@ def test_the_next_run_uses_the_saved_version_and_records_it(
     # The page shows the run's numbers and version, and the options the runner built.
     page = api.get(f"{AGENTS}/echo", token=admin).json()
     shown = page["claude_code"]
-    for key in ("tools", "disallowed_tools", "permission_mode", "setting_sources", "max_turns"):
+    for key in (
+        "tools",
+        "disallowed_tools",
+        "permission_mode",
+        "setting_sources",
+        "max_turns",
+        "max_buffer_size",
+    ):
         assert shown[key] == getattr(options, key), key
     assert shown["allowed_tools"] == options.allowed_tools
     assert shown["strict_mcp_config"] is options.strict_mcp_config is True

@@ -293,6 +293,7 @@ def test_options_lock_the_agent_down(tmp_path: Path) -> None:
     assert options.tools == []
     assert options.allowed_tools == ["mcp__app__get_job"]
     assert options.permission_mode == "dontAsk"
+    assert options.max_buffer_size == runner.sdk_options.MAX_BUFFER_SIZE  # browser B23
     assert options.setting_sources == []
     assert options.strict_mcp_config is True
     assert options.model == "claude-opus-5-5"

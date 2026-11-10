@@ -83,7 +83,7 @@ from app.agents import credentials, definitions, runs
 from app.agents.models import CredentialKind, RunStatus
 from app.apply import bank, states
 from app.apply.models import AnswerSource, Application, ApplicationAnswer, Mode, State
-from app.browser import tool_sessions
+from app.browser import screenshot, tool_sessions
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.profile import service as profile_service
@@ -525,8 +525,6 @@ class ApplySession:
         return await self._guarded(work)
 
     async def screenshot(self) -> tuple[dict[str, Any] | str, bool]:
-        from app.browser.finder import SHOT_MAX
-
         if await self._gone():
             return self._ended()
         try:
@@ -537,9 +535,10 @@ class ApplySession:
         data = shot.get("data")
         if not shot.get("ok") or not isinstance(data, str):
             return "The screenshot could not be taken.", True
-        if len(data) > SHOT_MAX:
-            return "The screenshot is too large: read the page with browser_snapshot.", True
-        return {"type": "image", "data": data, "mimeType": "image/png"}, False
+        image = await asyncio.to_thread(screenshot.for_model, data)
+        if image is None:
+            return screenshot.UNREAD, True
+        return {"type": "image", "data": image, "mimeType": screenshot.MIME}, False
 
     async def navigate(self, url: str) -> tuple[str, bool]:
         return await self.interact("browser_navigate", {"url": url[:2000]})

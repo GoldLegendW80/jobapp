@@ -54,6 +54,7 @@ from sqlalchemy.orm import Session
 from app.agents import credentials, definitions, runs
 from app.agents.failures import TURN_LIMIT
 from app.agents.models import CredentialKind, RunStatus
+from app.browser import screenshot
 from app.browser.client import BrowserError
 from app.browser.words import words as _words
 
@@ -110,7 +111,6 @@ KEYS = frozenset(
     {"Tab", "Shift+Tab", "Enter", "Escape", "Backspace", "Delete", "Space", "ArrowUp",
      "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"}
 )  # fmt: skip
-SHOT_MAX = 1_500_000  # base64 characters of a screenshot returned to the model, about 1.1 MB
 POSTINGS_MAX = 100  # postings in one report call, and the most `_keep` keeps
 TITLE_MAX = 300
 LOCATION_MAX = 300
@@ -1214,8 +1214,9 @@ class FinderSession:
         return json.dumps(view, ensure_ascii=False), False
 
     async def screenshot(self) -> tuple[dict[str, Any] | str, bool]:
-        """browser_take_screenshot: the visible page as a PNG image for the model (B20), at most
-        SHOT_MAX base64 characters; a larger one answers a text that says so."""
+        """browser_take_screenshot: the visible page as an image for the model (B20), a JPEG
+        bounded in size and bytes (screenshot.for_model, B23); one it cannot read or make fit
+        answers a text that says so."""
         if self.interactive is None:
             return "Refused: this run has no interactive search permission.", True
         if self.stopped:
@@ -1238,9 +1239,10 @@ class FinderSession:
         data = shot.get("data")
         if not shot.get("ok") or not isinstance(data, str):
             return "The screenshot could not be taken.", True
-        if len(data) > SHOT_MAX:
-            return "The screenshot is too large: read the page with browser_snapshot.", True
-        return {"type": "image", "data": data, "mimeType": "image/png"}, False
+        image = await asyncio.to_thread(screenshot.for_model, data)
+        if image is None:
+            return screenshot.UNREAD, True
+        return {"type": "image", "data": image, "mimeType": screenshot.MIME}, False
 
     async def ask_person(self, reason: object) -> tuple[str, bool]:
         """browser_ask_person (B20): browserd asks the person in the live view when one is open

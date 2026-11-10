@@ -10,7 +10,7 @@ from typing import Any
 from app.browser import finder
 from app.browser.client import BrowserError
 from app.browser.finder import FinderSession, Ran
-from app.browser.leases import Acquired, Lease, StoreUnavailableError, Waiting
+from app.browser.leases import Acquired, Lease, StoreUnavailableError, View, Waiting
 from app.jobs import slug as slugs
 
 
@@ -86,6 +86,9 @@ class FakeLeases:
     async def cancel(self, user: str, purposes: Any = None, key: str | None = None) -> int:
         self.cancelled.append(user)
         return 1
+
+    async def current(self, user: str) -> View:
+        return View(lease=None, held_by_other=self.busy, waiting=())
 
 
 class Known:

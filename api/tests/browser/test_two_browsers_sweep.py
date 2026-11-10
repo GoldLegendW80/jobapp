@@ -2,8 +2,9 @@
 side, as many as the person's browser has free slots (interactive.run_selected, `_Slots`). They
 start in run order, each on its own lease naming its website; one the lease store makes wait
 while another website of the sweep holds a lease asks again once that one ends; with none
-holding one it is `browser_busy` and the rest do not start, as with one browser; a stop lets the
-running ones end and keeps the waiting one from starting. The searches are stand ins that end
+holding one and someone else holding the browser it is `browser_busy` and the rest do not start
+(test_b23_slot_wait.py: the browser being freed is asked again); a stop lets the running ones
+end and keeps the waiting one from starting. The searches are stand ins that end
 when the test says (no clock, no sleep).
 """
 
@@ -15,7 +16,7 @@ from typing import Any
 import pytest
 
 from app.browser import sources
-from app.browser.leases import Acquired, Lease, Waiting
+from app.browser.leases import Acquired, Lease, View, Waiting
 from app.browser.sources import interactive
 from app.jobs import sweep
 from app.profile.schemas import SearchSection
@@ -56,6 +57,10 @@ class SlotLeases:
     async def cancel(self, user: str, purposes: Any = None, key: Any = None) -> int:
         self.cancelled.append(key)
         return 1
+
+    async def current(self, user: str) -> View:
+        """With no slot at all, someone else holds the browser."""
+        return View(lease=None, held_by_other=self.slots == 0, waiting=())
 
 
 class Searches:
