@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { http, HttpResponse } from "msw";
 import { userEvent, within } from "storybook/test";
 
 import { AppAt } from "@/design-system/app-at";
@@ -16,6 +17,7 @@ import {
 } from "@/design-system/fixtures/activity";
 import { FINISHED_STEPS, RUNNING_STEPS } from "@/design-system/fixtures/runs";
 import { fakeSession, member } from "@/test/auth";
+import { server } from "@/test/server";
 
 const meta = {
   title: "Pages/Activity",
@@ -138,6 +140,27 @@ export const TwoWebsitesSideBySide: Story = {
       path={`/activity/runs/${SEARCH_RUN_ID}?step=${WEBSITE_STEP_IDS[1]}`}
     />
   ),
+};
+
+/** As a job seeker, I want the Activity tab to show how many of my workflow runs are under way, so that I see the app at work from any page. Nothing shows when none is. */
+export const RunsUnderWayOnTheTab: Story = {
+  name: "Runs under way, counted on the tab",
+  beforeEach: () => {
+    fakeSession(member);
+    fakeActivityApi();
+    server.use(
+      http.get("*/api/activity/count", () =>
+        HttpResponse.json({ under_way: 3 }),
+      ),
+    );
+  },
+};
+
+/** As a job seeker on my phone, I want the count of runs under way on the Activity tab of the bottom bar too. */
+export const RunsUnderWayOnAPhone: Story = {
+  ...RunsUnderWayOnTheTab,
+  name: "Runs under way, on a phone",
+  globals: { viewport: { value: "mobile2", isRotated: false } },
 };
 
 /** As a job seeker on my phone, I want the activity readable at my screen's width, so that I can follow a run away from my desk. */
