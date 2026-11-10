@@ -680,3 +680,91 @@ def test_a_run_reads_cancelled_when_its_last_step_ended_cancelled(
         i["id"]: i["status"] for i in api.get("/api/activity/runs", token=alice).json()["items"]
     }
     assert found == {str(stopped): "cancelled", str(retried): "success", str(alone): "cancelled"}
+
+
+def _under_way(api: Api, token: str) -> int:
+    answer = api.get("/api/activity/count", token=token)
+    assert answer.status_code == 200
+    assert answer.headers["cache-control"] == "no-store"
+    count: int = answer.json()["under_way"]
+    listed = api.get("/api/activity/runs", token=token, params={"limit": 100}).json()["items"]
+    # The same rule as the list: the runs it shows running, queued or waiting.
+    assert count == sum(1 for i in listed if i["status"] in ("running", "queued", "waiting"))
+    return count
+
+
+def test_the_activity_count_is_the_callers_runs_under_way_their_own_steps_included(
+    factory: sessionmaker[Session], api: Api, alice: str, bob: str
+) -> None:
+    me, bobs = _user(factory, ALICE), _user(factory, BOB)
+    for minute, status in enumerate((RunStatus.done, RunStatus.failed, RunStatus.cancelled)):
+        _run(factory, me, "job_chat", minute, status=status)
+    assert _under_way(api, alice) == 0
+
+    queued = _run(factory, me, "job_chat", 5, status=RunStatus.queued)
+    # Another person's run under way, with the id of one of Alice's finished runs.
+    shared = uuid.uuid4()
+    _run(factory, me, "job_chat", 6, flow=runs.WorkflowRef("job_chat", shared))
+    _run(
+        factory,
+        bobs,
+        "job_chat",
+        7,
+        flow=runs.WorkflowRef("job_chat", shared),
+        status=RunStatus.running,
+    )
+    # A sweep whose website search ended, before its reader starts.
+    with factory() as db:
+        sweep_id = sweep.start(db, me, SweepTrigger.manual, T0).id
+        db.commit()
+    _run(factory, me, "browser_discovery", 8, flow=runs.WorkflowRef("job_search", sweep_id))
+    # A CV written, its hiring panel waiting for the person's panel slot.
+    posting = add_job(factory, me, "Example Robotics", "Platform engineer")
+    with factory() as db:
+        document = store.get_or_create(db, me, posting, Kind.cv, at=T0).id
+        db.commit()
+    writer = _run(
+        factory,
+        me,
+        "documents_cv",
+        9,
+        flow=runs.WorkflowRef("posting_documents", uuid.uuid4(), "write"),
+    )
+    with factory() as db:
+        db.add(
+            DocumentPanel(
+                user_id=me,
+                document_id=document,
+                kind="cv",
+                status="running",
+                source_run_id=writer,
+                reviewed_version=1,
+            )
+        )
+        db.commit()
+    assert _under_way(api, alice) == 3
+    assert _under_way(api, bob) == 1
+
+    with factory() as db:
+        db.execute(sa.update(AgentRun).where(AgentRun.id == queued).values(status=RunStatus.done))
+        db.execute(
+            sa.update(Sweep)
+            .where(Sweep.id == sweep_id)
+            .values(status=SweepStatus.done, finished_at=T0 + timedelta(minutes=10))
+        )
+        db.commit()
+    assert _under_way(api, alice) == 1
+    with factory() as db:
+        db.execute(
+            sa.update(DocumentPanel)
+            .where(DocumentPanel.source_run_id == writer)
+            .values(
+                status="done",
+                started_at=T0 + timedelta(minutes=10),
+                finished_at=T0 + timedelta(minutes=12),
+            )
+        )
+        db.commit()
+    assert _under_way(api, alice) == 0
+    assert _under_way(api, bob) == 1
+    assert api.get("/api/activity/count").status_code == 401
