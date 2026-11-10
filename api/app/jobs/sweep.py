@@ -427,7 +427,7 @@ def bind_source(
             carried = (
                 {name: selected[name] for name in SOURCE_COUNTERS if name in selected}
                 | {"attempt": 2}
-                if "first_attempt" in selected
+                if selected.get("first_attempt") is not None
                 else {}
             )
             selected.update(entry, phase="running", outcome=None, reason=None)
@@ -1160,20 +1160,20 @@ FAILED = ("failed", "partial")
 def retry_planned(stats: Stats, source_id: str) -> dict[str, Any] | None:
     """The entry of `source_id` when its retry is planned and not yet bound."""
     for entry in stats.sources:
-        if entry.get("source_id") == source_id and "first_attempt" in entry:
+        if entry.get("source_id") == source_id and entry.get("first_attempt") is not None:
             return entry if entry.get("attempt") != 2 else None
     return None
 
 
 def not_retried(entry: dict[str, Any], reason: str) -> None:
-    """Its retry refused by a rule of the source or of the run: the first attempt stands."""
-    first = entry.pop("first_attempt", None)
+    """Its retry refused by a rule of the source or of the run: the first attempt stands. Set to
+    None, never removed: a write keeps the stored row's keys the run's entry lacks."""
+    first = entry.get("first_attempt")
     if isinstance(first, dict) and entry.get("attempt") == 2:
         entry.update(
             phase="done", outcome=first["outcome"], reason=first["reason"], error=first["reason"]
         )
-    entry["attempt"] = 1
-    entry["not_retried"] = reason
+    entry.update(attempt=1, first_attempt=None, not_retried=reason)
 
 
 def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
@@ -1184,8 +1184,8 @@ def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
         and entry.get("phase") == "done"
         and entry.get("outcome") in FAILED
         and entry.get("reason") in RETRIED
-        and "first_attempt" not in entry
-        and "not_retried" not in entry
+        and entry.get("first_attempt") is None
+        and entry.get("not_retried") is None
     ]
 
 
@@ -1251,7 +1251,7 @@ async def _retry(
             logger.exception(
                 "sweep source retry failed",
                 extra={
-                    "sweep_id": str(plan.sweep_id),
+                    "sweep_id": str(getattr(plan, "sweep_id", None)),
                     "source": _hook_name(hook),
                     "error_type": type(error).__name__,
                 },
@@ -1273,12 +1273,13 @@ async def _retried(plan: Plan, stats: Stats, entry: dict[str, Any], timed_out: b
     """How a planned retry ended: never started (a stop, a rule of its source), cut by the
     deadline or a raise, or ended by its source."""
     if entry.get("attempt") != 2:
-        if "first_attempt" in entry:
+        if entry.get("first_attempt") is not None:
             not_retried(entry, "not_started")
         return
     if entry.get("phase") == "running":
-        if plan.commits is not None:
-            await plan.commits.settle(entry["source_id"])
+        commits = getattr(plan, "commits", None)
+        if commits is not None:
+            await commits.settle(entry["source_id"])
         entry["error"] = "time_budget" if timed_out else "page_failed"
         finish_source(entry)
         release_board(stats, entry["source_id"])

@@ -5,6 +5,7 @@ import ast
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import sqlalchemy as sa
@@ -680,3 +681,27 @@ def test_a_run_reads_cancelled_when_its_last_step_ended_cancelled(
         i["id"]: i["status"] for i in api.get("/api/activity/runs", token=alice).json()["items"]
     }
     assert found == {str(stopped): "cancelled", str(retried): "success", str(alone): "cancelled"}
+
+
+def test_a_sources_retry_shows_on_its_step() -> None:
+    """Browser B24: a source tried twice, and one not tried again with why, say so on their step;
+    a website's retry is its second agent step, so its entry adds none."""
+    stats = {
+        "sources": [
+            {"kind": "arbeitnow", "phase": "done", "outcome": "complete", "found": 3,
+             "attempt": 2, "first_attempt": {"outcome": "failed", "reason": "network"}},
+            {"kind": "linkedin", "mode": "api", "phase": "done", "outcome": "failed", "found": 0,
+             "attempt": 1, "not_retried": "linkedin_cooldown", "first_attempt": None},
+            {"kind": "board", "phase": "done", "outcome": "failed", "found": 0, "attempt": 1,
+             "not_retried": "no_time"},
+            {"kind": "custom", "mode": "llm_browser", "host": "jobs.example.org",
+             "phase": "done", "outcome": "complete", "found": 2, "attempt": 2},
+        ]
+    }  # fmt: skip
+    row = SimpleNamespace(status=SweepStatus.done, stats=stats, started_at=T0, finished_at=T0)
+    notes = [step["note"] for step in activity_steps._sweep_steps(uuid.uuid4(), row)[1:]]
+    assert notes == [
+        "3 found, tried twice",
+        "0 found, not tried again, LinkedIn asked the app to wait",
+        "0 found, not tried again, no time left",
+    ]
