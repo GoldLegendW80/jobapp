@@ -8,11 +8,6 @@ import {
   listDocuments,
   uploadDocument,
 } from "@/features/ingestion/api/documents-api";
-import {
-  acceptConsent,
-  consentKey,
-  getConsent,
-} from "@/features/ingestion/api/runs-api";
 
 import { failureSentence } from "./documents-api";
 import { getOfferNotes, offerNotesKey, readOffer } from "./offer-notes-api";
@@ -41,8 +36,8 @@ export function useRefreshOfferNotes(jobId: string, ended: boolean) {
 
 /**
  * A letter on its way to notes: the file is sent to ingestion, which reads its text; once read,
- * kept when it may hold a secret, and once ingestion's consent is given, its reading starts,
- * once. `again` reads a letter already uploaded through the same steps.
+ * and kept when it may hold a secret, its reading starts, once, with no consent asked (owner,
+ * 2026-11-10). `again` reads a letter already uploaded through the same steps.
  */
 export function useReadOffer(jobId: string) {
   const client = useQueryClient();
@@ -51,11 +46,6 @@ export function useReadOffer(jobId: string) {
   /** The letter whose reading was asked for: once per choice. */
   const started = useRef<string>(undefined);
 
-  const consent = useQuery({
-    queryKey: consentKey,
-    queryFn: ({ signal }) => getConsent(signal),
-    enabled: letterId !== undefined,
-  });
   const files = useQuery({
     queryKey: documentsKey,
     queryFn: ({ signal }) => listDocuments(signal),
@@ -88,16 +78,6 @@ export function useReadOffer(jobId: string) {
       setProblem(failureSentence(error));
     },
   });
-  const agree = useMutation({
-    mutationFn: acceptConsent,
-    onSuccess: (accepted) => {
-      client.setQueryData(consentKey, accepted);
-    },
-    onError: (error) => {
-      setProblem(failureSentence(error));
-      void client.invalidateQueries({ queryKey: consentKey });
-    },
-  });
   const keep = useMutation({
     mutationFn: confirmDocument,
     onSuccess: () => client.invalidateQueries({ queryKey: documentsKey }),
@@ -108,14 +88,13 @@ export function useReadOffer(jobId: string) {
 
   const file = files.data?.items.find((one) => one.id === letterId);
   const read = isRead(file);
-  const accepted = consent.data?.accepted;
   const startNow = start.mutate;
   useEffect(() => {
-    if (!read || letterId === undefined || accepted !== true) return;
+    if (!read || letterId === undefined) return;
     if (started.current === letterId) return;
     started.current = letterId;
     startNow(letterId);
-  }, [read, letterId, accepted, startNow]);
+  }, [read, letterId, startNow]);
 
   const choose = (id: string | undefined) => {
     setProblem(undefined);
@@ -126,13 +105,9 @@ export function useReadOffer(jobId: string) {
   return {
     problem,
     file,
-    consent,
-    agree,
     keep,
-    /** A file is on its way: sent, being read, waiting for the consent or a keep. */
+    /** A file is on its way: sent, being read or waiting for a keep. */
     pending: letterId !== undefined || send.isPending || start.isPending,
-    /** Ingestion's consent is due: the letter is read and nothing was agreed to yet. */
-    asking: read && accepted === false,
     /** A file chosen: the steps start over with it. */
     take: (chosen: File | undefined) => {
       if (chosen === undefined) return;

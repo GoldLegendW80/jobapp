@@ -5,12 +5,14 @@ import { fakeAnswer, fakeApplication, leftAnswer } from "@/test/apply";
 import {
   blockingFields,
   editorKind,
+  eventLine,
   hasForm,
   hasReport,
   isEditable,
   isOpenField,
   phaseOf,
   pollInterval,
+  reviewReason,
   statusLine,
   valueText,
 } from "../helpers/apply-state";
@@ -146,5 +148,32 @@ describe("the fields", () => {
     ["text", "text"],
   ])("reads %j as %j", (value, text) => {
     expect(valueText(value)).toBe(text);
+  });
+});
+
+describe("an application the old document check stopped (A22)", () => {
+  it.each([
+    ["resend_expired", "more than 7 days old"],
+    ["resend_changed", "changed since your Like"],
+    ["resend_full_auto_off", "Full auto was turned off"],
+    ["resend_used", "already used"],
+  ])("says why %s waits for the approval", (code, why) => {
+    const said = reviewReason(
+      fakeApplication("ready", { mode: "review", error_code: code }),
+    );
+    expect(said).toContain(
+      "The document check that stopped this application is gone",
+    );
+    expect(said).toContain(why);
+    expect(said).not.toMatch(SEPARATOR);
+  });
+
+  it.each([
+    ["back_to_auto", "Back to sending by itself"],
+    ["kept_for_approval", "Kept for your approval"],
+  ])("names the %s step of the history", (kind, line) => {
+    const said = eventLine({ at: "2026-11-10T09:00:00Z", kind, data: {} });
+    expect(said).toContain(line);
+    expect(said).not.toMatch(SEPARATOR);
   });
 });

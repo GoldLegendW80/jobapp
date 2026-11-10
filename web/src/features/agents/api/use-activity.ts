@@ -1,8 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 
 import {
+  ACTIVITY_COUNT_POLL_MS,
   ACTIVITY_POLL_MS,
   ACTIVE_FLOW_STATUSES,
+  activityCountKey,
+  getActivityCount,
   getWorkflowRun,
   listWorkflowRuns,
   listWorkflows,
@@ -43,5 +46,20 @@ export function useWorkflowRun(id: string) {
         ? ACTIVITY_POLL_MS
         : false;
     },
+  });
+}
+
+/**
+ * How many of the person's workflow runs are under way (the Activity tab's count). The interval
+ * stops while the document is hidden; the count, stale by then, is read again when it shows.
+ */
+export function useActivityCount() {
+  return useQuery({
+    queryKey: activityCountKey,
+    queryFn: ({ signal }) => getActivityCount(signal),
+    refetchInterval: ACTIVITY_COUNT_POLL_MS,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: true,
+    staleTime: ACTIVITY_COUNT_POLL_MS / 2,
   });
 }

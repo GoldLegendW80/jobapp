@@ -63,6 +63,7 @@ choice made by the build that stands until the owner says otherwise.
 | 2026-11-05 | The Agents tab in Admin grouped by category, and one table component (agents A8): "there is a lot of agents. group them by categories. verify that you use the same component array than all over the app." The list shows one section per category, in a fixed order (Finding jobs, Applying, Documents, Profile and import, Jobs and chat, Test), each agent's category set by name in the api's catalog; every table of the web app uses `components/ui/table.tsx`. |
 | 2026-11-09 | A workflow diagram above each table of the Agents tab (agents A9, issue #767): "represent each workflows with agents as a nodal schema so its easier to understand the relations between the agents. keep the tables but just put the schema on the top of each table". One diagram per category (Test aside), drawn from the relations the api serves with the list (`catalog.FLOWS`), each one a fact of the code; a test fails when an agent is registered and drawn nowhere, or drawn and not registered. Inline SVG, no new dependency; the tables stay as they are. Then, on the first drawing, the owner: "workflow diagram must be more like github workflows" (read by the orchestrator, issue #771, as the pattern of a GitHub Actions run graph: an "on:" line of triggers, cards in columns, connectors with dots, grouped parallel agents, fit and zoom, in the app's own design system, no GitHub code, icons or branding). |
 | 2026-11-09 | Activity as workflow runs (agents A10, issue #771): the owner, looking at A9's diagrams, "workflow diagram must be more like github workflows ... to understand how we can see triggers, workflows, agents in workflows, what's happening, logs ect..", then "put the activity page in the navbar. it should be like github per workflow. I want to see how the workflow was triggered, where are we in the workflow, being able to see the logs ect..". The GitHub style view of real runs replaces the Runs page (each person sees their own runs, grouped by workflow), and a running workflow is live while it runs. Activity moves into the main navigation next to Jobs, Discover, Applications and Profile; /runs and /runs/:id keep working. |
+| 2026-11-10 | A toast when a workflow run ends (agents A12, issue #786): "je dois pouvoir lancer la recherche de job et avoir un toaster à la fin de chaque workflows si ça a fail ou si ça a réussi et combien de job on été ajouté. même si je navigue dans le site" (I must be able to start the job search and get a toast at the end of each workflow, whether it failed or succeeded and how many jobs were added, even while I navigate the site). Every workflow, on every page of the signed in app, read from the Activity tab's count (A11) with no polling of its own; one toast per run in the browser, none for a run that ended before the page opened. |
 
 ### Ingestion and profile fill (owner decisions of 2026-10-21, through the orchestrator)
 
@@ -292,6 +293,10 @@ choice made by the build that stands until the owner says otherwise.
   reverses the consent of D9 and its text version 2 of D29. The table `document_consents` and the
   wait reason `consent` stay until a contract migration; a generation stored waiting with
   `consent` is started by the next tick. Ingestion's consent of Fill my profile is not part of it.
+- 2026-11-10 (D31, issue #778): asked whether the offer letter reader should stop asking for
+  ingestion's consent, the owner answered: "yes". Reading an offer letter and the chat of its
+  notes never ask for or wait for a consent; the model credential is still required. Fill my
+  profile keeps its own consent.
 
 ## Interactive job search (2026-10-24, #626)
 
@@ -360,6 +365,7 @@ choice made by the build that stands until the owner says otherwise.
   chrome://sandbox, the new tab page and the browser's own UI; chrome://policy's test page off; no extension installed; saved flags and saved test policies
   dropped before every start.
 - 2026-11-09 (A21, issue #773), the owner, on a one click Apply card that asked him to review its documents: "I don't want it in full auto". No document review stop where the person's Like in Full auto or click on Apply is the approval: guardrail 6's rule (a version over its page or with corrections goes back to the person) goes for Full auto and one click Apply; Review first still asks a look before its Approve.
+- 2026-11-10 (A22, issue #777), asked whether the applications the old document rule had already stopped and handed to Review first should go back to sending by themselves, the owner answered: "yes". Each one still waiting goes back to its own mode once, by itself after the deploy, only while its Like or Apply click is unspent, not expired and bound to the same answers and documents (a Like: Full auto still on); the gate decides it again with every check and Full auto's hold; otherwise it waits for Approve with the reason. Every move is an event of the application's history.
 
 ## Likes (2026-10-21)
 

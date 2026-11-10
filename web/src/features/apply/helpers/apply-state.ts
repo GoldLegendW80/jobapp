@@ -236,8 +236,8 @@ export function statusLine(
 /**
  * Why a form the app would have sent by itself (one click Apply, Full auto) waits for the person:
  * the api hands it to review (`mode` review, state `ready`) with the reason in `error_code`. The
- * api's sentences (api/app/apply direct.py, full_auto.py, model_check.py, caps.py, gate.py), said
- * for the job page. A code this page does not know is said in words, never shown raw.
+ * api's sentences (api/app/apply direct.py, full_auto.py, model_check.py, caps.py, gate.py,
+ * resend.py), said for the job page. A code this page does not know is said in words, never shown raw.
  */
 const REVIEW_REASONS: Record<string, string> = {
   email_review:
@@ -295,6 +295,14 @@ const REVIEW_REASONS: Record<string, string> = {
   full_auto_company:
     "Full auto already applied to this company recently, so it waits for you.",
   form_changed: "The form changed since it was filled, so it waits for you.",
+  resend_expired:
+    "The document check that stopped this application is gone, but your Like or your click on Apply is more than 7 days old, so it waits for your approval.",
+  resend_changed:
+    "The document check that stopped this application is gone, but its answers or your documents changed since your Like or your click on Apply, so it waits for your approval.",
+  resend_full_auto_off:
+    "The document check that stopped this application is gone, but Full auto was turned off after this Like, so it waits for your approval.",
+  resend_used:
+    "The document check that stopped this application is gone, but your Like or your click on Apply was already used, so it waits for your approval.",
 };
 
 export const OTHER_REVIEW_REASON =
@@ -438,6 +446,10 @@ const EVENTS: Record<string, string> = {
   submit_stopped: "Submit stopped before the click",
   screenshot_failed: "A screenshot could not be taken",
   ended: "Run ended",
+  back_to_auto:
+    "Back to sending by itself: the document check that stopped it is gone",
+  kept_for_approval:
+    "Kept for your approval: it cannot send by itself any more",
 };
 
 export function eventLine(event: ApplicationEvent): string {

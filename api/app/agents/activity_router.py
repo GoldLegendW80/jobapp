@@ -30,6 +30,9 @@ NOT_FOUND = "Run not found."
 READER = "posting_reader"
 # The statuses of a run under way, which the page reads again.
 ACTIVE = ("running", "queued", "waiting")
+# The runs that ended last, which the count names for the toast of a run's end (A12).
+ENDED_MAX = 10
+REASON_MAX = 300
 
 _STATUS = {
     RunStatus.queued: "queued",
@@ -95,6 +98,16 @@ class WorkflowRunList(BaseModel):
     items: list[WorkflowRunOut]
 
 
+class EndedOut(BaseModel):
+    id: str
+    finished_at: datetime
+
+
+class UnderWay(BaseModel):
+    under_way: int
+    ended: list[EndedOut]
+
+
 class StepOut(BaseModel):
     id: str
     kind: str
@@ -116,6 +129,10 @@ class WorkflowRunDetail(WorkflowRunOut):
     output_tokens: int | None
     cost_usd: float | None
     credential_kind: str | None
+    # Why a failed run failed, in the words of its first failed step.
+    reason: str | None
+    # A job search's count of the postings it added.
+    new_postings: int | None
 
 
 def _flow_out(workflow: workflows.Workflow) -> FlowOut | None:
@@ -214,6 +231,13 @@ def _status(steps: Sequence[StepOut]) -> str:
     return "success"
 
 
+def _finished(steps: Sequence[StepOut], state: str) -> datetime | None:
+    """When a run that ended ended: its last step's end."""
+    if state in ACTIVE:
+        return None
+    return max((step.finished_at for step in steps if step.finished_at), default=None)
+
+
 def _reader_job(row: sa.Row[Any]) -> uuid.UUID | None:
     """The one posting a reader run read, when it read one."""
     held = row.job_ids if row.agent == READER else None
@@ -295,11 +319,7 @@ def _summary(group: _Group, steps: Sequence[StepOut], subject: SubjectOut | None
     workflow = workflows.BY_KEY[group.workflow]
     started = [step.started_at for step in steps if step.started_at]
     state = _status(steps)
-    finished = (
-        max((step.finished_at for step in steps if step.finished_at), default=None)
-        if state not in ACTIVE
-        else None
-    )
+    finished = _finished(steps, state)
     return {
         "id": group.key,
         "workflow": workflow.key,
@@ -320,19 +340,31 @@ def _summary(group: _Group, steps: Sequence[StepOut], subject: SubjectOut | None
 
 
 class _Read:
-    """Each group's steps and subject, its app's own rows read once for all the groups."""
+    """Each group's steps and subject, its app's own rows read once for all the groups; a count
+    reads no subject."""
 
-    def __init__(self, db: Session, user_id: uuid.UUID, groups: list[_Group]) -> None:
+    def __init__(
+        self, db: Session, user_id: uuid.UUID, groups: list[_Group], subjects: bool = True
+    ) -> None:
         self.found = activity_steps.read(
             db, user_id, [(g.workflow, g.key, [row.id for row in g.rows]) for g in groups]
         )
-        self.subjects = _subjects(db, user_id, groups)
+        self.subjects = _subjects(db, user_id, groups) if subjects else {}
         self.definitions = catalog.load()
 
-    def of(self, group: _Group) -> tuple[list[StepOut], dict[str, Any]]:
+    def _found_steps(self, group: _Group) -> tuple[activity_steps.Found, list[StepOut]]:
         found = self.found.get(group.key) or activity_steps.Found()
-        steps = _steps(group, workflows.BY_KEY[group.workflow], found, self.definitions)
+        return found, _steps(group, workflows.BY_KEY[group.workflow], found, self.definitions)
+
+    def of(self, group: _Group) -> tuple[list[StepOut], dict[str, Any]]:
+        found, steps = self._found_steps(group)
         return steps, _summary(group, steps, _subject(group, found, self.subjects))
+
+    def ending(self, group: _Group) -> tuple[str, datetime | None]:
+        """The run's status, and when it ended once it has."""
+        steps = self._found_steps(group)[1]
+        state = _status(steps)
+        return state, _finished(steps, state)
 
 
 def _scan(db: Session, user_id: uuid.UUID) -> Sequence[sa.Row[Any]]:
@@ -365,6 +397,48 @@ async def list_workflow_runs(
     return await run_in_threadpool(_list, sessions_of(request), user.id, workflow, limit)
 
 
+def _count(sessions: sessionmaker[Session], user_id: uuid.UUID) -> UnderWay:
+    with sessions() as db:
+        groups = _group(_scan(db, user_id))
+        read = _Read(db, user_id, groups, subjects=False)
+        under_way, ended = 0, []
+        for group in groups:
+            state, finished = read.ending(group)
+            if state in ACTIVE:
+                under_way += 1
+            elif finished is not None:
+                ended.append(EndedOut(id=group.key, finished_at=finished))
+        ended.sort(key=lambda one: (one.finished_at, one.id), reverse=True)
+        return UnderWay(under_way=under_way, ended=ended[:ENDED_MAX])
+
+
+@router.get("/count", response_model=UnderWay, dependencies=[Depends(_no_store)])
+async def count_under_way(user: CurrentUser, request: Request) -> UnderWay:
+    """How many of the caller's workflow runs the list shows under way, the Activity tab's
+    count, and the ids of those that ended last, newest end first, for the toast of a run's end:
+    read on a short interval."""
+    return await run_in_threadpool(_count, sessions_of(request), user.id)
+
+
+def _reason(
+    db: Session, user_id: uuid.UUID, steps: Sequence[StepOut], found: activity_steps.Found
+) -> str | None:
+    """Why a failed run failed: its first failed step, with the words its row stores."""
+    failed = next((step for step in steps if step.status == "failure"), None)
+    if failed is None:
+        return None
+    words = found.reasons.get(failed.id)
+    if failed.kind == "agent":
+        words = db.scalar(
+            sa.select(AgentRun.error).where(
+                AgentRun.user_id == user_id, AgentRun.id == uuid.UUID(failed.id)
+            )
+        )
+    words = words.strip() if words else None
+    said = f"{failed.name}: {words}" if words else f"{failed.name} failed."
+    return said if len(said) <= REASON_MAX else said[: REASON_MAX - 1].rstrip() + "\u2026"
+
+
 def _detail(
     sessions: sessionmaker[Session], user_id: uuid.UUID, wanted: uuid.UUID
 ) -> WorkflowRunDetail | None:
@@ -394,7 +468,9 @@ def _detail(
                 return _detail(sessions, user_id, uuid.UUID(group.key))
             except ValueError:
                 return None
-        steps, summary = _Read(db, user_id, [group]).of(group)
+        read = _Read(db, user_id, [group])
+        steps, summary = read.of(group)
+        found = read.found.get(group.key) or activity_steps.Found()
         workflow = workflows.BY_KEY[group.workflow]
         tokens_in = [row.input_tokens for row in group.rows if row.input_tokens is not None]
         tokens_out = [row.output_tokens for row in group.rows if row.output_tokens is not None]
@@ -408,6 +484,8 @@ def _detail(
             output_tokens=sum(tokens_out) if tokens_out else None,
             cost_usd=round(sum(costs), 6) if costs else None,
             credential_kind=kinds.pop() if len(kinds) == 1 else None,
+            reason=_reason(db, user_id, steps, found) if summary["status"] == "failure" else None,
+            new_postings=found.added if group.workflow == "job_search" else None,
         )
 
 

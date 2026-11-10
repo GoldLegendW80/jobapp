@@ -75,6 +75,38 @@ describe("the shell on a wide screen", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows how many workflow runs are under way after Activity, in the link's name", async () => {
+    fakeSession(member);
+    server.use(
+      http.get("*/api/activity/count", () =>
+        HttpResponse.json({ under_way: 2 }),
+      ),
+    );
+    await openJobs();
+    const activity = await within(mainNav()).findByRole("link", {
+      name: /^Activity\s*,\s*2 under way$/,
+    });
+    expect(activity).toHaveAttribute("href", "/activity");
+    expect(within(activity).getByText("2")).toBeVisible();
+  });
+
+  it("shows no count on Activity when no run is under way", async () => {
+    fakeSession(member);
+    let read = false;
+    server.use(
+      http.get("*/api/activity/count", () => {
+        read = true;
+        return HttpResponse.json({ under_way: 0 });
+      }),
+    );
+    await openJobs();
+    await waitFor(() => {
+      expect(read).toBe(true);
+    });
+    const activity = within(mainNav()).getByRole("link", { name: "Activity" });
+    expect(activity).toHaveTextContent(/^Activity$/);
+  });
+
   it("keeps Admin current on every admin page, not only the one it opens", async () => {
     fakeSession(admin);
     server.use(
@@ -147,6 +179,22 @@ describe("the shell on a phone", () => {
     expect(
       within(applications).getByTestId("needs-you-dot"),
     ).toBeInTheDocument();
+  });
+
+  it("keeps the Activity count in the bar, in the link's name", async () => {
+    phoneScreen();
+    fakeSession(member);
+    server.use(
+      http.get("*/api/activity/count", () =>
+        HttpResponse.json({ under_way: 1 }),
+      ),
+    );
+    await openJobs();
+    const activity = await within(mainNav()).findByRole("link", {
+      name: /^Activity\s*,\s*1 under way$/,
+    });
+    expect(activity).toHaveAttribute("href", "/activity");
+    expect(within(activity).getByText("1")).toBeVisible();
   });
 
   it("puts Activity in the bar and, for an admin, Admin in the account menu", async () => {

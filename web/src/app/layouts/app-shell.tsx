@@ -4,6 +4,7 @@ import { Link, Outlet } from "react-router";
 import { Brand } from "@/components/blocks/brand";
 import { PageLoading } from "@/components/blocks/page-status";
 import { PillNav, PillNavLink } from "@/components/blocks/pill-nav";
+import { RunEndToasts } from "@/features/agents/components/run-end-toasts";
 import { useMe } from "@/features/auth/api/use-me";
 import { HealthDot } from "@/features/health/components/health-dot";
 import { useIsPhone } from "@/hooks/use-media-query";
@@ -20,7 +21,8 @@ const BOTTOM_BAR = "calc(3.5rem + 1px + env(safe-area-inset-bottom))";
 /**
  * The signed in frame: header with the app name, navigation and the user menu. Wide screens keep
  * the main navigation in the header; a phone (below `sm`) has a bottom tab bar instead, and the
- * header keeps the app name and the user menu, which then holds Admin too.
+ * header keeps the app name and the user menu, which then holds Admin too. On every page, a toast
+ * says when one of the person's workflow runs ends.
  */
 export function AppShell() {
   const { data: user } = useMe();
@@ -49,7 +51,7 @@ export function AppShell() {
               {MAIN_TABS.map((tab) => (
                 <PillNavLink key={tab.to} to={tab.to}>
                   {tab.label}
-                  {tab.counts ? <TabCounts /> : null}
+                  {tab.counts ? <TabCounts of={tab.counts} /> : null}
                 </PillNavLink>
               ))}
               {admin ? (
@@ -67,6 +69,7 @@ export function AppShell() {
       {/* Right after the header in the page's order, as the header's navigation is on a wide
           screen: the skip link passes it, and Tab reaches it before the page. */}
       {phone ? <BottomNav /> : null}
+      <RunEndToasts />
       <main
         id="main"
         tabIndex={-1}

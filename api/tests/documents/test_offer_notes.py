@@ -1,13 +1,14 @@
 """Reading an offer (SPEC-documents.md, "Reading an offer"): an invented offer letter uploaded to
 ingestion, read into the posting's offer notes on the fake backend (no model, no key); a French
-letter read in French; nothing stored or sent without ingestion's consent or a credential; the
-uploads that cannot be read; a verdict refused at submit, then the notes without it; the dash
-rule on every field but the quotes; the pay compared; the chat of the notes; the letter deleted;
-the binding; and the canary. Real Postgres at head."""
+letter read in French; no consent asked or waited for, nothing stored or sent without a
+credential; the uploads that cannot be read; a verdict refused at submit, then the notes without
+it; the dash rule on every field but the quotes; the pay compared; the chat of the notes; the
+letter deleted; the binding; and the canary. Real Postgres at head."""
 
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import uuid
@@ -32,7 +33,6 @@ from app.documents.models import (
     Origin,
     Role,
 )
-from app.ingestion.estimate_router import record_consent
 from app.ingestion.models import IngestionDocument
 from app.profile.models import Profile
 from tests.agents.g6_helpers import everything_stored
@@ -96,16 +96,9 @@ def upload(
         return found
 
 
-def consented(who: Person) -> Person:
-    with who.factory() as db:
-        record_consent(db, who.user)
-        db.commit()
-    return who
-
-
 @pytest.fixture
 def alex(factory: sessionmaker[Session], migrated_url: str) -> Person:
-    return consented(person(factory, migrated_url, USER_A))
+    return person(factory, migrated_url, USER_A)
 
 
 def read(
@@ -158,15 +151,40 @@ def test_a_french_letter_is_read_in_french(alex: Person) -> None:
     )
 
 
-def test_without_the_consent_or_a_credential_nothing_is_stored_or_sent(
+def consents(who: Person) -> int:
+    with who.factory() as db:
+        return db.scalar(
+            sa.text("SELECT count(*) FROM ingestion_consents WHERE user_id = :u"), {"u": who.user}
+        )
+
+
+def test_no_consent_is_asked_for_the_reading_or_its_chat(alex: Person) -> None:
+    assert consents(alex) == 0
+    document_id, generation_id, run_id = read(alex, upload(alex.factory, alex.user, LETTER))
+    execute(alex, run_id)
+    assert generation_row(alex.factory, generation_id).status is GenerationStatus.done
+    with alex.factory() as db:
+        posted = chat.post(
+            db, alex.user, document_id, "Shorter, please.", at=AT, settings=alex.settings
+        )
+        db.commit()
+    execute(alex, posted.run_id)
+    assert generation_row(alex.factory, posted.generation.id).status is GenerationStatus.done
+    assert consents(alex) == 0
+
+
+def test_the_offer_notes_never_read_ingestions_consent() -> None:
+    source = inspect.getsource(offer_notes)
+    assert "has_consented" not in source
+    assert "ingestion_consents" not in source
+    assert "IngestionConsent" not in source
+
+
+def test_without_a_credential_nothing_is_stored_or_sent(
     factory: sessionmaker[Session], migrated_url: str
 ) -> None:
     who = person(factory, migrated_url, USER_A)
     letter = upload(factory, who.user, LETTER)
-    with factory() as db, pytest.raises(offer_notes.OfferRefusedError) as refused:
-        offer_notes.read(db, who.user, who.posting, letter, at=AT, settings=who.settings)
-    assert refused.value.reason == "consent"
-    consented(who)
     with factory() as db:
         credentials.delete(db, who.user)
         db.commit()
@@ -197,7 +215,7 @@ def test_a_letter_that_cannot_be_read_is_refused(
 def test_another_persons_letter_or_posting_is_not_found(
     alex: Person, factory: sessionmaker[Session], migrated_url: str
 ) -> None:
-    blake = consented(person(factory, migrated_url, USER_B))
+    blake = person(factory, migrated_url, USER_B)
     theirs = upload(factory, blake.user, LETTER)
     with factory() as db, pytest.raises(writer_base.UploadRefusedError) as refused:
         offer_notes.read(db, alex.user, alex.posting, theirs, at=AT, settings=alex.settings)
@@ -427,18 +445,18 @@ def test_the_chat_changes_the_notes_and_answers(alex: Person) -> None:
     )
 
 
-def test_the_chat_of_the_notes_needs_the_same_consent(
+def test_the_chat_of_the_notes_needs_the_same_credential(
     factory: sessionmaker[Session], migrated_url: str
 ) -> None:
-    who = consented(person(factory, migrated_url, USER_A))
+    who = person(factory, migrated_url, USER_A)
     document_id, _, run_id = read(who, upload(factory, who.user, LETTER))
     execute(who, run_id)
     with factory() as db:
-        db.execute(sa.text("DELETE FROM ingestion_consents WHERE user_id = :u"), {"u": who.user})
+        credentials.delete(db, who.user)
         db.commit()
     with factory() as db, pytest.raises(chat.ChatRefusedError) as refused:
         chat.post(db, who.user, document_id, "Shorter, please.", at=AT, settings=who.settings)
-    assert refused.value.reason == "consent"
+    assert refused.value.reason == "credential"
 
 
 def test_the_letter_deleted_leaves_the_notes(alex: Person) -> None:

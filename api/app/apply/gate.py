@@ -62,7 +62,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.apply import caps, direct, full_auto, guardrails, service, states
+from app.apply import caps, direct, full_auto, guardrails, resend, service, states
 from app.apply.answer_limits import ANSWER_MAX, LETTER_MAX, letter_issue
 from app.apply.ats import base as ats_base
 from app.apply.models import (
@@ -157,6 +157,7 @@ SENTENCES = {
     **caps.SENTENCES,
     **full_auto.SENTENCES,
     **direct.SENTENCES,
+    **resend.SENTENCES,
 }
 # Refusals that leave the application as it is (`ready`): the person may approve again later.
 KEEP = frozenset(

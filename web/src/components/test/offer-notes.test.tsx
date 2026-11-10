@@ -101,30 +101,19 @@ describe("the Offer section of a posting", () => {
     expect(screen.queryByTestId("offer-letter-truncated")).toBeNull();
   });
 
-  it("sends the chosen letter to ingestion, asks its consent once, then reads it", async () => {
+  it("sends the chosen letter to ingestion, then reads it with no consent asked", async () => {
     const api = posting("interview");
     fakeDocuments();
-    const consent = {
-      version: 2,
-      text: "The letter is sent.",
-      accepted: false,
-    };
-    const agreed: unknown[] = [];
+    const consentCalls: string[] = [];
     server.use(
-      http.get("*/api/ingestion/consent", () =>
-        HttpResponse.json({
-          ...consent,
-          reminder: "Sent.",
-          accepted_at: null,
-        }),
-      ),
-      http.post("*/api/ingestion/consent", async ({ request }) => {
-        agreed.push(await request.json());
-        consent.accepted = true;
+      http.all("*/api/ingestion/consent", ({ request }) => {
+        consentCalls.push(request.method);
         return HttpResponse.json({
-          ...consent,
+          version: 2,
+          text: "The letter is sent.",
           reminder: "Sent.",
-          accepted_at: "2026-11-07T09:00:00Z",
+          accepted: false,
+          accepted_at: null,
         });
       }),
     );
@@ -135,19 +124,15 @@ describe("the Offer section of a posting", () => {
       within(offer).getByTestId("offer-letter-file"),
       new File(["Offer of employment"], "offer.docx"),
     );
-    const asked = await within(offer).findByTestId("offer-consent");
-    expect(asked.textContent).toContain("The letter is sent.");
-    expect(api.posted).toEqual([]);
-    await user.click(
-      within(asked).getByRole("button", { name: "Agree and read the letter" }),
-    );
     await within(offer).findByText(
       "Reading the letter. This takes a minute or two.",
     );
-    expect(agreed).toEqual([{ version: 2 }]);
     expect(api.posted).toEqual([
       { ingestion_document_id: expect.any(String) as unknown },
     ]);
+    expect(consentCalls).toEqual([]);
+    expect(within(offer).queryByText("The letter is sent.")).toBeNull();
+    expect(within(offer).queryByRole("checkbox")).toBeNull();
   });
 
   it("refuses a file that is neither a PDF nor a Word document before sending it", async () => {
@@ -175,17 +160,6 @@ describe("the Offer section of a posting", () => {
     fakeDocuments([
       fakeDocument({ id: "letter-1", name: "promesse-embauche.pdf" }),
     ]);
-    server.use(
-      http.get("*/api/ingestion/consent", () =>
-        HttpResponse.json({
-          version: 2,
-          text: "Sent.",
-          reminder: "Sent.",
-          accepted: true,
-          accepted_at: "2026-11-07T09:00:00Z",
-        }),
-      ),
-    );
     const user = userEvent.setup();
     renderApp(`/jobs/${JOB_ID}`);
     const offer = await screen.findByRole("region", { name: "Offer" });

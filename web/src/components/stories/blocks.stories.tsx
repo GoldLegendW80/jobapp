@@ -2,11 +2,11 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { PlusIcon, SearchIcon, SearchX } from "lucide-react";
 import { MemoryRouter } from "react-router";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 import { Brand } from "@/components/blocks/brand";
 import { CopyCommand } from "@/components/blocks/copy-command";
+import { CountBadge } from "@/components/blocks/count-badge";
 import { EmptyState } from "@/components/blocks/empty-state";
 import { Fact, Facts } from "@/components/blocks/facts";
 import { LoadError } from "@/components/blocks/load-error";
@@ -72,7 +72,7 @@ export const PageHeaderTitleOnly: Story = {
   ),
 };
 
-/** The app's sections in one white pill; the current one is black. A count that waits for the person is orange. */
+/** The app's sections in one white pill; the current one is black. A count after a label (`CountBadge`) is orange, its words read in the link's name: the applications that wait for the person, the workflow runs under way. */
 export const Navigation: Story = {
   render: () => (
     <PillNav label="Main" className="w-fit">
@@ -80,9 +80,13 @@ export const Navigation: Story = {
       <PillNavLink to="/discover">Discover</PillNavLink>
       <PillNavLink to="/applications">
         Applications
-        <Badge variant="brand">3</Badge>
+        <CountBadge count={3} words="waiting for you" />
       </PillNavLink>
       <PillNavLink to="/profile">Profile</PillNavLink>
+      <PillNavLink to="/activity">
+        Activity
+        <CountBadge count={2} words="under way" />
+      </PillNavLink>
     </PillNav>
   ),
 };
