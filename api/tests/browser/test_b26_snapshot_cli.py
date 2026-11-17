@@ -119,6 +119,7 @@ def test_a_long_list_is_reached_whole_through_find_then_click():
     assert "/url: /search?q=robot&page=2" in match["lines"]
     assert ("browser_click", {"ref": "e1999"}) in site.calls
     assert json.loads(seen["click"])["url"] == LIST_2
+    assert "untrusted_changed_lines" not in json.loads(seen["click"])  # another page: its top
     assert seen["kept"].text == listing(2)  # the tab's kept snapshot is the new page, whole
     assert len(seen["click"]) < finder.COMPACT_MAX + 1_000
 
