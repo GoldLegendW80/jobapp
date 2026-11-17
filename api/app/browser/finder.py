@@ -148,6 +148,8 @@ NO_PAGE = "No page is read in this tab yet: open one with browser_navigate."
 SCRIPT_MAX = 40_000
 SCRIPT_RESULT_MAX = 500_000
 NO_SCRIPT = "No script result is kept yet: run one with browser_evaluate."
+# A page read past this size is parsed in a thread (#797), never in the event loop.
+PARSE_INLINE_MAX = 100_000
 SOURCES = ("page", "script")
 # The addresses a script result names (absolute, or a quoted path from the root) that a report
 # may give (B27): the app opens one the agent did not; at most SCRIPT_LINKS_MAX, oldest dropped.
@@ -362,10 +364,11 @@ LinkedIn"). If the person is watching, they help and give the browser back; read
 then. If nobody is watching, go on another way, or end the website with report_no_postings and
 its reason. Never click a security check or a captcha yourself, and never solve one by code.
 
-Report a posting with report_postings (best right after reading it): its title as its page
-shows it, the address of that page and its text (the card's text when you did not open it), and
-company, location and published_on (YYYY-MM-DD) as the page shows them. The app keeps a posting
-whose page shows its title; when it refuses one, its answer says what to do. When the website shows
+Report a posting you opened or saw in a list with report_postings (best right
+after reading it): its title as its page shows it, the address of that page and its text
+(the card's text when you did not open it), and company, location and published_on
+(YYYY-MM-DD) as the page shows them. The app keeps a posting whose page shows its title; when
+it refuses one, its answer says what to do. When the website shows
 no list of postings, say why with report_no_postings: no_match (the search ran and listed no
 job that fits), no_list, cookie_wall, signin_wall, no_search_control, app_refused (the app
 refused what you needed), security_check. Never report a reason you did not see.
@@ -1368,9 +1371,13 @@ class FinderSession:
         return bool(canonical(url))
 
     async def _read_off_loop(self, url: str, text: str) -> None:
-        """`_read`, its parsing in a thread (#797): a page of PAGE_MAX characters never holds
-        the worker's event loop."""
-        self._read(url, text, await asyncio.to_thread(_parsed, url, text))
+        """`_read`, its parsing in a thread for a page past PARSE_INLINE_MAX characters (#797:
+        a page of PAGE_MAX took about 1.1 s on the Mac), so it never holds the worker's event
+        loop; a smaller one is parsed in place, as before."""
+        if len(text) <= PARSE_INLINE_MAX:
+            self._read(url, text)
+        else:
+            self._read(url, text, await asyncio.to_thread(_parsed, url, text))
 
     def _read(self, url: str, text: str, parsed: tuple[list[str], Detail] | None = None) -> None:
         """Note the links of a page read and its visible text (`_parsed`, unless given)."""

@@ -410,6 +410,7 @@ def reports(*steps: str) -> Any:
                 await session.ask_person("Please sign in again on this website.")
             elif step == "read":
                 await session.snapshot()
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         session.report_none(steps[-1])
         return finder_ran()
 

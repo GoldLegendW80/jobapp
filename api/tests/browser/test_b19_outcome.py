@@ -42,6 +42,7 @@ def test_a_navigation_browserd_refuses_is_the_app_s_refusal(code, counted):
 
     async def script(session: finder.FinderSession) -> finder.Ran:
         answers.append(await session.navigate("/fr/jobs"))
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         session.report_none("no_list")
         return finder.Ran()
 
@@ -67,6 +68,7 @@ def test_no_match_after_the_agent_acted_is_a_searched_website(acted, error):
             await session.interact("browser_click", {"ref": "e20"})  # No, thanks
             typed = {"ref": "e1", "text": "GenAI Engineer", "submit": True}
             assert (await session.interact("browser_type", typed))[1] is False
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         session.report_none("no_match")
         return finder.Ran()
 

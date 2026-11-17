@@ -591,6 +591,7 @@ def test_a_website_has_no_page_cap():
         assert not (await session.interact("browser_click", {"ref": "e3"}))[1]
         assert not (await session.interact("browser_click", {"ref": "e4"}))[1]
         assert not (await session.navigate(BASE + "b13/jobs/robot"))[1]
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         session.report_none("no_match")
         return finder.Ran()
 

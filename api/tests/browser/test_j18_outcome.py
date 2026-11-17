@@ -131,6 +131,7 @@ def as_a_person(site: Jungle, answers: list, reason: str | None = None):
                 )
             )
         if reason:
+            session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
             answers.append(session.report_none(reason))
         return finder.Ran()
 
@@ -249,6 +250,7 @@ def test_no_match_without_any_search_is_never_a_success():
 
     async def script(session: finder.FinderSession) -> finder.Ran:
         await session.snapshot()
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         session.report_none("no_match")
         return finder.Ran()
 
@@ -301,6 +303,7 @@ def typed_then(steps: list[tuple[str, str]], answers: list):
         )
         for _, ref in steps:
             answers.append(await session.interact("browser_click", {"ref": ref}))
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         answers.append(session.report_none("no_match"))
         return finder.Ran()
 
@@ -330,6 +333,7 @@ def test_a_page_that_shows_only_a_count_is_reported_as_no_list():
 def test_a_blocker_the_agent_names_ends_the_website_with_its_own_code(reason, code):
     async def script(session: finder.FinderSession) -> finder.Ran:
         await session.snapshot()
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         assert session.report_none(reason) == (
             "Noted. Report any posting you opened, then stop.",
             False,
@@ -345,6 +349,7 @@ def test_a_blocker_the_agent_names_ends_the_website_with_its_own_code(reason, co
 def test_an_unknown_reason_is_refused_and_changes_nothing(reason):
     async def script(session: finder.FinderSession) -> finder.Ran:
         await session.snapshot()
+        session.routes.update(dict.fromkeys(["search_box", "search_address", "listing"]))  # B27
         assert session.report_none(reason) == ("Refused: give one reason of the list.", True)
         return finder.Ran()
 
