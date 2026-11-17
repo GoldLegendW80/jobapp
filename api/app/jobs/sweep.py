@@ -1187,6 +1187,9 @@ def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
         and entry.get("reason") in RETRIED
         and entry.get("first_attempt") is None
         and entry.get("not_retried") is None
+        # LinkedIn's public job search stood in for its browser search (jobs J20): it took
+        # the retry slot of both.
+        and not entry.get("fallback")
     ]
 
 
