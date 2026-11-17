@@ -39,7 +39,7 @@ import {
  * - Jobs J20 (owner, 2026-11-17): the browser search is started only for a person with a LinkedIn
  *   sign in (browser_site_logins, as B17 records one), so C and D hold one for the fixture host.
  *   Person E chooses the browser search with none: LinkedIn is not opened in the browser, its
- *   public job search runs in its place, and Activity and the summary say so.
+ *   public job search runs in its place, and the summary says so.
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
  */
@@ -179,11 +179,15 @@ async function findJobs(page: Page, listed = false) {
   return dialog;
 }
 
-const linkedinLine = (dialog: ReturnType<Page["getByRole"]>) =>
+// LinkedIn's lines of the summary: the browser search's first, then, when LinkedIn's public job
+// search stood in for it or followed its failure (jobs J20), the public search's own.
+const linkedinLines = (dialog: ReturnType<Page["getByRole"]>) =>
   dialog
     .getByRole("region", { name: "Job sites in your browser" })
     .getByRole("listitem")
     .filter({ hasText: "LinkedIn:" });
+const linkedinLine = (dialog: ReturnType<Page["getByRole"]>) =>
+  linkedinLines(dialog).first();
 
 test.beforeAll(async ({ browser }) => {
   for (const [email, name] of [
@@ -300,7 +304,7 @@ test("E has no LinkedIn sign in: the public job search runs in place of the brow
   const page = pages[E]!;
   nextWall("");
   const dialog = await findJobs(page);
-  await expect(linkedinLine(dialog)).toContainText(GUEST_FALLBACK);
+  await expect(linkedinLines(dialog).last()).toContainText(GUEST_FALLBACK);
   await shots(page, "linkedin-public-search-fallback");
   await dialog.getByRole("button", { name: "Done" }).click();
   const source = (await lastSources(page.request)).find(
@@ -315,9 +319,8 @@ test("E has no LinkedIn sign in: the public job search runs in place of the brow
   };
   expect([held.lease, held.queue]).toEqual([null, []]);
   expect((await linkedinOf(page)).paused_until).toBeNull();
-  // Activity says the same.
-  await page.goto("/activity");
-  await expect(page.getByText(GUEST_FALLBACK).first()).toBeVisible();
+  // Activity's note of the fallback is covered in the api tests (test_activity_shows_the_fallback):
+  // a sweep with no agent run of a website has no run in Activity.
 });
 
 test("B ticked nothing: LinkedIn stays off for B, and B reads nothing of the others", async () => {

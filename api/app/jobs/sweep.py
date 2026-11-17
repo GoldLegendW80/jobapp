@@ -725,6 +725,14 @@ def _stats_json(sweep: Sweep, stats: Stats) -> dict[str, Any]:
             )
             for source in initial_sources(stored["search_scope"])
         ]
+        # LinkedIn's public job search standing in for the browser search (jobs J20) has an
+        # entry of its own, which the frozen scope does not list: kept, or no write carries it.
+        frozen = {s["source_id"] for s in data["sources"]}
+        data["sources"] += [
+            source
+            for source in updates.values()
+            if source and source.get("fallback") and source.get("source_id") not in frozen
+        ]
     return data
 
 
