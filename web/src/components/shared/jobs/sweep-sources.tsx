@@ -14,6 +14,7 @@ import { SweepJobFeeds } from "@/components/shared/jobs/job-feeds-ui";
 import {
   LINKEDIN_TIME_BUDGET,
   SOURCE_PROBLEMS,
+  guestSentence,
   leftOutSentence,
   searchesSentence,
   sourceName,
@@ -98,7 +99,12 @@ function sourceStatus(source: SweepSource): string {
   if (source.error === "not_started") return `${SOURCE_PROBLEMS.not_started}`;
   const searches = searchesSentence(source);
   const found = `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
-  const counts = [searches, leftOutSentence(source), found]
+  const counts = [
+    searches,
+    leftOutSentence(source),
+    guestSentence(source),
+    found,
+  ]
     .filter((part) => part !== "")
     .join(" ");
   return source.error ? `${counts} ${problemOf(source, source.error)}` : counts;

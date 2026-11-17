@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   SOURCE_PROBLEMS,
+  guestSentence,
   leftOutSentence,
   searchesSentence,
   sourceLabel,
@@ -221,5 +222,42 @@ describe("leftOutSentence (more saved values than a website's search takes)", ()
       "1,200 saved titles and 20 saved places were left out: a website's search types plain words, the first ones that fit.",
     );
     expect(sentence).not.toMatch(/[–—]| - /);
+  });
+});
+
+describe("guestSentence", () => {
+  it("says when LinkedIn's public job search stood in for the browser search", () => {
+    expect(
+      guestSentence({ fallback: "guest", fallback_after: "linkedin_signin" }),
+    ).toBe(
+      "Searched with LinkedIn's public job search, as you are not signed in to LinkedIn.",
+    );
+    expect(
+      guestSentence({ fallback: "guest", fallback_after: "search_refused" }),
+    ).toBe(
+      "Searched with LinkedIn's public job search, as the browser search failed.",
+    );
+  });
+
+  it("counts the postings of other places and names the pairs not searched", () => {
+    expect(
+      guestSentence({
+        other_place: 7,
+        not_searched: [
+          { title: "AI Engineer", place: "Lyon" },
+          { title: "ML Engineer", place: null },
+        ],
+      }),
+    ).toBe(
+      "7 postings of a place you did not choose left out. Not searched this time: AI Engineer in Lyon; ML Engineer.",
+    );
+    expect(guestSentence({ other_place: 1 })).toBe(
+      "1 posting of a place you did not choose left out.",
+    );
+  });
+
+  it("says nothing for an older api or another source", () => {
+    expect(guestSentence({})).toBe("");
+    expect(guestSentence({ fallback: null, not_searched: [] })).toBe("");
   });
 });

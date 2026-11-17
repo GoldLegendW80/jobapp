@@ -295,6 +295,37 @@ export function leftOutSentence(source: {
   return `${parts.join(" and ")} ${verb} left out: a website's search types plain words, the first ones that fit.`;
 }
 
+/** LinkedIn's public job search (jobs J20, owner 2026-11-17): when it stood in for the browser
+ * search, the postings of other places it left out, and the saved pairs it did not search.
+ * Empty when none applies or the api is older. */
+export function guestSentence(source: {
+  fallback?: string | null;
+  fallback_after?: string | null;
+  other_place?: number;
+  not_searched?: { title: string; place: string | null }[];
+}): string {
+  const parts: string[] = [];
+  if (source.fallback === "guest") {
+    parts.push(
+      source.fallback_after === "linkedin_signin"
+        ? "Searched with LinkedIn's public job search, as you are not signed in to LinkedIn."
+        : "Searched with LinkedIn's public job search, as the browser search failed.",
+    );
+  }
+  const other = source.other_place ?? 0;
+  if (other > 0) {
+    const what = other === 1 ? "posting" : "postings";
+    parts.push(
+      `${other.toLocaleString("en-GB")} ${what} of a place you did not choose left out.`,
+    );
+  }
+  const left = (source.not_searched ?? []).map((one) =>
+    one.place ? `${one.title} in ${one.place}` : one.title,
+  );
+  if (left.length) parts.push(`Not searched this time: ${left.join("; ")}.`);
+  return parts.join(" ");
+}
+
 export function sourceName(source: {
   kind: string;
   query: string;

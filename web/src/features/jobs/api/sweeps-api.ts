@@ -50,6 +50,15 @@ export const sweepSourceSchema = z.object({
   // LinkedIn's public job search (2026-10-31): the searches it built from the saved titles and
   // places, of which `searches` ran before its time cap; 0 or absent from an older api.
   planned: z.number().int().nonnegative().optional(),
+  // Jobs J20, LinkedIn's public job search: the pairs it did not search, the postings of a place
+  // none of the saved ones it left out, and "guest" when it stood in for the browser search,
+  // with that search's reason. Absent from an older api.
+  not_searched: z
+    .array(z.object({ title: z.string(), place: z.string().nullable() }))
+    .optional(),
+  other_place: z.number().int().nonnegative().optional(),
+  fallback: z.string().nullable().optional(),
+  fallback_after: z.string().nullable().optional(),
   // Saved titles and places its search could not carry (more than 100 of one, or too long in
   // all): the first ones that fit were searched. Absent from an older api.
   titles_left_out: z.number().int().nonnegative().optional(),

@@ -134,10 +134,22 @@ def sweep_out(row: Sweep) -> SweepOut:
             planned=max(0, count(item, "planned")),
             titles_left_out=max(0, count(item, "titles_left_out")),
             places_left_out=max(0, count(item, "places_left_out")),
+            not_searched=searched(item.get("not_searched")),
+            other_place=max(0, count(item, "other_place")),
             error=item["error"] if isinstance(item.get("error"), str) else None,
             **{
                 name: item.get(name) if isinstance(item.get(name), str) else None
-                for name in ("source_id", "mode", "host", "phase", "action", "outcome", "reason")
+                for name in (
+                    "source_id",
+                    "mode",
+                    "host",
+                    "phase",
+                    "action",
+                    "outcome",
+                    "reason",
+                    "fallback",
+                    "fallback_after",
+                )
             },
         )
         for item in stats.get("sources") or []

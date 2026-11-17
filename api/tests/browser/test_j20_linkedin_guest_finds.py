@@ -428,3 +428,34 @@ def test_activity_shows_the_fallback(after: str, said: str) -> None:
     source = {"mode": "api", "found": 4, "fallback": "guest", "fallback_after": after}
     assert activity_steps._source_note(source) == f"4 found, {said}"
     assert activity_steps._source_note({"mode": "api", "found": 4}) == "4 found"
+
+
+@pytest.mark.parametrize(
+    ("stored", "shown"),
+    [
+        (
+            {
+                "not_searched": [{"title": "AI Engineer", "place": "Lyon"}, {"title": "ML"}],
+                "other_place": 3,
+                "fallback": "guest",
+                "fallback_after": "linkedin_signin",
+            },
+            ([("AI Engineer", "Lyon"), ("ML", None)], 3, "guest", "linkedin_signin"),
+        ),
+        ({}, ([], 0, None, None)),  # an older row
+        (
+            {"not_searched": "Lyon", "other_place": -2, "fallback": 1, "fallback_after": True},
+            ([], 0, None, None),
+        ),
+    ],
+)
+def test_the_summary_shows_the_pairs_not_searched_other_places_and_the_fallback(
+    stored: dict[str, Any], shown: tuple[Any, ...]
+) -> None:
+    from app.jobs import sweep_router
+    from tests.browser.test_multi_search import row
+
+    entry = {"kind": "linkedin", "query": "", "mode": "api", "found": 1, **stored}
+    [source] = sweep_router.sweep_out(row([entry])).sources
+    left = [(one.title, one.place) for one in source.not_searched]
+    assert (left, source.other_place, source.fallback, source.fallback_after) == shown
