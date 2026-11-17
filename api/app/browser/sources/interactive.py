@@ -191,7 +191,7 @@ class GuardedTools:
                 not isinstance(url, str)
                 or len(url) > 2000
                 or not isinstance(text, str)
-                or len(text) > finder.SNAPSHOT_MAX
+                or len(text) > finder.PAGE_MAX
                 or not finder.canonical(url)
             ):
                 raise SourceError("page_failed")
