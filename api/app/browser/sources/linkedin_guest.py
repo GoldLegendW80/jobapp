@@ -904,9 +904,18 @@ async def _one(
 # --- the fallback of the browser search (jobs J20) -----------------------------------------------
 
 # A browser search that ended on one of these is not followed by this one: the run stopped its
-# sources (a commit that did not settle, a source not started after it), or the person stopped
-# that search. Any other failure is (owner, 2026-11-17: "It must work, even if i'm not logged in").
-NO_FALLBACK = frozenset({"store_failed", "store_refused", "not_started", "agent_cancelled"})
+# sources (a commit that did not settle, a source not started after it, findings it holds but
+# has not stored yet), or the person stopped that search. Any other failure is (owner,
+# 2026-11-17: "It must work, even if i'm not logged in").
+NO_FALLBACK = frozenset(
+    {
+        "store_failed",
+        "store_refused",
+        "not_started",
+        "finding_persistence_pending",
+        "agent_cancelled",
+    }
+)
 
 
 def _browser_sites(plan: Any) -> list[InteractiveSite]:
@@ -977,7 +986,7 @@ async def fall_back(
     if search is None or stop is not None or sweep.abandoned(plan):
         return
     commits = getattr(plan, "commits", None)
-    if commits is not None and commits.unsettled:
+    if commits is not None and getattr(commits, "unsettled", False):
         return
     for site in _browser_sites(plan):
         entry = _browser_entry(stats, site)
