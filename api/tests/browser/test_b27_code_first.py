@@ -279,6 +279,31 @@ def test_a_script_result_is_kept_one_value_per_line(raw, kept):
     assert finder._script_text(raw) == kept
 
 
+@pytest.mark.parametrize(
+    ("raw", "cut"),
+    [
+        (json.dumps("short"), False),  # a JSON string loses its quotes, nothing is cut
+        (json.dumps("x" * 50_000), False),
+        (json.dumps({"a": [1, 2]}), False),
+        (json.dumps("y\n" * 300_000), True),  # past SCRIPT_RESULT_MAX once read
+        ("[" * 5_000 + "]" * 5_000, False),  # nested past the parser: kept as answered
+    ],
+)
+def test_a_script_result_is_said_cut_only_when_it_was(raw, cut):
+    """Review of B27: the kept result is cut only when browserd or SCRIPT_RESULT_MAX cut it,
+    and a result nested deeper than the parser takes is kept as text, never an error."""
+
+    async def kept() -> finder.Kept:
+        session = object.__new__(finder.FinderSession)
+        session.script, session.script_links = None, {}
+        script, _ = await finder.FinderSession._keep_script(session, START, raw, False)
+        return script
+
+    script = asyncio.run(kept())
+    assert script.cut is cut
+    assert len(script.text) <= finder.SCRIPT_RESULT_MAX
+
+
 # What a script result names that a report may give (B27): absolute http(s) addresses and
 # quoted root paths; nothing else.
 LINK_TABLE = [

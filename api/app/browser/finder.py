@@ -1233,20 +1233,25 @@ def _parsed(url: str, text: str) -> tuple[list[str], Detail]:
     return links, (_detail(root), _seen_text(root))
 
 
-def _script_text(raw: object) -> str:
-    """A script's result as the session keeps it (B27): a JSON string as its text, a list or an
-    object one value per line (so browser_find answers one field per line), anything else as
-    browserd answered it; SCRIPT_RESULT_MAX characters at most, cut at a line end."""
+def _script_whole(raw: object) -> str:
+    """A script's result as the session keeps it (B27), before its cut: a JSON string as its
+    text, a list or an object one value per line (so browser_find answers one field per line),
+    anything else, or JSON nested deeper than the parser takes, as browserd answered it."""
     text = raw if isinstance(raw, str) else ""
     try:
         value = json.loads(text)
-    except ValueError:
-        return _head(text, SCRIPT_RESULT_MAX)
-    if isinstance(value, str):
-        text = value
-    elif isinstance(value, list | dict):
-        text = json.dumps(value, ensure_ascii=False, indent=1)
-    return _head(text, SCRIPT_RESULT_MAX)
+        if isinstance(value, str):
+            return value
+        if isinstance(value, list | dict):
+            return json.dumps(value, ensure_ascii=False, indent=1)
+    except (ValueError, RecursionError):
+        pass
+    return text
+
+
+def _script_text(raw: object) -> str:
+    """`_script_whole`, SCRIPT_RESULT_MAX characters at most, cut at a line end."""
+    return _head(_script_whole(raw), SCRIPT_RESULT_MAX)
 
 
 def _script_links(url: str, text: str) -> list[str]:
@@ -1570,9 +1575,10 @@ class FinderSession:
 
     async def _keep_script(self, url: str, raw: object, cut: bool) -> tuple[Kept, str]:
         """Keep a script's result (B27) and the addresses it names; the answer's line on it."""
-        text = await asyncio.to_thread(_script_text, raw)
+        whole = await asyncio.to_thread(_script_whole, raw)
+        text = _head(whole, SCRIPT_RESULT_MAX)
         links = await asyncio.to_thread(_script_links, url, text)
-        script = self.script = Kept(url, "", text, cut or len(text) < len(str(raw)))
+        script = self.script = Kept(url, "", text, cut or len(text) < len(whole))
         for link in links:
             self.script_links.pop(link, None)
             self.script_links[link] = None
