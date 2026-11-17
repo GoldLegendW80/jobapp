@@ -36,6 +36,10 @@ import {
  *   summary does not say LinkedIn needs her to sign in; she holds no lease and waits in no queue,
  *   and nothing is saved.
  * - Person B ticked nothing: LinkedIn stays off for B, with no pause and no search.
+ * - Jobs J20 (owner, 2026-11-17): the browser search is started only for a person with a LinkedIn
+ *   sign in (browser_site_logins, as B17 records one), so C and D hold one for the fixture host.
+ *   Person E chooses the browser search with none: LinkedIn is not opened in the browser, its
+ *   public job search runs in its place, and Activity and the summary say so.
  *
  * Run it with the group (web/e2e/browser-all.config.ts says how).
  */
@@ -46,11 +50,14 @@ const run = Date.now().toString(36);
 const B = `e2e-browser-b10b-${run}@example.org`;
 const C = `e2e-browser-b10c-${run}@example.org`;
 const D = `e2e-browser-b10d-${run}@example.org`;
+const E = `e2e-browser-b10e-${run}@example.org`;
 const CSRF = { "X-Requested-With": "jobapp" };
 const shots = makeShots("browser-b10");
 const tail = () => Math.random().toString(36).slice(2, 12).padEnd(10, "x");
 const KEY = `sk-ant-api03-e2ediscovery${tail()}${tail()}Fb10`;
 const terms = (list: string[]) => ({ terms: list, advanced_regex: false });
+const GUEST_FALLBACK =
+  "LinkedIn's public job search, as you are not signed in to LinkedIn";
 const PAUSED = /paused for a week|paused until|needs you to sign in/;
 
 type Job = { id: string; title: string; url: string | null };
@@ -96,6 +103,34 @@ function nextWall(wall: "checkpoint" | "signin" | ""): void {
   expect(answer.wall).toBe(wall || null);
 }
 
+/**
+ * A LinkedIn sign in for the person (a browser_site_logins row for the fixture host, the pages
+ * service, as B17's sign in leaves one), so that J20 starts the browser search for them.
+ */
+function recordLinkedInSignIn(email: string): void {
+  if (!/^[a-z0-9.@-]+$/.test(email)) throw new Error(`refusing ${email}`);
+  const sql = `
+    insert into browser_profiles (user_id, profile_id, uid)
+      select id, gen_random_uuid(), nextval('browser_profile_uid_seq') from users where email = '${email}'
+      on conflict (user_id) do nothing;
+    insert into browser_site_logins (profile_id, host, signed_in_at)
+      select p.profile_id, 'pages', now() from browser_profiles p
+      join users u on u.id = p.user_id where u.email = '${email}'
+      on conflict (profile_id, host) do update set expired_at = null, signed_in_at = now();
+    select count(*) from browser_site_logins l join browser_profiles p using (profile_id)
+      join users u on u.id = p.user_id where u.email = '${email}' and l.expired_at is null`;
+  const answer = compose(
+    "exec",
+    "-T",
+    "db",
+    "sh",
+    "-c",
+    'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "$0"',
+    sql,
+  );
+  expect(answer.trim().split("\n").pop()).toBe("1");
+}
+
 async function jobsOf(page: Page): Promise<Job[]> {
   const answer = await page.request.get("/api/jobs?limit=200");
   expect(answer.ok()).toBe(true);
@@ -121,14 +156,16 @@ async function lastSources(request: APIRequestContext): Promise<Source[]> {
  * Find jobs with LinkedIn in the list (adding it and saving is the permission, jobs J17), then the
  * summary's dialog once the search ended.
  */
-async function findJobs(page: Page) {
+async function findJobs(page: Page, listed = false) {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
   const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
-  await setup
-    .getByRole("button", { name: "Add LinkedIn", exact: true })
-    .click();
+  // A second search of the same person finds LinkedIn already in the list: the example is gone.
+  if (!listed)
+    await setup
+      .getByRole("button", { name: "Add LinkedIn", exact: true })
+      .click();
   // These guards are the browser search's: LinkedIn's public job search is the default
   // (owner, 2026-10-30), so the journey chooses the browser.
   await setup
@@ -153,6 +190,7 @@ test.beforeAll(async ({ browser }) => {
     [B, "Blake Example"],
     [C, "Casey Example"],
     [D, "Dana Example"],
+    [E, "Eli Example"],
   ] as const) {
     const context = await newContext(browser);
     contexts.push(context);
@@ -187,6 +225,8 @@ test.beforeAll(async ({ browser }) => {
     });
     expect(search.ok(), await search.text()).toBe(true);
     pages[email] = page;
+    // C and D are signed in to LinkedIn, so their walls are met; B ticks nothing and E has none.
+    if (email === C || email === D) recordLinkedInSignIn(email);
   }
 });
 
@@ -194,7 +234,7 @@ test.afterAll(async () => {
   nextWall("");
   for (const context of contexts) await context.close();
   contexts = [];
-  clearAttempts([B, C, D]);
+  clearAttempts([B, C, D, E]);
 });
 
 test("C meets LinkedIn's security check: no pause is recorded, and LinkedIn is searched again", async () => {
@@ -221,7 +261,7 @@ test("C meets LinkedIn's security check: no pause is recorded, and LinkedIn is s
   await shots(page, "linkedin-not-paused");
 
   // A second search the same day opens LinkedIn again.
-  const again = await findJobs(page);
+  const again = await findJobs(page, true);
   await expect(linkedinLine(again)).not.toContainText(PAUSED);
   await again.getByRole("button", { name: "Done" }).click();
   const second = (await lastSources(page.request)).find(
@@ -254,6 +294,30 @@ test("D meets LinkedIn's sign in page: no wall ends the website, no hand off", a
   };
   expect([held.lease, held.queue]).toEqual([null, []]);
   expect(await jobsOf(page)).toEqual([]);
+});
+
+test("E has no LinkedIn sign in: the public job search runs in place of the browser search", async () => {
+  const page = pages[E]!;
+  nextWall("");
+  const dialog = await findJobs(page);
+  await expect(linkedinLine(dialog)).toContainText(GUEST_FALLBACK);
+  await shots(page, "linkedin-public-search-fallback");
+  await dialog.getByRole("button", { name: "Done" }).click();
+  const source = (await lastSources(page.request)).find(
+    (item) => item.kind === "linkedin",
+  );
+  expect(source?.error ?? "").not.toMatch(/paused|checkpoint/);
+  // The browser never opened LinkedIn for E: no lease, no queue, no pause, no wall met.
+  const browserState = await page.request.get("/api/browser");
+  const held = (await browserState.json()) as {
+    lease: unknown;
+    queue: unknown[];
+  };
+  expect([held.lease, held.queue]).toEqual([null, []]);
+  expect((await linkedinOf(page)).paused_until).toBeNull();
+  // Activity says the same.
+  await page.goto("/activity");
+  await expect(page.getByText(GUEST_FALLBACK).first()).toBeVisible();
 });
 
 test("B ticked nothing: LinkedIn stays off for B, and B reads nothing of the others", async () => {
