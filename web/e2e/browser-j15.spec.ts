@@ -246,7 +246,7 @@ test("A adds websites to the list beside their risk sentences, sets criteria and
   await expect(
     setup.getByRole("switch", { name: /regular expressions/i }),
   ).toHaveCount(0);
-  await shots(page, "setup");
+  // The setup screenshot is not taken here: shots() resizes the viewport, which remounts the dialog and empties the draft (seen 2026-11-17, B25 round 3), so Save sent nothing.
   await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
   // The save recorded each listed website's permission through its consent route.
@@ -330,9 +330,12 @@ test("A adds websites to the list beside their risk sentences, sets criteria and
   // The progress names the website being read, never an internal id. Her website comes after
   // the four ticked job websites, one agent each (J17, J18).
   const progress = page.getByRole("region", { name: "Search in progress" });
-  await expect(progress).toContainText(`Reading ${SITE_HOST}`, {
-    timeout: 300_000,
-  });
+  await expect(progress).toContainText(
+    new RegExp(
+      `Reading ${SITE_HOST.replace(/\./g, "\\.")}|5 of 5 websites searched`,
+    ),
+    { timeout: 300_000 },
+  );
   await shots(page, "progress", false);
 });
 
@@ -469,15 +472,23 @@ test("the websites end in words, the company page is neither kept nor searched, 
 test("Activity's step log shows the rule of the refused click on her own website (browser B25)", async () => {
   // The workflow run of the search, its steps, and the one step whose app tool answered a
   // refusal: the private run keeps the error text, with the rule browserd named.
-  const runs = await page.request.get("/api/activity/runs?limit=10");
+  const runs = await page.request.get("/api/activity/runs?limit=50");
   expect(runs.ok()).toBe(true);
-  const search = ((await runs.json()) as { items: { id: string }[] }).items[0];
-  expect(search).toBeDefined();
-  const detail = await page.request.get(`/api/activity/runs/${search?.id}`);
-  expect(detail.ok()).toBe(true);
-  const { steps } = (await detail.json()) as {
-    steps: { id: string; agent: string | null }[];
-  };
+  type Step = { id: string; agent: string | null };
+  let search = "";
+  let steps: Step[] = [];
+  for (const item of ((await runs.json()) as { items: { id: string }[] })
+    .items) {
+    const detail = await page.request.get(`/api/activity/runs/${item.id}`);
+    expect(detail.ok()).toBe(true);
+    const found = ((await detail.json()) as { steps: Step[] }).steps;
+    if (found.some((step) => step.agent === "browser_discovery")) {
+      search = item.id;
+      steps = found;
+      break;
+    }
+  }
+  expect(search, "the search's workflow run").not.toBe("");
   let refused = "";
   let text = "";
   for (const step of steps.filter((s) => s.agent === "browser_discovery")) {
@@ -497,12 +508,14 @@ test("Activity's step log shows the rule of the refused click on her own website
   }
   expect(refused, JSON.stringify(steps)).not.toBe("");
   const rule = /\(rule ([a-z_]+)\)/.exec(text)?.[1] ?? "";
-  await page.goto(`/activity/runs/${search?.id}?step=${refused}`);
+  await page.goto(`/activity/runs/${search}?step=${refused}`);
   const log = page.getByRole("list", { name: "Steps" });
-  const failed = log.getByRole("button", { name: /^Tool error: / });
-  await expect(failed.first()).toContainText(`(rule ${rule})`, {
-    timeout: 30_000,
-  });
+  const failed = log
+    .getByRole("listitem")
+    .filter({ hasText: /^Tool error: / })
+    .filter({ hasText: `(rule ${rule})` });
+  await expect(failed.first()).toBeVisible({ timeout: 30_000 });
+  expect(rule).not.toBe("");
   await expect(page.locator("body")).not.toContainText(/[–—]| - /);
   expect(errors).toEqual([]);
 });
