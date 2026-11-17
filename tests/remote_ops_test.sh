@@ -61,6 +61,7 @@ case "$*" in
   answer alembic
   ;;
 "$C logs --no-color --since 10m") answer logs ;;
+"$C --profile browser logs --no-color --tail 5000 browser") answer browserlogs ;;
 "$C exec -T api python -c "*)
   printf 'reading %s\n' "$CANARY" >&2
   answer secret
@@ -280,6 +281,31 @@ out_has "egress=fail result=fail"
 out_lacks "$CANARY"
 ok "egress-host-check: ops/browser-egress.sh host-check of the deployed tree, ok or fail, never its rules"
 
+fresh
+{
+  printf 'browser-1  | INFO lease ab12: browser_click on a submit element, a step\n'
+  printf 'browser-1  | WARNING lease ab12: browser_navigate refused: unsupported_discovery rule=boundary\n'
+  printf 'browser-1  | WARNING lease ab12: refused https://me:%s@jobs.example.org/a?q=%s "%s" from 10.1.2.3 e2e-x@example.org\n' "$CANARY" "$CANARY" "$CANARY"
+  printf 'browser-1  | ERROR cookie %s could not be read\n' "$CANARY"
+  printf 'browser-1  | WARNING the session token %s\n' "$CANARY"
+} >"$STATE/browserlogs"
+run 0 "${OPS[@]}" logs-browser
+out_has "JOBAPP-LOG browser-1  | WARNING lease ab12: browser_navigate refused: unsupported_discovery rule=boundary"
+out_has 'JOBAPP-LOG browser-1  | WARNING lease ab12: refused <address> "<text>" from <ip> <email>'
+out_has "JOBAPP-OPS action=logs-browser lines=4 result=ok"
+out_lacks "$CANARY"
+out_lacks "a step"
+[[ "$(grep -c '^JOBAPP-LOG ' "$OUT")" == 2 ]] || fail "logs-browser lines: $(cat "$OUT")"
+for i in $(seq 1 250); do printf 'browser-1  | WARNING line %s\n' "$i"; done >"$STATE/browserlogs"
+run 0 "${OPS[@]}" logs-browser
+[[ "$(grep -c '^JOBAPP-LOG ' "$OUT")" == 200 ]] || fail "logs-browser keeps more than 200 lines"
+out_has "JOBAPP-LOG browser-1  | WARNING line 250"
+! grep -qx "JOBAPP-LOG browser-1  | WARNING line 50" "$OUT" || fail "logs-browser kept an old line"
+rm "$STATE/browserlogs"
+run 1 "${OPS[@]}" logs-browser
+out_has "JOBAPP-OPS action=logs-browser exit=1 result=fail"
+ok "logs-browser: the browser service's last 200 refused, error or warning lines, secrets dropped, addresses, texts, e-mails and IPs replaced; a failed read fails"
+
 run 1 env JOBAPP_DIR="$WORK/nowhere" ops/jetson-ops.sh status
 out_has "JOBAPP-OPS action=status reason=no-deploy-dir result=fail"
 rm "$APP/compose.yml"
@@ -427,7 +453,7 @@ run 0 ops/remote.sh --list
 remote_list="$(tr '\n' ' ' <"$OUT")"
 run 0 ops/jetson-ops.sh --list
 ops_list="$(tr '\n' ' ' <"$OUT")"
-[[ "$choices" == "status backup backups apply-status apply-pause apply-resume egress-host-check " ]] || fail "ops.yml choices: $choices"
+[[ "$choices" == "status backup backups apply-status apply-pause apply-resume egress-host-check logs-browser " ]] || fail "ops.yml choices: $choices"
 [[ "$remote_list" == "$choices" && "$ops_list" == "$choices" ]] ||
   fail "the actions differ: ops.yml '$choices', remote.sh '$remote_list', jetson-ops.sh '$ops_list'"
 ok "ops.yml's choice, ops/remote.sh and ops/jetson-ops.sh name the same actions"

@@ -16,6 +16,12 @@
 #   apply-resume       ... resume
 #   egress-host-check  ops/browser-egress.sh host-check: the browser's host firewall as installed
 #                      by the owner (sudo, by hand, once) is live and exact
+#   logs-browser       the last LOG_LINES (200) lines of the browser service's log that say refused,
+#                      error or warning (browser B25, owner 2026-11-17), each as `JOBAPP-LOG <line>`:
+#                      a line naming a token, secret, password or cookie is dropped, and in every
+#                      other one an address, a quoted text, an e-mail address and an IP address
+#                      are replaced (`redact`), as the run log of this public repository is
+#                      readable by anyone; browserd logs codes and rules, never a page
 #
 # Output: the figures only, on one line `JOBAPP-OPS action=<action> ... result=ok|fail` (status
 # prints its JOBAPP-VERIFY line first). What the scripts print themselves stays out of the log:
@@ -29,7 +35,7 @@ set -uo pipefail
 
 PROG="ops/jetson-ops.sh"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ACTIONS="status backup backups apply-status apply-pause apply-resume egress-host-check"
+ACTIONS="status backup backups apply-status apply-pause apply-resume egress-host-check logs-browser"
 COMPOSE="${COMPOSE:-docker compose -f compose.yml --profile tunnel}"
 export COMPOSE
 
@@ -66,6 +72,18 @@ finish() {
 }
 # word <text>: one token of the line: letters, digits and . _ : - only, else `-`.
 word() { if [[ "$1" =~ ^[A-Za-z0-9._:-]+$ ]]; then printf '%s' "$1"; else printf -- '-'; fi; }
+# redact: each line of stdin as it may be shown in the public run log (logs-browser): the time
+# and the service prefix kept, addresses, quoted texts, e-mail addresses and IP addresses
+# replaced, at most 300 characters.
+redact() {
+  sed -E \
+    -e 's#[A-Za-z][A-Za-z0-9+.]*://[^[:space:]"'"'"']*#<address>#g' \
+    -e 's#"[^"]*"#"<text>"#g' \
+    -e "s#'[^']*'#'<text>'#g" \
+    -e 's#[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]+#<email>#g' \
+    -e 's#[0-9]{1,3}(\.[0-9]{1,3}){3}#<ip>#g' \
+    -e 's#^(.{150}.{150}).*#\1#'
+}
 # count <regex>: lines of what the script printed that match, counted, never shown.
 count() { grep -cE "$1" "$TMP" || true; }
 
@@ -105,6 +123,15 @@ apply-status | apply-pause | apply-resume)
     finish ok "apply=$state"
   fi
   finish fail "apply=$(word "${state:--}") exit=$status"
+  ;;
+logs-browser)
+  status=0
+  # shellcheck disable=SC2086 # COMPOSE is a command line
+  $COMPOSE --profile browser logs --no-color --tail 5000 browser </dev/null >"$TMP" 2>/dev/null || status=$?
+  ((status == 0)) || finish fail "exit=$status"
+  grep -iE 'refused|error|warning' "$TMP" | grep -viE 'token|secret|password|cookie' |
+    tail -n "${LOG_LINES:-200}" | redact | sed 's/^/JOBAPP-LOG /'
+  finish ok "lines=$(grep -ciE 'refused|error|warning' "$TMP" || true)"
   ;;
 egress-host-check)
   [[ -f ops/browser-egress.sh ]] || finish fail reason=no-egress-script

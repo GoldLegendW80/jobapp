@@ -176,6 +176,7 @@ Note, 2026-10-28: LinkedIn's own fixed reader was deleted (owner, "Delete it"); 
 | B11 | to create | Privacy and isolation over the module | S | B4 to B10, B12a, B12b | none | 8 |
 | B12a | to create | The sign in hand off in browserd, the api and the worker | M | B5, B7 (never beside B8) | none | 6 |
 | B12b | to create | The sign in hand off for the person, and the later hand off | S | B12a, B4 | none | 7 |
+| B25 | in progress | A search run tells the truth: tool previews and errors in Activity, refusal rules, a sweep with no working source Failed, logs-browser (#789) | M | B24 | finder.py with B26 | 9 |
 | Checkpoint B | to create | The owner's own browser | human | B7, B12b, then B11 | none | after 5, 7 and 8 |
 
 **The first end to end slice** (one Greenhouse or Ashby application filled by the agent in the Jetson's browser, watched live, submitted after the person's approval) needs B1, B2, B3, B4 and B5 from this plan, and A1 to A7 from the apply plan, after the documents tasks it reads (see the apply plan's order). It lands after group 4 of this plan. B4 and B5 run in parallel because B5's journey does not use the live view; A4's journey does, so A4 waits for both. B7 and B12 are not in the slice, but apply's A10b (the sign in case), A15 and A18a start after B12b. **The short path to Full auto** (owner, 2026-10-19, issue #405) does not wait for B12: Full auto ships first for Ashby, Greenhouse and Lever, and until B12b and A10b a sign in wall sends the item to the review queue as "Needs you". Beside apply's A12, A13a and A13b, this plan runs B7, then B12a, then B12b, and apply's A10b follows.
@@ -457,3 +458,22 @@ Owner request of 2026-11-10, issue #785; branch `browser/B24-one-retry`, on B23 
 - Tests: `api/tests/jobs/test_b24_one_retry.py`, `api/tests/browser/test_b24_retry_slot.py` (one browser, real Redis and browserd's lease logic), `api/tests/agents/test_activity.py`.
 
 **Open:** LinkedIn's retry after a rate limit almost never runs, since its 30 minute cooldown outlasts the 15 minute deadline of the sources that make no browser call; a source `not_started` behind a stop of the websites gets no attempt in the retry pass.
+
+### B25: a search run tells the truth
+
+Acceptance (issue #789):
+1. Run events of `browser_discovery` (and every agent using the app's MCP tools) keep, for each app tool call, a bounded preview of its arguments that is safe to show: the address for navigate and fetch, the pattern for find, the length only for typed text and scripts. For each tool error, its text (at most 500 characters). Page content is never stored in events. Older events without these fields still render.
+2. Activity's step log shows them: "Tool call: browser_navigate https://..." and "Tool error: Refused ... (rule host_not_allowed)".
+3. browserd's refusal rule (`no_marker`, `not_a_sweep_tool`, `boundary`, `host_not_allowed`, line codes) travels in its failure answer; `finder.py` keeps it in the error text given to the agent and counts it per rule in the source's stats (`refusals: {rule: n}`), shown in the sweep's source detail.
+4. A sweep whose every source ended `failed` or `not_attempted` is shown Failed (sweep status, Activity workflow run, the Jobs page banner with each website's reason in words). `partial`, `complete`, `no_matches` count as working.
+5. `ops/remote.sh logs-browser`: the last 200 lines of the browser service matching `refused|error|warning`, no secrets.
+6. Tests: pytest for events, refusal rule propagation and sweep status; vitest for the log rendering; shell test for the new ops action; one journey that sees a refused navigation's rule in Activity on a fake site.
+
+**As built:**
+- `api/app/agents/runner.py`: a private run's `tool_call` of an app tool (`mcp__app__*`, one of the agent's own) keeps `preview` (`preview_args`: `url` through `safe_address`, http or https or a path of the site, no user name, password or fragment, query kept with secret named values replaced, at most 500 characters; `pattern` at most 200; ref, key, action, kind as one short word; numbers and switches; any other string as `<name>_length`, a list as `<name>_count`; names with a leading underscore left out); its `tool_result` with `is_error` keeps `error`, the text scrubbed of the credential and cut at TOOL_ERROR_MAX (500). Claude Code's tools and made up names keep neither.
+- `web/src/features/agents/helpers/run-steps.ts`: the title "Tool call: <tool> <address or pattern>", the other preview entries as arguments (lengths in characters), "Tool error: <text>". Older events render as before.
+- `browser/browserd/tools/actions.py`: `failure(..., rule)` and `refused(code)` answer `rule` (no_marker, not_a_sweep_tool, boundary, the line's code, host_not_allowed, submit_permit's code).
+- `api/app/browser/finder.py` (`refusal_rule`, `FinderSession.refusals`): the agent is told "... (rule <rule>)" for a refused navigation or action; `api/app/browser/sources/interactive.py` writes `refusals` in the source's entry; `api/app/jobs/sweep_router.py` and `schemas.py` serve it (`SourceOut.refusals`); `web/src/components/shared/jobs/sweep-sources.tsx` says "The app refused N actions (by rule: ...)".
+- `api/app/jobs/sweep.py` (`any_source_worked`, `NO_SOURCE_WORKED`): `finish_done` records Failed with that sentence when every selected source ended failed or not_attempted; Activity's sweep step and workflow run follow the status, the summary dialog shows "The search stopped", the sentence and each website's reason.
+- `ops/jetson-ops.sh`, `ops/remote.sh`, `.github/workflows/ops.yml`: `logs-browser`, `JOBAPP-LOG` lines, filtered and redacted (`redact`) on the Jetson since the run log of the public repository is readable by anyone.
+- Tests: `api/tests/agents/test_b25_run_truth.py`, `api/tests/jobs/test_b25_sweep_status.py`, `api/tests/browser/test_b25_refusal_rule.py`, `api/tests/browser/test_b19_outcome.py`, `web/src/features/agents/test/agent-step-log.test.tsx`, `web/src/components/test/sweep-sources.test.tsx`, `tests/remote_ops_test.sh`.

@@ -4,7 +4,8 @@
 # figures it printed.
 #
 #   ops/remote.sh <action>       one of: status backup backups apply-status apply-pause
-#                                apply-resume egress-host-check (ops/jetson-ops.sh says what each does)
+#                                apply-resume egress-host-check logs-browser (ops/jetson-ops.sh says
+#                                what each does)
 #   ops/remote.sh --list         the actions, one per line
 #
 # Needs gh signed in with the scope `workflow` and an account with write access to the
@@ -12,7 +13,8 @@
 # id: the newest dispatch of ops.yml by this gh account that was not there before the dispatch.
 # Output: `run <id>: <url>`, then the run's JOBAPP-VERIFY and JOBAPP-OPS lines (figures only,
 # read from gh run view <id> --log, nothing else of the log), then `REMOTE: OK <action>` or
-# `REMOTE: FAIL <action> <why>`.
+# `REMOTE: FAIL <action> <why>`. For logs-browser, the run's `JOBAPP-LOG` lines too (the browser
+# service's refusals, errors and warnings, already filtered and redacted on the Jetson), before.
 #
 # Exit status: 0 the run succeeded and said result=ok, 1 it did not (or it could not be started or
 # found), 64 wrong arguments.
@@ -23,7 +25,7 @@ set -euo pipefail
 PROG="ops/remote.sh"
 WORKFLOW="ops.yml"
 # The same list as the choice of ops.yml and the case of ops/jetson-ops.sh (the test checks all three).
-ACTIONS="status backup backups apply-status apply-pause apply-resume egress-host-check"
+ACTIONS="status backup backups apply-status apply-pause apply-resume egress-host-check logs-browser"
 POLL_SECONDS="${REMOTE_POLL_SECONDS:-2}"
 # The lines of ops/jetson-ops.sh and ops/jetson-verify.sh, matched exactly.
 LINE_RE='JOBAPP-(VERIFY|OPS) [a-z_]+=[A-Za-z0-9_.:,-]+( [a-z_]+=[A-Za-z0-9_.:,-]+)*'
@@ -32,6 +34,8 @@ LINE_RE='JOBAPP-(VERIFY|OPS) [a-z_]+=[A-Za-z0-9_.:,-]+( [a-z_]+=[A-Za-z0-9_.:,-]
 TAB=$'\t'
 CR=$'\r'
 LOG_LINE_RE="^[^${TAB}]*${TAB}[^${TAB}]*${TAB}[^ ${TAB}]*Z (${LINE_RE})${CR}?\$"
+# logs-browser's lines (ops/jetson-ops.sh), right after the same prefix.
+BROWSER_LOG_RE="^[^${TAB}]*${TAB}[^${TAB}]*${TAB}[^ ${TAB}]*Z (JOBAPP-LOG [^${CR}]*)${CR}?\$"
 
 usage_error() {
   printf '%s: %s\nusage: %s <action> | --list\nactions: %s\n' "$PROG" "$1" "$PROG" "$ACTIONS" >&2
@@ -92,6 +96,9 @@ lines=""
 for _ in 1 2 3 4 5; do
   if log="$(gh run view "$run" --log 2>/dev/null)"; then
     lines="$(sed -nE "s/$LOG_LINE_RE/\1/p" <<<"$log" || true)"
+    if [[ "$ACTION" == logs-browser ]]; then
+      sed -nE "s/$BROWSER_LOG_RE/\1/p" <<<"$log" || true
+    fi
     break
   fi
   sleep "$POLL_SECONDS"
