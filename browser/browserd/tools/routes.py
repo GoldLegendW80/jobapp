@@ -328,8 +328,9 @@ ROUTES = [
     ("POST", re.compile(rf"/leases/{LEASE_ID}/apply-wait/(?P<action>begin|read|resume)"),
      apply_wait, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/linkedin/open"), linkedin_open, 128),
+    # B27: a discovery's script of 40,000 characters, JSON escaped, and its scope of 32 KiB.
     ("POST", re.compile(rf"/leases/{LEASE_ID}/tools/(?P<name>[a-z_]{{1,48}})"), call_tool,
-     64 * 1024),
+     320 * 1024),
     ("PUT", re.compile(rf"/leases/{LEASE_ID}/files/(?P<name>[^/]{{1,100}})"), put_file,
      policy.FILE_MAX),
 ]  # fmt: skip

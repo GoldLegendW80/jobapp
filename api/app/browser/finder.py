@@ -141,8 +141,60 @@ REF_OF = re.compile(r"\[ref=((?:f\d{1,4})?e\d{1,7})\]")
 # browser_find's regular expression form: /expression/, or /expression/i for case aside.
 REGEX_FORM = re.compile(r"/(.+)/(i?)", re.DOTALL)
 NO_PAGE = "No page is read in this tab yet: open one with browser_navigate."
+# B27 (owner 2026-11-17: "let the agent write code in a sandbox or whatever"): a discovery's
+# script (browserd's actions.DISCOVERY_SCRIPT_MAX, DISCOVERY_SCRIPT_S, DISCOVERY_RESULT_MAX) and
+# its result, kept in the session as a page is (`FinderSession.script`): the answer shows
+# COMPACT_MAX characters of it, browser_find and browser_snapshot read the rest (`source`).
+SCRIPT_MAX = 40_000
+SCRIPT_RESULT_MAX = 500_000
+NO_SCRIPT = "No script result is kept yet: run one with browser_evaluate."
+SOURCES = ("page", "script")
+# The addresses a script result names (absolute, or a quoted path from the root) that a report
+# may give (B27): the app opens one the agent did not; at most SCRIPT_LINKS_MAX, oldest dropped.
+SCRIPT_LINKS_MAX = 20_000
+SCRIPT_LINK = re.compile(r"https?://[^\s\"'<>\\]{1,2000}|(?<=\")/[^\s\"'<>\\]{0,2000}(?=\")")
+# The postings one report call may have the app open itself (B27), one at a time, each after a
+# pause of APP_OPEN_PAUSE_S (a person's pace), in a tab of its own on the same lease.
+APP_OPENS_MAX = 20
+APP_OPEN_PAUSE_S = (2.0, 4.0)
+# The routes of a website's search (B27): report_no_postings is refused until the agent tried
+# the three, or named a block code saw (accept and refuse table: test_b27_code_first.py).
+# `search_box`: a search typed and submitted on the page; `search_address`: a browser_navigate to
+# an address whose query names what or where (SEARCH_PARAMS, a value) or holds a saved title's
+# words; `listing`: a public listing page opened (navigate or click): its last path segment is
+# a listing word (LISTING_WORDS, alone or as `word-...`), or the one before it a parent of such
+# pages (LISTING_PARENTS). The start page is none.
+ROUTES = {
+    "search_box": "the website's search box (type a title, then submit)",
+    "search_address": (
+        "a search address with its query parameters (browser_navigate to the website's search "
+        "address with a title and a place, as the website's own search builds it)"
+    ),
+    "listing": (
+        "the public listing pages (category, job or city pages, company pages, the sitemap)"
+    ),
+}
+SEARCH_PARAMS = frozenset(
+    {"q", "query", "keyword", "keywords", "kw", "k", "search", "searchterm", "search_term", "s",
+     "term", "terms", "text", "what", "title", "jobtitle", "job_title", "position", "role",
+     "motcle", "motscles", "mots_cles", "mot_cle", "recherche", "suche", "stichwort", "location",
+     "l", "where", "loc", "city", "place", "ville", "lieu", "ort", "wo", "geoid", "region"}
+)  # fmt: skip
+LISTING_WORDS = (
+    "sitemap", "jobs", "emplois", "emploi", "offres", "careers", "carrieres",
+    "stellenangebote", "stellen", "vacancies", "openings", "positions", "categories", "category",
+    "metiers", "metier", "companies", "entreprises", "unternehmen", "browse", "directory",
+    "locations", "cities", "villes", "departments", "teams",
+)  # fmt: skip
+LISTING_PARENTS = frozenset(
+    {"categories", "category", "categorie", "metiers", "companies", "company", "entreprises",
+     "entreprise", "unternehmen", "cities", "villes", "locations", "departments", "teams"}
+)  # fmt: skip
+# The reasons that name a block code sees (the agent asked the person, browser_ask_person, or the
+# app refused an action): accepted before the three routes.
+BLOCKS = frozenset({"security_check", "signin_wall", "cookie_wall"})
 # The saved values a job website's scope carries (browserd's discovery.VALUES_MAX, VALUE_MAX),
-# and its size as sent with every tool call (browserd takes a call of 64 KiB at most).
+# and its size as sent with every tool call (browserd takes a call of 320 KiB at most, B27).
 SCOPE_VALUES_MAX = 100
 SCOPE_VALUE_MAX = 300
 SCOPE_BYTES_MAX = 32_768
@@ -216,6 +268,11 @@ REPORT_ADVICE = {
         "loaded."
     ),
     "postings_max": "Enough postings for this report: report the next ones in another call.",
+    "not_on_opened_page": (
+        "The app opened this address and did not find the title on it (it may show a security "
+        "check or a sign in wall): open it yourself, then report the title as the page shows it."
+    ),
+    "app_opens_max": "Report fewer postings the app has to open in one call.",
 }
 # What browserd answers when it refused a navigation or an action of the agent's (B19): counted
 # as the app's refusal (`refused["unsupported_interaction"]`), never a page that did not load.
@@ -280,16 +337,35 @@ button, a filter. browser_snapshot(offset, length) reads the full snapshot part 
 the top at offset 0 (which reads the page again). A long list is complete in the full snapshot,
 even when the compact view shows only its top.
 
+Method, as a person who writes code would search:
+1. Build the website's search address with its query parameters for each wanted title and place
+(open one search first to see how the website writes it), and open it with browser_navigate.
+2. Read every result card with one script instead of reading snapshots: browser_evaluate a
+function that returns, for each card, its title, company, place, date and link (`a.href`).
+A script may hold up to 40,000 characters and run up to 120 s; its result (up to 500,000
+characters) is kept: the answer shows its start, and browser_find(pattern, source="script") or
+browser_snapshot(offset, source="script") read the rest.
+3. Paginate by address (the next page's parameter) or, in the same script, by fetching the next
+pages from the website's own origin (`await fetch(url).then(r => r.text())`, then `new
+DOMParser().parseFromString(html, "text/html")`) and reading their cards too.
+4. Open the postings that may fit and report them. Any posting address you saw on a page, in a
+snapshot or in a script result can be reported: the app opens the ones you did not open itself,
+checks their title and keeps them.
+5. When the search shows no list, try the website's public listing pages (category, job or city
+pages, company pages, the sitemap) before giving up. The app refuses report_no_postings until
+you tried the search box, a search address and the listing pages, or met a block (a security
+check, a sign in wall) you asked the person about.
+
 When a security check, a captcha or a sign in wall stops you, or the website needs the person,
 call browser_ask_person with one sentence for the person ("Please solve the security check on
 LinkedIn"). If the person is watching, they help and give the browser back; read the page again
 then. If nobody is watching, go on another way, or end the website with report_no_postings and
-its reason. Never click a security check or a captcha yourself.
+its reason. Never click a security check or a captcha yourself, and never solve one by code.
 
-Report a posting with report_postings once you opened its own page in this search (best right
-after reading it): its title as the page shows it, the address of that page and its text, and
+Report a posting with report_postings (best right after reading it): its title as its page
+shows it, the address of that page and its text (the card's text when you did not open it), and
 company, location and published_on (YYYY-MM-DD) as the page shows them. The app keeps a posting
-whose page you opened; when it refuses one, its answer says what to do. When the website shows
+whose page shows its title; when it refuses one, its answer says what to do. When the website shows
 no list of postings, say why with report_no_postings: no_match (the search ran and listed no
 job that fits), no_list, cookie_wall, signin_wall, no_search_control, app_refused (the app
 refused what you needed), security_check. Never report a reason you did not see.
@@ -1138,6 +1214,90 @@ def _record_size(record: PageRead) -> int:
     return len(record.text) + sum(map(len, record.lines)) + sum(map(len, record.headings))
 
 
+Detail = tuple[tuple[str, list[str], dict[str, tuple[str, str]]], tuple[list[str], list[str]]]
+
+
+def _parsed(url: str, text: str) -> tuple[list[str], Detail]:
+    """What `FinderSession._read` keeps of a page, worked out off the event loop (#797: the whole
+    kept page, up to PAGE_MAX, took about 1.1 s to parse on the Mac): the canonical addresses of
+    its links, in page order, and its detail and visible lines. Pure."""
+    from app.browser import sources
+
+    root = sources.parse_snapshot(text[:PAGE_MAX])
+    links = [
+        link for node in root.walk() if node.url and (link := canonical(urljoin(url, node.url)))
+    ]
+    return links, (_detail(root), _seen_text(root))
+
+
+def _script_text(raw: object) -> str:
+    """A script's result as the session keeps it (B27): a JSON string as its text, a list or an
+    object one value per line (so browser_find answers one field per line), anything else as
+    browserd answered it; SCRIPT_RESULT_MAX characters at most, cut at a line end."""
+    text = raw if isinstance(raw, str) else ""
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return _head(text, SCRIPT_RESULT_MAX)
+    if isinstance(value, str):
+        text = value
+    elif isinstance(value, list | dict):
+        text = json.dumps(value, ensure_ascii=False, indent=1)
+    return _head(text, SCRIPT_RESULT_MAX)
+
+
+def _script_links(url: str, text: str) -> list[str]:
+    """The addresses a script result names (B27, SCRIPT_LINK): absolute http or https ones, and
+    quoted paths from the root read against the page's address; canonical, in order, each once,
+    at most SCRIPT_LINKS_MAX. Pure and linear."""
+    found: dict[str, None] = {}
+    for match in SCRIPT_LINK.finditer(text):
+        link = canonical(urljoin(url, match.group(0)))
+        if link:
+            found[link] = None
+            if len(found) >= SCRIPT_LINKS_MAX:
+                break
+    return list(found)
+
+
+def route_of(url: str, home: set[str], titles: list[str], *, typed_address: bool) -> str | None:
+    """Which route of a website's search an address the agent's tab landed on is (B27, ROUTES):
+    `search_address` only for an address the agent built (`typed_address`: browser_navigate),
+    `listing` for any; None for the start page (`home`: its address and where it landed, by
+    path) and for any other address. Fails closed: an address it cannot read is no route."""
+    from urllib.parse import parse_qsl
+
+    try:
+        parts = urlsplit(canonical(url))
+        pairs = parse_qsl(parts.query, max_num_fields=100)
+    except ValueError:
+        return None
+    if not parts.scheme:
+        return None
+    homes = {urlsplit(h)._replace(fragment="").geturl() for h in home}
+    if parts._replace(fragment="").geturl() in homes:
+        return None
+    if typed_address:
+        named = any(
+            name.lower().removesuffix("[]") in SEARCH_PARAMS and value.strip()
+            for name, value in pairs
+        )
+        said = f" {_words(parts.path + ' ' + ' '.join(v for _, v in pairs))} "
+        if named or any((w := _words(t)) and f" {w} " in said for t in titles):
+            return "search_address"
+    if any(parts.path.rstrip("/") == urlsplit(h).path.rstrip("/") for h in home):
+        return None  # the start page's next page or its filters: no route of its own
+    segments = [s.lower() for s in parts.path.split("/") if s]
+    if not segments:
+        return None
+    last = segments[-1].rsplit(".", 1)[0] if "." in segments[-1] else segments[-1]
+    if any(last == word or last.startswith(word + "-") for word in LISTING_WORDS):
+        return "listing"
+    if len(segments) > 1 and segments[-2] in LISTING_PARENTS:
+        return "listing"
+    return None
+
+
 @dataclass
 class FinderSession:
     """One website's run, as the agent's tools see it: the lease's pages and what was kept."""
@@ -1182,6 +1342,15 @@ class FinderSession:
     # the agent is on (browser_tabs); dropped when the run ends (`RuntimeFinder.__call__`).
     kept: dict[int, Kept] = field(default_factory=dict, repr=False)
     tab: int = 0
+    # B27: the last script's result, kept as a page is (browser_find and browser_snapshot with
+    # source "script"), and the addresses the session's script results named, oldest first.
+    script: Kept | None = field(default=None, repr=False)
+    script_links: dict[str, None] = field(default_factory=dict, repr=False)
+    # The routes of the website's search the agent tried (ROUTES), the times it asked the
+    # person (a block it met), and the reported postings the app opened itself.
+    routes: dict[str, None] = field(default_factory=dict)
+    asked: int = 0
+    opened_by_app: int = 0
 
     def __post_init__(self) -> None:
         if self.interactive is None or canonical(self.interactive.start) != self.start:
@@ -1198,24 +1367,23 @@ class FinderSession:
         """Any address `canonical` reads (B20): browserd's egress proxy refuses a private one."""
         return bool(canonical(url))
 
-    def _read(self, url: str, text: str) -> None:
-        """Note the links of a page read and its visible text."""
-        from app.browser import sources
+    async def _read_off_loop(self, url: str, text: str) -> None:
+        """`_read`, its parsing in a thread (#797): a page of PAGE_MAX characters never holds
+        the worker's event loop."""
+        self._read(url, text, await asyncio.to_thread(_parsed, url, text))
 
-        root = sources.parse_snapshot(text[:PAGE_MAX])
-        for node in root.walk():
-            if node.url:
-                link = canonical(urljoin(url, node.url))
-                if link and self.on_site(link) and len(self.seen) < SEEN_MAX:
-                    self.seen.add(link)
+    def _read(self, url: str, text: str, parsed: tuple[list[str], Detail] | None = None) -> None:
+        """Note the links of a page read and its visible text (`_parsed`, unless given)."""
+        links, ((body, titles, fields), (lines, headings)) = parsed or _parsed(url, text)
+        for link in links:
+            if self.on_site(link) and len(self.seen) < SEEN_MAX:
+                self.seen.add(link)
         key = canonical(url)
         if key:
             if key not in self.seen and len(self.seen) >= SEEN_MAX:
                 self.seen.pop()
             self.pages_read.pop(key, None)  # read again: the newest record
             if key not in self.error_pages:
-                body, titles, fields = _detail(root)
-                lines, headings = _seen_text(root)
                 self.pages_read[key] = PageRead(
                     (body or "\n".join(lines))[:TEXT_MAX],
                     _within(lines, LINES_MAX),
@@ -1310,7 +1478,8 @@ class FinderSession:
             self.error_pages[opened] = None  # `_read` keeps no record of it
             while len(self.error_pages) > OPENED_MAX:
                 del self.error_pages[next(iter(self.error_pages))]
-        self._read(opened, self.pages.last_text)
+        await self._read_off_loop(opened, self.pages.last_text)
+        self._route(opened, typed_address=True)
         pages = self.pages
         return self._view(opened, pages.last_text, pages.last_title, pages.last_cut), False
 
@@ -1353,6 +1522,7 @@ class FinderSession:
             self._chosen.clear()
             return
         if self._typed:
+            self.routes["search_box"] = None  # B27: a search typed and submitted
             self._searched(", ".join(self._typed.values()), ", ".join(self._chosen.values()))
         self._typed.clear()
         self._chosen.clear()
@@ -1382,6 +1552,34 @@ class FinderSession:
         if title is None or any(_norm(title) in key[0].split(", ") for key in self._search_keys):
             return
         self._searched(title, next((p for p in self.interactive.places if held(p)), None))
+
+    def _route(self, url: str, *, typed_address: bool) -> None:
+        """Note the route of the search an address the agent's tab landed on is (B27)."""
+        titles = list(self.interactive.titles) if self.interactive else []
+        home = {self.start, self.landed} - {""}
+        route = route_of(url, home, titles, typed_address=typed_address)
+        if route:
+            self.routes[route] = None
+
+    async def _keep_script(self, url: str, raw: object, cut: bool) -> tuple[Kept, str]:
+        """Keep a script's result (B27) and the addresses it names; the answer's line on it."""
+        text = await asyncio.to_thread(_script_text, raw)
+        links = await asyncio.to_thread(_script_links, url, text)
+        script = self.script = Kept(url, "", text, cut or len(text) < len(str(raw)))
+        for link in links:
+            self.script_links.pop(link, None)
+            self.script_links[link] = None
+        while len(self.script_links) > SCRIPT_LINKS_MAX:
+            del self.script_links[next(iter(self.script_links))]
+        said = f"The script's result holds {len(text):,} characters"
+        if script.cut:
+            said += f" (cut at {SCRIPT_RESULT_MAX:,})"
+        if len(text) <= COMPACT_MAX:
+            return script, said + ": all shown."
+        return script, (
+            said + ': its start is shown. browser_find(pattern, source="script") searches it '
+            'whole, browser_snapshot(offset, source="script") reads it part by part.'
+        )
 
     async def interact(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         """Only trusted interactive sessions can add browserd's discovery discriminator."""
@@ -1428,7 +1626,9 @@ class FinderSession:
         self.current = url
         self.interactions[name] += 1
         self._note_search(name, args)
-        self._read(url, self.pages.last_text)
+        await self._read_off_loop(url, self.pages.last_text)
+        if name != "browser_evaluate":
+            self._route(url, typed_address=False)
         tabs = result.get("tabs") if isinstance(result.get("tabs"), list) else []
         if name == "browser_tabs":
             if args.get("action") == "close":
@@ -1445,8 +1645,12 @@ class FinderSession:
             )
         pages = self.pages
         view = json.loads(self._view(url, pages.last_text, pages.last_title, pages.last_cut))
-        if name == "browser_evaluate":  # the script's own result, bounded by browserd
-            view["script_result"] = str(result.get("result", ""))[:20_000]
+        if name == "browser_evaluate":  # B27: kept whole, its start shown; page content
+            script, said = await self._keep_script(
+                url, result.get("result", ""), result.get("cut") is True
+            )
+            view["untrusted_script_result"] = _head(script.text, COMPACT_MAX)
+            view["script"] = said
         if name == "browser_tabs":
             view["tabs"] = tabs
         return json.dumps(view, ensure_ascii=False), False
@@ -1497,6 +1701,7 @@ class FinderSession:
 
         # A lease gone or a permission withdrawn while the person was asked stops the session,
         # as every other tool does, never an exception out of the tool (B20, part B).
+        self.asked += 1  # B27: a block the agent met, which report_no_postings may name
         try:
             answer = await ask_person(self.pages, reason[:300], self.interactive.tool_scope())
         except BrowserError as exc:
@@ -1505,19 +1710,27 @@ class FinderSession:
             return self._stop(exc.code)
         return answer, False
 
-    async def snapshot(self, offset: int = 0, length: int = WINDOW_DEFAULT) -> tuple[str, bool]:
+    async def snapshot(
+        self, offset: int = 0, length: int = WINDOW_DEFAULT, source: str = "page"
+    ) -> tuple[str, bool]:
         """browser_snapshot (B26): at offset 0 the page is read again and kept; the answer is a
         window of `length` characters of the tab's kept snapshot from `offset`, cut at a line
-        end, with where the next one starts."""
+        end, with where the next one starts. With `source` "script" (B27), a window of the last
+        script's kept result, nothing read again."""
         if self.stopped:
             return self._stop(self.stopped)
-        if offset <= 0:
-            answer, error = await self._reread(compact=False)
-            if error:
-                return answer, error
-        kept = self.kept.get(self.tab)
-        if kept is None:
-            return NO_PAGE, True
+        if source == "script":
+            kept = self.script
+            if kept is None:
+                return NO_SCRIPT, True
+        else:
+            if offset <= 0:
+                answer, error = await self._reread(compact=False)
+                if error:
+                    return answer, error
+            kept = self.kept.get(self.tab)
+            if kept is None:
+                return NO_PAGE, True
         offset, length = max(offset, 0), min(max(length, 1), WINDOW_MAX)
         size = len(kept.text)
         if offset and offset >= size:
@@ -1526,10 +1739,12 @@ class FinderSession:
         if end < size and (line_end := kept.text.rfind("\n", offset, end)) > offset:
             end = line_end + 1
         part = kept.text[offset:end]
-        page: dict[str, Any] = {
-            "url": kept.url,
-            "untrusted_page_title": kept.title,
-            "untrusted_page_snapshot": part,
+        page: dict[str, Any] = {"url": kept.url, "untrusted_page_title": kept.title}
+        if source == "script":
+            page = {"url": kept.url, "untrusted_script_result": part}
+        else:
+            page["untrusted_page_snapshot"] = part
+        page |= {
             "offset": offset,
             "end": end,
             "snapshot_characters": size,
@@ -1537,9 +1752,10 @@ class FinderSession:
         if part == kept.text:
             page["snapshot"] = _told(kept, part)
         elif end < size:
+            also = ', source="script"' if source == "script" else ""
             page["snapshot"] = (
-                f"Characters {offset:,} to {end:,} of {size:,}: browser_snapshot(offset={end}) "
-                "reads on, browser_find(pattern) searches the whole."
+                f"Characters {offset:,} to {end:,} of {size:,}: browser_snapshot(offset={end}"
+                f"{also}) reads on, browser_find(pattern{also}) searches the whole."
             )
         else:
             page["snapshot"] = f"Characters {offset:,} to {end:,} of {size:,}: the end."
@@ -1566,7 +1782,7 @@ class FinderSession:
             self.refused["other_host"] += 1
             return "Refused: the page is on another site.", True
         self.current = url
-        self._read(url, text)
+        await self._read_off_loop(url, text)
         title = shot.get("title") if isinstance(shot.get("title"), str) else ""
         if compact:
             return self._view(url, text, title, shot.get("cut") is True), False
@@ -1574,7 +1790,11 @@ class FinderSession:
         return "", False
 
     async def find(
-        self, pattern: object, context_lines: object = None, max_matches: object = None
+        self,
+        pattern: object,
+        context_lines: object = None,
+        max_matches: object = None,
+        source: object = "page",
     ) -> tuple[str, bool]:
         """browser_find (B26): the lines of the tab's kept snapshot that hold `pattern` (plain
         text, case aside, or /expression/), each with its ref (`_ref_at`) and `context_lines`
@@ -1586,9 +1806,11 @@ class FinderSession:
             return self._stop(self.stopped)
         if not isinstance(pattern, str) or not pattern.strip() or len(pattern) > PATTERN_MAX:
             return f"Refused: give a pattern of 1 to {PATTERN_MAX} characters.", True
-        kept = self.kept.get(self.tab)
+        if source not in SOURCES:
+            return 'Refused: source is "page" or "script".', True
+        kept = self.script if source == "script" else self.kept.get(self.tab)
         if kept is None:
-            return NO_PAGE, True
+            return (NO_SCRIPT if source == "script" else NO_PAGE), True
         matcher = _matcher(pattern)
         if isinstance(matcher, str):
             return matcher, True
@@ -1618,7 +1840,7 @@ class FinderSession:
                 f"{total - len(found)} more matching lines not shown: narrow the pattern, or "
                 "raise max_matches."
             )
-        if found:
+        if found and source == "page":
             notes.append("Click a match by its ref (browser_click).")
         if stopped:
             notes.append(
@@ -1627,6 +1849,7 @@ class FinderSession:
             )
         answer = {
             "url": kept.url,
+            "source": source,
             "snapshot_characters": len(kept.text),
             "matching_lines": total,
             "untrusted_page_matches": found,
@@ -1661,8 +1884,36 @@ class FinderSession:
             return "Refused: this run has no interactive search permission.", True
         if not isinstance(reason, str) or reason not in NO_POSTINGS:
             return "Refused: give one reason of the list.", True
+        left = self.routes_left(reason)
+        if left:
+            return (
+                "Refused: do not give up yet. Try "
+                + "; ".join(ROUTES[route] for route in left)
+                + ". If a security check or a sign in wall blocks you, ask the person "
+                "(browser_ask_person), then name it."
+            ), True
         self.outcome = reason
         return "Noted. Report any posting you opened, then stop.", False
+
+    def routes_left(self, reason: str) -> list[str]:
+        """The routes the agent must still try before `report_no_postings(reason)` holds (B27):
+        none once a posting was kept; none for a block code saw (a reason of BLOCKS after the
+        agent asked the person, `app_refused` after the app refused an action); the search
+        address and the listing pages for `no_search_control` (the box is what it says is
+        missing); else every route of ROUTES not tried. Fails closed: what code did not see
+        is a route left."""
+        if self.found or self.verified_count:
+            return []
+        if reason in BLOCKS and self.asked:
+            return []
+        if reason == "app_refused" and (
+            self.refused["unsupported_interaction"]
+            or self.refused["other_host"]
+            or self.refused["not_an_address"]
+        ):
+            return []
+        needed = [r for r in ROUTES if not (reason == "no_search_control" and r == "search_box")]
+        return [route for route in needed if route not in self.routes]
 
     def report(self, items: Any) -> tuple[str, bool]:
         """Validate and keep the postings of a session without the sweep's commits (`_keep`);
@@ -1711,8 +1962,24 @@ class FinderSession:
             pending.clear()
             return True
 
+        opens = 0
         for index, item in enumerate(items):
             finding, reason = self._verified(item, {f.url for f in pending})
+            if reason == "detail_not_opened" and not self.stopped:
+                # B27: an address the agent saw and did not open, the app opens itself.
+                if opens >= APP_OPENS_MAX:
+                    reason = "app_opens_max"
+                else:
+                    opens += 1
+                    opened = await self._open_for_report(
+                        canonical(urljoin(self.current, item["url"]))
+                    )
+                    if opened:
+                        finding, reason = self._verified(
+                            {**item, "url": opened}, {f.url for f in pending}
+                        )
+                        if reason == "title_not_on_page":
+                            reason = "not_on_opened_page"
             if reason:
                 self.refused[reason] += 1
                 refusals.append(self._refusal(index, reason))
@@ -1725,6 +1992,72 @@ class FinderSession:
         return json.dumps(
             {"kept": kept, "refused": refusals[:50], "kept_in_all": self.verified_count}
         ), False
+
+    async def _open_for_report(self, url: str) -> str:
+        """Open a reported address the agent did not open (B27), as the agent would: a tab of
+        its own on the same lease (so the agent's tab and its kept snapshot stay), after a pause
+        of APP_OPEN_PAUSE_S, by browserd's navigate through the same line, egress and request
+        floor, then read and recorded as any page read (`_read`). The tab is closed and the
+        agent's selected again whatever happens; when that fails the search stops (the agent's
+        next action would land elsewhere). The address it landed on, else "" (no tab free, an
+        error status, a page that did not load). It never clicks or types: a security check is
+        left as it is, and the report is refused."""
+        from app.browser.sources import SourceError
+
+        if self.interactive is None or not url:
+            return ""
+        scope = {"_discovery": "native_get", "_discovery_scope": self.interactive.tool_scope()}
+        tools = self.pages.tools
+        try:
+            made = await tools.call("browser_tabs", {"action": "new", **scope})
+        except (BrowserError, SourceError):
+            return ""
+        index = next(
+            (
+                tab["index"]
+                for tab in made.get("tabs") or []
+                if isinstance(tab, dict)
+                and tab.get("current") is True
+                and type(tab.get("index")) is int
+            ),
+            None,
+        )
+        if not made.get("ok") or index is None or index == self.tab:
+            return ""
+        result: dict[str, Any] = {}
+
+        async def go() -> dict[str, Any]:
+            nonlocal result
+            result = await tools.call("browser_navigate", {"url": url, **scope})
+            return result
+
+        opened = ""
+        try:
+            await self.pages.sleep(self.pages.rng.uniform(*APP_OPEN_PAUSE_S))
+            await self.pages._act(go)
+            landed = canonical(self.pages.last_url)
+            status = result.get("status")
+            if landed and not (isinstance(status, int) and status >= 400):
+                await self._read_off_loop(landed, self.pages.last_text)
+                self.opened_by_app += 1
+                opened = landed
+        except (BrowserError, SourceError):
+            opened = ""
+        finally:
+            try:
+                closed = await tools.call(
+                    "browser_tabs", {"action": "close", "index": index, **scope}
+                )
+                back = await tools.call(
+                    "browser_tabs", {"action": "select", "index": self.tab, **scope}
+                )
+                restored = closed.get("ok") is True and back.get("ok") is True
+            except (BrowserError, SourceError):
+                restored = False
+            if not restored:
+                self.stopped = self.stopped or GUARD_FAILED
+                opened = ""
+        return opened
 
     def _refusal(self, index: int, reason: str) -> dict[str, Any]:
         """A refused posting as the agent reads it: its index, the reason and what to do about
@@ -1759,7 +2092,9 @@ class FinderSession:
         if page is None and url in self.error_pages:
             return None, "page_error"
         if page is None:
-            return None, "detail_not_opened" if url in self.seen else "not_seen"
+            # B27: an address seen on a page or in a script result; never one made up.
+            seen = url in self.seen or url in self.script_links
+            return None, "detail_not_opened" if seen else "not_seen"
         if url in self.reported_urls or url in pending:
             return None, "duplicate"
         found = title_on(page, title)
@@ -1908,7 +2243,7 @@ INTERACTIVE_FINDER = definitions.register(
         model_by_credential={CredentialKind.anthropic_api_key.value: MODEL_API_KEY},
         max_turns=INTERACTIVE_MAX_TURNS,
         wall_time_s=INTERACTIVE_WALL_TIME_S,
-        effort="low",
+        effort="medium",  # B27 (owner B20: the model stays Sonnet)
         internal=True,
         live_text=False,
         private_io=True,
