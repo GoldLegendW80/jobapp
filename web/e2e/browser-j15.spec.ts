@@ -466,6 +466,47 @@ test("the websites end in words, the company page is neither kept nor searched, 
   expect(errors).toEqual([]);
 });
 
+test("Activity's step log shows the rule of the refused click on her own website (browser B25)", async () => {
+  // The workflow run of the search, its steps, and the one step whose app tool answered a
+  // refusal: the private run keeps the error text, with the rule browserd named.
+  const runs = await page.request.get("/api/activity/runs?limit=10");
+  expect(runs.ok()).toBe(true);
+  const search = ((await runs.json()) as { items: { id: string }[] }).items[0];
+  expect(search).toBeDefined();
+  const detail = await page.request.get(`/api/activity/runs/${search?.id}`);
+  expect(detail.ok()).toBe(true);
+  const { steps } = (await detail.json()) as {
+    steps: { id: string; agent: string | null }[];
+  };
+  let refused = "";
+  let text = "";
+  for (const step of steps.filter((s) => s.agent === "browser_discovery")) {
+    const answer = await page.request.get(`/api/agents/runs/${step.id}`);
+    const { events } = (await answer.json()) as {
+      events: { kind: string; data: { is_error?: boolean; error?: string } }[];
+    };
+    const hit = events.find(
+      (event) =>
+        event.data.is_error === true &&
+        /\(rule [a-z_]+\)/.test(event.data.error ?? ""),
+    );
+    if (hit) {
+      refused = step.id;
+      text = hit.data.error ?? "";
+    }
+  }
+  expect(refused, JSON.stringify(steps)).not.toBe("");
+  const rule = /\(rule ([a-z_]+)\)/.exec(text)?.[1] ?? "";
+  await page.goto(`/activity/runs/${search?.id}?step=${refused}`);
+  const log = page.getByRole("list", { name: "Steps" });
+  const failed = log.getByRole("button", { name: /^Tool error: / });
+  await expect(failed.first()).toContainText(`(rule ${rule})`, {
+    timeout: 30_000,
+  });
+  await expect(page.locator("body")).not.toContainText(/[–—]| - /);
+  expect(errors).toEqual([]);
+});
+
 test("reopened by keyboard at 375 px in the dark, the setup holds her choices", async () => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.emulateMedia({ colorScheme: "dark" });
