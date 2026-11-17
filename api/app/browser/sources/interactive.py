@@ -802,6 +802,8 @@ async def _search(
             if not landed:
                 return "unsupported_interaction"
             site.started = True
+            # #797: the start page (up to PAGE_MAX) is parsed off the event loop when large.
+            parsed = await finder.parsed_off_loop(landed, pages.last_text)
             session = finder.FinderSession(
                 pages,
                 scope.start,
@@ -811,6 +813,7 @@ async def _search(
                 on_verified=None if site.commits is None else site.verified,
                 landed="" if landed == scope.start else landed,
                 flow=site.flow,
+                parsed=parsed,
             )
             ran = await agent(session)
             site.input_tokens += ran.input_tokens

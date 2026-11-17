@@ -1,9 +1,9 @@
 """B27 (owner, 2026-11-17: "let the agent write code in a sandbox or whatever"): the website
 search agent reads every result card with one script, its result kept and searchable as a page
 is; the app opens and verifies a posting the agent saw and did not open; the agent cannot give
-up before it tried the search box, a search address and the listing pages, or met a block code
-saw; browserd's script limits rise for a discovery's lease only; a page is parsed off the event
-loop (#797).
+up before it tried the search box, a search address and the listing pages (a block it asked
+the person about spares the search box only); browserd's script limits rise for a discovery's
+lease only; a page is parsed off the event loop (#797).
 
 The harness is test_b20_agent's (browserd's answers from `Site`, the registered tools called the
 way the SDK calls them). Invented hosts only, never a real job website.
@@ -13,6 +13,7 @@ import asyncio
 import json
 import sys
 import threading
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,6 +21,7 @@ from typing import Any
 import pytest
 
 from app.browser import finder
+from app.browser.client import BrowserError
 from tests.browser.test_b20_agent import HOME, RESULTS, START, Site, run, selected, text_of, tool
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -211,6 +213,225 @@ def test_no_free_tab_leaves_the_posting_to_the_agent():
 
     run(selected(), site, script)
     assert seen["report"]["refused"][0]["reason"] == "detail_not_opened"
+
+
+TWO = [
+    {"title": "Robot Arm Engineer", "url": SEEN_1, "text": "A card."},
+    {"title": "Robot Welder", "url": SEEN_2, "text": "A card."},
+]
+
+
+def opening(site: TabSite, answer: Any) -> None:
+    """browserd's answer to a browser_tabs call or a navigate of the app's tab: `answer(name,
+    args)` is a dict to answer, an exception to raise, or None for the site's own."""
+    call = site.call
+
+    async def answered(name: str, args: dict[str, Any]) -> dict[str, Any]:
+        given = answer(name, args)
+        if given is None:
+            return await call(name, args)
+        site.calls.append((name, {k: v for k, v in args.items() if not k.startswith("_")}))
+        if isinstance(given, Exception):
+            raise given
+        return given
+
+    site.call = answered  # type: ignore[method-assign]
+
+
+def report_two(site: TabSite, answer: Any) -> tuple[dict[str, Any], Any, list[Any]]:
+    """The agent saw both postings by script and reports them; browserd answers as `answer`
+    once the report starts. What the session ended with, what the report answered and what
+    was stored."""
+    seen: dict[str, Any] = {}
+
+    async def script(session):
+        batches = await stored(session)
+        await tool(session, "browser_navigate", url=BOARD)
+        await tool(session, "browser_evaluate", function="() => 1")
+        opening(site, answer)
+        seen["answer"] = text_of(await tool(session, "report_postings", postings=TWO))
+        seen["stopped"], seen["batches"] = session.stopped, batches
+        seen["opened_by_app"] = session.opened_by_app
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    return entry, seen, [f.url for batch in seen["batches"] for f in batch.findings]
+
+
+def tabs_of(site: TabSite) -> list[dict[str, Any]]:
+    return [args for name, args in site.calls if name == "browser_tabs"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ("close", {"ok": False, "error": "no_tab"}),
+        ("select", {"ok": False, "error": "no_tab"}),
+        ("close", BrowserError("unavailable")),
+        ("select", BrowserError("refused")),
+    ],
+)
+def test_a_tab_the_app_cannot_give_back_stops_the_website(failure):
+    """The app's tab not closed or the agent's not selected again: the agent's next action
+    would land elsewhere, so the website stops `guard_failed` and the report keeps nothing
+    more (the second posting is never opened)."""
+    action, given = failure
+    site = board(evaluated=scripted(CARDS))
+
+    def answer(name, args):
+        return given if name == "browser_tabs" and args["action"] == action else None
+
+    entry, seen, urls = report_two(site, answer)
+    assert seen["stopped"] == finder.GUARD_FAILED
+    assert seen["answer"].startswith("Stopped: guard_failed.")
+    assert urls == []
+    assert seen["opened_by_app"] == 0
+    assert [t["action"] for t in tabs_of(site)].count("new") == 1
+    assert entry["error"] == finder.GUARD_FAILED
+
+
+def test_browserd_guard_failed_on_the_apps_navigate_stops_the_website():
+    """browserd could not take a page off the list back (round 2 of PR 720): the website stops
+    `guard_failed` as for the agent's own navigate, after the app's tab is given back."""
+    site = board(evaluated=scripted(CARDS))
+
+    def answer(name, args):
+        if name == "browser_navigate" and args["url"] == SEEN_1:
+            return {"ok": False, "error": finder.GUARD_FAILED}
+        return None
+
+    _, seen, urls = report_two(site, answer)
+    assert seen["stopped"] == finder.GUARD_FAILED
+    assert urls == []
+    assert tabs_of(site) == [
+        {"action": "new"},
+        {"action": "close", "index": 1},
+        {"action": "select", "index": 0},
+    ]
+
+
+def test_a_lease_ended_during_the_apps_open_stops_with_its_own_code():
+    """The lease ends while the app's tab loads: every later call fails too, and the website
+    stops `lease_ended`, never `guard_failed` from the failed give back."""
+    site = board(evaluated=scripted(CARDS))
+    ended = [False]
+
+    def answer(name, args):
+        if name == "browser_navigate" and args["url"] == SEEN_1:
+            ended[0] = True
+        return BrowserError("ended") if ended[0] else None
+
+    entry, seen, urls = report_two(site, answer)
+    assert seen["stopped"] == "lease_ended"
+    assert urls == []
+    assert entry["error"] == "lease_ended"
+
+
+@pytest.mark.parametrize("code", ["time_budget", "lease_budget", "permission_unavailable"])
+def test_a_budget_spent_during_the_apps_open_stops_with_its_own_code(code, monkeypatch):
+    from app.browser.sources import Pages, SourceError
+
+    site = board(evaluated=scripted(CARDS))
+    act = Pages._act
+
+    async def spent(self, action, tool="browser_navigate"):
+        if self.tools is not None and any(n == "browser_tabs" for n, _ in site.calls):
+            raise SourceError(code)
+        return await act(self, action, tool)
+
+    monkeypatch.setattr(Pages, "_act", spent)
+    _, seen, urls = report_two(site, lambda name, args: None)
+    assert seen["stopped"] == code
+    assert urls == []
+    assert tabs_of(site)[-2:] == [{"action": "close", "index": 1}, {"action": "select", "index": 0}]
+
+
+def test_an_error_status_at_the_reported_address_is_refused():
+    """A 404 on the app's open: nothing read as a posting, `opened_by_app` unchanged, the
+    report refused and the website goes on."""
+    site = board(evaluated=scripted(CARDS))
+
+    def answer(name, args):
+        if name == "browser_navigate" and args["url"] == SEEN_1:
+            site.current = site.tabs[site.at] = SEEN_1
+            return {"ok": True, "url": SEEN_1, "status": 404}
+        return None
+
+    _, seen, urls = report_two(site, answer)
+    report = json.loads(seen["answer"])
+    assert report["kept"] == 1
+    assert [r["reason"] for r in report["refused"]] == ["detail_not_opened"]
+    assert urls == [SEEN_2]
+    assert seen["opened_by_app"] == 1
+    assert seen["stopped"] == ""
+
+
+@pytest.mark.parametrize(
+    "landed", [START + "jobs/7001-robot-arm-engineer", "https://ats.example.org/jobs/7001"]
+)
+def test_a_redirected_open_stores_the_landed_address(landed):
+    """The reported address redirects, on its website or to another (an ATS): the finding
+    is stored with the address the page landed on."""
+    site = board(evaluated=scripted(CARDS))
+    site.pages[landed] = POSTING_1
+
+    def answer(name, args):
+        if name == "browser_navigate" and args["url"] == SEEN_1:
+            site.current = site.tabs[site.at] = landed
+            return {"ok": True, "url": landed}
+        return None
+
+    _, seen, urls = report_two(site, answer)
+    assert urls == [landed, SEEN_2]
+    assert seen["opened_by_app"] == 2
+
+
+def test_a_new_tab_browserd_does_not_name_is_given_back_and_nothing_opened():
+    """browserd made a tab but names none current: the agent's tab is selected again, no
+    address is opened in a tab that may be the agent's, the website goes on."""
+    site = board(evaluated=scripted(CARDS))
+
+    def answer(name, args):
+        if name == "browser_tabs" and args["action"] == "new":
+            return {"ok": True, "tabs": [{"index": 0, "url": BOARD, "current": False}]}
+        return None
+
+    _, seen, urls = report_two(site, answer)
+    assert urls == []
+    assert seen["stopped"] == ""
+    assert {"action": "select", "index": 0} in tabs_of(site)
+    assert not any(t["action"] == "close" for t in tabs_of(site))
+    assert [
+        n for n, a in site.calls if n == "browser_navigate" and a["url"] in (SEEN_1, SEEN_2)
+    ] == []
+
+
+def test_the_app_opens_at_most_twenty_postings_per_call():
+    links = [START + f"jobs/{8000 + i}" for i in range(finder.APP_OPENS_MAX + 1)]
+    cards = [{"title": f"Robot Role {i}", "link": link} for i, link in enumerate(links)]
+    site = board(evaluated=scripted(cards))
+    for i, link in enumerate(links):
+        site.pages[link] = f'- heading "Robot Role {i}" [level=1]\n- paragraph: Invented.'
+    postings = [
+        {"title": f"Robot Role {i}", "url": u, "text": "A card."} for i, u in enumerate(links)
+    ]
+    seen: dict[str, Any] = {}
+
+    async def script(session):
+        batches = await stored(session)
+        await tool(session, "browser_navigate", url=BOARD)
+        await tool(session, "browser_evaluate", function="() => 1")
+        seen["report"] = report_of(await tool(session, "report_postings", postings=postings))
+        seen["batches"] = batches
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    assert seen["report"]["kept"] == finder.APP_OPENS_MAX
+    assert seen["report"]["refused"] == [
+        {"index": 20, "reason": "app_opens_max", "do": finder.REPORT_ADVICE["app_opens_max"]}
+    ]
+    assert [t["action"] for t in tabs_of(site)].count("new") == finder.APP_OPENS_MAX
+    assert entry["opened_by_app"] == finder.APP_OPENS_MAX
 
 
 def test_a_long_script_result_is_kept_and_read_with_find_and_snapshot():
@@ -439,77 +660,215 @@ def test_one_route_three_times_is_one_route():
     assert answers[0][1] is True
 
 
-@pytest.mark.parametrize(
-    ("reason", "setup", "accepted"),
-    [
-        ("security_check", "asked", True),
-        ("signin_wall", "asked", True),
-        ("cookie_wall", "asked", True),
-        ("security_check", "", False),  # named, not seen by code
-        ("signin_wall", "refused", False),
-        ("app_refused", "refused", True),
-        ("app_refused", "", False),
-        ("app_refused", "asked", False),
-        ("no_match", "asked", False),
-        ("no_list", "refused", False),
-        ("no_search_control", "two_routes", True),
-        ("no_search_control", "", False),
-        ("no_match", "two_routes", False),
-        ("no_match", "posting", True),
-    ],
-)
-def test_a_block_code_saw_lets_the_agent_give_up(reason, setup, accepted):
+ROUTES_2 = {"search_address", "listing"}
+ROUTES_3 = {"search_box", *ROUTES_2}
+
+
+# The accept and refuse table of the blocks (review of #800): code sees the ask and the app's
+# refusals, never the block itself, so a named block spares the search box only.
+BLOCK_TABLE = [
+    # asked alone, or with one route: refused, whatever the block named
+    ("security_check", {"asked"}, False),
+    ("signin_wall", {"asked"}, False),
+    ("cookie_wall", {"asked"}, False),
+    ("signin_wall", {"asked", "search_address"}, False),
+    ("signin_wall", {"asked", "listing"}, False),
+    ("cookie_wall", {"asked", "search_box", "listing"}, False),
+    # asked and the two other routes tried: accepted
+    ("security_check", {"asked", *ROUTES_2}, True),
+    ("signin_wall", {"asked", *ROUTES_2}, True),
+    ("cookie_wall", {"asked", *ROUTES_2}, True),
+    # named without an ask: the three routes
+    ("security_check", ROUTES_2, False),
+    ("signin_wall", {"refused", *ROUTES_2}, False),  # the app's refusal is no ask
+    ("security_check", ROUTES_3, True),
+    # app_refused: the app's own refusals only, then the two routes
+    ("app_refused", {"refused"}, False),
+    ("app_refused", {"refused", "search_address"}, False),
+    ("app_refused", {"refused", *ROUTES_2}, True),
+    ("app_refused", {"other_host", *ROUTES_2}, False),  # the agent's slip
+    ("app_refused", {"not_an_address", *ROUTES_2}, False),  # the agent's slip
+    ("app_refused", {"other_host", "not_an_address"}, False),
+    ("app_refused", {"asked", *ROUTES_2}, False),
+    ("app_refused", ROUTES_2, False),
+    ("app_refused", ROUTES_3, True),
+    # the other reasons: an ask or a refusal spares nothing
+    ("no_match", {"asked", *ROUTES_2}, False),
+    ("no_list", {"refused", *ROUTES_2}, False),
+    ("no_search_control", ROUTES_2, True),
+    ("no_search_control", set(), False),
+    ("no_search_control", {"search_address"}, False),
+    ("no_match", ROUTES_2, False),
+    ("no_match", ROUTES_3, True),
+    ("no_match", {"posting"}, True),
+]
+
+
+@pytest.mark.parametrize(("reason", "setup", "accepted"), BLOCK_TABLE)
+def test_a_block_spares_the_search_box_only(reason, setup, accepted):
     session = SimpleNamespace(
         found=[],
-        verified_count=1 if setup == "posting" else 0,
-        asked=1 if setup == "asked" else 0,
-        refused={"unsupported_interaction": 1 if setup == "refused" else 0}
-        | {"other_host": 0, "not_an_address": 0},
-        routes=dict.fromkeys(["search_address", "listing"] if setup == "two_routes" else []),
+        verified_count=1 if "posting" in setup else 0,
+        asked=1 if "asked" in setup else 0,
+        refused=Counter(
+            {
+                "unsupported_interaction": int("refused" in setup),
+                "other_host": int("other_host" in setup),
+                "not_an_address": int("not_an_address" in setup),
+            }
+        ),
+        routes=dict.fromkeys(r for r in finder.ROUTES if r in setup),
     )
     assert (finder.FinderSession.routes_left(session, reason) == []) is accepted  # type: ignore[arg-type]
 
 
-def test_asking_the_person_is_a_block_the_agent_may_name():
+def refusing_navigations(site: TabSite, answer: dict[str, Any]) -> None:
+    """From now on, browserd answers every browser_navigate with `answer` (its tab moves not)."""
+    call = site.call
+
+    async def refusing(name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == "browser_navigate":
+            args.pop("_discovery"), args.pop("_discovery_scope")
+            site.calls.append((name, dict(args)))
+            return answer
+        return await call(name, args)
+
+    site.call = refusing  # type: ignore[method-assign]
+
+
+def test_asking_the_person_spares_the_search_box_only():
+    """The owner's audit case: a sign in wall on the search, asked about. Giving up is refused
+    until the search address and the listing pages were tried, and the answer names them."""
+    site = board()
+    answers: list[tuple[str, bool]] = []
+
+    async def script(session):
+        await tool(session, "browser_ask_person", reason="Please sign in to the website")
+        answers.append(session.report_none("signin_wall"))
+        await tool(session, "browser_navigate", url=BOARD)
+        answers.append(session.report_none("signin_wall"))
+        await tool(session, "browser_navigate", url=LISTING)
+        answers.append(session.report_none("signin_wall"))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    first, second, last = answers
+    assert first[1] is True
+    assert second[1] is True
+    assert finder.ROUTES["search_box"] not in first[0]
+    assert finder.ROUTES["search_address"] in first[0]
+    assert finder.ROUTES["listing"] in first[0]
+    assert finder.ROUTES["search_address"] not in second[0]
+    assert finder.ROUTES["listing"] in second[0]
+    assert last == ("Noted. Report any posting you opened, then stop.", False)
+    assert entry["error"] == "signin_wall"
+
+
+@pytest.mark.parametrize("code", sorted(finder.APP_REFUSED))
+def test_a_website_the_app_refuses_everywhere_ends_after_two_navigations(code):
+    """Every navigate refused by browserd: each refused address counts as the route it asked
+    for, so `app_refused` holds after a search address and a listing page, never before."""
+    site = board()
+    answers: list[tuple[str, bool]] = []
+
+    async def script(session):
+        refusing_navigations(site, {"ok": False, "error": code})
+        answers.append(session.report_none("app_refused"))
+        said = text_of(await tool(session, "browser_navigate", url=BOARD))
+        assert said == finder.NAVIGATION_REFUSED
+        answers.append(session.report_none("app_refused"))
+        await tool(session, "browser_navigate", url=LISTING)
+        answers.append(session.report_none("app_refused"))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    assert [answer[1] for answer in answers] == [True, True, False]
+    assert entry["routes"] == ["search_address", "listing"]
+
+
+def test_a_security_check_on_every_route_ends_after_two_navigations():
+    """Cloudflare on every page (an HTTP 403 with its check), asked about: the two addresses
+    that answered the error count as their routes; a page that did not load counts nothing."""
     site = board()
     answers: list[tuple[str, bool]] = []
 
     async def script(session):
         await tool(session, "browser_ask_person", reason="Please solve the security check")
+        refusing_navigations(site, {"ok": False, "error": "navigation_failed"})
+        await tool(session, "browser_navigate", url=BOARD)  # did not load: no route
+        answers.append(session.report_none("security_check"))
+        call = site.call
+
+        async def checked(name: str, args: dict[str, Any]) -> dict[str, Any]:
+            if name == "browser_navigate":
+                site.pages[args["url"]] = CHECK_PAGE
+                site.current = args["url"]
+                return {"ok": True, "url": args["url"], "status": 403}
+            return await call(name, args)
+
+        site.call = checked  # type: ignore[method-assign]
+        await tool(session, "browser_navigate", url=BOARD)
+        answers.append(session.report_none("security_check"))
+        await tool(session, "browser_navigate", url=LISTING)
         answers.append(session.report_none("security_check"))
         return finder.Ran()
 
     entry, _, _ = run(selected(), site, script)
-    assert answers == [("Noted. Report any posting you opened, then stop.", False)]
+    assert [answer[1] for answer in answers] == [True, True, False]
     assert entry["error"] == "security_check"
 
 
+@pytest.mark.parametrize("url", ["mailto:x@example.org", "javascript:alert(1)", "ftp://x/jobs"])
+def test_the_agents_own_slips_try_no_route_and_never_unlock_app_refused(url):
+    site = board()
+    answers: list[tuple[str, bool]] = []
+
+    async def script(session):
+        for _ in range(3):
+            await tool(session, "browser_navigate", url=url)
+        answers.append(session.report_none("app_refused"))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    assert answers[0][1] is True
+    assert entry["routes"] == []
+
+
 def test_a_read_page_is_parsed_off_the_event_loop(monkeypatch):
-    """#797 item 1: `_read`'s parse of a kept page (up to PAGE_MAX) runs in a thread, never in
-    the worker's event loop."""
-    threads: list[tuple[int, int]] = []
+    """#797 item 1: `_read`'s parse of a kept page (up to PAGE_MAX), the start page's
+    included, runs in a thread, never in the worker's event loop."""
+    on_loop: list[bool] = []
     parsed = finder._parsed
 
     def watched(url: str, text: str):
-        threads.append((threading.get_ident(), loop_thread[0]))
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
         return parsed(url, text)
 
-    loop_thread = [0]
     monkeypatch.setattr(finder, "_parsed", watched)
     monkeypatch.setattr(finder, "PARSE_INLINE_MAX", 0)  # every page counts as a large one
     site = board()
+    before: list[int] = []
 
     async def script(session):
-        loop_thread[0] = threading.get_ident()
-        threads.clear()  # the start page, read before the agent ran
+        before.append(len(on_loop))  # the start page, read before the agent ran
         await tool(session, "browser_navigate", url=BOARD)
         await tool(session, "browser_snapshot")
         await tool(session, "browser_type", ref="e1", text="robot", submit=True)
         return finder.Ran()
 
     run(selected(), site, script)
-    assert len(threads) == 3
-    assert all(worker != loop for worker, loop in threads)
+    assert before == [1]
+    assert on_loop == [False] * 4
+
+
+def test_a_small_page_is_parsed_in_place():
+    assert asyncio.run(finder.parsed_off_loop(START, "x" * finder.PARSE_INLINE_MAX)) is None
+    big = asyncio.run(finder.parsed_off_loop(START, "x" * (finder.PARSE_INLINE_MAX + 1)))
+    assert big is not None
 
 
 def test_the_agent_runs_sonnet_at_medium_effort():

@@ -44,7 +44,7 @@ import uuid
 from bisect import bisect_right
 from collections import Counter
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import InitVar, dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
@@ -160,7 +160,11 @@ SCRIPT_LINK = re.compile(r"https?://[^\s\"'<>\\]{1,2000}|(?<=\")/[^\s\"'<>\\]{0,
 APP_OPENS_MAX = 20
 APP_OPEN_PAUSE_S = (2.0, 4.0)
 # The routes of a website's search (B27): report_no_postings is refused until the agent tried
-# the three, or named a block code saw (accept and refuse table: test_b27_code_first.py).
+# the three (accept and refuse table: test_b27_code_first.py). A route is tried once the agent's
+# tab landed on it, or once the agent's browser_navigate to it was refused by the app or
+# browserd, or answered an HTTP error status: a route met by a block counts. A block the agent
+# names (BLOCKS, after it asked the person) and `app_refused` (after the app refused one of its
+# actions) only spare the search box: the search address and the listing pages stay needed.
 # `search_box`: a search typed and submitted on the page; `search_address`: a browser_navigate to
 # an address whose query names what or where (SEARCH_PARAMS, a value) or holds a saved title's
 # words; `listing`: a public listing page opened (navigate or click): its last path segment is
@@ -192,8 +196,8 @@ LISTING_PARENTS = frozenset(
     {"categories", "category", "categorie", "metiers", "companies", "company", "entreprises",
      "entreprise", "unternehmen", "cities", "villes", "locations", "departments", "teams"}
 )  # fmt: skip
-# The reasons that name a block code sees (the agent asked the person, browser_ask_person, or the
-# app refused an action): accepted before the three routes.
+# The reasons that name a block the agent met (it asked the person, browser_ask_person, first):
+# accepted without the search box, never before the search address and the listing pages.
 BLOCKS = frozenset({"security_check", "signin_wall", "cookie_wall"})
 # The saved values a job website's scope carries (browserd's discovery.VALUES_MAX, VALUE_MAX),
 # and its size as sent with every tool call (browserd takes a call of 320 KiB at most, B27).
@@ -355,8 +359,9 @@ snapshot or in a script result can be reported: the app opens the ones you did n
 checks their title and keeps them.
 5. When the search shows no list, try the website's public listing pages (category, job or city
 pages, company pages, the sitemap) before giving up. The app refuses report_no_postings until
-you tried the search box, a search address and the listing pages, or met a block (a security
-check, a sign in wall) you asked the person about.
+you tried the search box, a search address and the listing pages. A block you asked the person
+about (a security check, a sign in wall) spares the search box only: try a search address and
+the listing pages first, a block on one route may not be on the others.
 
 When a security check, a captcha or a sign in wall stops you, or the website needs the person,
 call browser_ask_person with one sentence for the person ("Please solve the security check on
@@ -1233,6 +1238,15 @@ def _parsed(url: str, text: str) -> tuple[list[str], Detail]:
     return links, (_detail(root), _seen_text(root))
 
 
+async def parsed_off_loop(url: str, text: str) -> tuple[list[str], Detail] | None:
+    """`_parsed` in a thread for a page past PARSE_INLINE_MAX characters (#797: a page of
+    PAGE_MAX took about 1.1 s on the Mac), so it never holds the worker's event loop; None for
+    a smaller one, which `FinderSession._read` parses in place (about 55 ms at the bound)."""
+    if len(text) <= PARSE_INLINE_MAX:
+        return None
+    return await asyncio.to_thread(_parsed, url, text)
+
+
 def _script_whole(raw: object) -> str:
     """A script's result as the session keeps it (B27), before its cut: a JSON string as its
     text, a list or an object one value per line (so browser_find answers one field per line),
@@ -1359,14 +1373,17 @@ class FinderSession:
     routes: dict[str, None] = field(default_factory=dict)
     asked: int = 0
     opened_by_app: int = 0
+    # The start page's parse (`parsed_off_loop` of where it landed), made in a thread by the
+    # caller before the session (#797): a session is built in the event loop.
+    parsed: InitVar[tuple[list[str], Detail] | None] = None
 
-    def __post_init__(self) -> None:
+    def __post_init__(self, parsed: tuple[list[str], Detail] | None) -> None:
         if self.interactive is None or canonical(self.interactive.start) != self.start:
             raise ValueError("discovery scope does not match the opened site")
         if self.landed and canonical(self.landed) != self.landed:
             raise ValueError("the start page landed on another website")
         self.current = self.landed or self.start
-        self._read(self.current, self.first)
+        self._read(self.current, self.first, parsed)
         title = getattr(self.pages, "last_title", "")
         self._hold(self.current, self.first, title if isinstance(title, str) else "", False)
         self.first = ""
@@ -1376,13 +1393,8 @@ class FinderSession:
         return bool(canonical(url))
 
     async def _read_off_loop(self, url: str, text: str) -> None:
-        """`_read`, its parsing in a thread for a page past PARSE_INLINE_MAX characters (#797:
-        a page of PAGE_MAX took about 1.1 s on the Mac), so it never holds the worker's event
-        loop; a smaller one is parsed in place, as before."""
-        if len(text) <= PARSE_INLINE_MAX:
-            self._read(url, text)
-        else:
-            self._read(url, text, await asyncio.to_thread(_parsed, url, text))
+        """`_read`, its parsing in a thread for a large page (`parsed_off_loop`)."""
+        self._read(url, text, await parsed_off_loop(url, text))
 
     def _read(self, url: str, text: str, parsed: tuple[list[str], Detail] | None = None) -> None:
         """Note the links of a page read and its visible text (`_parsed`, unless given)."""
@@ -1470,6 +1482,7 @@ class FinderSession:
                 return self._stop(GUARD_FAILED)  # as in `interact`: no page to recover on
             if exc.code == "page_failed" and result.get("error") in APP_REFUSED:
                 self.refused["unsupported_interaction"] += 1
+                self._route(url, typed_address=True)  # a route met by a block was tried
                 return NAVIGATION_REFUSED, True
             if exc.code == "page_failed":
                 return "The page did not load.", True
@@ -1903,29 +1916,28 @@ class FinderSession:
                 "Refused: do not give up yet. Try "
                 + "; ".join(ROUTES[route] for route in left)
                 + ". If a security check or a sign in wall blocks you, ask the person "
-                "(browser_ask_person), then name it."
+                "(browser_ask_person): the search box may then be left, the other routes not."
             ), True
         self.outcome = reason
         return "Noted. Report any posting you opened, then stop.", False
 
     def routes_left(self, reason: str) -> list[str]:
         """The routes the agent must still try before `report_no_postings(reason)` holds (B27):
-        none once a posting was kept; none for a block code saw (a reason of BLOCKS after the
-        agent asked the person, `app_refused` after the app refused an action); the search
-        address and the listing pages for `no_search_control` (the box is what it says is
-        missing); else every route of ROUTES not tried. Fails closed: what code did not see
-        is a route left."""
+        none once a posting was kept; else every route of ROUTES not tried, the search box
+        aside for `no_search_control` (the box is what it says is missing), for a reason of
+        BLOCKS once the agent asked the person, and for `app_refused` once the app or browserd
+        refused one of its actions (`refused["unsupported_interaction"]`, never the agent's own
+        slips, `not_an_address` and `other_host`). Code checks the ask and the refusals, never
+        the block itself, so a block alone never ends a website: a route the agent's navigate
+        met a block on counts as tried (`navigate`), and a website blocked everywhere ends after
+        two navigations. Fails closed: what code did not see is a route left."""
         if self.found or self.verified_count:
             return []
-        if reason in BLOCKS and self.asked:
-            return []
-        if reason == "app_refused" and (
-            self.refused["unsupported_interaction"]
-            or self.refused["other_host"]
-            or self.refused["not_an_address"]
-        ):
-            return []
-        needed = [r for r in ROUTES if not (reason == "no_search_control" and r == "search_box")]
+        blocked = (reason in BLOCKS and self.asked > 0) or (
+            reason == "app_refused" and self.refused["unsupported_interaction"] > 0
+        )
+        box_spared = blocked or reason == "no_search_control"
+        needed = [r for r in ROUTES if not (box_spared and r == "search_box")]
         return [route for route in needed if route not in self.routes]
 
     def report(self, items: Any) -> tuple[str, bool]:
@@ -1987,6 +1999,8 @@ class FinderSession:
                     opened = await self._open_for_report(
                         canonical(urljoin(self.current, item["url"]))
                     )
+                    if self.stopped:
+                        break  # the website stopped: the report keeps nothing more
                     if opened:
                         finding, reason = self._verified(
                             {**item, "url": opened}, {f.url for f in pending}
@@ -2002,6 +2016,8 @@ class FinderSession:
                 return self._stop("store_failed")
         if not await flush():
             return self._stop("store_failed")
+        if self.stopped:
+            return self._stop(self.stopped)
         return json.dumps(
             {"kept": kept, "refused": refusals[:50], "kept_in_all": self.verified_count}
         ), False
@@ -2013,8 +2029,10 @@ class FinderSession:
         floor, then read and recorded as any page read (`_read`). The tab is closed and the
         agent's selected again whatever happens; when that fails the search stops (the agent's
         next action would land elsewhere). The address it landed on, else "" (no tab free, an
-        error status, a page that did not load). It never clicks or types: a security check is
-        left as it is, and the report is refused."""
+        error status, a page that did not load or that browserd refused). What `navigate` stops
+        on stops the website here too (browserd's `guard_failed`, a lease ended, a budget spent),
+        with its own code. It never clicks or types: a security check is left as it is, and the
+        report is refused."""
         from app.browser.sources import SourceError
 
         if self.interactive is None or not url:
@@ -2023,7 +2041,14 @@ class FinderSession:
         tools = self.pages.tools
         try:
             made = await tools.call("browser_tabs", {"action": "new", **scope})
-        except (BrowserError, SourceError):
+        except BrowserError as exc:
+            if exc.code == "ended":
+                self.stopped = self.stopped or "lease_ended"
+            return ""  # no tab made: the agent's is still the one selected
+        except SourceError as exc:  # a permission withdrawn (GuardedTools): as `navigate`
+            self.stopped = self.stopped or exc.code
+            return ""
+        if not made.get("ok"):
             return ""
         index = next(
             (
@@ -2035,7 +2060,11 @@ class FinderSession:
             ),
             None,
         )
-        if not made.get("ok") or index is None or index == self.tab:
+        made_tab = index if index is not None and index != self.tab else None
+        if made_tab is None:
+            # browserd made a tab the session cannot name: the agent's is selected again, and
+            # nothing is opened in a tab that may be the agent's.
+            await self._restore_tab(None)
             return ""
         result: dict[str, Any] = {}
 
@@ -2052,25 +2081,46 @@ class FinderSession:
             status = result.get("status")
             if landed and not (isinstance(status, int) and status >= 400):
                 await self._read_off_loop(landed, self.pages.last_text)
-                self.opened_by_app += 1
                 opened = landed
-        except (BrowserError, SourceError):
-            opened = ""
-        finally:
-            try:
-                closed = await tools.call(
-                    "browser_tabs", {"action": "close", "index": index, **scope}
-                )
-                back = await tools.call(
-                    "browser_tabs", {"action": "select", "index": self.tab, **scope}
-                )
-                restored = closed.get("ok") is True and back.get("ok") is True
-            except (BrowserError, SourceError):
-                restored = False
-            if not restored:
+        except SourceError as exc:
+            # As `navigate`: a page that did not load, or an address browserd refused, leaves
+            # the posting to the agent; browserd's guard_failed and every other code stop.
+            if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
                 self.stopped = self.stopped or GUARD_FAILED
+            elif exc.code != "page_failed":
+                self.stopped = self.stopped or exc.code
+        finally:
+            if not await self._restore_tab(made_tab):
                 opened = ""
+        if opened:
+            self.opened_by_app += 1  # a page the app opened and read, its tab given back
         return opened
+
+    async def _restore_tab(self, made: int | None) -> bool:
+        """Close the tab `_open_for_report` made (`made`, never the agent's) and select the
+        agent's again. A failure stops the website with `guard_failed` (unless a stop came
+        first): the agent's next action would land elsewhere."""
+        from app.browser.sources import SourceError
+
+        if self.interactive is None:
+            return False
+        scope = {"_discovery": "native_get", "_discovery_scope": self.interactive.tool_scope()}
+        tools = self.pages.tools
+        try:
+            closed = (
+                {"ok": True}
+                if made is None
+                else await tools.call("browser_tabs", {"action": "close", "index": made, **scope})
+            )
+            back = await tools.call(
+                "browser_tabs", {"action": "select", "index": self.tab, **scope}
+            )
+            restored = closed.get("ok") is True and back.get("ok") is True
+        except (BrowserError, SourceError):
+            restored = False
+        if not restored:
+            self.stopped = self.stopped or GUARD_FAILED
+        return restored
 
     def _refusal(self, index: int, reason: str) -> dict[str, Any]:
         """A refused posting as the agent reads it: its index, the reason and what to do about
