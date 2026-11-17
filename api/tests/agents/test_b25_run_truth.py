@@ -21,6 +21,7 @@ def recorder(secret: str | None = None) -> runner.Recorder:
         seq=1,
         secret=secret,
         private=True,
+        detail=True,
         known_tools=frozenset({NAVIGATE, TYPE, EVALUATE, "Bash"}),
     )
 

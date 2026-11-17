@@ -61,7 +61,7 @@ case "$*" in
   answer alembic
   ;;
 "$C logs --no-color --since 10m") answer logs ;;
-"$C --profile browser logs --no-color --tail 5000 browser") answer browserlogs ;;
+"$C --profile browser logs --no-color --timestamps --tail 2000 browser") answer browserlogs ;;
 "$C exec -T api python -c "*)
   printf 'reading %s\n' "$CANARY" >&2
   answer secret
@@ -283,28 +283,25 @@ ok "egress-host-check: ops/browser-egress.sh host-check of the deployed tree, ok
 
 fresh
 {
-  printf 'browser-1  | INFO lease ab12: browser_click on a submit element, a step\n'
-  printf 'browser-1  | WARNING lease ab12: browser_navigate refused: unsupported_discovery rule=boundary\n'
-  printf 'browser-1  | WARNING lease ab12: refused https://me:%s@jobs.example.org/a?q=%s "%s" from 10.1.2.3 e2e-x@example.org\n' "$CANARY" "$CANARY" "$CANARY"
-  printf 'browser-1  | ERROR cookie %s could not be read\n' "$CANARY"
-  printf 'browser-1  | WARNING the session token %s\n' "$CANARY"
+  printf 'browser-1  | 2026-11-17T10:00:01.000000000Z INFO lease ab12: browser_click on a submit element, a step\n'
+  printf 'browser-1  | 2026-11-17T10:00:02.000000000Z WARNING lease ab12: browser_navigate refused: unsupported_discovery rule=boundary\n'
+  printf 'browser-1  | 2026-11-17T10:00:03.000000000Z WARNING lease ab12: refused https://me:%s@jobs.example.org/a?q=%s "%s" from 10.1.2.3 e2e-x@example.org rule=host_not_allowed\n' "$CANARY" "$CANARY" "$CANARY"
+  printf 'browser-1  | 2026-11-17T10:00:04.000000000Z ERROR cookie %s could not be read rule=boundary\n' "$CANARY"
+  printf 'browser-1  | 2026-11-17T10:00:05.000000000Z WARNING the session token %s\n' "$CANARY"
 } >"$STATE/browserlogs"
 run 0 "${OPS[@]}" logs-browser
-out_has "JOBAPP-LOG browser-1  | WARNING lease ab12: browser_navigate refused: unsupported_discovery rule=boundary"
-out_has 'JOBAPP-LOG browser-1  | WARNING lease ab12: refused <address> "<text>" from <ip> <email>'
-out_has "JOBAPP-OPS action=logs-browser lines=4 result=ok"
+[[ "$(cat "$OUT")" == "JOBAPP-OPS action=logs-browser lines=5 errors=1 last_error=2026-11-17T10:00:04.000000000Z warnings=3 last_warning=2026-11-17T10:00:05.000000000Z rule_boundary=2 last_rule_boundary=2026-11-17T10:00:04.000000000Z rule_host_not_allowed=1 last_rule_host_not_allowed=2026-11-17T10:00:03.000000000Z result=ok" ]] || fail "logs-browser: $(cat "$OUT")"
 out_lacks "$CANARY"
 out_lacks "a step"
-[[ "$(grep -c '^JOBAPP-LOG ' "$OUT")" == 2 ]] || fail "logs-browser lines: $(cat "$OUT")"
-for i in $(seq 1 250); do printf 'browser-1  | WARNING line %s\n' "$i"; done >"$STATE/browserlogs"
+out_lacks "jobs.example.org"
+out_lacks "JOBAPP-LOG"
+printf 'browser-1  | 2026-11-17T10:00:01.000000000Z INFO nothing to report\n' >"$STATE/browserlogs"
 run 0 "${OPS[@]}" logs-browser
-[[ "$(grep -c '^JOBAPP-LOG ' "$OUT")" == 200 ]] || fail "logs-browser keeps more than 200 lines"
-out_has "JOBAPP-LOG browser-1  | WARNING line 250"
-! grep -qx "JOBAPP-LOG browser-1  | WARNING line 50" "$OUT" || fail "logs-browser kept an old line"
+[[ "$(cat "$OUT")" == "JOBAPP-OPS action=logs-browser lines=1 errors=0 last_error=- warnings=0 last_warning=- result=ok" ]] || fail "logs-browser quiet: $(cat "$OUT")"
 rm "$STATE/browserlogs"
 run 1 "${OPS[@]}" logs-browser
 out_has "JOBAPP-OPS action=logs-browser exit=1 result=fail"
-ok "logs-browser: the browser service's last 200 refused, error or warning lines, secrets dropped, addresses, texts, e-mails and IPs replaced; a failed read fails"
+ok "logs-browser: figures only, counts and last timestamp per refusal rule and per level over the last 2000 lines, no log text, address or secret; a failed read fails"
 
 run 1 env JOBAPP_DIR="$WORK/nowhere" ops/jetson-ops.sh status
 out_has "JOBAPP-OPS action=status reason=no-deploy-dir result=fail"
@@ -394,6 +391,13 @@ grep -q "^run list --workflow ops.yml --event workflow_dispatch --user e2e-teste
 grep -qx "run watch 12 --exit-status" "$STATE/gh.log" || fail "the run was not waited for: $(cat "$STATE/gh.log")"
 ! grep -q "^unexpected\|run view 1[01]\|run watch 1[01]" "$STATE/gh.log" || fail "an older run was read: $(cat "$STATE/gh.log")"
 ok "remote.sh status: dispatched on main with the action, the new run of this account found (after two listings), waited for, its figures printed alone, REMOTE: OK"
+
+gh_fresh success "JOBAPP-OPS action=logs-browser lines=5 errors=1 last_error=2026-11-17T10:00:04.000000000Z warnings=3 last_warning=2026-11-17T10:00:05.000000000Z rule_boundary=2 last_rule_boundary=2026-11-17T10:00:04.000000000Z result=ok"
+run 0 ops/remote.sh logs-browser
+line_is 2 "JOBAPP-OPS action=logs-browser lines=5 errors=1 last_error=2026-11-17T10:00:04.000000000Z warnings=3 last_warning=2026-11-17T10:00:05.000000000Z rule_boundary=2 last_rule_boundary=2026-11-17T10:00:04.000000000Z result=ok"
+line_is 3 "REMOTE: OK logs-browser"
+out_lacks "$CANARY"
+ok "remote.sh logs-browser: the counts line printed like any action's figures, nothing else of the log"
 
 gh_fresh success "JOBAPP-OPS action=apply-pause apply=paused result=ok"
 run 0 ops/remote.sh apply-pause

@@ -466,7 +466,7 @@ Acceptance (issue #789):
 2. Activity's step log shows them: "Tool call: browser_navigate https://..." and "Tool error: Refused ... (rule host_not_allowed)".
 3. browserd's refusal rule (`no_marker`, `not_a_sweep_tool`, `boundary`, `host_not_allowed`, line codes) travels in its failure answer; `finder.py` keeps it in the error text given to the agent and counts it per rule in the source's stats (`refusals: {rule: n}`), shown in the sweep's source detail.
 4. A sweep whose every source ended `failed` or `not_attempted` is shown Failed (sweep status, Activity workflow run, the Jobs page banner with each website's reason in words). `partial`, `complete`, `no_matches` count as working.
-5. `ops/remote.sh logs-browser`: the last 200 lines of the browser service matching `refused|error|warning`, no secrets.
+5. `ops/remote.sh logs-browser`: counts only over the last 2000 lines of the browser service (owner rule of 2026-10-15, figures only): per refusal rule (`rule=`) and per level (error, warning), and the timestamp of the last of each; no log text, no address.
 6. Tests: pytest for events, refusal rule propagation and sweep status; vitest for the log rendering; shell test for the new ops action; one journey that sees a refused navigation's rule in Activity on a fake site.
 
 **As built:**
@@ -475,5 +475,5 @@ Acceptance (issue #789):
 - `browser/browserd/tools/actions.py`: `failure(..., rule)` and `refused(code)` answer `rule` (no_marker, not_a_sweep_tool, boundary, the line's code, host_not_allowed, submit_permit's code).
 - `api/app/browser/finder.py` (`refusal_rule`, `FinderSession.refusals`): the agent is told "... (rule <rule>)" for a refused navigation or action; `api/app/browser/sources/interactive.py` writes `refusals` in the source's entry; `api/app/jobs/sweep_router.py` and `schemas.py` serve it (`SourceOut.refusals`); `web/src/components/shared/jobs/sweep-sources.tsx` says "The app refused N actions (by rule: ...)".
 - `api/app/jobs/sweep.py` (`any_source_worked`, `NO_SOURCE_WORKED`): `finish_done` records Failed with that sentence when every selected source ended failed or not_attempted; Activity's sweep step and workflow run follow the status, the summary dialog shows "The search stopped", the sentence and each website's reason.
-- `ops/jetson-ops.sh`, `ops/remote.sh`, `.github/workflows/ops.yml`: `logs-browser`, `JOBAPP-LOG` lines, filtered and redacted (`redact`) on the Jetson since the run log of the public repository is readable by anyone.
+- `ops/jetson-ops.sh`, `ops/remote.sh`, `.github/workflows/ops.yml`: `logs-browser`, printed as counts on the `JOBAPP-OPS` line (no log text), since the run log of the public repository is readable by anyone.
 - Tests: `api/tests/agents/test_b25_run_truth.py`, `api/tests/jobs/test_b25_sweep_status.py`, `api/tests/browser/test_b25_refusal_rule.py`, `api/tests/browser/test_b19_outcome.py`, `web/src/features/agents/test/agent-step-log.test.tsx`, `web/src/components/test/sweep-sources.test.tsx`, `tests/remote_ops_test.sh`.

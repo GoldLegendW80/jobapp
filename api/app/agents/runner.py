@@ -754,6 +754,8 @@ class Recorder:
     # value, and only the tool names this code knows are stored.
     private: bool = False
     known_tools: frozenset[str] = frozenset(FORBIDDEN_TOOLS)
+    # AgentDefinition.step_detail: a preview of an app tool's call and the text of its error.
+    detail: bool = False
     # The tool name of each recent call by its id, so that its result knows whose it is.
     called: dict[str, str] = field(default_factory=dict, repr=False)
     # A run with a token budget: what it has counted so far goes on the run row with each of
@@ -787,7 +789,7 @@ class Recorder:
             name = self.tool_name(block.name)
             data: dict[str, Any] = {"id": block.id, "name": name}
             data["input_size"] = size_of(block.input)
-            if self.app_tool(name):
+            if self.detail and self.app_tool(name):
                 preview = preview_args(block.input, self.secret)
                 if preview:
                     data["preview"] = preview
@@ -803,7 +805,11 @@ class Recorder:
         data: dict[str, Any] = {"id": block.tool_use_id, "is_error": bool(block.is_error)}
         if self.private:
             data["size"], data["blocks"] = result_size(block.content)
-            if block.is_error and self.app_tool(self.called.get(block.tool_use_id, "")):
+            if (
+                self.detail
+                and block.is_error
+                and self.app_tool(self.called.get(block.tool_use_id, ""))
+            ):
                 # The app's tools answer an error in words their code wrote (browser B25).
                 data["error"] = shorten(result_text(block.content), TOOL_ERROR_MAX, self.secret)
         else:
@@ -1468,6 +1474,7 @@ async def _execute(
             # version: one saved in between does not outlive the job.
             definition = replace(definition, wall_time_s=wall_time_max_s)
         recorder.private = definition.private_io
+        recorder.detail = definition.step_detail
         # The definition's model until the credential says which one the run uses.
         model = definition.model
         data = dict(run.input or {})

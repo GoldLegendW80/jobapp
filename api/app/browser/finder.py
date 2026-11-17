@@ -1590,6 +1590,7 @@ INTERACTIVE_FINDER = definitions.register(
         internal=True,
         live_text=False,
         private_io=True,
+        step_detail=True,
     )
 )
 
