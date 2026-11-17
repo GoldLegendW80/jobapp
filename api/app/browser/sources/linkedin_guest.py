@@ -33,7 +33,9 @@ gives its one permission (linkedin_guard), which this source checks too.
   ("Tech Lead", a French title), so scoring and the posting reader judge its fit; the unwanted
   titles and places, the person's own never apply rules (the app has none of its own), and the
   person's postings (same LinkedIn id or address: counted found and duplicate, never fetched
-  again) still leave it out.
+  again) still leave it out. So does a place none of the saved ones (linkedin_places,
+  `WantedPlaces`: LinkedIn answers postings of elsewhere for a place it does not know), on the
+  card, or on the posting page for a card without its place (`other_place`).
 - Detail: `GET <base>/jobs-guest/jobs/api/jobPosting/<id>`, only for a new card that passed the
   filter, every one of a round before the next round of pages (jobs J20: a detail of a card
   already listed comes before a further page whose cards would not be read), taken in turn
@@ -799,6 +801,7 @@ class _Run:
     searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
     unwanted: int = 0
     other_contract: int = 0
+    other_place: int = 0  # cards and postings of a place none of the saved ones (jobs J20)
     duplicates: int = 0
     found: int = 0  # findings counted without the run's commits
     planned: int = 0  # the searches built (`searches` counts the ones that ran)
@@ -1162,6 +1165,8 @@ async def _rounds(
                 new += 1
                 if not wanted.keep(card):
                     done.unwanted += 1
+                elif not wanted.where.matches(card.location, card.title):
+                    done.other_place += 1  # LinkedIn answered another place (jobs J20)
                 elif card.job_id in known:
                     _duplicate(stats, entry, done)
                 else:
@@ -1213,6 +1218,7 @@ class _Wanted:
 
         self.titles = pattern(search.title_exclude)
         self.places = pattern(search.location_exclude)
+        self.where = wanted_places(search)
         self.rules = list(rules) if rules is not None else sweep.never_apply_rules(search)
 
     def keep(self, card: Card) -> bool:
@@ -1221,6 +1227,12 @@ class _Wanted:
         if self.places is not None and self.places.search(card.location):
             return False
         return not any(rule.matches(card.company, card.title) for rule in self.rules)
+
+
+def wanted_places(search: SearchSection) -> linkedin_places.WantedPlaces:
+    """The saved places a card's or a posting's place must match (linkedin_places, jobs J20)."""
+    places, _ = typed_words(search.location)
+    return linkedin_places.WantedPlaces(places, search.remote_stance, finder.worldwide)
 
 
 async def _details(
@@ -1237,6 +1249,7 @@ async def _details(
     finder.VERIFIED_BATCH_MAX at a time."""
     batch: list[GuestFinding] = []
     saved = set(search.contract_types)
+    where = wanted_places(search)
     try:
         for _ in range(min(count, len(pending))):
             card, query = pending.popleft()
@@ -1249,6 +1262,9 @@ async def _details(
             done.details += 1
             url = view_url(base, card.job_id)
             location = card.location or detail.location
+            if not card.location and not where.matches(location, card.title):
+                done.other_place += 1  # a card without its place: the posting's says (J20)
+                continue
             contract = contract_of(card.title, location, url, detail.criteria)
             if query.check_contract and saved and contract.value not in saved:
                 done.other_contract += 1
@@ -1313,5 +1329,7 @@ def _write(entry: dict[str, Any], done: _Run, plan: Any) -> None:
         entry["unwanted"] = done.unwanted
     if done.other_contract:
         entry["other_contract"] = done.other_contract
+    if done.other_place:
+        entry["other_place"] = done.other_place
     if getattr(plan, "commits", None) is None:
         entry["found"] = entry.get("found", 0) + done.found
