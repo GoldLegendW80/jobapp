@@ -246,7 +246,7 @@ test("A adds websites to the list beside their risk sentences, sets criteria and
   await expect(
     setup.getByRole("switch", { name: /regular expressions/i }),
   ).toHaveCount(0);
-  // The setup screenshot is not taken here: shots() resizes the viewport, which remounts the dialog and empties the draft (seen 2026-11-17, B25 round 3), so Save sent nothing.
+  // The setup screenshot is not taken here: shots() resizes the viewport, which remounts the dialog and empties the draft (seen 2026-11-17, B25 round 3, issue #798), so Save sent nothing. Take it again when #798 is fixed.
   await setup.getByRole("button", { name: "Save and start search" }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
   // The save recorded each listed website's permission through its consent route.
