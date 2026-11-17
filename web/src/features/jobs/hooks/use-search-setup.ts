@@ -33,6 +33,12 @@ const MORE_FIELDS = new Set([
   "compensation",
 ]);
 
+/** Why Save cannot start a search yet: the api refuses a list with no website and no board. */
+export const EMPTY_LIST_REASON =
+  "Add a website or a company job board to your list to start a search.";
+
+export type SearchSetupState = ReturnType<typeof useSearchSetup>;
+
 export function useSearchSetup({
   profile,
   runner,
@@ -89,8 +95,18 @@ export function useSearchSetup({
     setReviewed(structuredClone(current.sections.search));
   };
 
+  const { sites, boards, feeds } = sources.draft;
+  const emptyReason =
+    sites.length === 0 && (boards?.length ?? 0) === 0 && feeds.length === 0
+      ? EMPTY_LIST_REASON
+      : null;
+
   const submit = async (values: SearchForm) => {
     if (busy.current || conflict) return;
+    if (emptyReason) {
+      setError(emptyReason);
+      return;
+    }
     busy.current = true;
     markSaving(true);
     setError(null);
@@ -146,6 +162,7 @@ export function useSearchSetup({
     setMore,
     conflict,
     error,
+    emptyReason,
     locked: saving || sources.saving,
     onSubmit,
   };

@@ -12,6 +12,8 @@ import {
 } from "@/design-system/fixtures/jobs-actions";
 import { withApp } from "@/design-system/with-app";
 import { useSweepRunner } from "@/features/jobs/api/use-sweep-runner";
+import { useSearchSetup } from "@/features/jobs/hooks/use-search-setup";
+import type { Profile } from "@/features/profile/api/profile-api";
 import { useProfile } from "@/features/profile/api/use-profile";
 import { fakeProfile } from "@/test/profile";
 import { server } from "@/test/server";
@@ -21,15 +23,11 @@ const nothing = () => undefined;
 /** The form in the dialog Find jobs opens, on the profile the fake api answers. */
 function Form() {
   const profile = useProfile({ retry: false });
-  const runner = useSweepRunner();
   return (
     <SetupSurface onClose={nothing} onReturnFocus={nothing}>
       {profile.data ? (
-        <SetupForm
+        <Loaded
           profile={profile.data}
-          runner={runner}
-          onClose={nothing}
-          onBusyChange={nothing}
           onReload={async () => {
             await profile.refetch();
           }}
@@ -37,6 +35,23 @@ function Form() {
       ) : null}
     </SetupSurface>
   );
+}
+
+function Loaded({
+  profile,
+  onReload,
+}: {
+  profile: Profile;
+  onReload: () => Promise<void>;
+}) {
+  const runner = useSweepRunner();
+  const setup = useSearchSetup({
+    profile,
+    runner,
+    onClose: nothing,
+    onBusyChange: nothing,
+  });
+  return <SetupForm setup={setup} onClose={nothing} onReload={onReload} />;
 }
 
 /** Save and start search, the footer's primary action. */
@@ -139,4 +154,20 @@ export const Conflict: Story = {
     );
   },
   play: start,
+};
+
+/** Nothing to search yet: the footer says what to add, and Save waits for it. */
+export const EmptyList: Story = {
+  name: "No website in the list",
+  beforeEach: () => {
+    fakeProfile({
+      ...camilleProfile(),
+      search: {
+        ...findJobsSearch(),
+        interactive_sites: [],
+        company_boards: [],
+        job_feeds: [],
+      },
+    });
+  },
 };
