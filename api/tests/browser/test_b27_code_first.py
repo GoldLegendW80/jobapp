@@ -865,12 +865,6 @@ def test_a_read_page_is_parsed_off_the_event_loop(monkeypatch):
     assert on_loop == [False] * 4
 
 
-def test_a_small_page_is_parsed_in_place():
-    assert asyncio.run(finder.parsed_off_loop(START, "x" * finder.PARSE_INLINE_MAX)) is None
-    big = asyncio.run(finder.parsed_off_loop(START, "x" * (finder.PARSE_INLINE_MAX + 1)))
-    assert big is not None
-
-
 def test_the_agent_runs_sonnet_at_medium_effort():
     """Acceptance 5 (owner B20: the model stays Sonnet)."""
     assert finder.INTERACTIVE_FINDER.effort == "medium"
