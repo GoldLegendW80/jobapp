@@ -355,6 +355,44 @@ def test_browserd_cuts_a_discovery_snapshot_at_its_own_ceiling_only(monkeypatch)
     assert cut["cut"] is True
 
 
+def test_another_agents_snapshot_reads_its_page_whole_and_it_cannot_find():
+    """One click Apply's agent (A19) shares the registered browser_snapshot: an offset or a
+    length is refused with why, a plain call reads its page as before, browser_find is refused."""
+    import asyncio
+    import uuid
+
+    from app.agents import tools as app_tools
+    from app.browser import finder_tools, tool_sessions
+
+    run_id = uuid.uuid4()
+    reads: list[str] = []
+
+    class Other:
+        async def snapshot(self) -> tuple[str, bool]:
+            reads.append("snapshot")
+            return "the apply page", False
+
+    other = Other()
+    tool_sessions.register(lambda asked: other if asked == run_id else None)
+    scope = app_tools.Scope(sessions=None, user_id=uuid.uuid4(), run_id=run_id)  # type: ignore[arg-type]
+
+    def call(name: str, **args: Any) -> dict[str, Any]:
+        return asyncio.run(finder_tools._factory(name)(scope).handler(args))
+
+    windowed, sized = call("browser_snapshot", offset=100), call("browser_snapshot", length=500)
+    assert reads == []
+    for refused in (windowed, sized):
+        assert refused["is_error"] is True
+        assert "reads the page whole" in text_of(refused)
+    plain = call("browser_snapshot")
+    assert text_of(plain) == "the apply page"
+    assert reads == ["snapshot"]
+    found = call("browser_find", pattern="apply")
+    assert found["is_error"] is True
+    assert text_of(found) == finder_tools.NO_SITE
+    assert reads == ["snapshot"]
+
+
 @pytest.mark.parametrize("name", ["browser_find", "browser_snapshot"])
 def test_the_new_arguments_are_the_website_searchs_only(name):
     from app.browser import finder_tools
