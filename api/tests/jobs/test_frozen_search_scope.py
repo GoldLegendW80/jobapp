@@ -238,7 +238,9 @@ def test_interactive_only_run_explains_unsupported_criteria_without_legacy_fallb
     asyncio.run(sweep.run_sweep(factory, sweep_id, clock, browser=website_runner(tools)))
     assert tools.calls == []
     row = read_sweep(factory, sweep_id)
-    assert row.status is SweepStatus.done
+    # The one website could not be searched, so no source worked: the search stopped (B25).
+    assert row.status is SweepStatus.failed
+    assert row.error == sweep.NO_SOURCE_WORKED
     [entry] = row.stats["sources"]
     assert entry["outcome"] == "failed"
     assert entry["reason"] == "unsupported_criteria"
