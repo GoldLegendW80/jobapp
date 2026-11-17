@@ -33,7 +33,8 @@ const MORE_FIELDS = new Set([
   "compensation",
 ]);
 
-/** Why Save cannot start a search yet: the api refuses a list with no website and no board. */
+/** Said beside Save while the list is empty: the api refuses a search with no website and no board (a
+ * save still goes through, it is how the last website is taken out). */
 export const EMPTY_LIST_REASON =
   "Add a website or a company job board to your list to start a search.";
 
@@ -103,10 +104,6 @@ export function useSearchSetup({
 
   const submit = async (values: SearchForm) => {
     if (busy.current || conflict) return;
-    if (emptyReason) {
-      setError(emptyReason);
-      return;
-    }
     busy.current = true;
     markSaving(true);
     setError(null);

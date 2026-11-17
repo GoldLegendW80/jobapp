@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
 } from "@/features/profile/helpers/editor-forms";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
+import { PHONE_QUERY } from "@/hooks/use-media-query";
 import { phoneScreen } from "@/test/media";
 import { fakeProfile, profileBody, type FakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
@@ -447,7 +448,13 @@ it("keeps a conflicting draft editable and requires reviewing the current profil
   await user.click(
     within(dialog).getByRole("button", { name: "Load current settings" }),
   );
-  expect(inList(dialog, "LinkedIn")).toBe(false);
+  // The setup is built again on the current settings: ask for the dialog that replaced it.
+  expect(
+    inList(
+      await screen.findByRole("dialog", { name: "Find jobs" }),
+      "LinkedIn",
+    ),
+  ).toBe(false);
 });
 
 it("does not save or start while loading the profile fails", async () => {
@@ -1819,4 +1826,97 @@ describe("Add the recommended websites", () => {
       "Keep at most 10 websites: Welcome to the Jungle and Free-Work were not added. Remove one to add another.",
     );
   });
+});
+
+/** A screen whose width the test changes: matchMedia answers for the phone query and tells its
+ * listeners, as a rotated phone or a resized window does. */
+function resizableScreen() {
+  const listeners = new Set<(event: { matches: boolean }) => void>();
+  let phone = false;
+  vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        get matches() {
+          return query === PHONE_QUERY && phone;
+        },
+        media: query,
+        addEventListener: (
+          _: string,
+          listener: (event: { matches: boolean }) => void,
+        ) => {
+          listeners.add(listener);
+        },
+        removeEventListener: (_: string, listener: () => void) => {
+          listeners.delete(listener);
+        },
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  );
+  return (next: boolean) => {
+    phone = next;
+    act(() => {
+      listeners.forEach((listener) => {
+        listener({ matches: next });
+      });
+    });
+  };
+}
+
+it("keeps the draft when the dialog becomes a drawer and back (#798)", async () => {
+  const resize = resizableScreen();
+  const { user, dialog, starts, profile } = await open();
+  expect(dialog).toHaveAttribute("data-slot", "dialog-content");
+  await toggle(user, dialog, "Indeed");
+  await user.type(
+    await instructionsBox(user, dialog),
+    "Junior roles only, remote.",
+  );
+  for (const phone of [true, false]) {
+    resize(phone);
+    const surface = await screen.findByRole("dialog", { name: "Find jobs" });
+    expect(surface).toHaveAttribute(
+      "data-slot",
+      phone ? "drawer-content" : "dialog-content",
+    );
+    expect(inList(surface, "Indeed")).toBe(true);
+    expect(await instructionsBox(user, surface)).toHaveValue(
+      "Junior roles only, remote.",
+    );
+  }
+  await user.click(
+    within(screen.getByRole("dialog", { name: "Find jobs" })).getByRole(
+      "button",
+      { name: "Save and start search" },
+    ),
+  );
+  await waitFor(() => {
+    expect(starts).toHaveLength(1);
+  });
+  const sites = (profile.saves[0]!.body.data as Search).interactive_sites ?? [];
+  expect(sites).toHaveLength(1);
+  expect(sites[0]).toMatchObject({ platform: "indeed" });
+});
+
+it("says why a search cannot start while the list is empty, and shows the api's reason on a 422 (#798)", async () => {
+  const { user, dialog } = await open();
+  const reason = "Tick at least one job website, then start the search again.";
+  server.use(
+    http.post("*/api/jobs/sweeps", () =>
+      HttpResponse.json({ detail: reason }, { status: 422 }),
+    ),
+  );
+  expect(
+    within(dialog).getByText(
+      "Add a website or a company job board to your list to start a search.",
+    ),
+  ).toBeInTheDocument();
+  await toggle(user, dialog, "Indeed");
+  expect(within(dialog).queryByText(/to start a search\.$/)).toBeNull();
+  await user.click(
+    within(dialog).getByRole("button", { name: "Save and start search" }),
+  );
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(reason);
+  expect(screen.getByRole("dialog", { name: "Find jobs" })).toBeInTheDocument();
 });

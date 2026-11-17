@@ -91,7 +91,7 @@ export function SetupForm({
             <Button
               type="submit"
               className="flex-1 sm:flex-none"
-              disabled={conflict || locked || emptyReason !== null}
+              disabled={conflict || locked}
               aria-describedby={emptyReason ? "setup-empty" : undefined}
             >
               {locked ? (
