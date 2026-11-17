@@ -1191,7 +1191,7 @@ class FinderSession:
         self.current = self.landed or self.start
         self._read(self.current, self.first)
         title = getattr(self.pages, "last_title", "")
-        self._keep(self.current, self.first, title if isinstance(title, str) else "", False)
+        self._hold(self.current, self.first, title if isinstance(title, str) else "", False)
         self.first = ""
 
     def on_site(self, url: str) -> bool:
@@ -1231,7 +1231,7 @@ class FinderSession:
                     total -= _record_size(self.pages_read.pop(next(iter(self.pages_read))))
             self.seen.add(key)
 
-    def _keep(self, url: str, text: str, title: str, cut: bool) -> Kept | None:
+    def _hold(self, url: str, text: str, title: str, cut: bool) -> Kept | None:
         """Keep the tab's snapshot whole, up to PAGE_MAX (B26); the one it replaces."""
         previous = self.kept.get(self.tab)
         whole = _head(text, PAGE_MAX)
@@ -1240,9 +1240,9 @@ class FinderSession:
 
     def _view(self, url: str, text: str, title: str = "", cut: bool = False) -> str:
         """An action's answer (B26, as Playwright CLI gives it): the address, the title and a
-        compact view of the page (`_compact`), the full snapshot kept for the tab (`_keep`) and a
+        compact view of the page (`_compact`), the full snapshot kept for the tab (`_hold`) and a
         line saying how long it is and how to read it. The page's text is untrusted."""
-        previous = self._keep(url, text, title, cut)
+        previous = self._hold(url, text, title, cut)
         kept = self.kept[self.tab]
         before = previous.text if previous is not None and previous.url == url else None
         top, changed = _compact(kept.text, before)
@@ -1570,7 +1570,7 @@ class FinderSession:
         title = shot.get("title") if isinstance(shot.get("title"), str) else ""
         if compact:
             return self._view(url, text, title, shot.get("cut") is True), False
-        self._keep(url, text, title, shot.get("cut") is True)
+        self._hold(url, text, title, shot.get("cut") is True)
         return "", False
 
     async def find(

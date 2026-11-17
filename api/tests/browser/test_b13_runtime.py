@@ -258,6 +258,7 @@ def test_a_page_addressing_the_assistant_gets_no_submit_and_no_unopened_posting(
     assert [r["is_error"] for r in backend.results] == [False, True, False]
     # The hostile text reached the model as page data, never as an instruction.
     assert HOSTILE in json.loads(texts[0])["untrusted_page_snapshot"]
+    assert one.kept == {}  # B26: the pages kept for the run are dropped when it ends
     # The line (B20): the POST "Submit application" button is refused by browserd before it
     # reaches the page.
     assert json.loads(texts[1])["error"] in {"submit", "line"}
