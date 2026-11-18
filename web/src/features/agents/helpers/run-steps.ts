@@ -91,15 +91,46 @@ function statusView(data: Record<string, unknown>): StepView {
   return { icon: "status", title: label, tone: "muted" };
 }
 
+/** The preview a private run keeps of an app tool's call (api runner.preview_args, browser
+ * B25): an address or a pattern shown as is, a short word, a number or a switch, and of a typed
+ * text, a script or a list only its length (`<name>_length`) or count (`<name>_count`). */
+function previewOf(data: Record<string, unknown>): Record<string, unknown> {
+  return data.preview && typeof data.preview === "object"
+    ? (data.preview as Record<string, unknown>)
+    : {};
+}
+
+function previewEntry([key, value]: [string, unknown]): [string, string] {
+  const length = /^(.+)_length$/.exec(key);
+  if (length?.[1] && typeof value === "number")
+    return [length[1], plural(value, "character")];
+  const count = /^(.+)_count$/.exec(key);
+  if (count?.[1] && typeof value === "number")
+    return [count[1], plural(value, "item")];
+  return [key, text(value)];
+}
+
 function toolCallView(data: Record<string, unknown>): StepView {
   const args =
     data.input && typeof data.input === "object"
       ? Object.entries(data.input as Record<string, unknown>)
       : [];
+  const preview = previewOf(data);
+  // The address of a navigation, or the pattern of a find, follows the tool's name.
+  const subject = [preview.url, preview.pattern].find(
+    (value): value is string => typeof value === "string" && value !== "",
+  );
   const view: StepView = {
     icon: "tool",
-    title: `Tool call: ${toolName(data.name)}`,
+    title: `Tool call: ${toolName(data.name)}${subject ? ` ${subject}` : ""}`,
   };
+  const shown = Object.entries(preview).filter(
+    ([key]) => key !== "url" && key !== "pattern",
+  );
+  if (!args.length && shown.length) {
+    view.body = { kind: "arguments", entries: shown.map(previewEntry) };
+    return view;
+  }
   if (args.length) {
     view.body = {
       kind: "arguments",
@@ -117,9 +148,18 @@ function toolCallView(data: Record<string, unknown>): StepView {
 
 function toolResultView(data: Record<string, unknown>): StepView {
   const failed = data.is_error === true;
+  // A private run keeps the error text of an app tool (browser B25), never its content.
+  const error =
+    failed && typeof data.error === "string" && data.error !== ""
+      ? data.error
+      : null;
   const view: StepView = {
     icon: failed ? "problem" : "succeeded",
-    title: failed ? "Tool error" : "Tool result",
+    title: error
+      ? `Tool error: ${error}`
+      : failed
+        ? "Tool error"
+        : "Tool result",
     tone: failed ? "error" : undefined,
   };
   if (data.content === undefined && typeof data.size === "number") {

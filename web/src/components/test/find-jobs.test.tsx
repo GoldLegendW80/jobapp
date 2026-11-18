@@ -835,13 +835,12 @@ describe("Find jobs on an empty list", () => {
     fakeJobsApi([]);
     const user = userEvent.setup();
     const { location } = renderApp("/jobs?find=1");
-    const setup = await screen.findByRole("dialog", { name: "Find jobs" });
+    await screen.findByRole("dialog", { name: "Find jobs" });
     await waitFor(() => {
       expect(location()).toBe("/jobs");
     });
-    await user.click(
-      await within(setup).findByRole("button", { name: "Cancel" }),
-    );
+    // The setup is built again once the profile is read: ask the page for the dialog it holds.
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
     // Opened by the address, it gives the focus to the Find jobs on the page.
     await waitFor(() => {
       expect(

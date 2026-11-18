@@ -3,11 +3,9 @@ import { Search as SearchIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Form } from "@/components/ui/form";
 import { Spinner } from "@/components/ui/spinner";
-import type { Profile } from "@/features/profile/api/profile-api";
 import { cn } from "@/lib/utils";
 
-import { useSearchSetup } from "@/features/jobs/hooks/use-search-setup";
-import type { SweepRunner } from "@/features/jobs/api/use-sweep-runner";
+import type { SearchSetupState } from "@/features/jobs/hooks/use-search-setup";
 import { SourcesEditor } from "@/components/shared/jobs/sources/sources-editor";
 import { BODY, EDGES } from "./setup-surface";
 import { WhatYouWant } from "./what-you-want";
@@ -15,20 +13,15 @@ import { WhatYouWant } from "./what-you-want";
 /** The two steps of Find jobs (where to search, what you want) and the footer that stays in
  * view: what went wrong, Cancel, and "Save and start search". */
 export function SetupForm({
-  profile,
-  runner,
+  setup,
   onClose,
   onReload,
-  onBusyChange,
 }: {
-  profile: Profile;
-  runner: SweepRunner;
+  setup: SearchSetupState;
   onClose: () => void;
   onReload: () => Promise<void>;
-  onBusyChange: (busy: boolean) => void;
 }) {
-  const setup = useSearchSetup({ profile, runner, onClose, onBusyChange });
-  const { locked, conflict, error } = setup;
+  const { locked, conflict, error, emptyReason } = setup;
   return (
     <Form {...setup.form}>
       <form
@@ -81,6 +74,11 @@ export function SetupForm({
               ) : null}
             </div>
           ) : null}
+          {emptyReason ? (
+            <p id="setup-empty" className="text-sm text-muted-foreground">
+              {emptyReason}
+            </p>
+          ) : null}
           <div className="flex items-center justify-end gap-2">
             <Button
               type="button"
@@ -94,6 +92,7 @@ export function SetupForm({
               type="submit"
               className="flex-1 sm:flex-none"
               disabled={conflict || locked}
+              aria-describedby={emptyReason ? "setup-empty" : undefined}
             >
               {locked ? (
                 <Spinner aria-hidden="true" role={undefined} />

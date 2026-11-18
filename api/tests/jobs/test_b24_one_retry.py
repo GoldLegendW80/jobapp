@@ -151,7 +151,8 @@ def test_a_second_failure_is_not_retried_again(
         "nothing_reported",
     )
     assert entry["first_attempt"]["reason"] == "browser_unavailable"
-    assert row.status is SweepStatus.done
+    # The only website failed twice: no website of the search worked (B25).
+    assert row.status is SweepStatus.failed
 
 
 @pytest.mark.parametrize(
@@ -229,7 +230,8 @@ def test_linkedin_in_its_cooldown_is_recorded_as_not_retried(
     assert (entry["outcome"], entry["reason"]) == ("failed", "linkedin_rate_limited")
     assert (entry["attempt"], entry["not_retried"]) == (1, "linkedin_cooldown")
     assert len(linkedin.requests) == 1  # no request in the cooldown
-    assert row.status is SweepStatus.done
+    # LinkedIn was the only source and it failed: the sweep is Failed (B25).
+    assert row.status is SweepStatus.failed
 
 
 def test_linkedin_failing_with_no_cooldown_is_retried(

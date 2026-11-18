@@ -763,7 +763,8 @@ def test_a_slot_starts_once_whatever_the_ticks(
         searched.extend(site.url for site in plan.search.interactive_sites)
 
     finished = run(factory, row.id, browser=browser)
-    assert finished.status is SweepStatus.done
+    # The stand-in searched nothing, so the one selected website never worked (B25).
+    assert finished.status is SweepStatus.failed
     assert finished.stats["schedule_slot"] == SLOT
     assert (finished.stats["boards_total"], finished.stats["new"]) == (0, 0)
     assert searched == [SITE["url"]]
