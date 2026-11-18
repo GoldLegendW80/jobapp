@@ -2622,9 +2622,10 @@ class FinderDefinition(definitions.AgentDefinition):
             session.web_search_answered(failed, call)
 
     def stream_variables(self, data: dict[str, Any]) -> dict[str, str]:
-        """J23, round 2 of #814: the fake backend's web stream searches the one query that covers
-        the run's plan (`{web_plan_query}`, web_plan.covering_query), whatever the scope, then
-        each place's town and AI boards queries (J25, `{web_plan_queries}`, a JSON list)."""
+        """J23, round 2 of #814: the fake backend's web stream searches the one query that
+        covers most of the run's plan (`{web_plan_query}`, web_plan.covering_query), whatever
+        the scope, then each place's town and AI boards queries (J25, `{web_plan_queries}`, a
+        JSON list)."""
         with _LOCK:
             session = _SCOPES.get(str(data.get("request")))
         if session is None or session.interactive is None or not session.interactive.web:

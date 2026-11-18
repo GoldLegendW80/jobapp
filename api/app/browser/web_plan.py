@@ -60,7 +60,8 @@ whose words fold to something and the places a query can name (`plan_of`): "++" 
 left out, never a plan nobody can search; titles that fold to the same words ("ingénieur IA"
 and "Ingenieur IA", "full-stack" and "full stack") are one title, the first (round 2). Fails
 closed: a query read otherwise counts for nothing. `covering_query` is the one query with OR
-that covers a whole plan (the fake backend's web stream searches it).
+that covers the families a query may search at once, and `covering_queries` adds each place's
+town and AI boards queries (the fake backend's web stream searches them all).
 """
 
 from __future__ import annotations
