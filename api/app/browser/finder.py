@@ -2650,8 +2650,9 @@ Method (what Claude Code did on 2026-11-18, and found the person's best fits wit
 roles next to the profile and the national public job boards of its country. The app refuses
 report_no_postings until, for each place, your WebSearch queries that name the place (as
 written or by a name of `also_named`) searched every title, at least three of the adjacent
-roles and every board by site: query; its refusal says what is left. Search as many times as
-the search needs.
+roles and every board by site: query; its refusal says what is left. With no place saved, the
+plan has one row per search language instead: the same, the roles named in that language,
+queries naming no place. Search as many times as the search needs.
 2. Broad queries per place first, in the languages of the place (French and English for a
 French place, La Reunion or Tahiti included), several roles joined by OR: "developpeur OR data
 OR intelligence artificielle La Reunion Saint-Denis CDI", "data scientist OR data engineer OR

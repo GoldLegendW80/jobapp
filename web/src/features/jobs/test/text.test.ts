@@ -165,6 +165,34 @@ describe("describeEvent", () => {
       "Fit changed from 60 to 72 (posting read)",
     ],
     ["import", { changed: ["notes"] }, "Updated by an import"],
+    ["sweep", { board: "custom" }, "Seen again by a search"],
+    [
+      "sweep",
+      {
+        discovery: {
+          date: "approximate",
+          evidence: { date_shown: "il y a un mois" },
+        },
+      },
+      'Found by a search, dated "il y a un mois" on the posting (approximate date)',
+    ],
+    [
+      "sweep",
+      { discovery: { date: "unknown", evidence: {} } },
+      "Found by a search, the posting gives no date",
+    ],
+    [
+      "sweep",
+      {
+        discovery: { date: "exact", evidence: { published_on: "2026-11-02" } },
+      },
+      "Seen again by a search",
+    ],
+    [
+      "sweep",
+      { discovery: { date: "approximate", evidence: { date_shown: " " } } },
+      "Seen again by a search",
+    ],
     ["brand_new", {}, "Brand new"],
   ])("%s %j", (kind, data, text) => {
     expect(describeEvent(kind, data)).toBe(text);

@@ -1,6 +1,8 @@
 """Jobs J21, round 1 of #809: the fake backend's web search stream (fake_streams/
 web_discovery.json), the one every journey stack's sweep runs for "Anywhere on the web", ends the
-web source searched with nothing new: one stubbed WebSearch, then no_match, no browserd call."""
+web source searched with nothing new: two stubbed WebSearch calls, each answered with an error
+(jobs J23: two in a row let it give up without its plan searched), then no_match, no browserd
+call."""
 
 import asyncio
 import random
@@ -42,7 +44,7 @@ class NoBrowser:
         return {"ok": True}
 
 
-def test_the_fake_web_stream_searches_once_and_reports_no_match(
+def test_the_fake_web_stream_searches_twice_and_reports_no_match(
     runtime: Runtime,  # noqa: F811
     alice,  # noqa: F811
 ) -> None:
@@ -60,6 +62,7 @@ def test_the_fake_web_stream_searches_once_and_reports_no_match(
     asyncio.run(finder.RuntimeFinder(lambda: runtime.context())(session))
     [run] = runs_of(runtime.factory, alice)
     assert (run.agent, run.status) == (finder.WEB_NAME, RunStatus.done), run.error
-    assert (session.web_searches, session.outcome, session.stopped) == (1, "no_match", "")
+    assert (session.web_searches, session.outcome, session.stopped) == (2, "no_match", "")
+    assert session.web_search_failures == finder.WEB_SEARCH_FAILS  # the runner told each error
     assert interactive.outcome(session) is None  # searched, nothing new: no failure
     assert browser.calls == []

@@ -63,6 +63,23 @@ const FIELD_LABELS: Record<string, string> = {
   description: "description",
 };
 
+/** A search's event; jobs J23: how the posting it found is dated, when it is not exactly. */
+function sweepLine(data: Record<string, unknown>): string {
+  const found = data.discovery;
+  if (found && typeof found === "object") {
+    const { date, evidence } = found as Record<string, unknown>;
+    const shown =
+      evidence && typeof evidence === "object"
+        ? (evidence as Record<string, unknown>).date_shown
+        : undefined;
+    if (date === "approximate" && typeof shown === "string" && shown.trim())
+      return `Found by a search, dated "${shown.trim()}" on the posting (approximate date)`;
+    if (date === "unknown")
+      return "Found by a search, the posting gives no date";
+  }
+  return "Seen again by a search";
+}
+
 /** One line for an event of the timeline. */
 export function describeEvent(
   kind: string,
@@ -118,7 +135,7 @@ export function describeEvent(
     case "import":
       return "Updated by an import";
     case "sweep":
-      return "Seen again by a search";
+      return sweepLine(data);
     default:
       return statusLabel(kind);
   }

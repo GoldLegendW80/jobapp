@@ -176,6 +176,7 @@ class FakeBackend:
         # about the run's own tools only (`"gate": "offered"` in the stream).
         self._gate_all = True
         self._web_results: list[dict[str, str]] = []
+        self._web_error: str | None = None
 
     async def interrupt(self) -> None:
         self._interrupted.set()

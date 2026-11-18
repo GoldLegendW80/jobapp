@@ -18,8 +18,10 @@ tests/browser/test_j23_web_breadth.py):
 - `boards`: each national public job board of the place's country (BOARDS) by a `site:` query
   that names the place; a country the table does not know has the `jobs` family instead: a
   query that names the place and a word for jobs (JOB_WORDS).
-With no place saved (or only a place that says no limit), one row with no place: its queries
-need not name one, and it has no board family.
+With no place saved (or only a place that says no limit), one row per search language instead
+(`search_languages`: the profile's languages of LANGUAGES, else French and English): its queries
+need not name a place, its roles count only by their forms in that language, and its boards are
+those of the language's country (French: France's; English: none).
 
 Matching (`_text` and `_names`): a query's words folded as the finder folds them (case and
 accents aside, any other character a space), its `-word` exclusions and `site:` operators set
@@ -54,69 +56,86 @@ LEFT_MAX = 1500  # characters of the refusal's list of what is left
 @dataclass(frozen=True)
 class Role:
     """A role next to the profile: its name in French and in English, the forms a query may
-    name it by (folded), and the words of the profile that call for it (folded)."""
+    name it by in each language (folded; a form of both languages in both), and the words of
+    the profile that call for it (folded)."""
 
     fr: str
     en: str
-    forms: tuple[str, ...]
+    forms_fr: tuple[str, ...]
+    forms_en: tuple[str, ...]
     triggers: tuple[str, ...]
+
+    @property
+    def forms(self) -> tuple[str, ...]:
+        """Its forms in either language: a place's queries may be in French or English."""
+        return tuple(dict.fromkeys((*self.forms_fr, *self.forms_en)))
+
+    def forms_in(self, language: str | None) -> tuple[str, ...]:
+        if language == "fr":
+            return self.forms_fr
+        return self.forms_en if language == "en" else self.forms
 
 
 # The roles next to the profile, in the order the plan lists them. A role is listed when the
 # summary's recent roles, skills or adjacent skills name one of its triggers as whole words.
+AI_WORDS = ("llm", "llms", "genai", "ia", "ai", "intelligence artificielle",
+            "artificial intelligence")  # fmt: skip
 # fmt: off
 ROLES: tuple[Role, ...] = (
-    Role("data scientist", "data scientist", ("data scientist", "data science"),
+    Role("data scientist", "data scientist",
+         ("data scientist", "data science"), ("data scientist", "data science"),
          ("machine learning", "ml", "deep learning", "data science", "data scientist",
-          "statistics", "statistiques", "scikit learn", "pandas", "llm", "llms", "nlp",
-          "genai", "ia", "ai", "intelligence artificielle", "artificial intelligence")),
+          "statistics", "statistiques", "scikit learn", "pandas", "nlp", *AI_WORDS)),
     Role("ingénieur machine learning", "machine learning engineer",
-         ("ingenieur machine learning", "machine learning engineer", "ml engineer",
-          "ingenieur ml"),
+         ("ingenieur machine learning", "ingenieur ml"),
+         ("machine learning engineer", "ml engineer"),
          ("machine learning", "ml", "deep learning", "pytorch", "tensorflow", "llm", "llms",
           "genai", "mlops")),
     Role("data engineer", "data engineer",
          ("data engineer", "ingenieur data", "ingenieur donnees", "ingenieur de donnees"),
+         ("data engineer",),
          ("sql", "etl", "spark", "airflow", "dbt", "data engineering", "data engineer",
           "bigquery", "snowflake", "postgresql", "postgres", "data pipelines", "pipelines")),
-    Role("MLOps", "MLOps", ("mlops", "ml ops"),
+    Role("MLOps", "MLOps", ("mlops", "ml ops"), ("mlops", "ml ops"),
          ("mlops", "docker", "kubernetes", "aws", "gcp", "azure", "terraform", "ci cd",
           "deployment", "deploiement")),
     Role("développeur Python", "Python developer",
-         ("developpeur python", "python developer", "ingenieur python", "python engineer",
-          "developpeuse python"),
+         ("developpeur python", "developpeuse python", "ingenieur python"),
+         ("python developer", "python engineer"),
          ("python", "fastapi", "django", "flask")),
-    Role("développeur full stack", "full stack developer", ("full stack", "fullstack"),
+    Role("développeur full stack", "full stack developer",
+         ("full stack", "fullstack"), ("full stack", "fullstack"),
          ("react", "typescript", "javascript", "node", "nodejs", "vue", "angular",
           "full stack", "fullstack", "frontend", "front end")),
     Role("consultant IA", "AI consultant",
-         ("consultant ia", "consultante ia", "ai consultant", "consultant ai",
-          "consultant intelligence artificielle", "consultant data"),
+         ("consultant ia", "consultante ia", "consultant intelligence artificielle",
+          "consultant data"),
+         ("ai consultant", "consultant ai", "data consultant"),
          ("consulting", "consultant", "conseil", "freelance", "client facing")),
     Role("tech lead", "tech lead",
-         ("tech lead", "technical lead", "lead developer", "lead developpeur", "lead dev"),
+         ("tech lead", "lead developpeur", "lead developer", "lead dev"),
+         ("tech lead", "technical lead", "lead developer", "lead dev"),
          ("lead", "tech lead", "architect", "architecte", "head of", "manager")),
     Role("ingénieur IA", "AI engineer",
-         ("ingenieur ia", "ai engineer", "ingenieur intelligence artificielle",
-          "genai engineer", "llm engineer", "ingenieure ia"),
-         ("llm", "llms", "genai", "ia", "ai", "agents", "rag", "langchain",
-          "intelligence artificielle", "artificial intelligence")),
+         ("ingenieur ia", "ingenieure ia", "ingenieur intelligence artificielle"),
+         ("ai engineer", "genai engineer", "llm engineer"),
+         ("agents", "rag", "langchain", *AI_WORDS)),
     Role("data analyst", "data analyst",
-         ("data analyst", "analyste data", "analyste de donnees"),
+         ("data analyst", "analyste data", "analyste de donnees"), ("data analyst",),
          ("power bi", "tableau", "analytics", "data analysis", "analyse de donnees")),
     Role("ingénieur logiciel", "software engineer",
-         ("ingenieur logiciel", "software engineer", "developpeur logiciel",
-          "software developer"),
+         ("ingenieur logiciel", "developpeur logiciel"),
+         ("software engineer", "software developer"),
          ("java", "c", "go", "rust", "software engineering", "backend", "back end")),
 )
 # The broad roles of Claude Code's own query of 2026-11-18 ("développeur OR data OR
 # intelligence artificielle"), listed after the profile's own, so the broad query it found the
 # person's best fits with counts as three roles.
 FALLBACK: tuple[Role, ...] = (
-    Role("développeur", "developer", ("developpeur", "developpeuse", "developer"), ()),
-    Role("data", "data", ("data",), ()),
+    Role("développeur", "developer", ("developpeur", "developpeuse"), ("developer",), ()),
+    Role("data", "data", ("data",), ("data",), ()),
     Role("intelligence artificielle", "artificial intelligence",
-         ("intelligence artificielle", "artificial intelligence"), ()),
+         ("intelligence artificielle",), ("artificial intelligence",), ()),
 )
 # fmt: on
 
@@ -181,9 +200,19 @@ SITE = re.compile(r"(?<![\w-])site:\s*(\S+)", re.IGNORECASE)
 EXCLUDED = re.compile(r"(?:(?<=\s)|^)-\S+")
 
 
+# With no place wanted, the search languages: the profile's languages this table names (folded),
+# in its order, else French and English; each with the country whose boards it searches.
+LANGUAGES = {
+    "french": "fr", "francais": "fr", "fr": "fr",
+    "english": "en", "anglais": "en", "en": "en",
+}  # fmt: skip
+LANGUAGE_COUNTRY = {"fr": "France", "en": None}
+LANGUAGE_NAMES = {"fr": "French", "en": "English"}
+
+
 @dataclass(frozen=True)
 class Row:
-    """The plan of one place (None: no place saved)."""
+    """The plan of one place, or with no place wanted of one search language."""
 
     place: str | None
     names: tuple[str, ...]  # folded forms a query names the place by
@@ -192,6 +221,7 @@ class Row:
     boards: tuple[Board, ...]
     country: str | None
     french: bool
+    language: str | None = None  # "fr" or "en" for a row with no place: its roles' forms
 
 
 def _forms(text: str) -> set[str]:
@@ -273,6 +303,18 @@ def adjacent_roles(
     return (*chosen[:ADJACENT_MAX], *(r for r in FALLBACK if fits(r)))
 
 
+def search_languages(profile: dict[str, Any]) -> tuple[str, ...]:
+    """The search languages of a plan with no place: the profile's languages LANGUAGES names, in
+    the profile's order, else French and English (never guessed from a name it does not know)."""
+    found: list[str] = []
+    for language in profile.get("languages") or []:
+        name = language.get("name") if isinstance(language, dict) else language
+        code = LANGUAGES.get(words(name)) if isinstance(name, str) else None
+        if code and code not in found:
+            found.append(code)
+    return tuple(found) or ("fr", "en")
+
+
 def _excluded(criteria: str) -> tuple[str, ...]:
     try:
         data = json.loads(criteria)
@@ -290,17 +332,31 @@ def plan_of(
         summary = json.loads(profile)
     except ValueError:
         summary = {}
-    roles = adjacent_roles(
-        summary if isinstance(summary, dict) else {}, titles, _excluded(criteria)
-    )
+    if not isinstance(summary, dict):
+        summary = {}
+    roles = adjacent_roles(summary, titles, _excluded(criteria))
     wanted = [p for p in places if p.strip() and not _worldwide(p)][:PLACES_MAX]
+    if not wanted:
+        return tuple(
+            Row(
+                None,
+                (),
+                titles[:TITLES_MAX],
+                roles,
+                BOARDS.get(LANGUAGE_COUNTRY[code] or "", ()),
+                LANGUAGE_COUNTRY[code],
+                code == "fr",
+                code,
+            )
+            for code in search_languages(summary)
+        )
     rows: list[Row] = []
-    for place in wanted or [None]:
-        country = country_of(place) if place else None
+    for place in wanted:
+        country = country_of(place)
         rows.append(
             Row(
                 place,
-                place_names(place) if place else (),
+                place_names(place),
                 titles[:TITLES_MAX],
                 roles,
                 BOARDS.get(country or "", ()),
@@ -356,7 +412,7 @@ def coverage(row: Row, queries: list[str]) -> dict[str, Any]:
         if not _names(row, text):
             continue
         titles |= {t for t in row.titles if _has(text, words(t))}
-        roles |= {r.en for r in row.roles if any(_has(text, f) for f in r.forms)}
+        roles |= {r.en for r in row.roles if any(_has(text, f) for f in r.forms_in(row.language))}
         sites = _sites(query)
         boards |= {b.name for b in row.boards if _board_named(b, sites)}
         jobs = jobs or any(word in JOB_WORDS for word in text.split())
@@ -365,6 +421,12 @@ def coverage(row: Row, queries: list[str]) -> dict[str, Any]:
 
 def _role_name(role: Role, french: bool) -> str:
     return role.fr if french else role.en
+
+
+def _where(row: Row) -> str:
+    if row.place is not None:
+        return f"for {row.place}"
+    return f"with no place, in {LANGUAGE_NAMES.get(row.language or '', 'any language')}"
 
 
 def left(rows: tuple[Row, ...], queries: list[str]) -> list[str]:
@@ -395,8 +457,7 @@ def left(rows: tuple[Row, ...], queries: list[str]) -> list[str]:
         if row.place is not None and not row.boards and not done["jobs"]:
             parts.append(f'a jobs query of the place ("jobs {row.place}")')
         if parts:
-            where = f"for {row.place}" if row.place else "with no place"
-            out.append(f"{where}: " + "; ".join(parts))
+            out.append(f"{_where(row)}: " + "; ".join(parts))
     return out
 
 
@@ -412,11 +473,17 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
         "rule": (
             "report_no_postings is refused until, for each place, your WebSearch queries "
             "naming the place searched every title, at least "
-            f"{ADJACENT_NEEDED} of the adjacent roles, and every board by site: query"
+            f"{ADJACENT_NEEDED} of the adjacent roles, and every board by site: query; with "
+            "no place saved, the same for each search language, the roles named in it"
         ),
         "places": [
             {
                 "place": row.place or "no place saved: any",
+                **(
+                    {"language": LANGUAGE_NAMES.get(row.language, row.language)}
+                    if row.language
+                    else {}
+                ),
                 **({"also_named": list(row.names)} if row.names else {}),
                 "titles": list(row.titles),
                 "adjacent_roles": [_role_name(r, row.french) for r in row.roles],
