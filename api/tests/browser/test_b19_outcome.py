@@ -47,13 +47,47 @@ def test_a_navigation_browserd_refuses_is_the_app_s_refusal(code, counted):
 
     entry, _, _ = run(selected(**SEARCH), Refusing(), ScriptedFinder(script))
     if counted:
-        assert answers == [(finder.NAVIGATION_REFUSED, True)]
+        # B25: a browserd without `rule` (older) is counted by its code.
+        assert answers == [(f"{finder.NAVIGATION_REFUSED} (rule {code})", True)]
         assert entry["refused"] == {"unsupported_interaction": 1}
+        assert entry["refusals"] == {code: 1}
         assert entry["error"] == "search_refused"
     else:
         assert answers == [("The page did not load.", True)]
         assert entry["refused"] == {}
+        assert "refusals" not in entry
         assert entry["error"] == "no_job_list"
+
+
+@pytest.mark.parametrize(
+    ("rule", "told"),
+    [
+        ("boundary", "boundary"),
+        ("not_a_sweep_tool", "not_a_sweep_tool"),
+        ("Bad Rule; drop", "unsupported_discovery"),  # not one short word: the code instead
+    ],
+)
+def test_browserd_s_refusal_rule_reaches_the_agent_and_the_stats(rule, told):
+    """B25 (owner, 2026-11-17): the rule browserd logs travels in its answer, is told to the
+    agent and counted per rule in the source's stats."""
+
+    class Refusing(Jungle):
+        async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+            if name == "browser_navigate" and args.get("url", "").endswith("/fr/jobs"):
+                return {"ok": False, "error": "unsupported_discovery", "rule": rule}
+            return await super().call(name, args)
+
+    answers: list = []
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        answers.append(await session.navigate("/fr/jobs"))
+        answers.append(await session.navigate("/fr/jobs"))
+        session.report_none("no_list")
+        return finder.Ran()
+
+    entry, _, _ = run(selected(**SEARCH), Refusing(), ScriptedFinder(script))
+    assert answers == [(f"{finder.NAVIGATION_REFUSED} (rule {told})", True)] * 2
+    assert entry["refusals"] == {told: 2}
 
 
 @pytest.mark.parametrize(("acted", "error"), [(True, None), (False, "nothing_reported")])

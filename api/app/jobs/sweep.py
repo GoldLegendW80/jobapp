@@ -138,6 +138,11 @@ NEW_JOBS_LISTED = 200
 
 CRASHED = "The worker stopped during this sweep. Start it again."
 NOT_PICKED = "The worker did not pick up this sweep. Start it again."
+# A sweep whose every source ended failed or not attempted (browser B25, owner 2026-11-17: a
+# search run tells the truth): Failed, not Done; each source's line says its reason.
+NO_SOURCE_WORKED = "No website of this search worked. Each one says why below."
+# The outcomes of a source that count as working (`finish_source`).
+WORKING = frozenset({"complete", "no_matches", "partial"})
 TIMED_OUT = "The sweep took too long and was stopped."
 INTERRUPTED = "The sweep was interrupted (the worker restarted). Start it again."
 INTERNAL = "The sweep failed because of an internal error."
@@ -842,7 +847,17 @@ def finish_done(
             return
         sweep.stats = _stats_json(sweep, stats)
         _finish(sweep, SweepStatus.done, now)
+        if not any_source_worked(sweep.stats):
+            sweep.status, sweep.error = SweepStatus.failed, NO_SOURCE_WORKED
         db.commit()
+
+
+def any_source_worked(stats: dict[str, Any]) -> bool:
+    """Whether a finished sweep had a source that worked (browser B25): True when one of its
+    selected sources (a `source_id`) ended complete, no_matches or partial, or when it had no
+    selected source at all (an older sweep, nothing to judge it by)."""
+    selected = [s for s in stats.get("sources", []) if isinstance(s, dict) and s.get("source_id")]
+    return not selected or any(source.get("outcome") in WORKING for source in selected)
 
 
 # --- running a sweep ----------------------------------------------------------------------------

@@ -56,6 +56,7 @@ def bound(db: Session, run: Any) -> dict[str, Any]:
 
 
 PRIVATE = agent("g6_private", tools=ALL_TOOLS, private_io=True, bind=bound)
+DETAILED = agent("g6_private", tools=ALL_TOOLS, private_io=True, step_detail=True, bind=bound)
 PUBLIC = agent("g6_private", tools=ALL_TOOLS, private_io=False, bind=bound)
 
 
@@ -169,9 +170,14 @@ def play(
     return raw, browser, named, leaked
 
 
-@pytest.mark.parametrize("private", [True, False], ids=["private", "public, the control"])
+@pytest.mark.parametrize(
+    ("private", "detail"),
+    [(True, False), (True, True), (False, False)],
+    ids=["private", "private with step detail (B25)", "public, the control"],
+)
 def test_redis_is_never_told_anything_of_a_private_run(
     private: bool,
+    detail: bool,
     stage: Stage,
     streams: Streams,
     g6_tools: None,
@@ -180,7 +186,7 @@ def test_redis_is_never_told_anything_of_a_private_run(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    found = PRIVATE if private else PUBLIC
+    found = (DETAILED if detail else PRIVATE) if private else PUBLIC
     monkeypatch.setitem(definitions.AGENTS, found.name, found)  # the worker and the api know it
     streams.add(
         "g6_private",
@@ -212,8 +218,17 @@ def test_redis_is_never_told_anything_of_a_private_run(
         # Not a word of the document in any command Redis received, whoever sent it.
         assert leaked.commands == []
         assert MARKER not in everything_in_redis(redis_url)
-        # The stream carries what is stored: names and sizes, and the model's own words.
-        assert set(steps["tool_call"]) == {"id", "name", "input_size"}
+        # The stream carries what is stored: names and sizes, a step detail agent's preview of
+        # the call (lengths, never typed text), and the model's own words.
+        assert set(steps["tool_call"]) == {"id", "name", "input_size"} | (
+            {"preview"} if detail else set()
+        )
+        if detail:
+            # The preview is stored with the run and stays out of Redis, like everything else.
+            preview = json.dumps(steps["tool_call"]["preview"])
+            assert MARKER not in preview
+            assert preview not in everything_in_redis(redis_url)
+            assert not any(preview in command for command in named.commands)
         assert set(steps["tool_result"]) == {"id", "is_error", "size", "blocks"}
         assert browser.texts() == [SPOKEN, f"Stored the item about {MARKER}."]
         row = run_row(stage.factory, run_id)
