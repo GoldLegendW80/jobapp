@@ -79,7 +79,7 @@ PLACES_MAX = 10  # places planned, the first ones
 ADJACENT_MAX = 6  # roles next to the profile the plan lists
 ADJACENT_NEEDED = 3  # of which a place needs at least this many searched
 QUERIES_MAX = 1000  # queries counted, the first ones
-LEFT_MAX = 1500  # characters of the refusal's list of what is left
+LEFT_MAX = 2500  # characters of the refusal's list of what is left
 
 
 @dataclass(frozen=True)
@@ -327,9 +327,15 @@ def place_names(place: str) -> tuple[str, ...]:
 
 
 def main_town(place: str) -> str:
-    """The main town of a saved place (J25: the first of TOWNS), "" when TOWNS has none."""
-    towns = TOWNS.get(linkedin_places.linkedin_name(place), ())
-    return towns[0][0] if towns else ""
+    """The main town of a saved place (J25: the first of TOWNS; a town of TOWNS the place
+    names itself, "Saint-Pierre, La Réunion"), "" when TOWNS has none for it."""
+    name = linkedin_places.linkedin_name(place)
+    if name not in TOWNS:
+        name = linkedin_places.linkedin_name(place.split(",")[-1].strip())
+    towns = TOWNS.get(name, ())
+    folded = words(place)
+    own = [town for town, _ in towns if _has(folded, words(town))]
+    return own[0] if own else towns[0][0] if towns else ""
 
 
 def shared_towns(place: str) -> tuple[str, ...]:

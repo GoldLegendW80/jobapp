@@ -1615,7 +1615,7 @@ def _store_finding(
             "unknown": [
                 name
                 for name, value in (
-                    ("company", finding.company),
+                    ("company", finding.company or cleaned.company),
                     ("published_on", finding.published_on),
                     ("location", finding.location),
                 )

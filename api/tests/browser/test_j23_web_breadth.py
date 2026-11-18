@@ -461,12 +461,19 @@ def test_folded_duplicates_still_fill_titles_max_with_distinct_titles() -> None:
     "titles", [(TITLE,), (TITLE, "Ingenieur IA", "data scientist"), ("++",), ()]
 )
 def test_the_covering_query_searches_the_whole_plan(places, titles) -> None:
-    """Round 2 of #814: the fake web stream's one query (`{web_plan_query}`) covers any plan."""
+    """Round 2 of #814: the fake web stream's first query (`{web_plan_query}`) covers the
+    families any query may search at once; J25: its other queries (`{web_plan_queries}`) are
+    each place's town and AI boards queries, and the whole plan is searched."""
     rows = plan(*places, titles=titles)
-    query = web_plan.covering_query(rows)
-    assert " OR " in query
-    assert web_plan.left(rows, [query]) == []
+    queries = web_plan.covering_queries(rows)
+    assert queries[0] == web_plan.covering_query(rows)
+    assert " OR " in queries[0]
+    left = web_plan.left(rows, queries[:1])
+    assert all("the saved titles" not in line and "national job boards" not in line
+               for line in left)  # fmt: skip
+    assert web_plan.left(rows, queries) == []
     assert web_plan.covering_query(()) == ""
+    assert web_plan.covering_queries(()) == []
 
 
 def test_a_place_without_boards_needs_a_jobs_query() -> None:
@@ -568,6 +575,10 @@ COVERING = (
     "site:apec.fr développeur La Réunion",
     "site:hellowork.com intelligence artificielle La Réunion",
 )
+# Jobs J25 (#817): the query of its own aimed at AI and tech boards, the main town named, that
+# Claude Code found the Saint-Denis AI and data CDIs with (COVERING[0] names the town already).
+AI_BOARDS = "offre emploi data scientist Saint-Denis La Réunion"
+PLAN = (*COVERING, AI_BOARDS)
 
 
 def test_production_give_up_is_refused_with_what_is_left_then_accepted() -> None:
@@ -587,6 +598,11 @@ def test_production_give_up_is_refused_with_what_is_left_then_accepted() -> None
     assert "site:hellowork.com" in said
     assert "site:apec.fr" not in said
     search(session, COVERING[-1])
+    said, error = session.report_none("no_match")
+    assert error
+    assert "aimed at AI and tech job boards" in said
+    assert "naming the main town" not in said  # COVERING[0] names Saint-Denis La Réunion
+    search(session, AI_BOARDS)
     assert session.report_none("no_match") == (
         "Noted. Report any posting you opened, then stop.",
         False,
@@ -601,19 +617,19 @@ def test_a_folded_duplicate_title_is_accepted_after_one_query() -> None:
     said, error = session.report_none("no_match")
     assert error
     assert "saved titles" not in said  # only the roles and boards are left
-    search(session, *COVERING)
+    search(session, *PLAN)
     assert session.report_none("no_match")[1] is False
 
 
 def test_every_place_needs_its_own_searches() -> None:
     session = web_session(places=("La Réunion", "Tahiti"))
-    search(session, *COVERING)
+    search(session, *PLAN)
     said, error = session.report_none("no_match")
     assert error
     assert "for Tahiti:" in said
     assert "for La Réunion" not in said
     search(session, *(q.replace("La Réunion", "Tahiti").replace("974", "Papeete")
-                      for q in COVERING))  # fmt: skip
+                      .replace("Saint-Denis", "Papeete") for q in PLAN))  # fmt: skip
     assert session.report_none("no_match")[1] is False
 
 
@@ -656,18 +672,18 @@ def test_the_stuffed_query_leaves_the_plan_mostly_unsearched() -> None:
 
 def test_a_web_search_answered_with_an_error_counts_for_nothing() -> None:
     session = web_session()
-    for query in COVERING:  # errors that alternate with answers never lift the plan
+    for query in PLAN:  # errors that alternate with answers never lift the plan
         search(session, query, failed=True)
         search(session, "ingénieur IA CDI")
-    assert session.web_queries == ["ingénieur IA CDI"] * len(COVERING)
+    assert session.web_queries == ["ingénieur IA CDI"] * len(PLAN)
     assert session.report_none("no_match")[1] is True
     # Not yet answered: not counted (the answer may be an error).
-    for n, query in enumerate(COVERING):
+    for n, query in enumerate(PLAN):
         assert session.searched_web({"query": query}, f"call{n}") is None
     assert session.report_none("no_match")[1] is True
-    for n in range(len(COVERING)):
+    for n in range(len(PLAN)):
         session.web_search_answered(False, f"call{n}")
-    counted = ["ingénieur IA CDI"] * len(COVERING) + list(COVERING)
+    counted = ["ingénieur IA CDI"] * len(PLAN) + list(PLAN)
     assert session.web_queries == counted
     assert session.report_none("no_match")[1] is False
     session.web_search_answered(False, "call0")  # an answer told twice counts once
@@ -701,7 +717,7 @@ def test_web_search_failing_before_the_plan_is_searched_says_so() -> None:
     assert interactive.outcome(session) == "web_search_failed"
     # The plan searched first, then the errors: searched, nothing new.
     session = web_session()
-    search(session, *COVERING)
+    search(session, *PLAN)
     search(session, "data La Réunion", "data Tahiti", failed=True)
     assert session.report_none("no_match")[1] is False
     assert interactive.outcome(session) is None
@@ -718,7 +734,7 @@ def test_web_search_failing_before_the_plan_is_searched_says_so() -> None:
 def test_routes_left_names_the_web_search_until_the_plan_is_searched() -> None:
     session = web_session()
     assert session.routes_left("no_match") == ["web_search"]
-    search(session, *COVERING)
+    search(session, *PLAN)
     assert session.routes_left("no_match") == []
 
 

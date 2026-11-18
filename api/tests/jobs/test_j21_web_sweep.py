@@ -193,7 +193,7 @@ def test_the_la_reunion_run_stores_the_niche_board_and_france_travail_postings(
     stored = {job.url: job for job in jobs_of(factory, alice)}
     assert set(stored) == {NICHE, TRAVAIL}
     assert stored[NICHE].company == "Example Lagoon Analytics"
-    assert stored[TRAVAIL].title == "Ingenieur IA (H/F)"
+    assert stored[TRAVAIL].title == "Ingenieur IA"  # J25: the marker taken out
     # No start page was opened: the first browserd call is a fetch.
     assert [name for name, _ in tools.calls] == ["web_fetch", "web_fetch"]
     assert finder.WEB_START not in {url for _, url in tools.calls}
