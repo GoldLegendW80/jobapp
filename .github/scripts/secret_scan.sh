@@ -13,8 +13,9 @@
 # on a branch and merged as CI checks a pull request out: "0 commits scanned", passed.
 #
 # This script gives the same program, at the version .pre-commit-config.yaml pins, with the same
-# rules (the repository's .gitleaks.toml and .gitleaksignore when it has them; today it has
-# neither, so the default rules and no allowlist), the commits to read:
+# rules (the repository's .gitleaks.toml and .gitleaksignore when it has them; today it has a
+# .gitleaksignore of hand checked false alarms and no .gitleaks.toml, so the default rules), the
+# commits to read:
 #
 #   a pull request    the commits of the pull request (what the head has and the base has not:
 #                     HEAD^1..HEAD^2 of the merge commit CI checks out), then the pull request
