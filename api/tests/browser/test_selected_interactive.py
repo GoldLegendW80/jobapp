@@ -47,6 +47,7 @@ def selected(url=BASE, **search):
             "title_include": {"terms": ["robot"]},
             "remote_stance": "remote",
             "interactive_instructions": CANARY,
+            "web_search": False,  # J21: these tests name their own sources
             "interactive_sites": [
                 {"platform": "custom", "url": url, "enabled": True, "mode": "llm_browser"}
             ],

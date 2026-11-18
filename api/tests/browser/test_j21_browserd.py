@@ -32,7 +32,11 @@ POSTINGS = (
 
 
 def test_the_web_scope_parses_and_any_public_page_is_open_to_it() -> None:
-    scope = discovery.Scope.parse(finder.InteractiveScope(start=finder.WEB_START).tool_scope())
+    scope = discovery.Scope.parse(
+        finder.InteractiveScope(
+            start=finder.WEB_START, titles=("Data scientist",), web=True
+        ).tool_scope()
+    )
     assert scope == discovery.Scope(finder.WEB_START)
     hosts = tuple(finder.lease_hosts(finder.WEB_START))
     assert hosts == ("anywhere.invalid",)

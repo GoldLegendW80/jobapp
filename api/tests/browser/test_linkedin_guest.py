@@ -124,6 +124,7 @@ POSTING = """<section class="top-card-layout container-lined overflow-hidden">
 def section(**fields: Any) -> SearchSection:
     data: dict[str, Any] = {
         "title_include": {"terms": ["GenAI Engineer"]},
+        "web_search": False,  # J21: these tests name their own sources
         "interactive_sites": [LINKEDIN],
     }
     data.update(fields)

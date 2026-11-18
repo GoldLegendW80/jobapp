@@ -32,6 +32,7 @@ def search_with(urls: list[str]) -> SearchSection:
     return SearchSection.model_validate(
         {
             "title_include": {"terms": ["robot"]},
+            "web_search": False,  # J21: these tests name their own sources
             "interactive_sites": [
                 {"platform": "custom", "url": url, "enabled": True, "mode": "llm_browser"}
                 for url in urls

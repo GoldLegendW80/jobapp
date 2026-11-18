@@ -143,6 +143,7 @@ def saved(start: str = VIE, **search: Any) -> SearchSection:
                 ]
             },
             "contract_types": ["CDI", "CDD"],
+            "web_search": False,  # J21: these tests name their own sources
             "interactive_sites": [
                 {"platform": "custom", "url": start, "enabled": True, "mode": "llm_browser"}
             ],

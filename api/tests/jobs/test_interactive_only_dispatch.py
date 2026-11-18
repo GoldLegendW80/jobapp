@@ -50,6 +50,7 @@ def test_permission_rows_never_add_legacy_frozen_modes(kind: str, selection: str
     search = SearchSection.model_validate(
         {
             "browser_sources": [entry(kind)],
+            "web_search": False,  # J21: these tests name their own sources
             "interactive_sites": []
             if selection == "removed"
             else [selected(kind, selection == "enabled")],

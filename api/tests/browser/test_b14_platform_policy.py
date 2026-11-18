@@ -300,6 +300,7 @@ def test_two_linkedin_addresses_of_one_sweep_share_one_pace_with_no_pause(second
     tools = Paged(now)
     sites = [("linkedin", "https://www.linkedin.com/jobs/"), ("custom", second)]
     search = selected(
+        web_search=False,  # J21: these tests name their own sources
         interactive_sites=[
             {"platform": label, "url": url, "enabled": True, "mode": "llm_browser"}
             for label, url in sites
