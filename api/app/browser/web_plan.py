@@ -618,6 +618,12 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
             "side by side are ANDed: a query without OR counts for one title, one role, one "
             "board and one place at most"
         ),
+        # Jobs J24 (#815): what a row's searches report, beside what they must search.
+        "report": (
+            "every open posting of a place whose role is one of its titles or adjacent roles, "
+            "or fits the profile's skills, whatever its title wording, its seniority or the "
+            "years of experience it asks: the app scores its fit and gaps"
+        ),
         "places": [
             {
                 "place": row.place or "no place saved: any",
