@@ -54,6 +54,8 @@ export const sweepSourceSchema = z.object({
   // all): the first ones that fit were searched. Absent from an older api.
   titles_left_out: z.number().int().nonnegative().optional(),
   places_left_out: z.number().int().nonnegative().optional(),
+  // browser B25: the app's refusals of the website's agent by rule; absent from an older api.
+  refusals: z.record(z.string(), z.number().int().nonnegative()).optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;

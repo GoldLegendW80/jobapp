@@ -98,10 +98,24 @@ function sourceStatus(source: SweepSource): string {
   if (source.error === "not_started") return `${SOURCE_PROBLEMS.not_started}`;
   const searches = searchesSentence(source);
   const found = `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
-  const counts = [searches, leftOutSentence(source), found]
+  const counts = [
+    searches,
+    leftOutSentence(source),
+    found,
+    refusalsSentence(source),
+  ]
     .filter((part) => part !== "")
     .join(" ");
   return source.error ? `${counts} ${problemOf(source, source.error)}` : counts;
+}
+
+/** What the app refused of the website's agent, by rule (browser B25), or "". */
+function refusalsSentence(source: SweepSource): string {
+  const rules = Object.entries(source.refusals ?? {}).filter(([, n]) => n > 0);
+  if (!rules.length) return "";
+  const total = rules.reduce((sum, [, n]) => sum + n, 0);
+  const listed = rules.map(([rule, n]) => `${rule} ${String(n)}`).join(", ");
+  return `The app refused ${plural(total, "action")} (by rule: ${listed}).`;
 }
 
 /** Why a job site stopped early, in words: LinkedIn's public job search says its own time cap

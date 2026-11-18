@@ -140,6 +140,10 @@ class AgentDefinition:
     # nothing of it is live, whatever `live_text` and AGENTS_LIVE_TEXT say; and its failures are
     # logged by type, without a message or a traceback.
     private_io: bool = False
+    # A private run whose app tools answer in words their code wrote (browser B25): its events
+    # also hold a short preview of each call (`preview_args`) and the text of a tool error.
+    # Off for every agent whose tools read documents or answer with what they were given.
+    step_detail: bool = False
     # Called by the runner once the run's final status is committed (`FinalRun`): done,
     # cancelled, and every failure the runner records itself. Not called for a run ended by
     # someone else (cancelled while queued, failed by a reaper or at the enqueue), nor when

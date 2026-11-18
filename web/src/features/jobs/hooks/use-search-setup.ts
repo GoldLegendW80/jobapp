@@ -33,6 +33,13 @@ const MORE_FIELDS = new Set([
   "compensation",
 ]);
 
+/** Said beside Save while the list is empty: the api refuses a search with no website and no board (a
+ * save still goes through, it is how the last website is taken out). */
+export const EMPTY_LIST_REASON =
+  "Add a website or a company job board to your list to start a search.";
+
+export type SearchSetupState = ReturnType<typeof useSearchSetup>;
+
 export function useSearchSetup({
   profile,
   runner,
@@ -88,6 +95,12 @@ export function useSearchSetup({
     setRevision(current.revision);
     setReviewed(structuredClone(current.sections.search));
   };
+
+  const { sites, boards, feeds } = sources.draft;
+  const emptyReason =
+    sites.length === 0 && (boards?.length ?? 0) === 0 && feeds.length === 0
+      ? EMPTY_LIST_REASON
+      : null;
 
   const submit = async (values: SearchForm) => {
     if (busy.current || conflict) return;
@@ -146,6 +159,7 @@ export function useSearchSetup({
     setMore,
     conflict,
     error,
+    emptyReason,
     locked: saving || sources.saving,
     onSubmit,
   };

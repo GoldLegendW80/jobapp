@@ -34,6 +34,7 @@ on:
           - apply-pause
           - apply-resume
           - egress-host-check
+          - logs-browser
 
 permissions:
   contents: read

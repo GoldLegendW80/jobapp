@@ -319,6 +319,19 @@ LINE_CODES = APP_REFUSED | {"credential", "card_field"}
 # (`redirect_refused`) is a page that did not load, counted as neither.
 FETCH_ADDRESS_REFUSED = frozenset({"bad_url", "refused_scheme", "private_address", "line"})
 NAVIGATION_REFUSED = "Refused: the app does not open this address. Go on another way."
+# The rule browserd names in a refusal (browser B25, `rule`: no_marker, not_a_sweep_tool,
+# boundary, host_not_allowed, a line code...): one short word, else the refusal's code.
+RULE = re.compile(r"[a-z][a-z0-9_]{0,39}")
+
+
+def refusal_rule(result: dict[str, Any]) -> str:
+    """The rule of a browserd refusal as the agent is told it and the stats count it."""
+    for value in (result.get("rule"), result.get("error")):
+        if isinstance(value, str) and RULE.fullmatch(value):
+            return value
+    return "refused"
+
+
 # What browserd answers when an action could not finish on the page (routes.call_tool's
 # `page_error`: Playwright gave up, often because a cookie banner covers the element;
 # `element_covered`: browserd saw another element over it; `stale_ref`: the element is gone):
@@ -1404,6 +1417,8 @@ class FinderSession:
     user_id: str
     found: list[Found] = field(default_factory=list)  # kept by `_keep`, without the commits
     refused: Counter[str] = field(default_factory=Counter)
+    # browserd's refusals by their rule (browser B25): the source's `refusals` in the sweep.
+    refusals: Counter[str] = field(default_factory=Counter)
     stopped: str = ""  # a sources.ERRORS code that ended the pages
     seen: set[str] = field(default_factory=set)  # canonical addresses linked from a page read
     interactions: Counter[str] = field(default_factory=Counter)
@@ -1565,8 +1580,10 @@ class FinderSession:
                 return self._stop(GUARD_FAILED)  # as in `interact`: no page to recover on
             if exc.code == "page_failed" and result.get("error") in APP_REFUSED:
                 self.refused["unsupported_interaction"] += 1
+                rule = refusal_rule(result)
+                self.refusals[rule] += 1
                 self._route(url, typed_address=True)  # a route met by a block was tried
-                return NAVIGATION_REFUSED, True
+                return f"{NAVIGATION_REFUSED} (rule {rule})", True
             if exc.code == "page_failed":
                 return "The page did not load.", True
             return self._stop(exc.code)
@@ -1813,9 +1830,13 @@ class FinderSession:
                 return ACTION_FAILED, True  # the page's, not a refusal (2026-10-28)
             if exc.code == "page_failed":
                 code = result.get("error", "page_failed")
+                message = result.get("message")
                 if code in LINE_CODES:  # the line (B20): the app's refusal, counted apart
                     self.refused["unsupported_interaction"] += 1
-                message = result.get("message")
+                    rule = refusal_rule(result)
+                    self.refusals[rule] += 1
+                    if isinstance(message, str):
+                        message = f"{message} (rule {rule})"
                 answer = {"error": code, "message": message if isinstance(message, str) else ""}
                 return json.dumps(answer)[:2000], True
             return self._stop(exc.code)
@@ -2505,6 +2526,7 @@ INTERACTIVE_FINDER = definitions.register(
         internal=True,
         live_text=False,
         private_io=True,
+        step_detail=True,
     )
 )
 

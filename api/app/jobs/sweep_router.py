@@ -24,6 +24,7 @@ Another user's sweep answers 404, like one that does not exist. Mounted before t
 so /api/jobs/sweeps is never read as a job id.
 """
 
+import re
 import uuid
 from datetime import datetime
 from typing import Annotated, Any
@@ -82,6 +83,10 @@ def queue_of(request: Request) -> queues.Queue:
     return found
 
 
+# A refusal rule of a website's source as the api shows it (browser B25, finder.RULE).
+RULE_WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
+
+
 def sweep_out(row: Sweep) -> SweepOut:
     stats = row.stats or {}
     failures = []
@@ -118,6 +123,21 @@ def sweep_out(row: Sweep) -> SweepOut:
             and isinstance(one.get("place"), str | None)
         ]
 
+    def refusals(value: Any) -> dict[str, int]:
+        """browserd's refusals of a website by rule (browser B25), read defensively: a short
+        lowercase word and a count each, at most 20."""
+        if not isinstance(value, dict):
+            return {}
+        return {
+            rule: number
+            for rule, number in list(value.items())[:20]
+            if isinstance(rule, str)
+            and RULE_WORD.fullmatch(rule)
+            and isinstance(number, int)
+            and not isinstance(number, bool)
+            and number > 0
+        }
+
     sources = [
         SourceOut(
             kind=str(item.get("kind", "")),
@@ -131,6 +151,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             items_skipped=max(0, count(item, "items_skipped")),
             searches=max(0, count(item, "searches")),
             searched=searched(item.get("searched")),
+            refusals=refusals(item.get("refusals")),
             planned=max(0, count(item, "planned")),
             titles_left_out=max(0, count(item, "titles_left_out")),
             places_left_out=max(0, count(item, "places_left_out")),

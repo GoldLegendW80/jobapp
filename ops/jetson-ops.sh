@@ -16,6 +16,10 @@
 #   apply-resume       ... resume
 #   egress-host-check  ops/browser-egress.sh host-check: the browser's host firewall as installed
 #                      by the owner (sudo, by hand, once) is live and exact
+#   logs-browser       counts over the last LOG_LINES (2000) lines of the browser service's log
+#                      (browser B25, owner rule of 2026-10-15, figures only): per refusal rule
+#                      (`rule=<name>`) and per level (error, warning) how many lines and the
+#                      timestamp of the last one; never a log line, an address or a text
 #
 # Output: the figures only, on one line `JOBAPP-OPS action=<action> ... result=ok|fail` (status
 # prints its JOBAPP-VERIFY line first). What the scripts print themselves stays out of the log:
@@ -29,7 +33,7 @@ set -uo pipefail
 
 PROG="ops/jetson-ops.sh"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-ACTIONS="status backup backups apply-status apply-pause apply-resume egress-host-check"
+ACTIONS="status backup backups apply-status apply-pause apply-resume egress-host-check logs-browser"
 COMPOSE="${COMPOSE:-docker compose -f compose.yml --profile tunnel}"
 export COMPOSE
 
@@ -66,6 +70,8 @@ finish() {
 }
 # word <text>: one token of the line: letters, digits and . _ : - only, else `-`.
 word() { if [[ "$1" =~ ^[A-Za-z0-9._:-]+$ ]]; then printf '%s' "$1"; else printf -- '-'; fi; }
+# stamp: the first ISO timestamp of the line on stdin (docker compose logs --timestamps), else `-`.
+stamp() { grep -oE -m1 '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z' | head -n 1 | grep . || printf -- '-'; }
 # count <regex>: lines of what the script printed that match, counted, never shown.
 count() { grep -cE "$1" "$TMP" || true; }
 
@@ -105,6 +111,24 @@ apply-status | apply-pause | apply-resume)
     finish ok "apply=$state"
   fi
   finish fail "apply=$(word "${state:--}") exit=$status"
+  ;;
+logs-browser)
+  status=0
+  # shellcheck disable=SC2086 # COMPOSE is a command line
+  $COMPOSE --profile browser logs --no-color --timestamps --tail "${LOG_LINES:-2000}" browser </dev/null >"$TMP" 2>/dev/null || status=$?
+  ((status == 0)) || finish fail "exit=$status"
+  figures="lines=$(grep -c . "$TMP" || true)"
+  for level in error warning; do
+    last="$(grep -iE "(^|[^a-z])$level([^a-z]|\$)" "$TMP" | tail -n 1 | stamp)"
+    figures+=" ${level}s=$(grep -ciE "(^|[^a-z])$level([^a-z]|\$)" "$TMP" || true) last_$level=$last"
+  done
+  # A rule is named by letters and underscores only, at most 20 of them; the rest count as `other`.
+  rules="$(grep -oE 'rule=[a-z_]{1,40}' "$TMP" | sed 's/^rule=//' | sort -u | head -n 20)"
+  for rule in $rules; do
+    last="$(grep -E "rule=$rule([^a-z_]|\$)" "$TMP" | tail -n 1 | stamp)"
+    figures+=" rule_${rule}=$(count "rule=$rule([^a-z_]|\$)") last_rule_${rule}=$last"
+  done
+  finish ok "$figures"
   ;;
 egress-host-check)
   [[ -f ops/browser-egress.sh ]] || finish fail reason=no-egress-script

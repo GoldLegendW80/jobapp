@@ -1,0 +1,9 @@
+# False alarms of the secret scan (ops/secret-scan), one gitleaks fingerprint per line.
+# Each was read by hand before it was listed here; none is a real secret.
+# web/src/features/jobs/use-sources.ts:128 is a TypeScript type annotation of the LinkedIn search mode.
+46655e30d1291ca410c3ad27eec588c72b4b6ca0:web/src/features/jobs/use-sources.ts:linkedin-client-id:128
+# test_b19_guards.py: an invented base64 key of a fake Algolia request (it holds the word "SaVe").
+d462ed42dc540b41415d5722768b2c2cecb5c974:api/tests/browser/test_b19_guards.py:generic-api-key:528
+dc7eee30f7ca7ffc7d6eca62682aadda353767a3:api/tests/browser/test_b19_guards.py:generic-api-key:522
+# tests/browser_pages/server.py: an invented hex key of the fake job site.
+436bb3ef197a3ab98b45d4a44e500392a818c097:tests/browser_pages/server.py:generic-api-key:92

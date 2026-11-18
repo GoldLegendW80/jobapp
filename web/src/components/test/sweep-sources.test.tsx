@@ -132,3 +132,26 @@ it("keeps LinkedIn's public job search among the job sites beside boards and fee
     "Arbeitnow",
   );
 });
+
+// browser B25: the app's refusals of a website's agent, counted by rule, in the source's line.
+it("says what the app refused of a website's agent, by rule", () => {
+  render(
+    <SweepSources
+      sources={[
+        source({
+          mode: "llm_browser",
+          phase: "done",
+          outcome: "failed",
+          reason: "search_refused",
+          error: "search_refused",
+          refusals: { host_not_allowed: 2, boundary: 1 },
+        }),
+      ]}
+    />,
+  );
+  const item = screen.getByRole("listitem");
+  expect(item).toHaveTextContent(
+    "The app refused 3 actions (by rule: host_not_allowed 2, boundary 1).",
+  );
+  expect(item.textContent).not.toMatch(/[–—]| - /);
+});
