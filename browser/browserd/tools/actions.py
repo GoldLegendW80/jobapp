@@ -53,7 +53,7 @@ from urllib.parse import urlsplit
 
 from browserd import detect, pages
 from browserd.config import NAVIGATION_S
-from browserd.tools import ask_person, discovery, line, pacing, policy, request_signin
+from browserd.tools import ask_person, discovery, fetch, line, pacing, policy, request_signin
 
 log = logging.getLogger("browserd")
 
@@ -1459,4 +1459,5 @@ TOOLS: dict[str, Tool] = {
     "browser_scroll": scroll,
     "browser_evaluate": evaluate,
     "browser_ask_person": ask_person.run,  # browserd/tools/ask_person.py
+    "web_fetch": fetch.run,  # B28: a discovery's GET of a public page
 }

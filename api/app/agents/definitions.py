@@ -98,6 +98,9 @@ Bind = Callable[["Session", "AgentRun"], Mapping[str, Any] | None]
 OnFinal = Callable[[FinalRun], Awaitable[None]]
 
 
+WebSearchHook = Callable[[uuid.UUID, dict[str, Any]], str | None]
+
+
 @dataclass(frozen=True)
 class AgentDefinition:
     name: str
@@ -151,6 +154,11 @@ class AgentDefinition:
     # Another model for runs on a given kind of credential (keys are CredentialKind values);
     # `model` for every kind not named.
     model_by_credential: Mapping[str, str] | None = field(default=None, hash=False)
+    # Claude Code's built in web search for this agent (browser B28; sdk_options.WEB_SEARCH):
+    # asked by the runner's gate before each search with the run's id and the search's input,
+    # it answers None to let it run or the refusal the model reads. None: no web search (every
+    # agent but the website search). The gate also refuses past sdk_options.WEB_SEARCHES_MAX.
+    web_search: WebSearchHook | None = field(default=None, hash=False, compare=False)
 
     def __post_init__(self) -> None:
         kinds = {kind.value for kind in CredentialKind}
