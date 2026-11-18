@@ -962,6 +962,9 @@ class _State:
     # B28: tells the definition that WebSearch is not offered after all, when Claude Code's
     # first message (`init`) does not list it; None once told, or when it was never offered.
     web_search_unlisted: Callable[[], None] | None = None
+    # Jobs J23: tells the definition whether each WebSearch answer was an error; None when the
+    # run was never offered WebSearch.
+    web_search_answered: Callable[[bool], None] | None = None
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
@@ -1012,6 +1015,12 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
                     state.tool_errors += bool(block.is_error)
+                    answered = state.web_search_answered
+                    if (
+                        answered is not None
+                        and recorder.called.get(block.tool_use_id) == sdk_options.WEB_SEARCH
+                    ):
+                        answered(bool(block.is_error))
                     await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
         state.result = message
@@ -1630,6 +1639,8 @@ async def _execute(
         told(run_id, searching)
         if searching:
             state.web_search_unlisted = lambda: told(run_id, False)
+            answered = definition.web_search_answered
+            state.web_search_answered = lambda failed: answered(run_id, failed)
         options = build_options(
             definition,
             tools,

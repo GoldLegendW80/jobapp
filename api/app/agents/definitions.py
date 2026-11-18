@@ -177,6 +177,10 @@ class AgentDefinition:
         kind in sdk_options.WEB_SEARCH_KINDS), and again, False, when Claude Code's first
         message does not list the tool. Nothing by default; the website search records it."""
 
+    def web_search_answered(self, run_id: uuid.UUID, failed: bool) -> None:
+        """Told by the runner after each WebSearch answer of run `run_id`, whether it was an
+        error (jobs J23). Nothing by default; the web source counts the errors in a row."""
+
     def __post_init__(self) -> None:
         kinds = {kind.value for kind in CredentialKind}
         unknown = sorted(str(key) for key in self.model_by_credential or {} if key not in kinds)

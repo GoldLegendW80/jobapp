@@ -1564,6 +1564,15 @@ def _store_finding(
             "source_id": source_id,
             "detail_read_at": finding.detail_read_at,
             "evidence": dict(finding.evidence),
+            # Jobs J23: how the posting is dated, for the person: an exact date, the page's
+            # own rough words ("il y a un mois", in evidence `date_shown`), or no date at all.
+            "date": (
+                "exact"
+                if finding.published_on
+                else "approximate"
+                if finding.evidence.get("date_shown")
+                else "unknown"
+            ),
             "unknown": [
                 name
                 for name, value in (

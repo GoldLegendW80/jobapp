@@ -206,6 +206,10 @@ class FakeBackend:
             raise ValueError(f'a stream\'s "gate" is "all" or "offered", not {asked!r}')
         self._gate_all = asked == "all"
         self._web_results = script.get("web_search") or []
+        # Jobs J23: a stream's top level `"web_search_error"` answers every search with that
+        # error instead (Claude Code's WebSearch failing).
+        error = script.get("web_search_error")
+        self._web_error = error if isinstance(error, str) and error else None
         partial = bool(getattr(options, "include_partial_messages", False))
         recorded = any(_is_stream_event(step) for step in steps)
         pacing = script.get("partial") or {}
@@ -426,11 +430,12 @@ class FakeBackend:
         handler = request.tools.by_name.get(name)
         if handler is None and name == WEB_SEARCH and name in offered:
             # Browser B28: Claude Code's web search, stubbed (no search engine in a test).
+            failed = self._web_error is not None
             return {
                 "type": "tool_result",
                 "tool_use_id": call_id,
-                "content": web_search_stub(args, self._web_results),
-                "is_error": False,
+                "content": self._web_error or web_search_stub(args, self._web_results),
+                "is_error": failed,
             }
         if handler is None:
             text = f"Error: No such tool available: {name}"

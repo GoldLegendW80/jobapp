@@ -26,6 +26,8 @@ POSTING = {
         "text": {"type": "string", "maxLength": finder.TEXT_MAX},
         "company": {"type": "string", "maxLength": 300},
         "published_on": {"type": "string", "maxLength": 10},
+        # Jobs J23: the page's own words for a date it gives only roughly ("il y a un mois").
+        "date_shown": {"type": "string", "maxLength": 200},
     },
     "required": ["title", "url", "text"],
     "additionalProperties": False,
@@ -211,7 +213,8 @@ DESCRIPTIONS = {
     "not know. Answers when the person gave the browser back, or at once when nobody is "
     "watching.",
     "report_postings": "Report job postings whose own page you opened in this search: the "
-    "title as the page shows it, location, company and published_on when the page shows them, "
+    "title as the page shows it, location, company and published_on when the page shows them "
+    "(date_shown, the page's own words, when it gives no exact date), "
     "the address of the posting's page, and its text. The app checks each one against the "
     "pages you opened; what it keeps stays, and a refusal says what to do.",
     "report_no_postings": "Say why this website gives no posting to report: no_match (the "
