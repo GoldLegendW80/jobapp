@@ -1729,6 +1729,9 @@ class FinderSession:
             web or names_site(query[:QUERY_MAX], {self.start, self.landed})
         ):
             self.routes["web_search"] = None
+        searching = getattr(self.pages.tools, "searching", None) if web else None
+        if searching is not None:
+            searching()  # J21: the web source's lease goes back while the agent searches
         return None
 
     async def web_fetch(self, raw: object) -> tuple[str, bool]:

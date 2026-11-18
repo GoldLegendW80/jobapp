@@ -56,6 +56,7 @@ and the website ends `signin_wall` when it found nothing (`_signed_out`).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import json
 import logging
@@ -203,6 +204,12 @@ class GuardedTools:
     async def wait_for(self, **args: Any) -> dict[str, Any]:
         await self._before("browser_wait_for")
         return await self.tools.wait_for(**args)
+
+    def searching(self) -> None:
+        """The web source's agent searches the web (jobs J21): its lease may go (`WebLease`)."""
+        searching = getattr(self.tools, "searching", None)
+        if searching is not None:
+            searching()
 
 
 def _plain(terms: TermList) -> tuple[list[str], int]:
@@ -652,25 +659,9 @@ async def _website(
     # The website's hosts: its platform's family (B19, finder.lease_hosts), else its own host.
     hosts = finder.lease_hosts(scope.start)
     slots, ready = turn if turn is not None else (_Slots(), asyncio.Event())
-    freeing = 0
-    while True:
-        seen = slots.ended
-        got = await runner.leases.acquire(
-            str(plan.user_id), "sweep", automation=True, hosts=hosts, source_id=context.source_id
-        )
-        if got.lease is not None and got.token is not None:
-            break
-        held = None if got.lease is None else ""
-        await runner._give_back(str(plan.user_id), held, context.source_id)
-        if held is not None:
-            return "browser_busy"
-        if not await slots.wait_end(seen):
-            if freeing >= FREEING_TRIES or await _held_elsewhere(runner, str(plan.user_id)):
-                return "browser_busy"
-            freeing += 1
-            await runner.sleep(FREEING_POLL_S)
-        if slots.stop:
-            return "not_started"
+    got = await _take(runner, plan, context, hosts, slots)
+    if isinstance(got, str):
+        return got
     slots.took(ready)
     lease_id = got.lease.lease_id
     paced = platform_policy.platform_for(context)
@@ -698,6 +689,33 @@ async def _website(
         return await _search(runner.finder, pages, scope, str(plan.user_id), site, runner.base_url)
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
+
+
+async def _take(
+    runner: Runner, plan: Any, context: SourceContext, hosts: Any, slots: _Slots
+) -> Any:
+    """A sweep lease of the person's browser for the source of `context`, in its turn among the
+    sweep's websites (`_Slots`): the lease store's answer holding the lease, or the code that
+    ends the source (`browser_busy`, `not_started`)."""
+    freeing = 0
+    while True:
+        seen = slots.ended
+        got = await runner.leases.acquire(
+            str(plan.user_id), "sweep", automation=True, hosts=hosts, source_id=context.source_id
+        )
+        if got.lease is not None and got.token is not None:
+            return got
+        held = None if got.lease is None else ""
+        await runner._give_back(str(plan.user_id), held, context.source_id)
+        if held is not None:
+            return "browser_busy"
+        if not await slots.wait_end(seen):
+            if freeing >= FREEING_TRIES or await _held_elsewhere(runner, str(plan.user_id)):
+                return "browser_busy"
+            freeing += 1
+            await runner.sleep(FREEING_POLL_S)
+        if slots.stop:
+            return "not_started"
 
 
 async def _held_elsewhere(runner: Runner, user: str) -> bool:
@@ -948,8 +966,9 @@ async def run_web(
     stop: str | None,
 ) -> None:
     """ "Anywhere on the web" (jobs J21, owner 2026-11-18): the search of the whole web, after the
-    websites, on a lease of the person's browser (web_fetch and the pages it opens), with the
-    same criteria, profile, tools and verification as a website's search and no start page."""
+    websites, on leases of the person's browser held only around its browserd calls (web_fetch
+    and the pages it opens, `WebLease`), with the same criteria, profile, tools and
+    verification as a website's search and no start page."""
     search = getattr(plan, "search", None)
     if search is None or not sweep.has_web(search):
         return
@@ -973,7 +992,14 @@ async def run_web(
         entry["error"] = await _web(runner, plan, search, entry)
     except (BrowserError, StoreUnavailableError):
         entry["error"] = "browser_unavailable"
-    except Exception:
+    except Exception as error:
+        logger.exception(
+            "web source failed",
+            extra={
+                "sweep_id": str(getattr(plan, "sweep_id", None)),
+                "error_type": type(error).__name__,
+            },
+        )
         entry["error"] = "agent_failed"
     if commits is not None and not await commits.settle(entry["source_id"]):
         entry["error"] = entry["error"] or "store_failed"
@@ -1013,8 +1039,132 @@ async def _web(
         host="web",
         flow=getattr(plan, "flow", None),
     )
+    from app.browser import platform_policy
+
+    lease = WebLease(runner, plan, context)
+    paced = platform_policy.platform_for(context)
+    web_host = urlsplit(finder.WEB_START).hostname or ""
+    pages = Pages(
+        GuardedTools(lease, runner.interactive_policy, context),
+        math.inf,
+        sleep=runner.sleep,
+        rng=runner.rng,
+        monotonic=runner.monotonic,
+        host=platform_policy.pace_key(paced, web_host, runner.base_url),
+        pacer=runner.pacer,
+        # No lease maximum, no idle bound: a lease is taken again when the agent next needs one.
+        lease_until=math.inf,
+        pause=platform_policy.pause_for(paced),
+    )
     try:
-        code = await _website(runner, plan, context, scope, site, math.inf)
+        code = await _search(runner.finder, pages, scope, user, site, runner.base_url)
     finally:
-        site.write(entry)
+        try:
+            await lease.close()
+        finally:
+            site.write(entry)
     return code or ("finding_persistence_pending" if site.found else None)
+
+
+# The calls a new lease of the web source may start with (browserd's FIRST_CALLS): they open
+# a page by its address.
+WEB_FIRST_CALLS = frozenset({"browser_navigate", "web_fetch"})
+
+
+class WebLease:
+    """The browser of "Anywhere on the web" (jobs J21, round 1 of #809): held only around its
+    browserd calls. The first call that opens an address takes a sweep lease (`_take`); the
+    agent going back to its web search (`searching`, from `FinderSession.searched_web`) gives
+    it back, so browserd's idle timer never ends it while WebSearch runs, and the browser slot
+    serves an apply meanwhile. A lease browserd ended anyway (idle while the model thought, a
+    sign in that took the slot) is dropped: a call that opens an address takes a new one, any
+    other answers `no_page`, so the agent opens its page again. The tools interface of
+    browserd (`call`, `snapshot`, `wait_for`), under GuardedTools."""
+
+    def __init__(self, runner: Runner, plan: Any, context: SourceContext) -> None:
+        self.runner, self.plan, self.context = runner, plan, context
+        self.hosts = finder.lease_hosts(finder.WEB_START)
+        self.lease_id: str | None = None
+        self.tools: Any = None
+        self.taken = 0  # the leases taken in the run
+        self.calls = 0  # browserd calls in flight
+        self.lock = asyncio.Lock()
+        self.giving: asyncio.Task[None] | None = None
+
+    async def _held(self, opens: bool) -> Any:
+        """The lease's tools, a lease taken when `opens`; None with no lease and no address."""
+        async with self.lock:
+            if self.tools is None:
+                if not opens:
+                    return None
+                got = await _take(self.runner, self.plan, self.context, self.hosts, _Slots())
+                if isinstance(got, str):
+                    raise SourceError(got)
+                self.lease_id = got.lease.lease_id
+                self.tools = self.runner.tools_for(str(self.plan.user_id), self.lease_id, got.token)
+                self.taken += 1
+            self.calls += 1
+            return self.tools
+
+    async def _drop(self, tools: Any = None, idle: bool = False) -> None:
+        """Gives the lease back (`tools`: only while it is still that one's; `idle`: only while
+        no browserd call is in flight)."""
+        async with self.lock:
+            if self.tools is None or (tools is not None and tools is not self.tools):
+                return
+            if idle and self.calls:
+                return
+            lease_id, self.tools, self.lease_id = self.lease_id, None, None
+            if lease_id is not None:
+                await self.runner.leases.release(
+                    str(self.plan.user_id), lease_id, reason="sweep_done"
+                )
+
+    async def _run(self, name: str, call: Callable[[Any], Awaitable[dict[str, Any]]]) -> Any:
+        opens = name in WEB_FIRST_CALLS
+        for _ in range(2 if opens else 1):
+            tools = await self._held(opens)
+            if tools is None:
+                break
+            try:
+                return await call(tools)
+            except BrowserError as exc:
+                if exc.code != "ended":
+                    raise
+            finally:
+                self.calls -= 1
+            with contextlib.suppress(StoreUnavailableError):
+                await self._drop(tools)
+        return {"ok": False, "error": "no_page"}
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        return await self._run(name, lambda tools: tools.call(name, args))
+
+    async def snapshot(self) -> dict[str, Any]:
+        return await self._run("browser_snapshot", lambda tools: tools.snapshot())
+
+    async def wait_for(self, **args: Any) -> dict[str, Any]:
+        return await self._run("browser_wait_for", lambda tools: tools.wait_for(**args))
+
+    def searching(self) -> None:
+        """The agent runs a WebSearch: the lease goes back once no browserd call is in flight."""
+        if self.tools is None or self.calls or (self.giving and not self.giving.done()):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self.giving = loop.create_task(self._give())
+
+    async def _give(self) -> None:
+        try:
+            await self._drop(idle=True)
+        except Exception as error:
+            # The lease stays the run's; `close` gives it back at the end.
+            logger.warning("web source lease give back failed: %s", type(error).__name__)
+
+    async def close(self) -> None:
+        """The end of the run: the lease, if held, goes back."""
+        if self.giving is not None:
+            await self.giving
+        await self._drop()

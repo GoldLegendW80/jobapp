@@ -660,9 +660,10 @@ def make_gate(
     instead of letting the call through on a count that may be behind.
 
     `web_search` (browser B28): Claude Code's WebSearch is allowed only with it, at most
-    WEB_SEARCHES_MAX times a run (the definition's `web_searches_max`; None, no cap, jobs J21);
-    before each search it is asked with the search's input and answers None, or the refusal the
-    model reads (the definition's `web_search` hook)."""
+    WEB_SEARCHES_MAX times a run (the definition's `web_searches_max`; None, no cap of the app's,
+    Claude Code's own default of 200 a session holding, jobs J21); before each search it is asked
+    with the search's input and answers None, or the refusal the model reads (the definition's
+    `web_search` hook)."""
     searches = 0
 
     def refuse(reason: str) -> dict[str, Any]:

@@ -1255,6 +1255,8 @@ def _narrowed(plan: Any, ids: set[str]) -> Any:
                 for site in search.interactive_sites
                 if _source_id("api", site.url) in ids or _source_id("llm_browser", site.url) in ids
             ],
+            # Anywhere on the web (jobs J21) runs again only when it is one of the retried.
+            "web_search": has_web(search) and _source_id("web", WEB_KEY) in ids,
         }
     )
     return rest

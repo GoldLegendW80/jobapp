@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.agents import sdk_options
 from app.agents.models import AGENT_NAME_MAX, CredentialKind, RunStatus
 
 if TYPE_CHECKING:
@@ -165,9 +166,10 @@ class AgentDefinition:
     web_search: WebSearchHook | None = field(default=None, hash=False, compare=False)
     # The most WebSearch calls the gate lets one run make, Claude Code's own session cap set to
     # the same number: sdk_options.WEB_SEARCHES_MAX for the website search. None (jobs J21,
-    # owner 2026-11-18, "No cap, like the Mac"): no cap of the app's and Claude Code's default,
-    # for the search of the whole web (`web_discovery`), bounded by its Cancel and the lease.
-    web_searches_max: int | None = 20
+    # owner 2026-11-18, "No cap, like the Mac"): no cap of the app's, for the search of the whole
+    # web (`web_discovery`); Claude Code's own default bound holds there, as on the Mac
+    # (CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION unset: 200 a session), beside its Cancel.
+    web_searches_max: int | None = sdk_options.WEB_SEARCHES_MAX
 
     def web_search_offered(self, run_id: uuid.UUID, offered: bool) -> None:
         """Told by the runner whether run `run_id` offers WebSearch (browser B28): once when the

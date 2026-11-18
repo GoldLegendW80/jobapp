@@ -18,12 +18,22 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser import finder
+from app.browser.client import BrowserError
 from app.browser.sources import MemoryPacer, Runner
 from app.jobs import sweep
 from app.jobs.models import Job, JobStatus, Sweep, SweepStatus
 from tests.browser.fakes import FakeLeases, ScriptedFinder
 from tests.browser.test_b20_agent import text_of, tool
-from tests.jobs.sweep_helpers import jobs_of, new_sweep, now, read_sweep, search, set_profile
+from tests.jobs.sweep_helpers import (
+    HOST,
+    SITE,
+    jobs_of,
+    new_sweep,
+    now,
+    read_sweep,
+    search,
+    set_profile,
+)
 
 NICHE = "https://jobs.example-ai-board.test/offres/data-scientist-cdi-saint-denis-4821"
 TRAVAIL = "https://candidat.francetravail.test/offres/recherche/detail/201XLKP"
@@ -212,3 +222,255 @@ def test_a_posting_another_source_stored_is_a_duplicate_by_address_or_identity(
     with factory() as db:
         count = db.scalar(sa.select(sa.func.count()).select_from(Job).where(Job.user_id == alice))
     assert count == 2
+
+
+# --- round 1 of #809: the one retry of a failed source, and the lease while the agent searches
+
+
+class SiteAndWebTools(WebTools):
+    """browserd for a sweep with one website (its start page) and the web source's fetches."""
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if args.get("_discovery_scope", {}).get("start") == finder.WEB_START:
+            return await super().call(name, args)
+        args.pop("_discovery", None)
+        args.pop("_discovery_scope", None)
+        self.calls.append((name, args.get("url", "")))
+        if name == "browser_navigate" and args.get("url") == SITE["url"]:
+            return {"ok": True, "url": SITE["url"], "title": "Jobs", "snapshot": '- heading "Jobs"'}
+        return {"ok": False, "error": "navigation_failed"}
+
+    async def snapshot(self) -> dict[str, Any]:
+        return {"ok": True, "url": SITE["url"], "snapshot": '- heading "Jobs"'}
+
+
+def with_site(factory: sessionmaker[Session], user: uuid.UUID) -> None:
+    set_profile(
+        factory,
+        user,
+        search(
+            title_include={"terms": ["data scientist", "ingenieur ia"], "advanced_regex": False},
+            location={"terms": ["reunion", "saint-pierre"], "advanced_regex": False},
+            interactive_sites=[SITE],
+            never_apply=[],
+            web_search=True,
+        ),
+    )
+
+
+def run_script(
+    factory: sessionmaker[Session], user: uuid.UUID, script: Any, leases: Any, tools_for: Any
+) -> Sweep:
+    clock = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    hook = Runner(
+        leases,
+        tools_for,
+        sleep=sleep,
+        rng=random.Random(5),  # noqa: S311  a seeded pacing, not a secret
+        monotonic=lambda: clock[0],
+        pacer=MemoryPacer(lambda: clock[0]),
+        finder=ScriptedFinder(script),
+    )
+    sweep_id = new_sweep(factory, user)
+    asyncio.run(sweep.run_sweep(factory, sweep_id, now, browser=hook))
+    return read_sweep(factory, sweep_id)
+
+
+def site_entry(row: Sweep) -> dict[str, Any]:
+    [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
+    return entry
+
+
+def test_a_website_retried_runs_the_web_agent_once_and_keeps_its_counts(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    with_site(factory, alice)
+    runs = {"web": 0, "site": 0}
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        assert session.interactive is not None
+        if session.interactive.web:
+            runs["web"] += 1
+            return await la_reunion(session)
+        runs["site"] += 1
+        raise RuntimeError("the website's agent fails")  # agent_failed: retried once
+
+    tools = SiteAndWebTools()
+    row = run_script(factory, alice, script, FakeLeases(), lambda *_: tools)
+    assert runs == {"web": 1, "site": 2}
+    site = site_entry(row)
+    assert (site["attempt"], site["first_attempt"]["reason"]) == (2, "agent_failed")
+    web = web_entry(row)
+    assert (web["found"], web["postings"], web["error"]) == (2, 2, None)
+    assert web.get("first_attempt") is None
+    assert {job.url for job in jobs_of(factory, alice)} == {NICHE, TRAVAIL}
+
+
+def test_a_failed_web_source_is_retried_alone(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    with_site(factory, alice)
+    runs = {"web": 0, "site": 0}
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        assert session.interactive is not None
+        if not session.interactive.web:
+            runs["site"] += 1
+            # Searched: every route tried (B27, as the agent's actions mark them), its search
+            # page opened, no matching job there.
+            session.routes.update(dict.fromkeys(finder.ROUTES))
+            await tool(session, "browser_navigate", url=SITE["url"])
+            await tool(session, "report_no_postings", reason="no_match")
+            return finder.Ran()
+        runs["web"] += 1
+        if runs["web"] == 1:
+            raise RuntimeError("the web agent fails")  # agent_failed: retried once
+        return await la_reunion(session)
+
+    tools = SiteAndWebTools()
+    row = run_script(factory, alice, script, FakeLeases(), lambda *_: tools)
+    assert runs == {"web": 2, "site": 1}
+    site = site_entry(row)
+    assert (site.get("first_attempt"), site["error"]) == (None, None)
+    web = web_entry(row)
+    assert (web["attempt"], web["first_attempt"]["reason"]) == (2, "agent_failed")
+    assert (web["found"], web["postings"], web["error"]) == (2, 2, None)
+
+
+IDLE_S = 300  # browserd's BROWSER_IDLE_S
+
+
+class IdleLeases(FakeLeases):
+    """The lease store, and browserd's idle timer on the test's clock: a lease ends IDLE_S after
+    its grant or its last tool call (browserd/leases.py `expired`)."""
+
+    def __init__(self, clock: list[float]) -> None:
+        super().__init__()
+        self.clock = clock
+        self.last: dict[str, float] = {}
+        self.calls: list[tuple[str, str]] = []
+
+    async def acquire(self, user: str, purpose: str, automation: bool, **kw: Any) -> Any:
+        got = await super().acquire(user, purpose, automation, **kw)
+        if got.lease is not None:
+            self.last[got.lease.lease_id] = self.clock[0]
+        return got
+
+    def tools_for(self, user: str, lease_id: str, token: str) -> Any:
+        store = self
+
+        def live(name: str) -> None:
+            if lease_id in store.released or store.clock[0] - store.last[lease_id] >= IDLE_S:
+                raise BrowserError("ended")
+            store.last[lease_id] = store.clock[0]
+            store.calls.append((lease_id, name))
+
+        class Bound(WebTools):
+            async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+                live(name)
+                return await super().call(name, args)
+
+            async def snapshot(self) -> dict[str, Any]:
+                live("browser_snapshot")
+                return await super().snapshot()
+
+        return Bound()
+
+
+def run_idle(
+    factory: sessionmaker[Session], user: uuid.UUID, script: Any
+) -> tuple[Sweep, IdleLeases]:
+    clock = [0.0]
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    leases = IdleLeases(clock)
+    hook = Runner(
+        leases,  # type: ignore[arg-type]
+        leases.tools_for,
+        sleep=sleep,
+        rng=random.Random(5),  # noqa: S311  a seeded pacing, not a secret
+        monotonic=lambda: clock[0],
+        pacer=MemoryPacer(lambda: clock[0]),
+        finder=ScriptedFinder(lambda session: script(session, clock, leases)),
+    )
+    sweep_id = new_sweep(factory, user)
+    asyncio.run(sweep.run_sweep(factory, sweep_id, now, browser=hook))
+    return read_sweep(factory, sweep_id), leases
+
+
+async def fetch(session: finder.FinderSession, url: str) -> None:
+    answer = json.loads(text_of(await tool(session, "web_fetch", url=url)))
+    assert answer["url"] == url, answer
+
+
+async def report(session: finder.FinderSession) -> finder.Ran:
+    answer = json.loads(text_of(await tool(session, "report_postings", postings=list(POSTINGS))))
+    assert answer["kept"] == 2, answer
+    return finder.Ran()
+
+
+def test_six_minutes_of_web_search_then_a_fetch_succeeds(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """Round 1 of #809: no lease is held while the agent searches, so browserd's idle timer
+    never ends the source; the next fetch takes a lease of its own."""
+    profile(factory, alice)
+
+    async def script(
+        session: finder.FinderSession, clock: list[float], leases: IdleLeases
+    ) -> finder.Ran:
+        # Searching first: no lease is taken for WebSearch.
+        for query in QUERIES:
+            assert searched_web(session, query) is None
+            clock[0] += 90
+        assert leases.acquired == []
+        await fetch(session, TRAVAIL)
+        assert leases.held == {"lease-1"}
+        # Back to searching: the lease goes back, the browser slot is free meanwhile.
+        assert searched_web(session, QUERIES[0]) is None
+        await asyncio.sleep(0)  # the give back runs
+        assert leases.held == set()
+        clock[0] += 6 * 60
+        await fetch(session, NICHE)
+        return await report(session)
+
+    row, leases = run_idle(factory, alice, script)
+    entry = web_entry(row)
+    assert (entry["found"], entry["postings"], entry["error"]) == (2, 2, None)
+    assert {job.url for job in jobs_of(factory, alice)} == {NICHE, TRAVAIL}
+    assert [lease for lease, _ in leases.calls] == ["lease-1", "lease-2"]
+    assert leases.released == ["lease-1", "lease-2"]
+    assert leases.held == set()
+
+
+def test_a_lease_that_ended_idle_is_taken_again_by_the_next_fetch(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """The lease ended while the model thought, with no search between: the next fetch takes a
+    new lease instead of ending the source `lease_ended`; a page action answers no page."""
+    profile(factory, alice)
+
+    async def script(
+        session: finder.FinderSession, clock: list[float], leases: IdleLeases
+    ) -> finder.Ran:
+        assert searched_web(session, QUERIES[0]) is None
+        await fetch(session, TRAVAIL)
+        clock[0] += IDLE_S + 60
+        # A page action on the ended lease: no page, the lease dropped, the source goes on.
+        await tool(session, "browser_snapshot")
+        assert leases.released == ["lease-1"]
+        assert not session.stopped
+        await fetch(session, NICHE)
+        return await report(session)
+
+    row, leases = run_idle(factory, alice, script)
+    entry = web_entry(row)
+    assert (entry["found"], entry["postings"], entry["error"]) == (2, 2, None)
+    assert [lease for lease, _ in leases.calls] == ["lease-1", "lease-2"]
+    assert leases.released == ["lease-1", "lease-2"]
