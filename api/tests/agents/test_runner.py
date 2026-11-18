@@ -2,16 +2,18 @@
 limits, cancel, failures, scratch directory, credential handling, tool scoping and the gate."""
 
 import asyncio
+import json
 import logging
 import os
 import uuid
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import runner, runs
+from app.agents import definitions, fake_backend, runner, runs, sdk_options
 from app.agents.crypto import Keyring
 from app.agents.models import CredentialKind, RunStatus
 from app.config import Settings
@@ -642,3 +644,58 @@ def test_outcome_of_api_errors_and_missing_result() -> None:
     assert runner._cost(-1) is None
     assert runner._minutes(600) == "10 minutes"
     assert runner._minutes(60) == "1 minute"
+
+
+@dataclass(frozen=True)
+class ToldDefinition(definitions.AgentDefinition):
+    """ECHO with the runner's word on WebSearch recorded (browser B28, round 1 of #805)."""
+
+    told: list[bool] = field(default_factory=list, hash=False, compare=False)
+
+    def web_search_offered(self, run_id: uuid.UUID, offered: bool) -> None:
+        self.told.append(offered)
+
+
+def no_refusal(run_id: uuid.UUID, found: dict[str, Any]) -> str | None:
+    return None
+
+
+@pytest.mark.parametrize(
+    ("hook", "offered_kinds", "listed", "told"),
+    [
+        # Offered, and Claude Code lists it: the route is needed.
+        (no_refusal, None, True, [True]),
+        # Offered, but Claude Code's first message does not list it: told again, False.
+        (no_refusal, None, False, [True, False]),
+        # The credential's kind is not one WebSearch runs on (whatever was decided earlier).
+        (no_refusal, frozenset(), True, [False]),
+        # An agent without web search.
+        (None, None, True, [False]),
+    ],
+)
+def test_the_definition_is_told_whether_web_search_was_offered(
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    alice_id: uuid.UUID,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    hook: Any,
+    offered_kinds: frozenset[str] | None,
+    listed: bool,
+    told: list[bool],
+) -> None:
+    """B28, round 1 of #805: the runner tells the definition once, from the same decision that
+    offers WebSearch, and again when Claude Code does not list the tool; the website search
+    needs its `web_search` route only then (test_b28_web_search)."""
+    if offered_kinds is not None:
+        monkeypatch.setattr(sdk_options, "WEB_SEARCH_KINDS", offered_kinds)
+    stream = json.loads((fake_backend.STREAMS / "echo.json").read_text(encoding="utf-8"))
+    stream["steps"][0]["message"]["tools"] += ["WebSearch"] if listed else []
+    (tmp_path / "echo.json").write_text(json.dumps(stream), encoding="utf-8")
+    monkeypatch.setattr(fake_backend, "STREAMS", tmp_path)
+    base = {f.name: getattr(definitions.ECHO, f.name) for f in fields(definitions.ECHO)}
+    agent = ToldDefinition(**{**base, "web_search": hook})
+    rc = replace(context(settings, factory, keyring), agents={"echo": agent})
+    assert execute(rc, new_run(factory, alice_id)) is RunStatus.done
+    assert agent.told == told

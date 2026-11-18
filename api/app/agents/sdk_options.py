@@ -66,12 +66,16 @@ FORBIDDEN_TOOLS = (
 
 # Claude Code's built in web search (browser B28, owner 2026-11-17): the one built-in tool an
 # agent may get, and only an agent whose definition asks for it (`AgentDefinition.web_search`,
-# the website search's alone); its results are untrusted text, as a page's. At most
-# WEB_SEARCHES_MAX a run: the runner's gate refuses the next ones, and Claude Code's own cap is
-# set to the same number (WEB_SEARCHES_ENV). The credential kinds it runs on: an API key, and a
-# Claude subscription (the docs do not settle whether a subscription's token may search; a
-# search that fails answers the model an error and the run goes on). A kind left out of this
-# set gets no web search at all, and the prompt says the tool may be missing.
+# the website search's alone); its results reach the model from Claude Code directly (no
+# `untrusted_` key wraps them), and the prompt's Method marks them untrusted, as a page's. Two
+# bounds, both WEB_SEARCHES_MAX: the runner's gate counts WebSearch calls and refuses the 21st;
+# one call may run several searches server side (the bundled CLI asks for up to 8 per call), so
+# Claude Code's own cap, which counts those searches across the session, is set to the same
+# number (WEB_SEARCHES_ENV, given with the tool in runner.build_options and never without it):
+# a run makes at most 20 searches, whatever the number of calls. The credential kinds it runs
+# on: an API key, and a Claude subscription (the docs do not settle whether a subscription's
+# token may search; a search that fails answers the model an error and the run goes on). A kind
+# left out of this set gets no web search at all, and the prompt says the tool may be missing.
 WEB_SEARCH = "WebSearch"
 WEB_SEARCHES_MAX = 20
 WEB_SEARCHES_ENV = "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION"

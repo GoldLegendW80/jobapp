@@ -812,6 +812,9 @@ class _State:
     text_chars: int = 0
     tool_calls: int = 0
     tool_errors: int = 0
+    # B28: tells the definition that WebSearch is not offered after all, when Claude Code's
+    # first message (`init`) does not list it; None once told, or when it was never offered.
+    web_search_unlisted: Callable[[], None] | None = None
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
@@ -875,6 +878,14 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
         if message.subtype == "init":
             data = message.data
             state.model = str(data.get("model") or "") or state.model
+            listed, unlisted = data.get("tools"), state.web_search_unlisted
+            state.web_search_unlisted = None  # the first `init` only
+            if (
+                unlisted is not None
+                and isinstance(listed, list)
+                and sdk_options.WEB_SEARCH not in listed
+            ):
+                unlisted()
             await recorder.emit(
                 "init",
                 {"model": data.get("model"), "tools": list(data.get("tools") or [])},
@@ -1464,6 +1475,13 @@ async def _execute(
         # credential kind it runs on (sdk_options.WEB_SEARCH_KINDS).
         hook = definition.web_search
         searching = hook is not None and secret.kind.value in sdk_options.WEB_SEARCH_KINDS
+        # Told to the definition once, here, from this same decision (its `web_search` route is
+        # needed only when the tool was offered), and again, False, when Claude Code does not
+        # list it after all (`_handle`).
+        told = definition.web_search_offered
+        told(run_id, searching)
+        if searching:
+            state.web_search_unlisted = lambda: told(run_id, False)
         options = build_options(
             definition,
             tools,

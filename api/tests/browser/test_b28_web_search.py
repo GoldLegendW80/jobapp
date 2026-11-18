@@ -412,3 +412,100 @@ def test_the_fake_backend_stubs_web_search_and_never_offers_it_unasked():
     assert POSTING in on["content"]
     assert off["is_error"] is True
     assert "No such tool" in off["content"]
+
+
+SIGN_OUT = "https://jobs.example.test/logout"
+ALL_ROUTES = ["search_box", "search_address", "listing", "web_search"]
+
+
+@pytest.mark.parametrize("code", ["bad_url", "refused_scheme", "private_address", "line"])
+def test_a_fetch_refused_for_its_address_is_the_agents_slip(code: str):
+    """Round 1 of #805: browserd refusing the address the agent chose to fetch (a sign out
+    address, a user part, a scheme, a private host) is never the app's refusal, so it spares no
+    route: report_no_postings("app_refused") still needs all four."""
+    browser = site(**{SIGN_OUT: {"ok": False, "error": code, "message": "Refused."}})
+    seen: dict[str, Any] = {}
+
+    async def script(session):
+        session.web_search_on = True
+        seen["before"] = session.routes_left("app_refused")
+        seen["answer"] = answer_of(await tool(session, "web_fetch", url=SIGN_OUT))
+        seen["after"] = session.routes_left("app_refused")
+        seen["refused"] = dict(session.refused)
+        return finder.Ran()
+
+    run(selected(), browser, script)
+    assert seen["before"] == ALL_ROUTES
+    assert seen["after"] == ALL_ROUTES
+    assert seen["answer"]["error"] == code
+    assert seen["refused"].get("unsupported_interaction", 0) == 0
+    assert seen["refused"]["not_an_address"] == 1
+
+
+def test_browserd_refusing_the_lease_is_still_the_apps_refusal():
+    browser = site(**{POSTING: {"ok": False, "error": "unsupported_discovery"}})
+    seen: dict[str, Any] = {}
+
+    async def script(session):
+        session.web_search_on = True
+        await tool(session, "web_fetch", url=POSTING)
+        seen["after"] = session.routes_left("app_refused")
+        return finder.Ran()
+
+    run(selected(), browser, script)
+    assert seen["after"] == ["search_address", "listing"]
+
+
+def test_the_web_search_route_follows_the_runners_word_not_the_credential():
+    """Round 1 of #805: `web_search_on` is the runner's word (`web_search_offered`), never set
+    when the run is created: a session the runner said nothing about, or said False about
+    (Claude Code did not list WebSearch), needs no web search before report_no_postings."""
+    seen: dict[str, Any] = {}
+
+    async def script(session):
+        import uuid
+
+        run_id = uuid.uuid4()
+        with finder._LOCK:
+            finder._SESSIONS[run_id] = session
+        try:
+            seen["unsaid"] = session.routes_left("no_list")
+            finder.INTERACTIVE_FINDER.web_search_offered(run_id, True)
+            seen["offered"] = session.routes_left("no_list")
+            finder.INTERACTIVE_FINDER.web_search_offered(run_id, False)
+            seen["unlisted"] = session.routes_left("no_list")
+            seen["refusal"] = text_of(await tool(session, "report_no_postings", reason="no_list"))
+        finally:
+            with finder._LOCK:
+                finder._SESSIONS.pop(run_id, None)
+        finder.INTERACTIVE_FINDER.web_search_offered(run_id, True)  # a run gone: nothing
+        return finder.Ran()
+
+    run(selected(), Site({START: HOME}), script)
+    assert seen["unsaid"] == ["search_box", "search_address", "listing"]
+    assert seen["offered"] == ALL_ROUTES
+    assert seen["unlisted"] == ["search_box", "search_address", "listing"]
+    assert "a web search of this website's postings" not in seen["refusal"]
+
+
+def test_the_first_message_no_longer_says_whether_web_search_is_on():
+    """The model reads its own tool list (the prompt's Method: "when WebSearch is among your
+    tools"); the first message says nothing a decision taken before the run could get wrong."""
+    seen: dict[str, Any] = {}
+
+    async def script(session):
+        with finder._LOCK:
+            finder._SCOPES["request-key"] = session
+        try:
+            seen["first"] = json.loads(
+                finder.INTERACTIVE_FINDER.prompt({"request": "request-key"}, None)
+            )
+        finally:
+            with finder._LOCK:
+                finder._SCOPES.pop("request-key", None)
+        return finder.Ran()
+
+    run(selected(), Site({START: HOME}), script)
+    assert "web_search" not in seen["first"]["search_scope"]
+    assert "start" in seen["first"]["search_scope"]
+    assert "when WebSearch is among your tools" in finder.INTERACTIVE_PROMPT

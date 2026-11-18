@@ -53,7 +53,7 @@ import regex
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.agents import credentials, definitions, runs, sdk_options
+from app.agents import credentials, definitions, runs
 from app.agents.failures import TURN_LIMIT
 from app.agents.models import CredentialKind, RunStatus
 from app.browser import screenshot
@@ -189,7 +189,8 @@ APP_OPEN_PAUSE_S = (2.0, 4.0)
 # a listing word (LISTING_WORDS, alone or as `word-...`), or the one before it a parent of such
 # pages (LISTING_PARENTS). The start page is none. `web_search` (B28): a WebSearch whose query
 # names the website (its host, or its host's name before the public suffix); needed only when
-# the run has the web search (`FinderSession.web_search_on`) and no block or refusal spared the
+# the runner offered the run WebSearch (`FinderSession.web_search_on`, set by the definition's
+# `web_search_offered`, never from the credential at creation) and no block or refusal spared the
 # search box: a website walled everywhere still ends honestly without it.
 ROUTES = {
     "search_box": "the website's search box (type a title, then submit)",
@@ -313,6 +314,10 @@ APP_REFUSED = frozenset(
 )  # fmt: skip
 # browserd's refusals of the line (B20, browser/browserd/tools/line.py), counted as the app's.
 LINE_CODES = APP_REFUSED | {"credential", "card_field"}
+# browserd's web_fetch refusing the address the agent gave (browserd/tools/fetch.py `allowed`):
+# the agent's slip, never the app's refusal (B28, round 1 of #805). A redirect off limits
+# (`redirect_refused`) is a page that did not load, counted as neither.
+FETCH_ADDRESS_REFUSED = frozenset({"bad_url", "refused_scheme", "private_address", "line"})
 NAVIGATION_REFUSED = "Refused: the app does not open this address. Go on another way."
 # What browserd answers when an action could not finish on the page (routes.call_tool's
 # `page_error`: Playwright gave up, often because a cookie banner covers the element;
@@ -389,10 +394,10 @@ you tried the search box, a search address and the listing pages. A block you as
 about (a security check, a sign in wall) spares the search box only: try a search address and
 the listing pages first, a block on one route may not be on the others.
 6. When the website's search is walled (a security check, a sign in wall) or gives no list,
-search the web for its postings (when WebSearch is among your tools: search_scope.web_search
-says so): WebSearch with site:<the website's host> and a wanted title and place, then open the
-postings it gives with browser_navigate, or read one with web_fetch(url), which fetches a public
-page signed out without the tab and keeps it (browser_find and browser_snapshot read the rest
+search the web for its postings (when WebSearch is among your tools): WebSearch with
+site:<the website's host> and a wanted title and place, then open the postings it gives with
+browser_navigate, or read one with web_fetch(url), which fetches a public page signed out
+without the tab and keeps it (browser_find and browser_snapshot read the rest
 with source="fetch"). A page web_fetch read counts as opened for report_postings. The same job
 on another public page (the employer's careers page) may be reported with that page's address.
 The app refuses report_no_postings until you tried this too, unless a block or a refusal stopped
@@ -1442,9 +1447,10 @@ class FinderSession:
     routes: dict[str, None] = field(default_factory=dict)
     asked: int = 0
     opened_by_app: int = 0
-    # B28: whether the run has Claude Code's web search (its credential kind), the searches it
-    # made, the last page web_fetch read (kept as a page is, source "fetch"), and the fetches
-    # that met a security check or a sign in page, by host and by reason (the stats).
+    # B28: whether the run has Claude Code's web search (the runner's word, `web_search_offered`
+    # of the definition: offered and listed by Claude Code), the searches it made, the last
+    # page web_fetch read (kept as a page is, source "fetch"), and the fetches that met a
+    # security check or a sign in page, by host and by reason (the stats).
     web_search_on: bool = False
     web_searches: int = 0
     fetched: Kept | None = field(default=None, repr=False)
@@ -1740,8 +1746,13 @@ class FinderSession:
             ), True
         text, landed = result.get("snapshot"), canonical(str(result.get("url") or ""))
         if result.get("ok") is not True or not isinstance(text, str) or not landed:
-            if result.get("error") in LINE_CODES:
-                self.refused["unsupported_interaction"] += 1
+            if result.get("error") == "unsupported_discovery":
+                self.refused["unsupported_interaction"] += 1  # browserd refused the lease
+            elif result.get("error") in FETCH_ADDRESS_REFUSED:
+                # The address the agent chose to fetch (a user part, a scheme, a private host,
+                # a sign out address): its own slip, as B27's, never the app's refusal, so it
+                # spares no route of `routes_left("app_refused")` (round 1 of #805).
+                self.refused["not_an_address"] += 1
             code = result.get("error") if isinstance(result.get("error"), str) else "fetch_failed"
             return json.dumps({"error": code[:100], "message": FETCH_FAILED}), True
         self.interactions["web_fetch"] += 1
@@ -2448,6 +2459,14 @@ def web_search_hook(run_id: uuid.UUID, found: dict[str, Any]) -> str | None:
 class FinderDefinition(definitions.AgentDefinition):
     """The definition; its first message names no person, site or page."""
 
+    def web_search_offered(self, run_id: uuid.UUID, offered: bool) -> None:
+        """B28: the runner's word on WebSearch for this run (definitions.AgentDefinition), the
+        one source of `FinderSession.web_search_on`, so the `web_search` route is needed only
+        when the tool was offered (round 1 of #805)."""
+        session = session_of(run_id)
+        if session is not None:
+            session.web_search_on = offered
+
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         with _LOCK:
             session = _SCOPES.get(str(data.get("request")))
@@ -2465,8 +2484,6 @@ class FinderDefinition(definitions.AgentDefinition):
                     "untrusted_person_instructions": scope.instructions,
                     "person_profile": json.loads(scope.profile),
                     "signed_in": scope.signed_in,
-                    # B28: whether this run has WebSearch (its credential kind).
-                    "web_search": session.web_search_on,
                 }
             }
         )
@@ -2561,9 +2578,6 @@ class RuntimeFinder(FinderAgent):
             credential = credentials.get(db, user_id)
             if credential is None:
                 return "no_credential"
-            # B28: the runner offers WebSearch on these kinds only (runner._execute).
-            kind = getattr(credential.kind, "value", credential.kind)
-            session.web_search_on = kind in sdk_options.WEB_SEARCH_KINDS
             try:
                 made = runs.create_run(
                     db, user_id, INTERACTIVE_NAME, None, data, MODEL, context.clock(), session.flow
