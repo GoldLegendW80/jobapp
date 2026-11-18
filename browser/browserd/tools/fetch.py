@@ -2,11 +2,17 @@
 owner 2026-11-17: "It must work, even if i'm not logged in", #792).
 
 A discovery's agent may read a public http or https address the way Claude Code's WebFetch reads
-one on the owner's Mac: a GET from a fresh request context of Playwright (`APIRequestContext`,
-no cookie, no storage, never the person's signed in context) through browserd's egress proxy
-(public addresses only, proxy.py), bounded to FETCH_MAX bytes and FETCH_S seconds. Redirects are
-followed by this code, one hop at a time, and only to an address the search may open (any public
-http or https address, no user part, no sign out address); anything else stops the fetch.
+one on the owner's Mac: a GET from a fresh HTTP client (`client`: no cookie kept or sent, no
+storage, never the person's signed in context) through browserd's egress proxy (public addresses
+only, proxy.py; no environment setting is read, so nothing bypasses it), bounded to FETCH_MAX
+bytes and FETCH_S seconds. The body is read as a stream and counted as it comes, before and
+after decoding (`Body`): `identity` is asked for, a gzip or deflate answer is decoded part by
+part with the same bound, any other encoding is refused, so neither a stream without end nor a
+compressed bomb outgrows the bound (round 1 of #805: Playwright's request context read the
+whole body, and inflated it, before any bound was checked). Redirects are followed by this code,
+one hop at a time, and only to an address the search may open (any public http or https
+address, no user part, no sign out address); a redirect's body is never read; anything else
+stops the fetch.
 
 The page is answered as a snapshot of the same grammar as Playwright's (`as_snapshot`: headings,
 paragraphs, links with their addresses), so the api reads, keeps and verifies it as any page of
@@ -23,10 +29,15 @@ import ipaddress
 import logging
 import re
 import unicodedata
+import zlib
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any
 from urllib.parse import urljoin, urlsplit
+
+import httpx
 
 from browserd import proxy
 from browserd.config import PROXY_PORT
@@ -97,16 +108,20 @@ PRIVATE_NAMES = ("localhost", ".localhost", ".local", ".internal", ".home.arpa",
 
 
 def private_host(host: str) -> bool:
-    """An address literal that is not public unicast (proxy.address_allowed), or a local name.
-    The egress proxy refuses a private address whatever its name resolves to; this refuses the
-    obvious ones before any request (the line in two places)."""
+    """An address literal that is not public unicast (proxy.address_allowed), a local name, or a
+    single label name (`api`, `worker`, `caddy`: the Compose services, a local network's
+    machines; no public site has one). The egress proxy refuses a private address whatever its
+    name resolves to; this refuses the obvious ones before any request (the line in two
+    places)."""
     name = host.lower().rstrip(".").strip("[]")
     if name == "localhost" or name.endswith(PRIVATE_NAMES):
         return True
     try:
         ipaddress.ip_address(name)
     except ValueError:
-        # 2130706433, 0x7f.1, 127.1: a number a resolver reads as an address; fail closed.
+        if "." not in name:
+            return True
+        # 2130706433, 0x7f.1, 127.1, 0177.0.0.1: a number a resolver reads as an address.
         return all(NUMERIC.fullmatch(label) for label in name.split(".") if label)
     return not proxy.address_allowed(name)
 
@@ -120,6 +135,10 @@ def allowed(url: object) -> str | None:
     try:
         host = urlsplit(str(url)).hostname or ""
     except ValueError:
+        return "bad_url"
+    if "%" in host:
+        # A percent encoded host (`%31%32%37.0.0.1`, `localhost%2e`, an IPv6 zone): a browser
+        # decodes it (WHATWG) to a name this check never read. No public site needs one.
         return "bad_url"
     if not host or private_host(host):
         return "private_address"
@@ -279,7 +298,7 @@ def as_snapshot(url: str, body: str, content_type: str) -> Read:
     return reader.done()
 
 
-def blocked(url: str, status: int, headers: dict[str, str], body: str, read: Read) -> str:
+def blocked(url: str, status: int, headers: Mapping[str, str], body: str, read: Read) -> str:
     """Why a fetched page is no page to read: `security_check`, `signin_wall`, else "".
     Fails closed: a check's code anywhere, a check's words in the title or on a page with little
     text, or an error status with little text, is a security check. Pure and linear."""
@@ -315,6 +334,75 @@ def _charset(content_type: str) -> str:
     return found.group(1) if found else "utf-8"
 
 
+class Body:
+    """A body read as a stream, bounded as it comes (module docstring): its bytes on the wire
+    and, once decoded, its bytes again, each at most FETCH_MAX. `identity` is passed through,
+    `gzip` and `deflate` are inflated part by part (zlib's `max_length`, so a bomb never yields
+    more than the room left), any other encoding is refused."""
+
+    ENCODINGS = frozenset({"", "identity", "gzip", "x-gzip", "deflate"})
+
+    def __init__(self, encoding: str) -> None:
+        self.encoding = encoding
+        self.wire = 0
+        self.size = 0
+        self.parts: list[bytes] = []
+        self.inflate: Any = None
+        if encoding in ("gzip", "x-gzip"):
+            self.inflate = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        elif encoding == "deflate":
+            self.inflate = zlib.decompressobj()
+        self.raw_deflate = encoding == "deflate"  # zlib wrapped, else raw on the first error
+
+    def feed(self, chunk: bytes) -> bool:
+        """Take one chunk; False once the body passed FETCH_MAX on the wire or decoded."""
+        self.wire += len(chunk)
+        if self.wire > FETCH_MAX:
+            return False
+        if self.inflate is None:
+            return self._keep(chunk)
+        data = chunk
+        while data:
+            try:
+                out = self.inflate.decompress(data, FETCH_MAX - self.size + 1)
+            except zlib.error:
+                if not (self.raw_deflate and self.size == 0 and self.wire == len(chunk)):
+                    raise
+                self.raw_deflate = False  # a raw deflate stream, as some servers send
+                self.inflate = zlib.decompressobj(-zlib.MAX_WBITS)
+                continue
+            if not self._keep(out):
+                return False
+            data = self.inflate.unconsumed_tail
+        return True
+
+    def _keep(self, data: bytes) -> bool:
+        self.size += len(data)
+        if self.size > FETCH_MAX:
+            return False
+        self.parts.append(data)
+        return True
+
+    def joined(self) -> bytes:
+        return b"".join(self.parts)
+
+
+def client() -> httpx.AsyncClient:
+    """A fresh client for one fetch: every request through browserd's egress proxy (http by its
+    absolute form, https by CONNECT), with no environment setting read (`trust_env=False`: no
+    proxy variable, no NO_PROXY bypass, no netrc), no redirect followed by itself, no cookie kept
+    or sent (a cookie policy that allows no domain), certificates checked, and `identity` asked
+    for (Body reads any other answer)."""
+    return httpx.AsyncClient(
+        proxy=f"http://127.0.0.1:{PROXY_PORT}",
+        trust_env=False,
+        follow_redirects=False,
+        cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=[])),
+        timeout=FETCH_S,
+        headers={"Accept-Encoding": "identity"},
+    )
+
+
 async def run(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
     """web_fetch(url) on a discovery's lease (module docstring)."""
     if not tab.state.discovery or tab.state.native_failed:
@@ -334,35 +422,37 @@ async def run(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _fetch(tab: Any, url: str) -> dict[str, Any]:
-    # A fresh request context, never the lease's own: no cookie of any context is sent.
-    context = await tab.browser.playwright.request.new_context(
-        proxy={"server": f"http://127.0.0.1:{PROXY_PORT}"}, ignore_https_errors=False
-    )
-    try:
+    # A fresh client, never the lease's context: no cookie of any context is sent.
+    async with client() as http:
         for _ in range(REDIRECTS_MAX + 1):
             try:
-                response = await context.get(
-                    url, max_redirects=0, fail_on_status_code=False, timeout=FETCH_S * 1000
-                )
-            except Exception as exc:  # Playwright's Error, a proxy refusal, a reset: no page
+                response = await http.send(http.build_request("GET", url), stream=True)
+            except Exception as exc:  # httpx's errors, a proxy refusal, a reset: no page
                 log.warning("lease %s: web_fetch failed: %s", tab.lease_tag, type(exc).__name__)
                 return failure("fetch_failed", "The page could not be fetched.")
-            status, headers = response.status, response.headers
-            location = headers.get("location", "")
-            if 300 <= status < 400 and location:
-                await response.dispose()
-                url = urljoin(url, location.strip())
-                if code := allowed(url):
-                    log.warning("lease %s: web_fetch redirect refused: %s", tab.lease_tag, code)
-                    return failure("redirect_refused", "Refused: the page redirects off limits.")
-                continue
-            return await _answer(url, status, headers, response)
+            try:
+                status, headers = response.status_code, response.headers
+                location = headers.get("location", "")
+                if 300 <= status < 400 and location:
+                    url = urljoin(url, location.strip())  # the body of a redirect is never read
+                    if code := allowed(url):
+                        log.warning("lease %s: web_fetch redirect refused: %s", tab.lease_tag, code)
+                        return failure(
+                            "redirect_refused", "Refused: the page redirects off limits."
+                        )
+                    continue
+                return await _answer(tab, url, status, headers, response)
+            finally:
+                await response.aclose()
         return failure("redirects_max", f"More than {REDIRECTS_MAX} redirects.")
-    finally:
-        await context.dispose()
 
 
-async def _answer(url: str, status: int, headers: dict[str, str], response: Any) -> dict[str, Any]:
+TOO_LARGE = f"The page is larger than {FETCH_MAX // 1_048_576} MB."
+
+
+async def _answer(
+    tab: Any, url: str, status: int, headers: Mapping[str, str], response: Any
+) -> dict[str, Any]:
     kind = headers.get("content-type", "")
     content_type = kind.split(";")[0].strip().lower()
     try:
@@ -370,16 +460,25 @@ async def _answer(url: str, status: int, headers: dict[str, str], response: Any)
     except ValueError:
         declared = 0
     if declared > FETCH_MAX:
-        return failure("too_large", f"The page is larger than {FETCH_MAX // 1_048_576} MB.")
+        return failure("too_large", TOO_LARGE)
     if content_type not in TEXT_TYPES:
         return failure("not_text", "The address is no text page (a file or an image).")
-    body = await response.body()
-    if len(body) > FETCH_MAX:
-        return failure("too_large", f"The page is larger than {FETCH_MAX // 1_048_576} MB.")
+    encoding = headers.get("content-encoding", "").strip().lower()
+    if encoding not in Body.ENCODINGS:
+        return failure("encoding", "The page came in an encoding the app does not read.")
+    body = Body(encoding)
     try:
-        text = body.decode(_charset(kind), errors="replace")
+        async for chunk in response.aiter_raw():
+            if not body.feed(chunk):
+                return failure("too_large", TOO_LARGE)
+    except Exception as exc:  # a reset, a broken gzip stream: no page
+        log.warning("lease %s: web_fetch read failed: %s", tab.lease_tag, type(exc).__name__)
+        return failure("fetch_failed", "The page could not be fetched.")
+    data = body.joined()
+    try:
+        text = data.decode(_charset(kind), errors="replace")
     except LookupError:
-        text = body.decode("utf-8", errors="replace")
+        text = data.decode("utf-8", errors="replace")
     read = await asyncio.to_thread(as_snapshot, url, text, content_type)
     reason = blocked(url, status, headers, text, read)
     if reason:
