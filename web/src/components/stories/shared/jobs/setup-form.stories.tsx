@@ -171,3 +171,14 @@ export const EmptyList: Story = {
     });
   },
 };
+
+/** Jobs J21: Anywhere on the web unticked, shown paused with Search it again, never removed. */
+export const WebPaused: Story = {
+  name: "Anywhere on the web paused",
+  beforeEach: () => {
+    fakeProfile({
+      ...camilleProfile(),
+      search: { ...findJobsSearch(), web_search: false },
+    });
+  },
+};
