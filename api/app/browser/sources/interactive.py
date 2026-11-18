@@ -735,6 +735,9 @@ def outcome(session: finder.FinderSession) -> str | None:
             return "search_refused" if refused else code
         if session.interactions:  # no_match after the agent acted on the website (B20)
             return None
+        web = session.interactive is not None and session.interactive.web
+        if web and session.web_searches:  # J21: no_match after searching the web
+            return None
     if session.refused["unsupported_interaction"]:
         return "unsupported_interaction"
     return "search_refused" if refused else "nothing_reported"
@@ -787,46 +790,59 @@ async def _search(
     cap = asyncio.timeout(None)  # B20: no time cap; the run's Cancel stops it
     try:
         async with cap:
-            result: dict[str, Any] = {}
-
-            async def start():
-                nonlocal result
-                result = await pages.tools.call(
-                    "browser_navigate",
-                    {
-                        "url": scope.start,
-                        "_discovery": "native_get",
-                        "_discovery_scope": scope.tool_scope(),
-                    },
+            if scope.web:
+                # J21: the web search opens no start page; its first tool is WebSearch.
+                site.started = True
+                session = finder.FinderSession(
+                    pages,
+                    scope.start,
+                    "",
+                    user_id=user,
+                    interactive=scope,
+                    on_verified=None if site.commits is None else site.verified,
+                    flow=site.flow,
                 )
-                return result
+            else:
+                result: dict[str, Any] = {}
 
-            try:
-                await pages._act(start)
-            except SourceError as exc:
-                if exc.code == "page_failed" and result.get("error") == "unsupported_discovery":
+                async def start():
+                    nonlocal result
+                    result = await pages.tools.call(
+                        "browser_navigate",
+                        {
+                            "url": scope.start,
+                            "_discovery": "native_get",
+                            "_discovery_scope": scope.tool_scope(),
+                        },
+                    )
+                    return result
+
+                try:
+                    await pages._act(start)
+                except SourceError as exc:
+                    if exc.code == "page_failed" and result.get("error") == "unsupported_discovery":
+                        return "unsupported_interaction"
+                    return exc.code
+                # The start page may land on another address (Welcome to the Jungle answers `/` on
+                # `/en`, Indeed's on the person's country site): any public address since B20,
+                # browserd's egress proxy holding it.
+                landed = finder.canonical(pages.last_url)
+                if not landed:
                     return "unsupported_interaction"
-                return exc.code
-            # The start page may land on another address (Welcome to the Jungle answers `/` on
-            # `/en`, Indeed's on the person's country site): any public address since B20,
-            # browserd's egress proxy holding it.
-            landed = finder.canonical(pages.last_url)
-            if not landed:
-                return "unsupported_interaction"
-            site.started = True
-            # #797: the start page (up to PAGE_MAX) is parsed off the event loop when large.
-            parsed = await finder.parsed_off_loop(landed, pages.last_text)
-            session = finder.FinderSession(
-                pages,
-                scope.start,
-                pages.last_text,
-                user_id=user,
-                interactive=scope,
-                on_verified=None if site.commits is None else site.verified,
-                landed="" if landed == scope.start else landed,
-                flow=site.flow,
-                parsed=parsed,
-            )
+                site.started = True
+                # #797: the start page (up to PAGE_MAX) is parsed off the event loop when large.
+                parsed = await finder.parsed_off_loop(landed, pages.last_text)
+                session = finder.FinderSession(
+                    pages,
+                    scope.start,
+                    pages.last_text,
+                    user_id=user,
+                    interactive=scope,
+                    on_verified=None if site.commits is None else site.verified,
+                    landed="" if landed == scope.start else landed,
+                    flow=site.flow,
+                    parsed=parsed,
+                )
             ran = await agent(session)
             site.input_tokens += ran.input_tokens
             site.output_tokens += ran.output_tokens
@@ -919,3 +935,84 @@ async def ask_person(pages: Pages, reason: str, tool_scope: dict[str, Any]) -> s
         guarded.page = ("", "")
         return "The person had the browser: read the page again (browser_snapshot)."
     return "The person did not answer: go on another way, or end the website."
+
+
+async def run_web(
+    runner: Runner,
+    plan: Any,
+    stats: sweep.Stats,
+    progress: Callable[[], Awaitable[None]],
+    deadline: float,
+    stop: str | None,
+) -> None:
+    """ "Anywhere on the web" (jobs J21, owner 2026-11-18): the search of the whole web, after the
+    websites, on a lease of the person's browser (web_fetch and the pages it opens), with the
+    same criteria, profile, tools and verification as a website's search and no start page."""
+    search = getattr(plan, "search", None)
+    if search is None or not sweep.has_web(search):
+        return
+    entry = sweep.bind_source(
+        stats,
+        "web",
+        (sweep.WEB_KEY,),
+        {**sweep.web_entry(), "result_pages": 0, "found": 0, "postings": 0, "error": None},
+    )
+    if stop:
+        entry["error"] = "not_started"
+        sweep.finish_source(entry)
+        await progress()
+        return
+    stats.current_board = entry["source_id"]
+    await progress()
+    commits = getattr(plan, "commits", None)
+    if commits is not None:
+        commits.admit(entry["source_id"])
+    try:
+        entry["error"] = await _web(runner, plan, search, entry)
+    except (BrowserError, StoreUnavailableError):
+        entry["error"] = "browser_unavailable"
+    except Exception:
+        entry["error"] = "agent_failed"
+    if commits is not None and not await commits.settle(entry["source_id"]):
+        entry["error"] = entry["error"] or "store_failed"
+    sweep.finish_source(entry)
+    sweep.release_board(stats, entry.get("source_id"))
+    await progress()
+
+
+async def _web(
+    runner: Runner, plan: Any, search: SearchSection, entry: dict[str, Any]
+) -> str | None:
+    """The web search's one agent run (`run_web`): every saved criterion and the profile, the
+    scope's start WEB_START (never opened), its postings stored as a website's (`_Site`), so a
+    posting another source stored is counted a duplicate there (same address, or the same
+    company, title and place: sweep.commit_verified)."""
+    user = str(plan.user_id)
+    context = SourceContext(
+        user,
+        str(plan.sweep_id) if getattr(plan, "sweep_id", None) else None,
+        entry["source_id"],
+        "custom",
+        finder.WEB_START,
+    )
+    try:
+        planned = searches_for(search, finder.WEB_START)
+    except ValueError:
+        return "unsupported_criteria"
+    if runner.finder is None or not await runner.finder.available(user):
+        return "no_credential"
+    profile = await runner.finder.profile(user)
+    scope = dataclasses.replace(planned.scope, profile=profile, web=True)
+    planned = dataclasses.replace(planned, scope=scope)
+    site = _Site(
+        planned,
+        commits=getattr(plan, "commits", None),
+        source_id=entry["source_id"],
+        host="web",
+        flow=getattr(plan, "flow", None),
+    )
+    try:
+        code = await _website(runner, plan, context, scope, site, math.inf)
+    finally:
+        site.write(entry)
+    return code or ("finding_persistence_pending" if site.found else None)

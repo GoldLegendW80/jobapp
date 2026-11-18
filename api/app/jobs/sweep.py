@@ -231,6 +231,19 @@ def has_websites(search: SearchSection | None) -> bool:
     return bool(search and any(site.enabled for site in search.interactive_sites))
 
 
+def has_web(search: SearchSection | None) -> bool:
+    """Whether a sweep of `search` searches the whole web ("Anywhere on the web", jobs J21)."""
+    return bool(search and getattr(search, "web_search", True))
+
+
+WEB_KEY = "anywhere"
+
+
+def web_entry() -> dict[str, Any]:
+    """The frozen source of "Anywhere on the web" (jobs J21): its stats entry, mode "web"."""
+    return {"source_id": _source_id("web", WEB_KEY), "mode": "web", "kind": "web", "host": "web"}
+
+
 def alert_keys(search: SearchSection | None) -> list[str]:
     """The providers whose job alert e-mails the person turned on (app/mail/alerts)."""
     if search is None:
@@ -254,6 +267,7 @@ def has_sources(search: SearchSection | None) -> bool:
     owner 2026-10-30)."""
     return (
         has_websites(search)
+        or has_web(search)
         or bool(boards.enabled_boards(search))
         or bool(alert_keys(search))
         or bool(search and search.job_feeds)
@@ -299,6 +313,9 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         # from the frozen sources below, never from `search`), only "browser" is kept.
         if raw.get("linkedin_search") == "api":
             del raw["linkedin_search"]
+        # The same for "Anywhere on the web" (J21): its default (on) is left out.
+        if raw.get("web_search") is True:
+            del raw["web_search"]
         # No board saved, or none listed: the key is not frozen at all. The release before the
         # company boards refuses it (extra="forbid"), so a queued run it claims after a
         # rollback stays valid unless the person really saved boards (SPEC-jobs, Company job
@@ -325,6 +342,9 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             for site in search.interactive_sites
             if site.enabled
         )
+        # "Anywhere on the web" (jobs J21), run after the websites (`Runner.websites`).
+        if has_web(search):
+            sources.append(web_entry())
         # The ticked alert e-mails (app/mail/alerts). The entries keep this order; the sources
         # that make no browser call are read side by side (run_sweep).
         sources.extend(alert_entry(key) for key in alert_keys(search))

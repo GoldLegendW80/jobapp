@@ -179,11 +179,16 @@ def _sweep_steps(key: uuid.UUID, row: Any) -> list[dict[str, Any]]:
             if source.get("outcome") == "not_attempted":
                 status = "cancelled"
         # A website searched in the browser shows as its agent's step once that run exists.
-        node = "browser_discovery" if source.get("mode") == "llm_browser" else "sweep"
-        if node == "browser_discovery" and status != "waiting":
+        node = AGENT_OF_MODE.get(str(source.get("mode")), "sweep")
+        if node != "sweep" and status != "waiting":
             continue
         steps.append(_step(f"source:{key}:{index}", node, name, status, note=_source_note(source)))
     return steps
+
+
+# The source modes an agent runs (its step once that run exists): a website in the browser,
+# and "Anywhere on the web" (jobs J21).
+AGENT_OF_MODE = {"llm_browser": "browser_discovery", "web": "web_discovery"}
 
 
 def _source_note(source: Mapping[str, Any]) -> str | None:

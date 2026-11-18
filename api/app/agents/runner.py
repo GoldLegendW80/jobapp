@@ -240,6 +240,13 @@ WEB_SEARCHES_SPENT = (
     f"No more web searches in this run (at most {sdk_options.WEB_SEARCHES_MAX}): go on with the "
     "pages you found."
 )
+
+
+def web_searches_spent(most: int) -> str:
+    """WEB_SEARCHES_SPENT for a run allowed `most` searches (jobs J21)."""
+    return WEB_SEARCHES_SPENT.replace(str(sdk_options.WEB_SEARCHES_MAX), str(most), 1)
+
+
 # Argument names whose values are never stored in a tool call event.
 _SECRET_ARG = ("secret", "token", "password", "api_key", "apikey", "authorization", "cookie")
 # What a private run keeps of an app tool's call and error (browser B25, `preview_args`): the
@@ -639,6 +646,7 @@ def make_gate(
     on_denied: Callable[[str], Awaitable[None]],
     budget: Budget | None = None,
     web_search: Callable[[dict[str, Any]], str | None] | None = None,
+    web_searches_max: int = sdk_options.WEB_SEARCHES_MAX,
 ) -> Gate:
     """The PreToolUse hook: any tool outside the allow list is denied by this code, whatever
     the options or the model say (hooks run first, and a hook deny holds in every mode).
@@ -658,8 +666,9 @@ def make_gate(
     instead of letting the call through on a count that may be behind.
 
     `web_search` (browser B28): Claude Code's WebSearch is allowed only with it, at most
-    WEB_SEARCHES_MAX times a run; before each search it is asked with the search's input and
-    answers None, or the refusal the model reads (the definition's `web_search` hook)."""
+    `web_searches_max` times a run (the definition's, jobs J21); before each search it is
+    asked with the search's input and answers None, or the refusal the model reads (the
+    definition's `web_search` hook)."""
     searches = 0
 
     def refuse(reason: str) -> dict[str, Any]:
@@ -696,8 +705,8 @@ def make_gate(
                 return stop(BUDGET_STOP)
         if name == sdk_options.WEB_SEARCH and web_search is not None:
             nonlocal searches
-            if searches >= sdk_options.WEB_SEARCHES_MAX:
-                return refuse(WEB_SEARCHES_SPENT)
+            if searches >= web_searches_max:
+                return refuse(web_searches_spent(web_searches_max))
             searches += 1
             raw = input_data.get("tool_input")
             refusal = web_search(raw if isinstance(raw, dict) else {})
@@ -742,7 +751,7 @@ def build_options(
         effort=definition.effort,  # type: ignore[arg-type]
         cwd=str(workdir),
         env=(
-            {**env, sdk_options.WEB_SEARCHES_ENV: str(sdk_options.WEB_SEARCHES_MAX)}
+            {**env, sdk_options.WEB_SEARCHES_ENV: str(definition.web_searches_max)}
             if web_search
             else env
         ),
@@ -762,6 +771,26 @@ def make_scratch(settings: Settings, run_id: uuid.UUID) -> Path:
 
 
 # --- events -------------------------------------------------------------------------------------
+
+# Jobs J21: the longest WebSearch query a private run's event keeps.
+WEB_QUERY_MAX = 200
+# Claude Code's WebSearch answer (CLI 2.1.286 and 2.1.325 alike): a `Links: [...]` line of JSON
+# objects per search it ran, each result with its "url".
+_LINKS_LINE = re.compile(r"^Links: (\[.*\])\s*$", re.MULTILINE)
+
+
+def web_search_results(text: str) -> int:
+    """How many results a WebSearch answer lists (its links), 0 when it lists none or its shape
+    is not Claude Code's (counted, never stored)."""
+    count = 0
+    for found in _LINKS_LINE.finditer(text):
+        try:
+            links = json.loads(found.group(1))
+        except ValueError:
+            continue
+        if isinstance(links, list):
+            count += sum(1 for link in links if isinstance(link, dict) and link.get("url"))
+    return count
 
 
 @dataclass
@@ -821,6 +850,12 @@ class Recorder:
                 preview = preview_args(block.input, self.secret)
                 if preview:
                     data["preview"] = preview
+            elif self.detail and name == sdk_options.WEB_SEARCH:
+                # Jobs J21: the query of Claude Code's web search, the agent's own words,
+                # bounded (Activity: "Web search: <query>").
+                query = block.input.get("query") if isinstance(block.input, dict) else None
+                if isinstance(query, str) and query.strip():
+                    data["preview"] = {"query": shorten(query.strip(), WEB_QUERY_MAX, self.secret)}
             return data
         return {
             "id": block.id,
@@ -840,6 +875,8 @@ class Recorder:
             ):
                 # The app's tools answer an error in words their code wrote (browser B25).
                 data["error"] = shorten(result_text(block.content), TOOL_ERROR_MAX, self.secret)
+            if self.detail and self.called.get(block.tool_use_id) == sdk_options.WEB_SEARCH:
+                data["results"] = web_search_results(result_text(block.content))
         else:
             data["content"] = shorten(result_text(block.content), TOOL_RESULT_MAX, self.secret)
         return data
@@ -1607,6 +1644,7 @@ async def _execute(
                 denied,
                 state.budget,
                 (lambda found: hook(run_id, found)) if searching and hook else None,
+                definition.web_searches_max,
             ),
             stderr=stderr_lines.append,
             partial_messages=live_store is not None,
