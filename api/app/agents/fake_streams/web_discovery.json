@@ -1,5 +1,5 @@
 {
- "description": "The web search's default stream (jobs J21), the journeys': two WebSearch calls, each answered by the stub with an error (no search engine; jobs J23: two failures in a row let the web source give up without its plan searched, which no fixed query could cover for every journey's criteria), then report_no_postings no_match, so a fake stack's sweep shows Anywhere on the web searched with nothing new, and opens no page.",
+ "description": "The web search's default stream (jobs J21), the journeys': two WebSearch calls, each answered by the stub with an error (no search engine; jobs J23: two failures in a row let the web source give up without its plan searched, which no fixed query could cover for every journey's criteria), then report_no_postings no_match, so a fake stack's sweep shows Anywhere on the web ended web_search_failed (round 1 of #814: the web search failed before its plan was searched, never searched with nothing new), and opens no page.",
  "web_search": [
   {
    "title": "Example Robotics careers",
