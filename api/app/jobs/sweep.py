@@ -607,6 +607,9 @@ class Plan:
     commits: "Commits | None" = None
     # One parse of a big answer at a time for the whole run (`parse_one`), set by run_sweep.
     parsing: asyncio.Semaphore | None = None
+    # Jobs J22: every saved title and place pair LinkedIn's public job search did not search,
+    # by source id (its summary lists the first SEARCHES_LISTED): what its public page reads.
+    linkedin_not_searched: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)
 
     @property
     def flow(self) -> WorkflowRef:
@@ -1188,6 +1191,7 @@ NOT_RETRIED = frozenset(
         "linkedin_daily",
         "platform_daily",
         "linkedin_searched_once",
+        "linkedin_page_refused",
         "bad_address",
         # The run's own state.
         "store_failed",
@@ -1234,6 +1238,33 @@ def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
         # the retry slot of both.
         and not entry.get("fallback")
     ]
+
+
+# Jobs J22 (owner, 2026-11-18: "Yes, fall back to browser"): LinkedIn's public job search that
+# ended on one of these before it searched every saved title and place pair is followed, in the
+# same sweep, by LinkedIn's public job search page read in the browser for the pairs left
+# (app/browser/sources/linkedin_page.py, after the websites). Never both it and the one retry
+# (B24): a refusal is not retried while LinkedIn's cooldown runs, so the page takes its slot
+# (`not_retried` LINKEDIN_PAGE, set by linkedin_guest when the runner reads the page); a failure
+# retried or about to be is not followed by the page. Never after a search that already stood
+# in for the browser search (J20, `fallback` "guest").
+LINKEDIN_PAGE_AFTER = frozenset({"linkedin_rate_limited", "page_failed", "layout_changed"})
+LINKEDIN_PAGE = "linkedin_page"
+
+
+def linkedin_page_due(entry: dict[str, Any]) -> bool:
+    """Whether LinkedIn's public page in the browser follows this entry (above)."""
+    return (
+        entry.get("mode") == "api"
+        and entry.get("kind") == "linkedin"
+        and entry.get("phase") == "done"
+        and entry.get("outcome") in FAILED
+        and entry.get("reason") in LINKEDIN_PAGE_AFTER
+        and not entry.get("fallback")
+        and entry.get("attempt") != 2
+        and entry.get("first_attempt") is None
+        and bool(entry.get("not_searched"))
+    )
 
 
 def _narrowed(plan: Any, ids: set[str]) -> Any:

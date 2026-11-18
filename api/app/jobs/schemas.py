@@ -798,7 +798,8 @@ class SourceOut(BaseModel):
     planned: int = Field(default=0, ge=0)
     # Jobs J20: the first SEARCHES_LISTED saved title and place pairs it did not search, the
     # postings of a place none of the saved ones it left out, and "guest" when it stood in for
-    # the browser search, with that search's reason (`fallback_after`).
+    # the browser search, with that search's reason (`fallback_after`); "page" when its public
+    # page read in the browser stood in for it after a refusal (jobs J22).
     not_searched: list[SearchRanOut] = Field(default_factory=list)
     other_place: int = Field(default=0, ge=0)
     fallback: str | None = None
