@@ -157,7 +157,7 @@ def test_navigation_off_the_list_is_refused_before_the_page(
     async def go() -> None:
         tools, _ = await tools_of(world, A)
         result = await tools.navigate(url)
-        assert result == {"ok": False, "error": code, "message": result["message"]}
+        assert result == {"ok": False, "error": code, "message": result["message"], "rule": code}
 
     run(world, go)
 

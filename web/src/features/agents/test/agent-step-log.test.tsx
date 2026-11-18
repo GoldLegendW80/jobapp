@@ -356,6 +356,65 @@ describe("an agent step's log", () => {
     expect(stored.querySelector("pre")).toHaveTextContent("stored text");
   });
 
+  it("shows a private app tool call's preview and its error text (browser B25)", async () => {
+    stepApi();
+    renderApp(PAGE);
+    const { panel, source } = await openLog();
+    act(() => {
+      source.open();
+      source.emit("step", step(1, "status", { status: "running" }));
+      source.emit(
+        "step",
+        step(2, "tool_call", {
+          id: "n1",
+          name: "mcp__app__browser_navigate",
+          input_size: 60,
+          preview: { url: "https://jobs.example.org/search?q=data" },
+        }),
+      );
+      source.emit(
+        "step",
+        step(3, "tool_result", {
+          id: "n1",
+          is_error: true,
+          size: 90,
+          blocks: 0,
+          error:
+            "Refused: the app does not open this address. Go on another way. (rule host_not_allowed)",
+        }),
+      );
+      source.emit("step", step(4, "text", { text: "Typing." }));
+      source.emit(
+        "step",
+        step(5, "tool_call", {
+          id: "t1",
+          name: "mcp__app__browser_type",
+          input_size: 50,
+          preview: { ref: "e12", text_length: 11, submit: true },
+        }),
+      );
+    });
+    const log = within(panel).getByRole("list", { name: "Steps" });
+    const user = userEvent.setup();
+    const navigate = await within(log).findByRole("button", {
+      name: /^Tool call: browser_navigate https:\/\/jobs\.example\.org\/search\?q=data/,
+    });
+    // A group that ended in an error is open already.
+    if (navigate.getAttribute("aria-expanded") !== "true")
+      await user.click(navigate);
+    const navigated = groupsOf(log)[1]!;
+    expect(navigated).toHaveTextContent(
+      "Tool error: Refused: the app does not open this address. Go on another way. (rule host_not_allowed)",
+    );
+    await user.click(
+      within(log).getByRole("button", { name: /Tool call: browser_type/ }),
+    );
+    const typed = groupsOf(log).at(-1)!;
+    expect(typed).toHaveTextContent("e12");
+    expect(typed).toHaveTextContent("11 characters");
+    expect(typed).toHaveTextContent("true");
+  });
+
   it("keeps the log and its steps when a refresh fails", async () => {
     stepApi();
     renderApp(PAGE);
