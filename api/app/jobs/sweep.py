@@ -1168,6 +1168,7 @@ NOT_RETRIED = frozenset(
         "linkedin_daily",
         "platform_daily",
         "linkedin_searched_once",
+        "linkedin_page_refused",
         "bad_address",
         # The run's own state.
         "store_failed",
@@ -1213,7 +1214,31 @@ def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
         # LinkedIn's public job search stood in for its browser search (jobs J20): it took
         # the retry slot of both.
         and not entry.get("fallback")
+        # Its public page in the browser takes the slot of a refused public job search (J22).
+        and not linkedin_page_due(entry)
     ]
+
+
+# Jobs J22 (owner, 2026-11-18: "Yes, fall back to browser"): LinkedIn's public job search that
+# ended on one of these before it searched every saved title and place pair is followed, in the
+# same sweep, by LinkedIn's public job search page read in the browser for the pairs left
+# (app/browser/sources/linkedin_page.py, after the websites). That fallback takes its one retry
+# (B24): never both, never after a search that already stood in for the browser search (J20).
+LINKEDIN_PAGE_AFTER = frozenset({"linkedin_rate_limited", "page_failed", "layout_changed"})
+
+
+def linkedin_page_due(entry: dict[str, Any]) -> bool:
+    """Whether LinkedIn's public page in the browser follows this entry (above)."""
+    return (
+        entry.get("mode") == "api"
+        and entry.get("kind") == "linkedin"
+        and entry.get("phase") == "done"
+        and entry.get("outcome") in FAILED
+        and entry.get("reason") in LINKEDIN_PAGE_AFTER
+        and not entry.get("fallback")
+        and entry.get("attempt") != 2
+        and bool(entry.get("not_searched"))
+    )
 
 
 def _narrowed(plan: Any, ids: set[str]) -> Any:

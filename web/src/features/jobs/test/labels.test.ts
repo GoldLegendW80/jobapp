@@ -239,6 +239,21 @@ describe("guestSentence", () => {
     );
   });
 
+  it("says when LinkedIn's public page in the browser stood in for the public API (jobs J22)", () => {
+    expect(
+      guestSentence({
+        fallback: "page",
+        fallback_after: "linkedin_rate_limited",
+        not_searched: [{ title: "AI Engineer", place: "Reunion" }],
+      }),
+    ).toBe(
+      "Searched with LinkedIn's public job search page, as the public API refused. Not searched this time: AI Engineer in Reunion.",
+    );
+    expect(SOURCE_PROBLEMS.linkedin_page_refused).toContain(
+      "public job search page",
+    );
+  });
+
   it("counts the postings of other places and names the pairs not searched", () => {
     expect(
       guestSentence({
