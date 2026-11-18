@@ -85,6 +85,12 @@ def test_the_summary_answer_names_the_counter() -> None:
         "searched",
         # LinkedIn's public job search: the searches it built (2026-10-31).
         "planned",
+        # Jobs J20: the pairs it did not search, the postings of other places it left out, and
+        # its fallback for the browser search.
+        "not_searched",
+        "other_place",
+        "fallback",
+        "fallback_after",
         # And the saved titles and places its search could not carry (jobs J18).
         "titles_left_out",
         "places_left_out",
@@ -141,6 +147,10 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "searches": 0,
         "searched": [],
         "planned": 0,
+        "not_searched": [],
+        "other_place": 0,
+        "fallback": None,
+        "fallback_after": None,
         "titles_left_out": 0,
         "places_left_out": 0,
         "error": "store_failed",
