@@ -22,6 +22,8 @@ FROM debian:trixie-slim
 # The Jetson's build of 2026-11-05 installed this one from trixie-security (its dpkg-query line).
 ARG CHROMIUM_VERSION=156.0.8078.79-1~deb13u1
 ARG PLAYWRIGHT_VERSION=1.55.0
+# web_fetch's HTTP client (browserd/tools/fetch.py, B28): the api's own pin (api/pyproject.toml).
+ARG HTTPX_VERSION=0.28.1
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -45,6 +47,7 @@ RUN --mount=type=secret,id=extra_ca,required=false \
     fi \
  && python3 -m venv /opt/venv \
  && /opt/venv/bin/pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
+      "httpx==${HTTPX_VERSION}" \
  && rm -f /tmp/extra-ca.pem
 
 # Users: browserd runs as root with SETUID and SETGID only (compose.yml drops every other

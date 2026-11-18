@@ -40,6 +40,7 @@ TOOLS = frozenset(
         "browser_wait_for",
         "browser_evaluate",
         "browser_ask_person",
+        "web_fetch",  # B28: a GET of a public page, without the tab (tools/fetch.py)
     }
 )
 UNSUPPORTED = "unsupported_discovery"

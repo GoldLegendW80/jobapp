@@ -718,6 +718,7 @@ def test_a_block_spares_the_search_box_only(reason, setup, accepted):
             }
         ),
         routes=dict.fromkeys(r for r in finder.ROUTES if r in setup),
+        web_search_on=False,  # B28: the run has no WebSearch (test_b28_web_search's table)
     )
     assert (finder.FinderSession.routes_left(session, reason) == []) is accepted  # type: ignore[arg-type]
 
@@ -981,7 +982,11 @@ def test_the_tool_schemas_carry_the_script_limits():
     assert schema["maxLength"] == finder.SCRIPT_MAX == actions.DISCOVERY_SCRIPT_MAX
     assert finder.SCRIPT_RESULT_MAX == actions.DISCOVERY_RESULT_MAX
     for name in ("browser_find", "browser_snapshot"):
-        assert finder_tools.SCHEMAS[name]["properties"]["source"]["enum"] == ["page", "script"]
+        assert finder_tools.SCHEMAS[name]["properties"]["source"]["enum"] == [
+            "page",
+            "script",
+            "fetch",
+        ]
     assert RESULTS  # the harness's results page stays the search box's landing
 
 

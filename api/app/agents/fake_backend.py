@@ -99,6 +99,15 @@ PARTIAL_CHARS = 24
 PARTIAL_SLEEP_S = 0.02
 # How the pinned CLI answers, by itself, a call to a tool it does not offer.
 NO_SUCH_TOOL = "<tool_use_error>Error: No such tool available: {name}</tool_use_error>"
+# Claude Code's web search (browser B28), stubbed: a stream's top level `"web_search"` lists the
+# results every search answers ({"title", "url"}), as Claude Code gives them: titles and
+# addresses, no page text. Never a real search engine.
+WEB_SEARCH = "WebSearch"
+
+
+def web_search_stub(args: dict[str, Any], results: list[dict[str, str]]) -> str:
+    query = str(args.get("query", ""))
+    return f"Web search results for query: {json.dumps(query)}\n\nLinks: {json.dumps(results)}"
 
 
 class UnknownScriptError(LookupError):
@@ -166,6 +175,7 @@ class FakeBackend:
         # Whether the gate is asked about every tool name (the default) or, as the CLI does,
         # about the run's own tools only (`"gate": "offered"` in the stream).
         self._gate_all = True
+        self._web_results: list[dict[str, str]] = []
 
     async def interrupt(self) -> None:
         self._interrupted.set()
@@ -195,6 +205,7 @@ class FakeBackend:
         if asked not in ("all", "offered"):
             raise ValueError(f'a stream\'s "gate" is "all" or "offered", not {asked!r}')
         self._gate_all = asked == "all"
+        self._web_results = script.get("web_search") or []
         partial = bool(getattr(options, "include_partial_messages", False))
         recorded = any(_is_stream_event(step) for step in steps)
         pacing = script.get("partial") or {}
@@ -371,7 +382,8 @@ class FakeBackend:
 
     async def _call(self, request: BackendRequest, block: dict[str, Any]) -> dict[str, Any]:
         name, args, call_id = block["name"], block.get("input") or {}, block["id"]
-        if not self._gate_all and name not in request.tools.by_name:
+        offered = set(request.tools.by_name) | set(getattr(request.options, "tools", None) or [])
+        if not self._gate_all and name not in offered:
             # As the CLI: a tool it does not offer is answered by itself, no hook is asked.
             return {
                 "type": "tool_result",
@@ -412,6 +424,14 @@ class FakeBackend:
                 "is_error": True,
             }
         handler = request.tools.by_name.get(name)
+        if handler is None and name == WEB_SEARCH and name in offered:
+            # Browser B28: Claude Code's web search, stubbed (no search engine in a test).
+            return {
+                "type": "tool_result",
+                "tool_use_id": call_id,
+                "content": web_search_stub(args, self._web_results),
+                "is_error": False,
+            }
         if handler is None:
             text = f"Error: No such tool available: {name}"
             return {

@@ -64,6 +64,23 @@ FORBIDDEN_TOOLS = (
     "Write",
 )
 
+# Claude Code's built in web search (browser B28, owner 2026-11-17): the one built-in tool an
+# agent may get, and only an agent whose definition asks for it (`AgentDefinition.web_search`,
+# the website search's alone); its results reach the model from Claude Code directly (no
+# `untrusted_` key wraps them), and the prompt's Method marks them untrusted, as a page's. Two
+# bounds, both WEB_SEARCHES_MAX: the runner's gate counts WebSearch calls and refuses the 21st;
+# one call may run several searches server side (the bundled CLI asks for up to 8 per call), so
+# Claude Code's own cap, which counts those searches across the session, is set to the same
+# number (WEB_SEARCHES_ENV, given with the tool in runner.build_options and never without it):
+# a run makes at most 20 searches, whatever the number of calls. The credential kinds it runs
+# on: an API key, and a Claude subscription (the docs do not settle whether a subscription's
+# token may search; a search that fails answers the model an error and the run goes on). A kind
+# left out of this set gets no web search at all, and the prompt says the tool may be missing.
+WEB_SEARCH = "WebSearch"
+WEB_SEARCHES_MAX = 20
+WEB_SEARCHES_ENV = "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION"
+WEB_SEARCH_KINDS = frozenset({"anthropic_api_key", "claude_subscription"})
+
 # The longest line Claude Code may write to the SDK, one message that may echo a tool's answer:
 # the SDK's 1 MiB ended a search on a screenshot (CLIJSONDecodeError, browser B23); still a bound.
 MAX_BUFFER_SIZE = 8 * 1024 * 1024
@@ -101,15 +118,17 @@ def full_name(name: str) -> str:
     return f"mcp__{SERVER}__{name}"
 
 
-def fixed() -> dict[str, Any]:
+def fixed(web_search: bool = False) -> dict[str, Any]:
     """The options of every run that no definition changes: no built-in tool (`tools=[]`, and
     each one denied by name), no permission prompt, no settings, CLAUDE.md or skills
     (`setting_sources=[]`), only the MCP servers the runner names, adaptive thinking, and a
-    line of at most MAX_BUFFER_SIZE bytes from Claude Code."""
+    line of at most MAX_BUFFER_SIZE bytes from Claude Code. With `web_search` (B28), WebSearch
+    alone is offered and not denied."""
+    builtin = [WEB_SEARCH] if web_search else []
     return {
         "max_buffer_size": MAX_BUFFER_SIZE,
-        "tools": [],
-        "disallowed_tools": list(FORBIDDEN_TOOLS),
+        "tools": builtin,
+        "disallowed_tools": [name for name in FORBIDDEN_TOOLS if name not in builtin],
         "permission_mode": PERMISSION_MODE,
         "strict_mcp_config": True,
         "setting_sources": [],
