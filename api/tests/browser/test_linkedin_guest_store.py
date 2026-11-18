@@ -49,9 +49,13 @@ OWNERS_RULE = "No cybersecurity roles: cyber, security, pentest, threat"
 
 
 def run_sweep(
-    sessions: sessionmaker[Session], user: uuid.UUID, rules: tuple[str, ...] = (OWNERS_RULE,)
+    sessions: sessionmaker[Session],
+    user: uuid.UUID,
+    rules: tuple[str, ...] = (OWNERS_RULE,),
+    page: str = PAGE,
+    **fields: Any,
 ) -> tuple[dict[str, Any], LinkedInFake]:
-    search = section(never_apply=list(rules))
+    search = section(never_apply=list(rules), **fields)
     with sessions() as database:
         row = Sweep(user_id=user, trigger=SweepTrigger.manual, status=SweepStatus.running,
                     stats={})  # fmt: skip
@@ -69,7 +73,7 @@ def run_sweep(
                       skills=None, known=known, search=search, search_scope=scope)  # fmt: skip
     plan.commits = sweep.Commits(sessions, plan, stats, lambda: datetime.now(UTC))
     now = [0.0]
-    fake = LinkedInFake(now, pages={0: PAGE})
+    fake = LinkedInFake(now, pages={0: page})
 
     async def sleep(seconds: float) -> None:
         now[0] += seconds
@@ -172,3 +176,30 @@ def test_a_second_sweep_counts_the_same_postings_as_duplicates_without_fetching_
     entry, fake = run_sweep(factory, bob)
     assert entry["postings"] == 2
     assert len(fake.requests) == 3
+
+
+def test_a_card_titled_outside_the_saved_terms_is_read_and_stored_and_another_place_is_not(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+) -> None:
+    """Jobs J20: the title rule moved after reading (a "Tech Lead" or a French title a search for
+    the saved term returned is stored, and scoring judges it), and a posting of a place none of
+    the saved ones is not stored (the sweep of 2026-11-17 stored postings of Miami for three
+    French overseas places)."""
+    page = "".join(
+        [
+            card("4100000031", "Tech Lead IA", place="Papeete, Windward Islands, French Polynesia"),
+            card("4100000032", "Ingénieur IA générative", place="Saint-Denis, Réunion"),
+            card("4100000033", "GenAI Engineer", place="Miami, FL"),
+        ]
+    )
+    entry, fake = run_sweep(factory, alice, page=page, location={"terms": ["Tahiti", "La Réunion"]})
+    assert entry["other_place"] == 1  # Miami: a card is judged once, whatever search gave it
+    with factory() as database:
+        titles = database.scalars(
+            sa.select(Job.title).where(Job.user_id == alice).order_by(Job.url)
+        ).all()
+    assert titles == ["Tech Lead IA", "Ingénieur IA générative"]
+    assert "4100000033" not in fake.paths()  # never fetched
+    locations = [r.url.params["location"] for r in fake.requests if "location" in r.url.params]
+    assert locations == ["French Polynesia", "Reunion"]

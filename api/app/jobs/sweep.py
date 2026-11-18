@@ -730,6 +730,14 @@ def _stats_json(sweep: Sweep, stats: Stats) -> dict[str, Any]:
             )
             for source in initial_sources(stored["search_scope"])
         ]
+        # LinkedIn's public job search standing in for the browser search (jobs J20) has an
+        # entry of its own, which the frozen scope does not list: kept, or no write carries it.
+        frozen = {s["source_id"] for s in data["sources"]}
+        data["sources"] += [
+            source
+            for source in updates.values()
+            if source and source.get("fallback") and source.get("source_id") not in frozen
+        ]
     return data
 
 
@@ -1202,6 +1210,9 @@ def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
         and entry.get("reason") in RETRIED
         and entry.get("first_attempt") is None
         and entry.get("not_retried") is None
+        # LinkedIn's public job search stood in for its browser search (jobs J20): it took
+        # the retry slot of both.
+        and not entry.get("fallback")
     ]
 
 

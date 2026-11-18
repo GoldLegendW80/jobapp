@@ -68,3 +68,31 @@ def test_finish_done_ends_done_when_one_website_worked(
 ) -> None:
     row = finished(factory, alice, "failed", working)
     assert (row.status, row.error) == (SweepStatus.done, None)
+
+
+def test_a_sweep_whose_only_working_source_is_the_linkedin_guest_fallback_is_not_failed(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """J20 with B25: LinkedIn's public job search stood in for the website's browser search, which
+    failed; the stand-in entry has no place among the selected websites yet it worked."""
+    set_profile(factory, alice, search(interactive_sites=[SITE]))
+    sweep_id = new_sweep(factory, alice)
+    stats = sweep.Stats(
+        sources=[dict(entry) for entry in read_sweep(factory, sweep_id).stats["sources"]]
+    )
+    stats.sources[0]["outcome"] = "failed"
+    stats.sources.append(
+        {
+            "source_id": sweep._source_id("api", SITE["url"]),
+            "mode": "api",
+            "kind": "linkedin",
+            "phase": "done",
+            "outcome": "complete",
+            "fallback": "guest",
+            "fallback_after": "linkedin_signin",
+            "error": None,
+        }
+    )
+    sweep.finish_done(factory, sweep_id, stats, now())
+    row = read_sweep(factory, sweep_id)
+    assert (row.status, row.error) == (SweepStatus.done, None)

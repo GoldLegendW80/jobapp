@@ -14,6 +14,7 @@ import { SweepJobFeeds } from "@/components/shared/jobs/job-feeds-ui";
 import {
   LINKEDIN_TIME_BUDGET,
   SOURCE_PROBLEMS,
+  guestSentence,
   leftOutSentence,
   searchesSentence,
   sourceName,
@@ -101,6 +102,7 @@ function sourceStatus(source: SweepSource): string {
   const counts = [
     searches,
     leftOutSentence(source),
+    guestSentence(source),
     found,
     refusalsSentence(source),
   ]

@@ -796,6 +796,13 @@ class SourceOut(BaseModel):
     # LinkedIn's public job search: the searches it built from the saved titles and places, of
     # which `searches` ran before its caps (0 from an older sweep or another source).
     planned: int = Field(default=0, ge=0)
+    # Jobs J20: the first SEARCHES_LISTED saved title and place pairs it did not search, the
+    # postings of a place none of the saved ones it left out, and "guest" when it stood in for
+    # the browser search, with that search's reason (`fallback_after`).
+    not_searched: list[SearchRanOut] = Field(default_factory=list)
+    other_place: int = Field(default=0, ge=0)
+    fallback: str | None = None
+    fallback_after: str | None = None
     # Saved titles and places its frozen scope could not carry (more than 100 of one, or more
     # than 32 KiB in all): the first ones that fit were searched, these were left out.
     titles_left_out: int = Field(default=0, ge=0)

@@ -152,7 +152,7 @@ def test_no_place_or_a_place_that_says_no_limit_searches_worldwide(places: list[
     assert query.place == (places[0] if places else None)
 
 
-def test_each_specific_place_is_one_search_as_written_without_geo_id() -> None:
+def test_each_specific_place_is_one_search_as_linkedin_names_it_without_geo_id() -> None:
     queries = guest.queries_for(
         section(
             title_include={"terms": ["GenAI Engineer", "AI Engineer"]},
@@ -162,11 +162,12 @@ def test_each_specific_place_is_one_search_as_written_without_geo_id() -> None:
     assert [(q.keywords, q.location, q.geo_id) for q in queries] == [
         ("GenAI Engineer", "Worldwide", "92000000"),
         ("GenAI Engineer", "Paris", None),
-        ("GenAI Engineer", "Île-de-France", None),
+        ("GenAI Engineer", "Île-de-France, France", None),  # LinkedIn's name (jobs J20)
         ("AI Engineer", "Worldwide", "92000000"),
         ("AI Engineer", "Paris", None),
-        ("AI Engineer", "Île-de-France", None),
+        ("AI Engineer", "Île-de-France, France", None),
     ]
+    assert [q.place for q in queries[:3]] == ["anywhere", "Paris", "Île-de-France"]
     assert "geoId" not in params(queries[1])
     assert params(queries[1])["location"] == ["Paris"]
 
@@ -388,6 +389,7 @@ def execute(
     now: list[float] | None = None,
     rules: Any = None,
     cooldown: Any = None,
+    logins: Any = None,
 ) -> tuple[list[dict[str, Any]], Any, FakeLeases, list[float]]:
     """One sweep's browser hook (sources.Runner) with this search; the LinkedIn fake answers."""
     now = now if now is not None else [0.0]
@@ -425,6 +427,7 @@ def execute(
         base_url=base_url,
         guest_http=(lambda: httpx.MockTransport(fake.handler)) if transport else None,
         guest_cooldown=cooldown or guest.MemoryCooldown(lambda: now[0]),
+        site_logins=logins,
     )
     asyncio.run(runner(plan, stats, progress, deadline))
     return stats.sources, fake, leases, now
@@ -434,7 +437,8 @@ def test_linkedin_ticked_is_searched_through_the_api_without_the_browser() -> No
     entries, fake, leases, _ = execute(section())
     [entry] = entries
     assert leases.acquired == []  # no lease of the person's browser
-    assert fake.paths() == ["search?start=0", "4100000001", "4100000002"]
+    # Every card is read, "Senior Algorithm Engineer" too (jobs J20: scoring judges its fit).
+    assert fake.paths() == ["search?start=0", "4100000001", "4100000002", "4100000003"]
     assert entry == {
         "source_id": sweep._source_id("api", LINKEDIN["url"]),
         "mode": "api",
@@ -444,15 +448,15 @@ def test_linkedin_ticked_is_searched_through_the_api_without_the_browser() -> No
         "outcome": "partial",
         "reason": "finding_persistence_pending",
         "result_pages": 1,
-        "found": 2,
+        "found": 3,
         "postings": 0,
         "error": "finding_persistence_pending",
-        "details": 2,
+        "details": 3,
         "searches": 1,
         "planned": 1,
         "searched": [{"title": "GenAI Engineer", "place": None}],
-        "unwanted": 1,  # "Senior Algorithm Engineer" matches no saved title
-        "requests": 3,
+        "not_searched": [],
+        "requests": 4,
     }
     request = fake.requests[0]
     assert request.headers["user-agent"].startswith("Mozilla/5.0")
@@ -461,7 +465,7 @@ def test_linkedin_ticked_is_searched_through_the_api_without_the_browser() -> No
 
 def test_no_cookie_is_ever_sent_back_and_no_redirect_is_followed() -> None:
     _, fake, _, _ = execute(section())
-    assert len(fake.requests) == 3
+    assert len(fake.requests) == 4
     assert all("cookie" not in r.headers for r in fake.requests)
 
 
@@ -473,7 +477,7 @@ def test_requests_are_paced_at_least_eight_seconds_apart_after_any_page_of_the_h
     _, fake, _, _ = execute(section(), pacer=pacer, now=now)
     times = [100.0, *fake.times]
     gaps = [b - a for a, b in itertools.pairwise(times)]
-    assert len(gaps) == 3
+    assert len(gaps) == 4
     assert all(gap >= guest.PAUSE_S[0] for gap in gaps), gaps
     assert all(gap <= guest.PAUSE_S[1] for gap in gaps), gaps
 
@@ -557,7 +561,7 @@ def test_a_posting_gone_is_skipped_and_a_changed_layout_is_said() -> None:
     )
     assert entries[0]["found"] == 1
     assert entries[0]["error"] == "finding_persistence_pending"
-    assert fake.paths() == ["search?start=0", "4100000001", "4100000002"]
+    assert fake.paths() == ["search?start=0", "4100000001", "4100000002", "4100000003"]
     odd = "<ul><li><div class='job-card-new'>GenAI Engineer</div></li></ul>"
     entries, _, _, _ = execute(section(), lambda now: LinkedInFake(now, pages={0: odd}))
     assert entries[0]["error"] == "layout_changed"
@@ -576,7 +580,7 @@ def test_pages_per_search_and_requests_per_sweep_are_capped(
     search = section(title_include={"terms": ["GenAI Engineer", "AI Engineer", "ML Engineer"]})
     entries, fake, _, _ = execute(search, ManySearches, deadline=10_000.0)
     [entry] = entries
-    assert guest.REQUESTS_MAX == 45
+    assert guest.REQUESTS_MAX == 90
     assert len(fake.requests) == guest.REQUESTS_MAX == entry["requests"]
     starts = [r.url.params["start"] for r in fake.requests if "start" in r.url.params]
     assert max(int(s) for s in starts) <= (guest.PAGES_PER_SEARCH - 1) * guest.PAGE_SIZE
@@ -639,19 +643,18 @@ def test_breadth_first_every_first_page_before_any_second_and_details_in_turn(
     [entry] = entries
     kinds = ["page" if "start" in r.url.params else "detail" for r in fake.requests]
     starts = [r.url.params["start"] for r in fake.requests if "start" in r.url.params]
-    # The 21 first pages, then the round's details, then second pages.
+    # The 21 first pages, then the round's details, every one before a second page (jobs J20):
+    # 210 new cards, more than the request cap leaves, so no second page is read.
     assert kinds[:21] == ["page"] * 21
-    assert starts[:21] == ["0"] * 21
-    rounds = 21 + guest.DETAILS_PER_ROUND
-    assert kinds[21:rounds] == ["detail"] * guest.DETAILS_PER_ROUND
-    assert starts[21:]
-    assert set(starts[21:]) == {"10"}
+    assert starts == ["0"] * 21
+    assert kinds[21:] == ["detail"] * (guest.REQUESTS_MAX - 21)
     assert len(fake.requests) == guest.REQUESTS_MAX
-    # The round's details take one card of each search in turn: the first card of 15 searches.
-    ids = [int(r.url.path.rsplit("/", 1)[1]) for r in fake.requests[21:rounds]]
-    assert all(job_id % 100 == 0 for job_id in ids)  # each search's first card
-    assert len({job_id // 100 for job_id in ids}) == guest.DETAILS_PER_ROUND
-    assert (entry["searches"], entry["planned"]) == (21, 21)
+    # The details take one card of each search in turn: the first card of every search first.
+    ids = [int(r.url.path.rsplit("/", 1)[1]) for r in fake.requests[21:]]
+    assert all(job_id % 100 == 0 for job_id in ids[:21])  # each search's first card
+    assert len({job_id // 100 for job_id in ids[:21]}) == 21
+    assert all(job_id % 100 == 1 for job_id in ids[21:42])  # then each one's second
+    assert (entry["searches"], entry["planned"], entry["not_searched"]) == (21, 21, [])
 
 
 def test_cards_are_fetched_in_turn_across_searches() -> None:
@@ -680,15 +683,18 @@ def test_the_time_cap_does_not_depend_on_the_websites_read_in_the_browser(
     monkeypatch.setattr(guest, "_search", record)
     others = [{**CUSTOM, "url": f"https://jobs-{n}.example.test/"} for n in range(websites)]
     execute(section(interactive_sites=[LINKEDIN, *others]), deadline=900.0)
-    assert limits == [guest.LINKEDIN_TIME_S]
+    # Since jobs J20 (780 s) the websites' minimum binds once one is ticked, whatever their
+    # number.
+    kept = 900.0 - guest.WEBSITES_MIN_S
+    assert limits == [guest.LINKEDIN_TIME_S if not websites else kept]
 
 
 @pytest.mark.parametrize(
     ("now", "deadline", "websites", "limit"),
     [
-        (0.0, 900.0, 0, 420.0),
-        (0.0, 900.0, 1, 420.0),
-        (0.0, 900.0, 2, 420.0),
+        (0.0, 900.0, 0, 780.0),
+        (0.0, 900.0, 1, 660.0),
+        (0.0, 900.0, 2, 660.0),
         # Started late: the websites read in the browser keep WEBSITES_MIN_S.
         (300.0, 900.0, 2, 660.0),
         (500.0, 900.0, 0, 900.0),  # none ticked: up to the sweep's own deadline
@@ -707,11 +713,17 @@ def test_the_time_limit_keeps_a_minimum_for_the_websites_read_in_the_browser(
 
 
 def test_the_caps_fit_the_sweep() -> None:
-    """LINKEDIN_TIME_S plus the websites' minimum fits the sweep's deadline; every first page
-    fits the time cap at the slowest pace; the request cap binds only at a fast pace."""
-    assert guest.LINKEDIN_TIME_S + guest.WEBSITES_MIN_S <= sweep.SWEEP_TIMEOUT_S
-    assert 21 * guest.PAUSE_S[1] + guest.REQUEST_S <= guest.LINKEDIN_TIME_S
-    assert guest.SEARCHES_MAX * guest.PAUSE_S[0] + guest.REQUEST_S <= guest.LINKEDIN_TIME_S
+    """Jobs J20: 12 saved titles in 3 saved places are 36 first pages, all within the time cap
+    at the slowest pace even with a website read in the browser ticked, with time and requests
+    left for the details of their new cards; the time cap ends before the sweep's deadline of
+    the sources that make no browser call; the request cap binds only at a fast pace."""
+    pairs = 12 * 3
+    limit = guest.time_limit(0.0, sweep.SWEEP_TIMEOUT_S, 1)
+    assert pairs * guest.PAUSE_S[1] + guest.REQUEST_S <= limit
+    assert (limit - pairs * guest.PAUSE_S[1]) // guest.PAUSE_S[1] >= 15  # details, slowest pace
+    assert pairs + 15 <= guest.REQUESTS_MAX
+    assert guest.LINKEDIN_TIME_S < sweep.SWEEP_TIMEOUT_S
+    assert pairs * 2 <= guest.SEARCHES_MAX  # VIE saved doubles them
     assert guest.REQUESTS_MAX * sum(guest.PAUSE_S) / 2 > guest.LINKEDIN_TIME_S - guest.REQUEST_S
 
 
@@ -733,7 +745,7 @@ def test_unwanted_titles_places_never_apply_and_known_postings_are_never_fetched
             card("4100000014", "GenAI Engineer, Security"),  # the person's own rule (cyber)
             card("4100000015", "GenAI Engineer", company="Example Casino"),  # a never apply rule
             card("4100000016", "GenAI Engineer, Agents"),  # the person has it already
-            card("4100000017", "Data Engineer"),  # no saved title
+            card("4100000017", "Data Engineer"),  # no saved title: read (jobs J20)
         ]
     )
     search = section(
@@ -749,9 +761,9 @@ def test_unwanted_titles_places_never_apply_and_known_postings_are_never_fetched
         rules=sweep.never_apply_rules(search),
     )
     [entry] = entries
-    assert fake.paths() == ["search?start=0", "4100000011"]
-    assert entry["unwanted"] == 5
-    assert entry["found"] == 2  # the new one and the duplicate
+    assert fake.paths() == ["search?start=0", "4100000011", "4100000017"]
+    assert entry["unwanted"] == 4
+    assert entry["found"] == 3  # the two new ones and the duplicate
     assert entry["duplicates"] == 1
 
 
@@ -785,11 +797,11 @@ def test_a_security_role_is_left_out_only_by_the_persons_own_rule(
 
 def test_a_posting_of_another_contract_is_dropped_only_when_linkedin_could_not_filter() -> None:
     entries, _, _, _ = execute(section(contract_types=["CDI", "Alternance"]))
-    assert entries[0]["other_contract"] == 2  # both postings are internships
+    assert entries[0]["other_contract"] == 3  # the three postings are internships
     assert entries[0]["found"] == 0
     entries, _, _, _ = execute(section(contract_types=["CDI"]))  # f_JT=F filtered natively
     assert "other_contract" not in entries[0]
-    assert entries[0]["found"] == 2
+    assert entries[0]["found"] == 3
 
 
 def test_the_permission_is_checked_before_every_request() -> None:
@@ -841,16 +853,29 @@ def test_the_fixture_server_replaces_linkedin_in_tests() -> None:
 
 
 def test_browser_mode_keeps_the_finder_agent_and_api_mode_leaves_other_websites_to_it() -> None:
-    # Browser: the website's agent path (no model credential here, so `no_credential`).
+    # Browser: the website's agent path (no model credential here, so `no_credential`), then,
+    # as it failed, LinkedIn's public job search in the same sweep (jobs J20).
     entries, fake, _, _ = execute(section(linkedin_search="browser"))
-    [entry] = entries
-    assert (entry["mode"], entry["error"], fake.requests) == ("llm_browser", "no_credential", [])
+    [entry, fallback] = entries
+    assert (entry["mode"], entry["error"], entry["fallback"]) == (
+        "llm_browser",
+        "no_credential",
+        "guest",
+    )
     assert entry["source_id"] == sweep._source_id("llm_browser", LINKEDIN["url"])
+    assert (fallback["mode"], fallback["fallback"], fallback["fallback_after"]) == (
+        "api",
+        "guest",
+        "no_credential",
+    )
+    assert fallback["found"] == 3
+    assert len(fake.requests) == 4
     # API with another website: LinkedIn through the API, the other website in the browser.
     entries, fake, _, _ = execute(section(interactive_sites=[CUSTOM, LINKEDIN]))
     by_mode = {e["mode"]: e for e in entries}
     assert by_mode["api"]["kind"] == "linkedin"
-    assert by_mode["api"]["found"] == 2
+    assert by_mode["api"]["found"] == 3
+    assert "fallback" not in by_mode["api"]
     assert by_mode["llm_browser"]["host"] == "jobs.example.test"
     assert by_mode["llm_browser"]["error"] == "no_credential"
 
@@ -931,7 +956,7 @@ def test_a_refusal_keeps_every_sweep_away_from_linkedin_for_half_an_hour() -> No
     now[0] = refused_at + guest.COOLDOWN_S + 1
     entries, fake, _, _ = execute(section(), now=now, cooldown=cooldown, deadline=now[0] + 1000)
     assert entries[0]["error"] == "finding_persistence_pending"
-    assert len(fake.requests) == 3
+    assert len(fake.requests) == 4
     # A wall starts it too; a page that failed otherwise does not.
     for answer, cooled in (
         ((302, {"location": "https://www.linkedin.com/authwall"}), True),
@@ -1031,9 +1056,9 @@ def test_a_compressed_answer_is_decoded_within_the_size_cap() -> None:
 
         return make
 
-    entries, _, _, _ = execute(section(), compressed(gzip.compress(SEARCH_PAGE.encode())))
+    entries, fake, _, _ = execute(section(), compressed(gzip.compress(SEARCH_PAGE.encode())))
     assert entries[0]["result_pages"] == 1
-    assert entries[0]["unwanted"] == 1  # the page was read: its cards were filtered
+    assert len(fake.requests) == 4  # the page was read: its three cards were asked for
     assert entries[0]["error"] is None
     bomb = gzip.compress(b"<li>" + b" " * (guest.BODY_MAX * 4))
     assert len(bomb) < guest.BODY_MAX // 100
@@ -1125,7 +1150,7 @@ def test_parsing_runs_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(guest, "parse_cards", cards)
     monkeypatch.setattr(guest, "parse_posting", posting)
     execute(section())
-    assert len(threads) == 3
+    assert len(threads) == 4
     assert threading.main_thread().name not in threads
 
 

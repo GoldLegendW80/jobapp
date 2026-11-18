@@ -12,7 +12,9 @@ gives its one permission (linkedin_guard), which this source checks too.
 - Search: `GET <base>/jobs-guest/jobs/api/seeMoreJobPostings/search` returns an HTML fragment
   of up to 10 job cards (id, title, company, location, posted date). One search per saved title
   and place: no saved place, or a place that says no limit (finder.worldwide), searches
-  `location=Worldwide&geoId=92000000`; any other place is sent as written, without a geoId.
+  `location=Worldwide&geoId=92000000`; any other place is sent as LinkedIn names it
+  (linkedin_places: "Tahiti" as "French Polynesia", jobs J20), else as written, without a
+  geoId; two saved places LinkedIn names the same are one search.
   `f_TPR=r<days * 86400>` limits the age to the saved days. Contract types: `f_JT` with CDI as F
   (full time), CDD as T (temporary), Freelance as C (contract), Stage as I (internship), all the
   saved ones in one filter; Alternance has no code, so with it saved no `f_JT` is sent and the
@@ -24,15 +26,21 @@ gives its one permission (linkedin_guard), which this source checks too.
   PAGES_PER_SEARCH a search, in rounds, breadth first: the first page of every search, then
   the details of that round, then the second page of the searches that go on, and so on; a
   search ends at a short or a stale page. The entry counts the searches that ran (`searches`)
-  against the ones planned (`planned`): a time cap that stops it shows as "11 of 21".
-- Filter before any detail request: the saved titles to include (a card whose title matches
-  none is left out: LinkedIn's relevance is loose), the unwanted titles and places, the person's
-  own never apply rules (the app has none of its own), and the person's postings (same LinkedIn
-  id or address: counted found and duplicate, never fetched again).
+  against the ones planned (`planned`): a time cap that stops it shows as "11 of 21", and the
+  saved title and place pairs it did not search are named (`not_searched`, jobs J20).
+- Filter before any detail request (jobs J20, owner 2026-11-17: the title rule moved after
+  reading): a card a search for a saved title returned is read whatever its title says
+  ("Tech Lead", a French title), so scoring and the posting reader judge its fit; the unwanted
+  titles and places, the person's own never apply rules (the app has none of its own), and the
+  person's postings (same LinkedIn id or address: counted found and duplicate, never fetched
+  again) still leave it out. So does a place none of the saved ones (linkedin_places,
+  `WantedPlaces`: LinkedIn answers postings of elsewhere for a place it does not know), on the
+  card, or on the posting page for a card without its place (`other_place`).
 - Detail: `GET <base>/jobs-guest/jobs/api/jobPosting/<id>`, only for a new card that passed the
-  filter, at most DETAILS_PER_ROUND after each round, taken in turn from each search (its
-  first card, then its second ...), so one search's full page never takes the round's details
-  from the others, and the rest at the end while the budget holds: the description and the
+  filter, every one of a round before the next round of pages (jobs J20: a detail of a card
+  already listed comes before a further page whose cards would not be read), taken in turn
+  from each search (its first card, then its second ...), so one search's full page never
+  takes the details from the others while the budget holds: the description and the
   criteria (seniority, employment type, job function, industries) become the posting's text,
   so the normal scoring applies; the employment type
   gives the contract type when the title says none (`contract_of`). The posting is stored as
@@ -65,6 +73,13 @@ gives its one permission (linkedin_guard), which this source checks too.
   page, although the anonymous calls cannot harm the account. A permission withdrawn after the
   first request ends the source `permission_revoked` (`refused`).
 
+Fallback (jobs J20, owner 2026-11-17: "It must work, even if i'm not logged in"): with
+`search.linkedin_search` "browser", a person with no LinkedIn sign in has LinkedIn searched here
+instead of in the browser, and a browser search that ends failed has it searched here right
+after, in the same sweep (`unsigned`, `fall_back`, run by sources.Runner.websites). Once it
+starts, both entries say `fallback` "guest"; the browser one is then not retried (B24): this
+search takes its retry slot.
+
 LinkedIn's User Agreement forbids automated access, these endpoints included; the owner accepted
 that risk in the LinkedIn checkbox. These requests send no cookie and no account: the worst case
 is a block of the Jetson's address, not a restriction of the person's profile.
@@ -86,7 +101,7 @@ import unicodedata
 import uuid
 import zlib
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from html.parser import HTMLParser
@@ -98,7 +113,7 @@ from redis.exceptions import RedisError
 
 from app.browser import finder
 from app.browser.leases import StoreUnavailableError
-from app.browser.sources import PACE_POLL_S, linkedin
+from app.browser.sources import PACE_POLL_S, linkedin, linkedin_places
 from app.jobs import sweep
 from app.jobs.importer import kind
 from app.jobs.models import ContractType
@@ -120,15 +135,16 @@ WORLDWIDE_LOCATION, WORLDWIDE_GEO_ID = "Worldwide", "92000000"
 PAUSE_S = (8.0, 12.0)  # between two requests of LinkedIn's host (module docstring, Pace)
 PAGES_PER_SEARCH = 3
 PAGE_SIZE = 10  # cards LinkedIn gives a page
-DETAILS_PER_ROUND = 15  # details fetched after a round of pages, the rest later
-REQUESTS_MAX = 45  # about 7.5 minutes at 10 s apart: LINKEDIN_TIME_S stops it first, mostly
+REQUESTS_MAX = 90  # 780 s at the fastest pace (8 s) is 97: LINKEDIN_TIME_S stops it first
 # The source's own time cap (`time_limit`), beside the sweep's other sources that make no
-# browser call (alerts 120 s, feeds 180 s, boards 300 s): 420 s of the sweep's 900 s fit 21
-# first pages (3 titles in 7 places, about 220 s at 10 s apart) and their details. The websites
-# read in the browser start once all of those ended and keep at least WEBSITES_MIN_S.
-LINKEDIN_TIME_S = 420.0
+# browser call (alerts 120 s, feeds 180 s, boards 300 s), below the 900 s they all end by
+# (jobs J20): 12 saved titles in 3 saved places are 36 first pages, 432 s even at 12 s apart,
+# and the details of their new cards take the rest. The websites read in the browser start once
+# all of those ended and keep at least WEBSITES_MIN_S of the 900 s.
+LINKEDIN_TIME_S = 780.0
 WEBSITES_MIN_S = 240.0
-SEARCHES_MAX = 30  # searches built from the saved titles and places, in saved order
+SEARCHES_MAX = 72  # 12 titles in 3 places, twice with VIE saved; in saved order
+FALLBACK = "guest"  # the `fallback` of both entries when this search stands in for the browser
 CARDS_MAX = 25  # cards read from one page, whatever it holds
 BODY_MAX = 2_000_000  # bytes read of one answer
 TIMEOUT_S = 20.0
@@ -199,6 +215,12 @@ class Query:
 def queries_for(search: SearchSection) -> list[Query]:
     """The searches of `search` (module docstring), at most SEARCHES_MAX; ValueError
     (`unsupported_criteria`) when no saved title gives a word to type."""
+    return every_query(search)[:SEARCHES_MAX]
+
+
+def every_query(search: SearchSection) -> list[Query]:
+    """Every search of `search`, in saved order, before SEARCHES_MAX: the pairs past the cap
+    are named among those not searched."""
     titles, _ = typed_words(search.title_include)
     if not titles:
         raise ValueError("unsupported_criteria")
@@ -207,7 +229,15 @@ def queries_for(search: SearchSection) -> list[Query]:
     if not places or any(finder.worldwide(place) for place in places):
         worldwide = next((p for p in places if finder.worldwide(p)), None)
         spots.append((worldwide, WORLDWIDE_LOCATION, WORLDWIDE_GEO_ID))
-    spots.extend((place, place, None) for place in places if not finder.worldwide(place))
+    named: set[str] = set()
+    for place in places:
+        if finder.worldwide(place):
+            continue
+        # LinkedIn's own name (jobs J20); two saved places it names the same are one search.
+        location = linkedin_places.linkedin_name(place)
+        if location.casefold() not in named:
+            named.add(location.casefold())
+            spots.append((place, location, None))
     saved = set(search.contract_types)
     others = saved - {"VIE"}
     # CDD without CDI sends no filter: LinkedIn lists most fixed term contracts as full time,
@@ -232,7 +262,7 @@ def queries_for(search: SearchSection) -> list[Query]:
                 )
             if "VIE" in saved:
                 found.append(Query(f"{title} VIE", place, location, geo_id, None, True, title))
-    return found[:SEARCHES_MAX]
+    return found
 
 
 def search_url(base: str, query: Query, days: int, start: int) -> str:
@@ -771,9 +801,12 @@ class _Run:
     searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
     unwanted: int = 0
     other_contract: int = 0
+    other_place: int = 0  # cards and postings of a place none of the saved ones (jobs J20)
     duplicates: int = 0
     found: int = 0  # findings counted without the run's commits
     planned: int = 0  # the searches built (`searches` counts the ones that ran)
+    # Every saved title and place pair planned, in order: those not in `searches` are named.
+    pairs: dict[tuple[str, str | None], None] = field(default_factory=dict)
 
 
 async def run(
@@ -802,45 +835,181 @@ async def run(
             sweep.not_retried(retry, COOLING)
             await progress()
             continue
-        entry = sweep.bind_source(
-            stats,
-            MODE,
-            (site.url,),
-            {
-                "source_id": sweep._source_id(MODE, site.url),
-                "mode": MODE,
-                "kind": KIND,
-                "host": linkedin.host(runner.base_url),
-                "result_pages": 0,
-                "found": 0,
-                "postings": 0,
-                "error": None,
-            },
-        )
         if index:
+            entry = _bind(runner, stats, site, {})
             entry["error"] = "linkedin_searched_once"
-        else:
-            stats.current_board = entry["source_id"]
+            sweep.finish_source(entry)
             await progress()
-            limit = time_limit(runner.monotonic(), deadline, len(sites) - len(api))
-            commits = getattr(plan, "commits", None)
-            if commits is not None:
-                commits.admit(entry["source_id"])
-            try:
-                entry["error"] = await _search(
-                    runner, plan, search, site, entry, stats, progress, limit
-                )
-            except Exception:
-                logger.exception("linkedin guest search failed")
-                entry["error"] = "page_failed"
-            if commits is not None and not await commits.settle(entry["source_id"]):
-                entry["error"] = entry["error"] or "store_failed"
-                stop = "store_failed"
-        sweep.finish_source(entry)
-        # Cleared only while it still names this search: a source beside may have taken it.
-        sweep.release_board(stats, entry["source_id"])
-        await progress()
+            continue
+        websites = len(sites) - len(api)
+        stop = await _one(runner, plan, search, site, stats, progress, deadline, websites) or stop
     return stop
+
+
+def _bind(runner: Runner, stats: sweep.Stats, site: InteractiveSite, extra: dict[str, Any]) -> Any:
+    return sweep.bind_source(
+        stats,
+        MODE,
+        (site.url,),
+        {
+            "source_id": sweep._source_id(MODE, site.url),
+            "mode": MODE,
+            "kind": KIND,
+            "host": linkedin.host(runner.base_url),
+            "result_pages": 0,
+            "found": 0,
+            "postings": 0,
+            "error": None,
+            **extra,
+        },
+    )
+
+
+async def _one(
+    runner: Runner,
+    plan: Any,
+    search: SearchSection,
+    site: InteractiveSite,
+    stats: sweep.Stats,
+    progress: Callable[[], Awaitable[None]],
+    deadline: float,
+    websites: int,
+    extra: dict[str, Any] | None = None,
+) -> str | None:
+    """Search `site` through the guest API once, its entry bound with `extra`; the code that
+    stops the later websites (a commit that did not settle), else None."""
+    entry = _bind(runner, stats, site, extra or {})
+    stop: str | None = None
+    stats.current_board = entry["source_id"]
+    await progress()
+    limit = time_limit(runner.monotonic(), deadline, websites)
+    commits = getattr(plan, "commits", None)
+    if commits is not None:
+        commits.admit(entry["source_id"])
+    try:
+        entry["error"] = await _search(runner, plan, search, site, entry, stats, progress, limit)
+    except Exception:
+        logger.exception("linkedin guest search failed")
+        entry["error"] = "page_failed"
+    if commits is not None and not await commits.settle(entry["source_id"]):
+        entry["error"] = entry["error"] or "store_failed"
+        stop = "store_failed"
+    sweep.finish_source(entry)
+    # Cleared only while it still names this search: a source beside may have taken it.
+    sweep.release_board(stats, entry["source_id"])
+    await progress()
+    return stop
+
+
+# --- the fallback of the browser search (jobs J20) -----------------------------------------------
+
+# A browser search that ended on one of these is not followed by this one: the run stopped its
+# sources (a commit that did not settle, a source not started after it, findings it holds but
+# has not stored yet), or the person stopped that search. Any other failure is (owner,
+# 2026-11-17: "It must work, even if i'm not logged in").
+NO_FALLBACK = frozenset(
+    {
+        "store_failed",
+        "store_refused",
+        "not_started",
+        "finding_persistence_pending",
+        "agent_cancelled",
+    }
+)
+
+
+def _browser_sites(plan: Any) -> list[InteractiveSite]:
+    """The ticked LinkedIn addresses the browser searches (the frozen mode, `by_api`)."""
+    search = getattr(plan, "search", None)
+    if search is None:
+        return []
+    return [
+        s
+        for s in search.interactive_sites
+        if s.enabled and s.effective_platform == KIND and not by_api(plan, s)
+    ]
+
+
+def _browser_entry(stats: sweep.Stats, site: InteractiveSite) -> dict[str, Any] | None:
+    source_id = sweep._source_id("llm_browser", site.url)
+    return next((e for e in stats.sources if e.get("source_id") == source_id), None)
+
+
+async def unsigned(runner: Runner, plan: Any, stats: sweep.Stats) -> list[InteractiveSite]:
+    """The LinkedIn addresses of the browser search whose person has no LinkedIn sign in (B17,
+    site_logins): their browser entry ends `linkedin_signin` not attempted, and `fall_back`
+    searches them here instead (it writes `fallback` "guest" once that search starts: a sweep
+    stopped before never claims one). Unknown (no sign in store, or one that cannot
+    say) reads as signed in: the browser search runs, and a failure falls back after it."""
+    from app.browser import platform_policy
+
+    logins = getattr(runner, "site_logins", None)
+    if logins is None:
+        return []
+    out: list[InteractiveSite] = []
+    for site in _browser_sites(plan):
+        entry = _browser_entry(stats, site)
+        if entry is None or entry.get("fallback") or entry.get("phase") == "done":
+            continue
+        start = platform_policy.test_start(runner.base_url, KIND, site.url)
+        try:
+            signed = await logins.signed_in(str(plan.user_id), urlsplit(start).hostname or "")
+        except Exception:
+            logger.warning("linkedin sign in unknown, the browser searches it")
+            continue
+        if signed:
+            continue
+        entry.update(
+            phase="done",
+            outcome="not_attempted",
+            reason="linkedin_signin",
+            error="linkedin_signin",
+        )
+        out.append(site)
+    return out
+
+
+async def fall_back(
+    runner: Runner,
+    plan: Any,
+    stats: sweep.Stats,
+    progress: Callable[[], Awaitable[None]],
+    deadline: float,
+    stop: str | None = None,
+) -> None:
+    """LinkedIn's public job search in place of the browser search, in the same sweep: for the
+    address `unsigned` set aside, and for one whose browser search ended failed or partial for
+    any reason but NO_FALLBACK. Once a sweep, for its first such address; the browser entry
+    says `fallback` "guest" (so B24 does not retry it: this takes its slot), and so does the
+    new entry of this search, with the browser's reason (`fallback_after`)."""
+    search = getattr(plan, "search", None)
+    if search is None or stop is not None or sweep.abandoned(plan):
+        return
+    commits = getattr(plan, "commits", None)
+    if commits is not None and getattr(commits, "unsettled", False):
+        return
+    for site in _browser_sites(plan):
+        entry = _browser_entry(stats, site)
+        if entry is None or entry.get("phase") != "done":
+            continue
+        if entry.get("fallback"):
+            continue
+        due = entry.get("outcome") == "not_attempted" and entry.get("reason") == "linkedin_signin"
+        failed = entry.get("outcome") in sweep.FAILED and entry.get("reason") not in NO_FALLBACK
+        if not (due or failed):
+            continue
+        if _guest_entry(stats, site) is not None:
+            return  # searched here once this sweep already
+        entry["fallback"] = FALLBACK
+        await progress()
+        extra = {"fallback": FALLBACK, "fallback_after": entry.get("reason")}
+        await _one(runner, plan, search, site, stats, progress, deadline, 0, extra)
+        return
+
+
+def _guest_entry(stats: sweep.Stats, site: InteractiveSite) -> dict[str, Any] | None:
+    source_id = sweep._source_id(MODE, site.url)
+    return next((e for e in stats.sources if e.get("source_id") == source_id), None)
 
 
 async def _cooling(runner: Runner) -> bool:
@@ -865,13 +1034,13 @@ def time_limit(now: float, deadline: float, websites: int) -> float:
     return min(now + LINKEDIN_TIME_S, deadline - keep)
 
 
-def without_api(plan: Any) -> Any:
+def without_api(plan: Any, also: Sequence[InteractiveSite] = ()) -> Any:
     """The plan the browser's websites run with: the same, without the LinkedIn addresses
-    searched in API mode (`run`)."""
+    searched in API mode (`run`), nor those of `also` (`unsigned`)."""
     search = getattr(plan, "search", None)
     if search is None:
         return plan
-    api = [s for s in search.interactive_sites if s.enabled and by_api(plan, s)]
+    api = [s for s in search.interactive_sites if s.enabled and (by_api(plan, s) or s in also)]
     if not api:
         return plan
     rest = copy.copy(plan)
@@ -924,13 +1093,15 @@ async def _search(
     except StopError as stop:
         return stop.code
     try:
-        queries = queries_for(search)
+        every = every_query(search)
     except ValueError:
         return "unsupported_criteria"
+    queries = every[:SEARCHES_MAX]
     transport = runner.guest_http() if runner.guest_http is not None else None
     if transport is None:
         return "page_failed"  # no way out configured: no request at all
-    done = _Run(planned=len({(q.title, q.place) for q in queries}))
+    pairs = dict.fromkeys((q.title, q.place) for q in every)
+    done = _Run(planned=len(pairs), pairs=pairs)
     try:
         async with httpx.AsyncClient(
             transport=transport,
@@ -968,9 +1139,9 @@ async def _rounds(
     progress: Callable[[], Awaitable[None]],
     done: _Run,
 ) -> None:
-    """The pages in rounds, breadth first: the first page of every search, then up to
-    DETAILS_PER_ROUND details of new cards taken in turn from each search, then the next page
-    of the searches that go on; the details left at the end."""
+    """The pages in rounds, breadth first: the first page of every search, then the details of
+    its new cards taken in turn from each search, then the next page of the searches that go
+    on (jobs J20: every detail of a round before the next round of pages)."""
     host = urlsplit(base).hostname or linkedin.HOST
     # The person's postings when the search starts. One a source beside this one (LinkedIn's
     # alert e-mails) stores meanwhile is fetched and then found a duplicate by the commits,
@@ -1001,6 +1172,8 @@ async def _rounds(
                 new += 1
                 if not wanted.keep(card):
                     done.unwanted += 1
+                elif not wanted.where.matches(card.location, card.title):
+                    done.other_place += 1  # LinkedIn answered another place (jobs J20)
                 elif card.job_id in known:
                     _duplicate(stats, entry, done)
                 else:
@@ -1009,12 +1182,11 @@ async def _rounds(
                 still.append(query)
             await progress()
         _in_turn(pending)
-        await _details(guest, base, plan, search, pending, entry, done, DETAILS_PER_ROUND)
+        await _details(guest, base, plan, search, pending, entry, done, len(pending))
         await progress()
         active = still
         if not active:
             break
-    await _details(guest, base, plan, search, pending, entry, done, len(pending))
 
 
 def _in_turn(pending: deque[tuple[Card, Query]]) -> None:
@@ -1043,26 +1215,31 @@ def _duplicate(stats: sweep.Stats, entry: dict[str, Any], done: _Run) -> None:
 
 
 class _Wanted:
-    """The saved titles to include, the unwanted titles and places, and the person's never apply
-    rules, read on a card before any detail."""
+    """The unwanted titles and places, and the person's never apply rules, read on a card before
+    any detail. The saved titles to include are not (jobs J20, module docstring): a card a
+    search for one of them returned is read, and scoring judges it."""
 
     def __init__(self, search: SearchSection, rules: Any) -> None:
         def pattern(terms: Any) -> re.Pattern[str] | None:
             return matching.compile_terms(list(terms.terms), terms.advanced_regex)
 
-        self.include = pattern(search.title_include)
         self.titles = pattern(search.title_exclude)
         self.places = pattern(search.location_exclude)
+        self.where = wanted_places(search)
         self.rules = list(rules) if rules is not None else sweep.never_apply_rules(search)
 
     def keep(self, card: Card) -> bool:
-        if self.include is not None and not self.include.search(card.title):
-            return False
         if self.titles is not None and self.titles.search(card.title):
             return False
         if self.places is not None and self.places.search(card.location):
             return False
         return not any(rule.matches(card.company, card.title) for rule in self.rules)
+
+
+def wanted_places(search: SearchSection) -> linkedin_places.WantedPlaces:
+    """The saved places a card's or a posting's place must match (linkedin_places, jobs J20)."""
+    places, _ = typed_words(search.location)
+    return linkedin_places.WantedPlaces(places, search.remote_stance, finder.worldwide)
 
 
 async def _details(
@@ -1079,6 +1256,7 @@ async def _details(
     finder.VERIFIED_BATCH_MAX at a time."""
     batch: list[GuestFinding] = []
     saved = set(search.contract_types)
+    where = wanted_places(search)
     try:
         for _ in range(min(count, len(pending))):
             card, query = pending.popleft()
@@ -1091,6 +1269,9 @@ async def _details(
             done.details += 1
             url = view_url(base, card.job_id)
             location = card.location or detail.location
+            if not card.location and not where.matches(location, card.title):
+                done.other_place += 1  # a card without its place: the posting's says (J20)
+                continue
             contract = contract_of(card.title, location, url, detail.criteria)
             if query.check_contract and saved and contract.value not in saved:
                 done.other_contract += 1
@@ -1145,9 +1326,17 @@ def _write(entry: dict[str, Any], done: _Run, plan: Any) -> None:
     entry["searched"] = [
         {"title": title, "place": place} for title, place in list(done.searches)[:SEARCHES_LISTED]
     ]
+    # The pairs a cap or a stop left out (jobs J20): the first SEARCHES_LISTED, in saved order;
+    # `planned` less `searches` counts them all.
+    left = [pair for pair in done.pairs if pair not in done.searches]
+    entry["not_searched"] = [
+        {"title": title, "place": place} for title, place in left[:SEARCHES_LISTED]
+    ]
     if done.unwanted:
         entry["unwanted"] = done.unwanted
     if done.other_contract:
         entry["other_contract"] = done.other_contract
+    if done.other_place:
+        entry["other_place"] = done.other_place
     if getattr(plan, "commits", None) is None:
         entry["found"] = entry.get("found", 0) + done.found

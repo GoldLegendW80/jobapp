@@ -244,3 +244,27 @@ def test_held_start_wins_and_later_edit_cannot_change_frozen_scope(factory, cloc
         assert [entry.url for entry in claimed.search.interactive_sites] == [BEFORE]
     finally:
         sa.event.remove(engine, "before_cursor_execute", observe)
+
+
+def test_the_guest_search_standing_in_for_a_browser_search_keeps_its_entry(
+    factory, clock, alice, fake_queue
+):
+    """J20: the entry of LinkedIn's public job search in place of a browser search is not in the
+    frozen scope, and every write of the progress used to drop it (found in the b10 journey)."""
+    set_profile(factory, alice.id, two_websites())
+    start(factory, alice, clock, fake_queue)
+    with factory() as db:
+        sweep_id = db.query(Sweep).filter_by(user_id=alice.id).one().id
+    assert sweep.claim(factory, sweep_id, clock()) is not None
+    guest = {
+        "source_id": sweep._source_id("api", "https://jobs.example.org/"),
+        "mode": "api", "kind": "linkedin", "host": "www.linkedin.com", "phase": "done",
+        "fallback": "guest", "fallback_after": "linkedin_signin", "error": None,
+    }  # fmt: skip
+    progress = sweep.Stats(sources=[guest])
+    sweep.save_progress(factory, sweep_id, progress, clock())
+    sweep.finish_done(factory, sweep_id, progress, clock())
+    with factory() as db:
+        kept = db.get(Sweep, sweep_id).stats["sources"]
+    assert len(kept) == 3
+    assert kept[-1]["fallback_after"] == "linkedin_signin"

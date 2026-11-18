@@ -545,11 +545,16 @@ class Runner:
         stop: str | None = None,
     ) -> None:
         """The websites read in the browser, LinkedIn in API mode left out (`linkedin` searched
-        it): the sweep runs them after its API sources, with the time left."""
+        it): the sweep runs them after its API sources, with the time left. A LinkedIn of the
+        browser search falls back to LinkedIn's public job search (jobs J20): in its place when
+        the person has no LinkedIn sign in, right after it when it ended failed."""
         from app.browser.sources import linkedin_guest
         from app.browser.sources.interactive import run_selected
 
-        await run_selected(self, linkedin_guest.without_api(plan), stats, progress, deadline, stop)
+        unsigned = await linkedin_guest.unsigned(self, plan, stats)
+        rest = linkedin_guest.without_api(plan, unsigned)
+        await run_selected(self, rest, stats, progress, deadline, stop)
+        await linkedin_guest.fall_back(self, plan, stats, progress, deadline, stop)
 
     async def __call__(
         self,
