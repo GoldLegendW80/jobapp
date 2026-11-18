@@ -12,6 +12,7 @@ from claude_agent_sdk import ToolResultBlock, ToolUseBlock
 from app.agents import definitions, runner, sdk_options
 from app.agents import tools as app_tools
 from app.browser import finder
+from app.browser.sources import interactive
 from app.jobs import sweep
 from app.profile.schemas import SearchSection
 
@@ -186,3 +187,25 @@ def test_the_web_scope_needs_only_its_search_before_it_reports_nothing(reason: s
     assert left(session(web=True, routes=others), reason) == ["web_search"]  # type: ignore[arg-type]
     assert left(session(web=False, routes={"web_search"}), "no_match") != []  # type: ignore[arg-type]
     assert left(session(web=True, routes=set(), found=1), reason) == []  # type: ignore[arg-type]
+
+
+async def _nothing() -> None:
+    return None
+
+
+def test_the_web_search_unticked_never_runs_nor_counts() -> None:
+    stats = sweep.Stats()
+    plan = SimpleNamespace(search=SearchSection.model_validate({"web_search": False}))
+    # Never reached: a run would need the runner.
+    asyncio.run(interactive.run_web(None, plan, stats, _nothing, 0.0, None))  # type: ignore[arg-type]
+    assert stats.sources == []
+
+
+def test_a_stopped_sweep_marks_the_web_search_not_started() -> None:
+    stats = sweep.Stats()
+    plan = SimpleNamespace(search=SearchSection.model_validate({}))
+    asyncio.run(interactive.run_web(None, plan, stats, _nothing, 0.0, "no_credential"))  # type: ignore[arg-type]
+    [entry] = stats.sources
+    assert entry["source_id"] == sweep.web_entry()["source_id"]
+    assert entry["error"] == "not_started"
+    assert entry["outcome"] == "not_attempted"
