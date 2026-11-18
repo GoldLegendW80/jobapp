@@ -42,8 +42,9 @@ def node_text(node: Any) -> str:
 
 def read_cards(html: str, here: str) -> dict[str, Any]:
     """CARDS_SCRIPT's reading of a page, by the same selectors."""
+    root = guest._tree(html)
     cards = []
-    for card in guest._tree(html).walk():
+    for card in root.walk():
         if "base-search-card" not in card.classes():
             continue
         link = next(
@@ -61,7 +62,20 @@ def read_cards(html: str, here: str) -> dict[str, Any]:
                 "date": stamp.attrs.get("datetime", "") if stamp else "",
             }
         )
-    return {"cards": cards}
+    lists = [n for n in root.walk() if "jobs-search__results-list" in n.classes()]
+    items = (
+        sum(1 for c in lists[0].children if not isinstance(c, str) and c.tag == "li")
+        if lists
+        else 0
+    )
+    urns = sum(1 for n in root.walk() if "data-entity-urn" in n.attrs)
+    none = {"no-results", "jobs-search-no-results", "jobs-search-no-results-banner"}
+    return {
+        "cards": cards,
+        "listed": max(items, urns),
+        "results": bool(lists),
+        "none": any(n.classes() & none for n in root.walk()),
+    }
 
 
 def read_posting(html: str) -> dict[str, Any]:
@@ -96,16 +110,16 @@ def read_posting(html: str) -> dict[str, Any]:
 
 class PageTools:
     """browserd's discovery tools on one sweep lease, over the J22 fixture pages: a search page
-    answers `search/engineer.html` whatever the words, a posting `view/<id>/index.html` (404
-    when there is none). `statuses` and `redirects` override a navigation by its number (1
-    based); `heading` is the page's one heading in the snapshot."""
+    answers `search/<search>` whatever the words (engineer.html: three cards), a posting
+    `view/<id>/index.html` (404 when there is none). `statuses` and `redirects` override a
+    navigation by its number (1 based); `heading` is the page's one heading in the snapshot."""
 
     def __init__(self, now: list[float], statuses: dict[int, int] | None = None,
                  redirects: dict[int, str] | None = None, heading: str = "Engineer jobs",
-                 empty: bool = False) -> None:  # fmt: skip
+                 empty: bool = False, search: str = "engineer.html") -> None:  # fmt: skip
         self.now = now
         self.statuses, self.redirects = statuses or {}, redirects or {}
-        self.heading, self.empty = heading, empty
+        self.heading, self.empty, self.search = heading, empty, search
         self.navigations: list[tuple[str, float]] = []
         self.calls: list[str] = []
         self.scopes: list[Any] = []
@@ -122,7 +136,7 @@ class PageTools:
             status = self.statuses.get(number, 200)
             path = urlsplit(self.here).path.removeprefix("/j22/linkedin/jobs/")
             if path == "search":
-                file = ROOT / "j22/linkedin/jobs/search/engineer.html"
+                file = ROOT / "j22/linkedin/jobs/search" / self.search
             else:
                 file = ROOT / "j22/linkedin/jobs" / path / "index.html"
             if not file.is_file() or self.empty:
@@ -163,6 +177,7 @@ def run(
     *,
     enabled: bool = True,
     known: Any = None,
+    policy: Any = None,
 ) -> tuple[list[dict[str, Any]], PageTools, FakeLeases, LinkedInFake]:
     """One sweep's browser hook (sources.Runner) as the worker builds it: LinkedIn's guest API
     first, the page after it when it refused."""
@@ -191,6 +206,7 @@ def run(
         sweep_id=uuid.uuid4(),
         known=known or Known(),
         rules=None,
+        linkedin_not_searched={},  # sweep.Plan's: every pair the public job search left
     )
     runner = sources.Runner(
         leases,
@@ -199,7 +215,7 @@ def run(
         monotonic=lambda: now[0],
         rng=random.Random(11),  # noqa: S311  deterministic test pacing
         pacer=sources.MemoryPacer(lambda: now[0]),
-        interactive_policy=Allow(),
+        interactive_policy=policy or Allow(),
         base_url=BASE_URL,
         guest_http=lambda: httpx.MockTransport(fake.handler),
         guest_cooldown=guest.MemoryCooldown(lambda: now[0]),
@@ -229,9 +245,9 @@ def test_after_a_429_the_page_reads_the_pairs_not_searched_signed_out_by_code() 
     assert all(scope == {"start": f"{BASE}/jobs/search"} for scope in tools.scopes)
     # Code reads every page: navigate, its snapshot, one script; never a sign in, never a click.
     assert set(tools.calls) == {"browser_navigate", "browser_snapshot", "browser_evaluate"}
-    # Breadth first: the first page of both searches, the new cards' postings, then the next
-    # page of the search that gave new cards; the second search's page gave none.
-    assert tools.paths() == ["search", "search", "4200000101", "4200000102", "search?start=25"]
+    # Breadth first: the first page of both searches, then the new cards' postings; no next
+    # page, as a page of three cards is not a full page (PAGE_SIZE).
+    assert tools.paths() == ["search", "search", "4200000101", "4200000102"]
     first = urlsplit(tools.navigations[0][0])
     assert first.path == "/j22/linkedin/jobs/search"
     assert first.query == "keywords=AI%20Engineer&location=Reunion&f_TPR=r2592000"
@@ -246,9 +262,10 @@ def test_after_a_429_the_page_reads_the_pairs_not_searched_signed_out_by_code() 
     ]
     assert entry["page"] == {
         "searches": 2,
-        "result_pages": 3,
-        "cards": 9,
+        "result_pages": 2,
+        "cards": 6,
         "details": 2,
+        "missing": 0,
         "postings": 0,  # no commits in this run: `found` counts them
     }
 
@@ -367,13 +384,14 @@ def test_the_cards_and_the_posting_are_read_whatever_their_shape() -> None:
                 {"link": "javascript:alert(1)", "title": "No id"},
                 "not a card",
             ]
-        }
+        },
+        "pages.test",
     )
     assert [(c.job_id, c.title, c.published) for c in cards] == [
         ("11", "AI Engineer", ""),
         ("12", "B", ""),
     ]
-    assert page.cards_of({"cards": "x"}) == []
+    assert page.cards_of({"cards": "x"}, "pages.test") == []
     assert page.posting_of({"description": "  "}) is None
     detail = page.posting_of(
         {"description": "Build\x00 agents", "criteria": [["Employment type", "Internship"], [1]]}
@@ -395,3 +413,229 @@ def test_the_address_is_built_by_code_from_the_saved_pair() -> None:
     )
     assert page.posting_page(guest.BASE_URL, "42") == "https://www.linkedin.com/jobs/view/42"
     assert LINKEDIN["url"].startswith("https://www.linkedin.com")
+
+
+def test_activity_says_failed_after_a_failure_of_the_public_api() -> None:
+    for reason in ("page_failed", "layout_changed"):
+        note = activity_steps._source_note(
+            {"mode": "api", "fallback": "page", "fallback_after": reason}
+        )
+        assert note == "LinkedIn's public job search page, as the public API failed"
+
+
+# --- fail closed: a changed layout, a page or a card off LinkedIn (round 1) ----------------------
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        PageTools([0.0], search="changed.html"),  # list items, cards of a renamed class
+        PageTools([0.0], empty=True),  # neither a results list nor a no results message
+    ],
+    ids=["renamed-cards", "no-list-no-message"],
+)
+def test_a_first_page_on_a_changed_layout_is_never_an_empty_result(tools: PageTools) -> None:
+    entries, tools, leases, _ = run(reunion(), tools=tools)
+    [entry] = entries
+    assert len(tools.navigations) == 1  # the source ends at the first page
+    assert (entry["reason"], entry["outcome"], entry["fallback"]) == (
+        "layout_changed",
+        "failed",
+        "page",
+    )
+    assert entry["not_searched"] == [
+        {"title": "AI Engineer", "place": "La Réunion"},
+        {"title": "Data Engineer", "place": "La Réunion"},
+    ]
+    assert (entry["searches"], entry["page"]["searches"]) == (0, 0)
+    assert leases.released == ["lease-1"]
+
+
+def test_linkedins_no_results_page_is_an_empty_result() -> None:
+    entries, tools, _, _ = run(reunion(), tools=PageTools([0.0], search="none.html"))
+    [entry] = entries
+    assert tools.paths() == ["search", "search"]
+    assert entry["reason"] is None
+    assert (entry["searches"], entry["not_searched"]) == (2, [])
+    assert (entry["page"]["searches"], entry["page"]["cards"]) == (2, 0)
+
+
+@pytest.mark.parametrize(
+    ("value", "changed"),
+    [
+        ({"cards": [], "listed": 0, "results": True, "none": False}, False),  # an empty list
+        ({"cards": [], "listed": 0, "results": False, "none": True}, False),  # the message
+        ({"cards": [], "listed": 0, "results": True, "none": True}, False),
+        ({"cards": [], "listed": 3, "results": True, "none": False}, True),  # renamed cards
+        ({"cards": [], "listed": 3, "results": False, "none": False}, True),  # urns, no list
+        ({"cards": [], "listed": 1, "results": True, "none": True}, True),
+        ({"cards": [], "listed": 0, "results": False, "none": False}, True),  # nothing known
+        ({"cards": []}, True),  # an older script
+        ({"cards": [], "listed": "0", "results": True, "none": False}, True),
+        ({"cards": [], "listed": -1, "results": True, "none": False}, True),
+        ({"cards": [], "listed": 0.0, "results": True, "none": False}, True),
+        ({"cards": [], "listed": True, "results": True, "none": False}, True),
+        ({"cards": [], "listed": 0, "results": 1, "none": False}, True),
+        ({"cards": [], "listed": 0, "results": True, "none": None}, True),
+        ({"cards": [], "listed": None, "results": None, "none": None}, True),
+    ],
+)
+def test_the_layout_rule_fails_closed(value: dict[str, Any], changed: bool) -> None:
+    assert page._layout_changed(value) is changed
+
+
+@pytest.mark.parametrize(
+    ("url", "kept"),
+    [
+        ("https://www.linkedin.com/jobs/search?keywords=x", True),
+        ("https://linkedin.com/jobs/search", True),
+        ("https://fr.linkedin.com/jobs/search", True),
+        ("http://www.linkedin.com/jobs/search", True),
+        ("https://WWW.LinkedIn.com/jobs/search", True),
+        ("http://pages.test:8080/j22/linkedin/jobs/search", True),  # the fixture host
+        ("https://evil.example/jobs/view/1", False),
+        ("https://linkedin.com.evil.example/jobs/view/1", False),
+        ("https://evillinkedin.com/jobs/view/1", False),
+        ("https://www.linkedin.com.example/jobs/view/1", False),
+        ("https://www.linkedin.co/jobs/view/1", False),
+        ("https://linkedin.evil.example/jobs/view/1", False),
+        ("https://evil.example/?u=https://www.linkedin.com/jobs/view/1", False),
+        ("https://evil.example#www.linkedin.com", False),
+        ("https://www.linkedin.com@evil.example/jobs/view/1", False),
+        ("ftp://www.linkedin.com/jobs/view/1", False),
+        ("javascript:alert(1)", False),
+        ("data:text/html,linkedin.com", False),
+        ("//www.linkedin.com/jobs/view/1", False),
+        ("/jobs/view/1", False),
+        ("", False),
+        ("https://[::1/jobs", False),
+        ("https://www.linkedin.com/" + "x" * 2000, False),
+        ("http://pages.test.evil.example/jobs/view/1", False),
+    ],
+)
+def test_an_address_is_linkedins_or_the_fixture_hosts_only(url: str, kept: bool) -> None:
+    assert page.on_linkedin(url, "pages.test") is kept
+
+
+def test_a_page_off_linkedin_ends_the_page_with_nothing_stored() -> None:
+    tools = PageTools([0.0], redirects={1: "https://evil.example/jobs/search?keywords=AI"})
+    entries, tools, leases, _ = run(reunion(), tools=tools)
+    [entry] = entries
+    assert len(tools.navigations) == 1
+    assert "browser_evaluate" not in tools.calls  # nothing it shows is read
+    assert (entry["reason"], entry["fallback"]) == ("page_failed", "page")
+    assert entry["found"] == 0
+    assert (entry["searches"], len(entry["not_searched"])) == (0, 2)
+    assert leases.released == ["lease-1"]
+
+
+def test_a_card_whose_link_leads_off_linkedin_is_dropped() -> None:
+    cards = page.cards_of(
+        {
+            "cards": [
+                {"link": "https://evil.example/jobs/view/21", "title": "Elsewhere"},
+                {"urn": "urn:li:jobPosting:22", "link": "https://evil.example/x", "title": "U"},
+                {"link": "https://fr.linkedin.com/jobs/view/ai-engineer-23", "title": "Fr"},
+                {"urn": "urn:li:jobPosting:24", "link": "", "title": "No link"},
+                {"link": "https://www.linkedin.com.evil.example/jobs/view/25", "title": "Look"},
+            ]
+        },
+        "www.linkedin.com",
+    )
+    assert [(c.job_id, c.title) for c in cards] == [("23", "Fr"), ("24", "No link")]
+
+
+# --- the bounds: pages, permission, every pair, next pages, missing pages (round 1) --------------
+
+
+def many(titles: int) -> Any:
+    return section(
+        title_include={"terms": [f"Engineer {n}" for n in range(titles)]},
+        location={"terms": ["La Réunion"]},
+    )
+
+
+def test_at_most_pages_max_pages_and_the_rest_stays_not_searched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(page, "PAGES_MAX", 3)
+    entries, tools, leases, _ = run(many(4))
+    [entry] = entries
+    assert tools.paths() == ["search", "search", "search"]
+    assert entry["reason"] is None  # the cap ends it without an error, what it read kept
+    assert entry["page"]["searches"] == 3
+    assert entry["not_searched"] == [{"title": "Engineer 3", "place": "La Réunion"}]
+    assert leases.released == ["lease-1"]
+
+
+class RevokedAfterFirstPage(Allow):
+    """The permission withdrawn once the reader opened its first page."""
+
+    def __init__(self, tools: PageTools) -> None:
+        super().__init__()
+        self.tools = tools
+
+    async def check(self, context: Any) -> str | None:
+        self.checks += 1
+        return "permission_revoked" if self.tools.navigations else None
+
+
+def test_a_permission_withdrawn_mid_run_stops_the_page_before_its_next_call() -> None:
+    tools = PageTools([0.0])
+    entries, tools, leases, _ = run(reunion(), tools=tools, policy=RevokedAfterFirstPage(tools))
+    [entry] = entries
+    # The navigation was checked before it; the next call (its snapshot) is refused.
+    assert tools.calls == ["browser_navigate"]
+    assert (entry["reason"], entry["fallback"]) == ("permission_revoked", "page")
+    assert (entry["searches"], len(entry["not_searched"])) == (0, 2)
+    assert leases.released == ["lease-1"]
+
+
+def test_every_pair_left_is_read_past_the_fifty_the_summary_lists() -> None:
+    entries, tools, _, _ = run(many(55))
+    [entry] = entries
+    assert tools.paths().count("search") == 55
+    assert (entry["searches"], entry["planned"]) == (55, 55)
+    assert entry["not_searched"] == []
+    assert len(entry["searched"]) == 50  # the summary lists 50, `searches` counts them all
+    assert entry["page"]["searches"] == 55
+
+
+@pytest.mark.parametrize(
+    ("size", "paths"),
+    [
+        # A full page with new cards: its next page is read (start = page * PAGE_SIZE).
+        (3, ["search", "search", "4200000101", "4200000102", "search?start=3"]),
+        # A page of fewer cards than a full page: no next page, even with new cards.
+        (4, ["search", "search", "4200000101", "4200000102"]),
+    ],
+)
+def test_a_next_page_only_after_a_full_page_with_new_cards(
+    monkeypatch: pytest.MonkeyPatch, size: int, paths: list[str]
+) -> None:
+    monkeypatch.setattr(page, "PAGE_SIZE", size)
+    _, tools, _, _ = run(reunion())
+    assert tools.paths() == paths
+
+
+def test_a_search_page_gone_leaves_its_pair_not_searched() -> None:
+    entries, tools, _, _ = run(reunion(), tools=PageTools([0.0], statuses={1: 404}))
+    [entry] = entries
+    assert tools.paths()[:2] == ["search", "search"]  # the other search goes on
+    # No failure: the cards of the other search were read (no commits in this run).
+    assert (entry["reason"], entry["found"]) == ("finding_persistence_pending", 2)
+    assert entry["not_searched"] == [{"title": "AI Engineer", "place": "La Réunion"}]
+    assert entry["searched"] == [{"title": "Data Engineer", "place": "La Réunion"}]
+    assert (entry["page"]["searches"], entry["page"]["missing"]) == (1, 1)
+
+
+@pytest.mark.parametrize("status", [500, 503, 403, 302])
+def test_a_search_page_answering_an_error_ends_the_page_with_its_pair_not_searched(
+    status: int,
+) -> None:
+    entries, tools, _, _ = run(reunion(), tools=PageTools([0.0], statuses={2: status}))
+    [entry] = entries
+    assert tools.paths() == ["search", "search"]
+    assert entry["reason"] == "page_failed"
+    assert entry["searched"] == [{"title": "AI Engineer", "place": "La Réunion"}]
+    assert entry["not_searched"] == [{"title": "Data Engineer", "place": "La Réunion"}]

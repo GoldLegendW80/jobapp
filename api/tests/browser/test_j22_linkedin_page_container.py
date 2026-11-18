@@ -59,7 +59,11 @@ def test_the_scripts_read_the_cards_and_the_posting_on_real_chromium(j22):
         assert opened["ok"], opened
         read = lease.tool("browser_evaluate", function=page.CARDS_SCRIPT, **marker)
         assert read["ok"], read
-        cards = page.cards_of(page._loads(read))
+        value = page._loads(read)
+        # What the results list holds, beside the cards: a first page of no card is an empty
+        # result only on an empty list or LinkedIn's no results message (`_layout_changed`).
+        assert (value["listed"], value["results"], value["none"]) == (3, True, False)
+        cards = page.cards_of(value, "pages")
         assert [(c.job_id, c.title, c.company, c.location, c.published) for c in cards] == [
             ("4200000101", "AI Engineer", "Example Reunion", "Saint-Denis, Réunion, Reunion",
              "2026-11-12"),
@@ -67,6 +71,18 @@ def test_the_scripts_read_the_cards_and_the_posting_on_real_chromium(j22):
              "2026-11-17"),
             ("4200000103", "ML Engineer", "Example Miami", "Miami, FL", "2026-11-10"),
         ]  # fmt: skip
+        for name, listed, results, none, changed in (
+            ("changed.html", 2, True, False, True),  # cards of a renamed class
+            ("none.html", 0, False, True, False),  # LinkedIn's no results message
+        ):
+            opened = lease.tool("browser_navigate", url=f"{PAGES}/search/{name}", **marker)
+            assert opened["ok"], opened
+            read = lease.tool("browser_evaluate", function=page.CARDS_SCRIPT, **marker)
+            assert read["ok"], read
+            value = page._loads(read)
+            assert page.cards_of(value, "pages") == []
+            assert (value["listed"], value["results"], value["none"]) == (listed, results, none)
+            assert page._layout_changed(value) is changed
         opened = lease.tool("browser_navigate", url=f"{PAGES}/view/4200000101/", **marker)
         assert opened["ok"], opened
         read = lease.tool("browser_evaluate", function=page.POSTING_SCRIPT, **marker)
