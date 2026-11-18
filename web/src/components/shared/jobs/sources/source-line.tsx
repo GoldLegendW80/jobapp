@@ -117,16 +117,21 @@ export function SourceLine({
           ) : null}
         </ItemContent>
         <ItemActions className="-mt-0.5">
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            disabled={disabled}
-            aria-label={`Remove ${row.name}`}
-            onClick={onRemove}
-          >
-            <X aria-hidden="true" />
-          </Button>
+          {/* J21: the web search is paused, never removed; paused, it offers Search it again. */}
+          {row.kind === "web" && !row.enabled ? null : (
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              disabled={disabled}
+              aria-label={
+                row.kind === "web" ? `Pause ${row.name}` : `Remove ${row.name}`
+              }
+              onClick={onRemove}
+            >
+              <X aria-hidden="true" />
+            </Button>
+          )}
         </ItemActions>
       </li>
     </Item>

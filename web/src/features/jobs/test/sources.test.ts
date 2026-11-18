@@ -18,12 +18,19 @@ import {
   withFeed,
   withScheme,
   withoutRow,
+  WEB_HOW,
+  WEB_NAME,
   withRecommended,
   type SourcesDraft,
 } from "../helpers/sources";
 import { EMPTY } from "@/features/profile/api/profile-api";
 
-const EMPTY_DRAFT: SourcesDraft = { sites: [], boards: null, feeds: [] };
+const EMPTY_DRAFT: SourcesDraft = {
+  sites: [],
+  boards: null,
+  feeds: [],
+  web: true,
+};
 
 describe("an address the person types", () => {
   it("gets https when typed without its scheme, and keeps one typed", () => {
@@ -114,9 +121,11 @@ describe("the list", () => {
           enabled: true,
         },
       ],
+      web: true,
     };
     const rows = rowsOf(draft);
     expect(rows.map((row) => [row.name, row.how, row.enabled])).toEqual([
+      [WEB_NAME, WEB_HOW, true],
       ["LinkedIn", "Job website, searched by the assistant", true],
       [
         "careers.example.org",
@@ -130,13 +139,14 @@ describe("the list", () => {
       ],
       ["Example Labs", "Company job board on Ashby, read directly", true],
     ]);
-    expect(rows[0]?.platform).toBe("linkedin");
+    expect(rows[1]?.platform).toBe("linkedin");
     // The paused website is not searched.
-    expect(sourceCount(draft)).toBe(3);
-    const second = rows[1];
+    expect(sourceCount(draft)).toBe(4);
+    const second = rows[2];
     if (!second) throw new Error("no second line");
-    expect(sourceCount(resumed(draft, second))).toBe(4);
+    expect(sourceCount(resumed(draft, second))).toBe(5);
     expect(rowsOf(withoutRow(draft, second)).map((row) => row.name)).toEqual([
+      WEB_NAME,
       "LinkedIn",
       "Himalayas",
       "Example Labs",
@@ -147,6 +157,30 @@ describe("the list", () => {
 
   it("reads a search section that never saved a board list as no board at all", () => {
     expect(draftOfSearch(structuredClone(EMPTY.search))).toEqual(EMPTY_DRAFT);
+  });
+
+  it("ticks Anywhere on the web unless the search says no, and only pauses it", () => {
+    // J21: ticked for everyone, existing setups included (web_search absent).
+    expect(draftOfSearch(structuredClone(EMPTY.search)).web).toBe(true);
+    expect(
+      draftOfSearch({ ...structuredClone(EMPTY.search), web_search: false })
+        .web,
+    ).toBe(false);
+    const [web] = rowsOf(EMPTY_DRAFT);
+    if (!web) throw new Error("no web line");
+    expect([web.kind, web.name, web.platform]).toEqual(["web", WEB_NAME, null]);
+    expect(web.how).not.toMatch(/[–—]| - /);
+    expect(sourceCount(EMPTY_DRAFT)).toBe(1);
+    // Removing it unticks it: still a line, shown paused, and searched again on demand.
+    const paused = withoutRow(EMPTY_DRAFT, web);
+    expect(paused.web).toBe(false);
+    expect(sourceCount(paused)).toBe(0);
+    expect(rowsOf(paused).map((row) => [row.name, row.enabled])).toEqual([
+      [WEB_NAME, false],
+    ]);
+    const [again] = rowsOf(paused);
+    if (!again) throw new Error("no web line");
+    expect(resumed(paused, again).web).toBe(true);
   });
 
   it("offers examples of every kind, with no dash as a separator", () => {
@@ -182,6 +216,7 @@ describe("the recommended places", () => {
       sites: [siteOf("https://fr.linkedin.com/jobs/")],
       boards: null,
       feeds: ["arbeitnow"],
+      web: true,
     };
     expect(missingRecommended(draft).map((example) => example.label)).toEqual([
       "Welcome to the Jungle",
@@ -206,7 +241,12 @@ describe("the recommended places", () => {
     const sites = Array.from({ length: 9 }, (_, index) =>
       siteOf(`https://careers${String(index)}.example.org/`),
     );
-    const result = withRecommended({ sites, boards: null, feeds: [] });
+    const result = withRecommended({
+      sites,
+      boards: null,
+      feeds: [],
+      web: true,
+    });
     expect(result.draft.sites).toHaveLength(10);
     expect(result.added).toEqual(["LinkedIn", "Arbeitnow", "Himalayas"]);
     expect(result.left).toEqual([

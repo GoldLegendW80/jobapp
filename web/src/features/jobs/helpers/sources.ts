@@ -7,7 +7,9 @@
  * - a job feed (Arbeitnow, Himalayas, Adzuna): read through its official API (app/jobs/feeds);
  * - a company job board on Ashby, Greenhouse, Lever, SmartRecruiters, Workable or Recruitee:
  *   read through its public API (app/jobs/boards, POST /api/jobs/boards/detect names it);
- * - any other address: a website of the person's own, browsed by the assistant.
+ * - any other address: a website of the person's own, browsed by the assistant;
+ * - "Anywhere on the web" (jobs J21), no address: the assistant searches the whole web as a
+ *   person would, ticked for everyone (`web_search`, true when absent), paused when unticked.
  *
  * The profile keeps the three stores it always had (`interactive_sites`, `job_feeds`,
  * `company_boards`), so a search reads them as before. This module is pure: the editor's hook
@@ -32,6 +34,8 @@ export interface SourcesDraft {
   /** null: never saved; the search reads no company board until the person adds one. */
   boards: CompanyBoard[] | null;
   feeds: JobFeed[];
+  /** Jobs J21: whether "Anywhere on the web" is searched (`web_search`, true when absent). */
+  web: boolean;
 }
 
 /** The list as a search section stores it. */
@@ -42,6 +46,7 @@ export function draftOfSearch(search: Search): SourcesDraft {
       ? structuredClone(search.company_boards)
       : null,
     feeds: (search.job_feeds ?? []).filter(isJobFeed),
+    web: search.web_search ?? true,
   };
 }
 
@@ -254,7 +259,7 @@ export function withBoard(
   return { boards: [...boards, { ...board, enabled: true }] };
 }
 
-export type RowKind = "website" | "feed" | "board";
+export type RowKind = "web" | "website" | "feed" | "board";
 
 /** One line of the list, whatever store it comes from. */
 export interface SourceRow {
@@ -288,8 +293,23 @@ export function shortName(url: string): string {
   return url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
 }
 
-/** Every line of the list: the websites, then the feeds, then the company boards. */
+/** The name and line of the web search (jobs J21): no address, nothing to sign in to. */
+export const WEB_NAME = "Anywhere on the web";
+export const WEB_HOW =
+  "Searches the whole web like a person would, then reads only public job postings";
+
+/** Every line of the list: the web search, the websites, then the feeds, then the company boards. */
 export function rowsOf(draft: SourcesDraft): SourceRow[] {
+  const web: SourceRow = {
+    key: "web:anywhere",
+    kind: "web",
+    name: WEB_NAME,
+    url: "",
+    how: WEB_HOW,
+    enabled: draft.web,
+    platform: null,
+    index: 0,
+  };
   const sites = draft.sites.map((site, index): SourceRow => {
     const platform = platformOf(site);
     const known = site.platform !== "custom" ? site.platform : null;
@@ -328,20 +348,22 @@ export function rowsOf(draft: SourcesDraft): SourceRow[] {
     platform: null,
     index,
   }));
-  return [...sites, ...feeds, ...boards];
+  return [web, ...sites, ...feeds, ...boards];
 }
 
 /** How many places a search of this draft reads. */
 export function sourceCount(draft: SourcesDraft): number {
   return (
+    Number(draft.web) +
     draft.sites.filter((site) => site.enabled).length +
     draft.feeds.length +
     (draft.boards ?? []).filter((board) => board.enabled).length
   );
 }
 
-/** The draft without the line `row`. */
+/** The draft without the line `row`; the web search is never removed, only paused (J21). */
 export function withoutRow(draft: SourcesDraft, row: SourceRow): SourcesDraft {
+  if (row.kind === "web") return { ...draft, web: false };
   if (row.kind === "website")
     return {
       ...draft,
@@ -357,6 +379,7 @@ export function withoutRow(draft: SourcesDraft, row: SourceRow): SourcesDraft {
 
 /** The draft with the paused line `row` searched again. */
 export function resumed(draft: SourcesDraft, row: SourceRow): SourcesDraft {
+  if (row.kind === "web") return { ...draft, web: true };
   if (row.kind === "website")
     return {
       ...draft,
