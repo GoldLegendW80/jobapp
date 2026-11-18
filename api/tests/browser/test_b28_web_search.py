@@ -347,7 +347,7 @@ def test_the_gate_allows_at_most_20_web_searches_a_run():
     async def on_denied(name: str) -> None:
         denied.append(name)
 
-    def hook(found: dict[str, Any]) -> str | None:
+    def hook(found: dict[str, Any], call: str | None) -> str | None:
         asked.append(found)
         return None
 
@@ -372,7 +372,7 @@ def test_the_gate_denies_web_search_without_the_hook_and_passes_its_refusal():
 
     async def go() -> tuple[dict[str, Any], dict[str, Any]]:
         closed = runner.make_gate(frozenset(), on_denied)
-        refusing = runner.make_gate(frozenset(), on_denied, None, lambda _: "Stopped: x.")
+        refusing = runner.make_gate(frozenset(), on_denied, None, lambda _, __: "Stopped: x.")
         return (
             await closed(hook_input("WebSearch"), None, {}),
             await refusing(hook_input("WebSearch"), None, {}),
@@ -388,6 +388,7 @@ def stub_backend(results: list[dict[str, str]]) -> fake_backend.FakeBackend:
     backend = fake_backend.FakeBackend.__new__(fake_backend.FakeBackend)
     backend._gate_all = False
     backend._web_results = results
+    backend._web_error = None  # jobs J23: no stream error, the results answer
     return backend
 
 

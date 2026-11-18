@@ -1185,6 +1185,7 @@ NOT_RETRIED = frozenset(
         "page_cap",
         "too_large",
         "rate_limited",
+        "web_search_failed",
         "blocked",
         "not_found",
         "host_rate_limited",
@@ -1537,6 +1538,15 @@ def recover_verified(
     return *found, known
 
 
+def discovery_date(finding: Any) -> str:
+    """Jobs J23: how a verified posting is dated, for the person (its event's `discovery`, the
+    timeline's line): "exact" with a published date, "approximate" with only the page's own
+    rough words for it ("il y a un mois", evidence `date_shown`), else "unknown"."""
+    if finding.published_on:
+        return "exact"
+    return "approximate" if finding.evidence.get("date_shown") else "unknown"
+
+
 def _store_finding(
     db: Session, plan: Plan, source_id: str, source: str, finding: Any, delta: Stats,
     now: datetime,
@@ -1564,6 +1574,7 @@ def _store_finding(
             "source_id": source_id,
             "detail_read_at": finding.detail_read_at,
             "evidence": dict(finding.evidence),
+            "date": discovery_date(finding),
             "unknown": [
                 name
                 for name, value in (

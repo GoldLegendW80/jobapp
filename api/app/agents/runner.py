@@ -639,7 +639,7 @@ def make_gate(
     allowed: frozenset[str],
     on_denied: Callable[[str], Awaitable[None]],
     budget: Budget | None = None,
-    web_search: Callable[[dict[str, Any]], str | None] | None = None,
+    web_search: Callable[[dict[str, Any], str | None], str | None] | None = None,
     web_searches_max: int | None = sdk_options.WEB_SEARCHES_MAX,
 ) -> Gate:
     """The PreToolUse hook: any tool outside the allow list is denied by this code, whatever
@@ -662,8 +662,8 @@ def make_gate(
     `web_search` (browser B28): Claude Code's WebSearch is allowed only with it, at most
     WEB_SEARCHES_MAX times a run (the definition's `web_searches_max`; None, no cap of the app's,
     Claude Code's own default of 200 a session holding, jobs J21); before each search it is asked
-    with the search's input and answers None, or the refusal the model reads (the definition's
-    `web_search` hook)."""
+    with the search's input and the tool call's id, and answers None, or the refusal the model
+    reads (the definition's `web_search` hook)."""
     searches = 0
 
     def refuse(reason: str) -> dict[str, Any]:
@@ -704,7 +704,7 @@ def make_gate(
                 return refuse(WEB_SEARCHES_SPENT)
             searches += 1
             raw = input_data.get("tool_input")
-            refusal = web_search(raw if isinstance(raw, dict) else {})
+            refusal = web_search(raw if isinstance(raw, dict) else {}, tool_use_id)
             return refuse(refusal) if refusal else {}
         if name in allowed:
             return {}
@@ -941,6 +941,21 @@ class Recorder:
 # --- the run ------------------------------------------------------------------------------------
 
 
+def _passing(
+    hook: definitions.WebSearchHook, run_id: uuid.UUID, passed: set[str]
+) -> Callable[[dict[str, Any], str | None], str | None]:
+    """The gate's WebSearch hook for run `run_id`: `hook`, and the id of each call it lets
+    through kept in `passed` (jobs J23: only their answers are the search engine's)."""
+
+    def searched(found: dict[str, Any], call: str | None) -> str | None:
+        refusal = hook(run_id, found, call)
+        if refusal is None and call:
+            passed.add(call)
+        return refusal
+
+    return searched
+
+
 @dataclass
 class _State:
     model: str | None = None
@@ -962,6 +977,12 @@ class _State:
     # B28: tells the definition that WebSearch is not offered after all, when Claude Code's
     # first message (`init`) does not list it; None once told, or when it was never offered.
     web_search_unlisted: Callable[[], None] | None = None
+    # Jobs J23: tells the definition whether each WebSearch answer was an error; None when the
+    # run was never offered WebSearch. Only the answers of the calls the gate let through
+    # (`web_search_passed`, by call id): a refusal of the gate (WEB_SEARCHES_SPENT, the
+    # definition's own) is no failure of the search engine.
+    web_search_answered: Callable[[bool, str], None] | None = None
+    web_search_passed: set[str] = field(default_factory=set)
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
@@ -1012,6 +1033,13 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
             for block in message.content:
                 if isinstance(block, ToolResultBlock):
                     state.tool_errors += bool(block.is_error)
+                    answered = state.web_search_answered
+                    if (
+                        answered is not None
+                        and recorder.called.get(block.tool_use_id) == sdk_options.WEB_SEARCH
+                        and block.tool_use_id in state.web_search_passed
+                    ):
+                        answered(bool(block.is_error), block.tool_use_id)
                     await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
         state.result = message
@@ -1567,6 +1595,8 @@ async def _execute(
             recorder.on_done = _chat_reply(context, run_id)
         else:
             prompt = definition.prompt(data, run.job_id)
+        # The fake backend's stream may name what the definition says of this run (jobs J23).
+        variables.update(definition.stream_variables(data))
         binding: Mapping[str, Any] | None = None
         if definition.bind is not None:
             # What the run works on, decided here, in code, before a tool or a model call.
@@ -1630,6 +1660,8 @@ async def _execute(
         told(run_id, searching)
         if searching:
             state.web_search_unlisted = lambda: told(run_id, False)
+            answered = definition.web_search_answered
+            state.web_search_answered = lambda failed, call: answered(run_id, failed, call)
         options = build_options(
             definition,
             tools,
@@ -1639,7 +1671,7 @@ async def _execute(
                 frozenset(tools.allowed_names),
                 denied,
                 state.budget,
-                (lambda found: hook(run_id, found)) if searching and hook else None,
+                _passing(hook, run_id, state.web_search_passed) if searching and hook else None,
                 definition.web_searches_max,
             ),
             stderr=stderr_lines.append,

@@ -230,6 +230,10 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "The website showed a security check the app's browser could not pass.",
   nothing_reported:
     "The assistant read this website but reported no job and no reason. Postings saved before are kept.",
+  // Anywhere on the web: Claude Code's web search failed twice in a row before the plan of
+  // searches was done (jobs J23, round 1 of #814), never "searched, nothing new".
+  web_search_failed:
+    "The web search failed twice in a row, so the searches planned were not all made. Postings saved before are kept.",
   no_credential: "Add your model access in Account to search this website.",
   agent_failed:
     "The assistant stopped before the end. Postings saved before are kept.",

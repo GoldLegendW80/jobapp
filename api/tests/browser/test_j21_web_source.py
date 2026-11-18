@@ -43,7 +43,7 @@ def test_the_web_agent_has_no_cap_and_the_website_agent_twenty() -> None:
     assert web.tools == site.tools
     assert web.web_search is site.web_search
     assert web.model == site.model  # owner 2026-11-18: "Keep Sonnet"
-    assert "at most" not in web.system_prompt.split("Method:")[1].split("2.")[0]
+    assert "at most" not in web.system_prompt.split("Method")[1].split("2.")[0]
     assert "site:candidat.francetravail.fr" in web.system_prompt
     for dash in ("—", "–", " - "):
         assert dash not in web.system_prompt
@@ -55,7 +55,7 @@ def _searches(most: int | None, count: int) -> tuple[list[dict], list[str]]:
 
     asked: list[str] = []
     gate = runner.make_gate(
-        frozenset(), denied, None, lambda found: asked.append(found["query"]), most
+        frozenset(), denied, None, lambda found, _: asked.append(found["query"]), most
     )
 
     async def search(n: int) -> dict:
@@ -165,28 +165,24 @@ def test_another_tools_result_is_not_counted_as_a_search() -> None:
     assert "results" not in record.tool_result(answer)
 
 
-def session(*, web: bool, routes: set[str], web_search_on: bool = True, found: int = 0):
+def session(*, routes: set[str], found: int = 0):
     return SimpleNamespace(
         found=[object()] * found,
         verified_count=0,
         asked=0,
         refused=Counter(),
         routes=dict.fromkeys(routes),
-        web_search_on=web_search_on,
-        interactive=SimpleNamespace(web=web),
+        web_search_on=True,
+        interactive=SimpleNamespace(web=False),
     )
 
 
-@pytest.mark.parametrize("reason", ["no_match", "no_search_control"])
-def test_the_web_scope_needs_only_its_search_before_it_reports_nothing(reason: str) -> None:
+def test_a_website_still_needs_its_own_routes() -> None:
+    # The web scope's give up is its plan's coverage (jobs J23, test_j23_web_breadth.py).
     left = finder.FinderSession.routes_left
-    assert left(session(web=True, routes=set()), reason) == ["web_search"]  # type: ignore[arg-type]
-    assert left(session(web=True, routes={"web_search"}), reason) == []  # type: ignore[arg-type]
-    # The website routes never count for it, and a website still needs them.
-    others = set(finder.ROUTES) - {"web_search"}
-    assert left(session(web=True, routes=others), reason) == ["web_search"]  # type: ignore[arg-type]
-    assert left(session(web=False, routes={"web_search"}), "no_match") != []  # type: ignore[arg-type]
-    assert left(session(web=True, routes=set(), found=1), reason) == []  # type: ignore[arg-type]
+    assert left(session(routes={"web_search"}), "no_match") != []  # type: ignore[arg-type]
+    assert left(session(routes=set(finder.ROUTES)), "no_match") == []  # type: ignore[arg-type]
+    assert left(session(routes=set(), found=1), "no_match") == []  # type: ignore[arg-type]
 
 
 async def _nothing() -> None:
