@@ -504,8 +504,12 @@ class Runner:
         site_logins: Any = None,
         guest_http: Callable[[], Any] | None = None,
         guest_cooldown: Any = None,
+        linkedin_page: bool = False,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
+        # LinkedIn's public job search page in the browser when its public API refused (jobs
+        # J22, linkedin_page): the worker's runner reads it, a runner built without it does not.
+        self.linkedin_page = linkedin_page
         # LinkedIn's public job search (linkedin_guest): a new HTTP transport per sweep; None
         # makes no request at all (tests that do not give one).
         self.guest_http = guest_http
@@ -557,7 +561,8 @@ class Runner:
         rest = linkedin_guest.without_api(plan, unsigned)
         await run_selected(self, rest, stats, progress, deadline, stop)
         await linkedin_guest.fall_back(self, plan, stats, progress, deadline, stop)
-        await linkedin_page.fall_back(self, plan, stats, progress, deadline, stop)
+        if self.linkedin_page:
+            await linkedin_page.fall_back(self, plan, stats, progress, deadline, stop)
 
     async def __call__(
         self,
@@ -616,6 +621,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         site_logins=SiteLogins(sessions),
         guest_http=_guest_http,
         guest_cooldown=RedisCooldown(pool),
+        linkedin_page=True,
     )
 
 
