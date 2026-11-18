@@ -355,17 +355,20 @@ def test_real_feeds_and_boards_side_by_side_keep_their_own_entries(
     assert board["postings"] >= 1
     assert arbeitnow["postings"] >= 1
     with factory() as db:
-        stored = dict(
-            db.execute(
-                sa.select(Job.source, sa.func.count())
-                .where(Job.user_id == alice)
-                .group_by(Job.source)
-            ).all()
-        )
-    assert stored == {
+        noted = [
+            sweep.noted_sources(source)
+            for source in db.scalars(sa.select(Job.source).where(Job.user_id == alice))
+        ]
+    # Each row is the first source's that stored it; jobs J25 (#817): Example Robotics's Forward
+    # Deployed Engineer in Paris is on the board and the feed, one row naming both.
+    firsts: dict[str, int] = {}
+    for names in noted:
+        firsts[names[0]] = firsts.get(names[0], 0) + 1
+    assert firsts == {
         "ashby:example-robotics": board["postings"],
         "arbeitnow": arbeitnow["postings"],
     }
+    assert [sorted(n) for n in noted if len(n) > 1] == [["arbeitnow", "ashby:example-robotics"]]
     assert row.stats["new"] == board["postings"] + arbeitnow["postings"]
 
 

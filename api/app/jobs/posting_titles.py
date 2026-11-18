@@ -30,6 +30,7 @@ duplicate). The store compares it within WINDOW_DAYS of the earlier row's discov
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from app.jobs import gazetteer
@@ -234,12 +235,20 @@ def place_key(location: str | None) -> str | None:
     return f"{town}|{code}"
 
 
+def title_key(title: str) -> str:
+    """A title's words in any script, case and accents aside ("AI Engineer 東京" is not
+    "مهندس AI Engineer"; text_key would keep "ai engineer" of both)."""
+    folded = unicodedata.normalize("NFKD", title.casefold())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return " ".join(re.findall(r"[^\W_]+", folded))
+
+
 def cross_key(company: str | None, title: str, location: str | None) -> tuple[str, str, str] | None:
     """The key of one job across boards (module docstring), None when it cannot be told."""
     core = company_core(stated(company))
     if not core:
         return None
-    key = text_key(clean(title, company, location).title)
+    key = title_key(clean(title, company, location).title)
     place = place_key(location)
     if not key or place is None:
         return None

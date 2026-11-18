@@ -219,6 +219,10 @@ def test_a_place_is_its_town_and_its_departement(location: str | None, key: str 
          ("Example Lagoon", "Data Scientist", "Saint-Denis (974)"), False),
         (("LHH", "Data Scientist", "Saint-Denis (974)"),
          ("LHH", "Data Scientist", "Saint-Denis"), False),  # unsure of the place: two rows
+        (("Example Lagoon", "AI Engineer 東京", "Paris"),
+         ("Example Lagoon", "مهندس AI Engineer", "Paris"), False),  # every script counts
+        (("Example Lagoon", "Ingénieur IA", "Paris"),
+         ("example lagoon", "INGENIEUR IA (H/F)", "Paris, France"), True),
     ],
 )  # fmt: skip
 def test_the_cross_board_key(first: tuple[str, ...], second: tuple[str, ...], same: bool) -> None:
@@ -377,6 +381,18 @@ def test_a_copy_seen_after_the_window_is_another_posting(
     )  # fmt: skip
     row = sweep_of(factory, alice, [], [JOBIJOBA])
     assert (row.stats["new"], row.stats["duplicates"]) == (1, 0)
+
+
+def test_the_title_as_shown_is_added_to_a_text_that_lacks_it_only(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    profile(factory, alice)
+    has = finding("DATA ENGINEER (H/F)", company="Example Lagoon", location="Saint-Denis (974)",
+                  text="Offre: Data Engineer H/F. Python.")  # fmt: skip
+    row = sweep_of(factory, alice, [has])
+    assert row.stats["new"] == 1
+    [job] = jobs_of(factory, alice)
+    assert (job.title, job.posting_text) == ("DATA ENGINEER", "Offre: Data Engineer H/F. Python.")
 
 
 def test_two_unnamed_employers_with_the_same_clean_title_stay_two(

@@ -1585,7 +1585,8 @@ def _store_finding(
     cleaned = posting_titles.clean(finding.title, finding.company, finding.location)
     company = finding.company or cleaned.company or UNKNOWN_EMPLOYER
     text = finding.text
-    if cleaned.changed and finding.title not in text:
+    shown = posting_titles.title_key(finding.title)
+    if cleaned.changed and f" {shown} " not in f" {posting_titles.title_key(text)} ":
         text = f"{finding.title}\n\n{text}"
     posting = Posting(
         cleaned.title, finding.location, finding.url, finding.published_on or "", text
