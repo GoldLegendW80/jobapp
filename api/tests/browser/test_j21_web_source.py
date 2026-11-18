@@ -2,6 +2,12 @@
 
 import asyncio
 import json
+import uuid
+from collections import Counter
+from types import SimpleNamespace
+
+import pytest
+from claude_agent_sdk import ToolResultBlock, ToolUseBlock
 
 from app.agents import definitions, runner, sdk_options
 from app.agents import tools as app_tools
@@ -13,7 +19,7 @@ from app.profile.schemas import SearchSection
 ANSWER = (
     'Web search results for query: "data scientist CDI La Reunion"\n\n'
     'Links: [{"title":"Data scientist (CDI)","url":"https://jobs.example-ai-board.test/p/1"},'
-    '{"title":"Offre 123ABC","url":"https://candidat.francetravail.fr/offres/recherche/detail/123ABC"}]\n\n'
+    '{"title":"Offre 123ABC","url":"https://candidat.francetravail.test/offres/recherche/detail/123ABC"}]\n\n'
     "A summary the model wrote.\n"
 )
 
@@ -107,3 +113,76 @@ def test_the_web_scope_reads_no_website() -> None:
     assert scope.tool_scope() == {"start": finder.WEB_START}
     assert finder.canonical(finder.WEB_START) == finder.WEB_START
     assert json.dumps(scope.tool_scope())
+
+
+def recorder(*, detail: bool = True, private: bool = True) -> runner.Recorder:
+    made = runner.Recorder(
+        None, uuid.uuid4(), 1, private=private, detail=detail, secret="TOKEN9f3a"
+    )  # type: ignore[arg-type]
+    made.known_tools = frozenset(runner.FORBIDDEN_TOOLS) | {sdk_options.WEB_SEARCH}
+    return made
+
+
+def search_call(query: object) -> ToolUseBlock:
+    return ToolUseBlock(id="s1", name=sdk_options.WEB_SEARCH, input={"query": query})
+
+
+def test_a_private_detailed_run_keeps_the_query_bounded_and_scrubbed_and_the_result_count() -> None:
+    record = recorder()
+    query = "  TOKEN9f3a data scientist CDI La Reunion " + "x" * 300
+    call = record.tool_call(search_call(query))
+    kept = call["preview"]["query"]
+    assert call["name"] == sdk_options.WEB_SEARCH
+    assert "TOKEN9f3a" not in kept
+    assert kept.startswith(runner.REDACTED + " data scientist")
+    assert kept.endswith(" more]")
+    assert len(kept.split("...")[0]) == runner.WEB_QUERY_MAX
+    answer = ToolResultBlock(tool_use_id="s1", content=ANSWER, is_error=None)
+    result = record.tool_result(answer)
+    assert result["results"] == 2
+    # The answer's text is never kept.
+    assert "content" not in result
+    assert "error" not in result
+
+
+@pytest.mark.parametrize("query", ["", "   ", None, 42])
+def test_a_search_without_a_query_text_keeps_no_preview(query: object) -> None:
+    assert "preview" not in recorder().tool_call(search_call(query))
+
+
+def test_without_step_detail_neither_query_nor_count_is_kept() -> None:
+    record = recorder(detail=False)
+    assert "preview" not in record.tool_call(search_call("data scientist La Reunion"))
+    answer = ToolResultBlock(tool_use_id="s1", content=ANSWER, is_error=None)
+    assert "results" not in record.tool_result(answer)
+
+
+def test_another_tools_result_is_not_counted_as_a_search() -> None:
+    record = recorder()
+    record.tool_call(ToolUseBlock(id="r1", name="Read", input={"file_path": "/x"}))
+    answer = ToolResultBlock(tool_use_id="r1", content=ANSWER, is_error=None)
+    assert "results" not in record.tool_result(answer)
+
+
+def session(*, web: bool, routes: set[str], web_search_on: bool = True, found: int = 0):
+    return SimpleNamespace(
+        found=[object()] * found,
+        verified_count=0,
+        asked=0,
+        refused=Counter(),
+        routes=dict.fromkeys(routes),
+        web_search_on=web_search_on,
+        interactive=SimpleNamespace(web=web),
+    )
+
+
+@pytest.mark.parametrize("reason", ["no_match", "no_search_control"])
+def test_the_web_scope_needs_only_its_search_before_it_reports_nothing(reason: str) -> None:
+    left = finder.FinderSession.routes_left
+    assert left(session(web=True, routes=set()), reason) == ["web_search"]  # type: ignore[arg-type]
+    assert left(session(web=True, routes={"web_search"}), reason) == []  # type: ignore[arg-type]
+    # The website routes never count for it, and a website still needs them.
+    others = set(finder.ROUTES) - {"web_search"}
+    assert left(session(web=True, routes=others), reason) == ["web_search"]  # type: ignore[arg-type]
+    assert left(session(web=False, routes={"web_search"}), "no_match") != []  # type: ignore[arg-type]
+    assert left(session(web=True, routes=set(), found=1), reason) == []  # type: ignore[arg-type]
