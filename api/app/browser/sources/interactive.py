@@ -743,11 +743,14 @@ def outcome(session: finder.FinderSession) -> str | None:
     `security_check`: the agent says it, so it never hides a refusal of the app); else
     `unsupported_interaction` when browserd or the website
     refused one of its actions, `search_refused` when the api refused an address; else
-    `nothing_reported`. Opening a search page by its address, pressing a link or a failed click
-    that it recovered from are how a person searches too: no kind of action is required, and
-    nothing read is no success."""
+    `nothing_reported`. The web source whose plan WebSearch failing lifted before it was searched
+    (`FinderSession.web_search_failed`) ends `web_search_failed` (round 1 of #814). Opening a
+    search page by its address, pressing a link or a failed click that it recovered from are how
+    a person searches too: no kind of action is required, and nothing read is no success."""
     if session.found or session.verified_count:
         return None
+    if session.web_search_failed():
+        return "web_search_failed"  # J23: WebSearch failing lifted a plan not searched
     refused = any(session.refused[name] for name in APP_REFUSALS)
     if session.outcome:
         code = finder.NO_POSTINGS[session.outcome]

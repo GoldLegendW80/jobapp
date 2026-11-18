@@ -99,7 +99,8 @@ Bind = Callable[["Session", "AgentRun"], Mapping[str, Any] | None]
 OnFinal = Callable[[FinalRun], Awaitable[None]]
 
 
-WebSearchHook = Callable[[uuid.UUID, dict[str, Any]], str | None]
+# (the run's id, the search's input, the tool call's id or None): None, or the refusal.
+WebSearchHook = Callable[[uuid.UUID, dict[str, Any], str | None], str | None]
 
 
 @dataclass(frozen=True)
@@ -160,7 +161,8 @@ class AgentDefinition:
     # `model` for every kind not named.
     model_by_credential: Mapping[str, str] | None = field(default=None, hash=False)
     # Claude Code's built in web search for this agent (browser B28; sdk_options.WEB_SEARCH):
-    # asked by the runner's gate before each search with the run's id and the search's input,
+    # asked by the runner's gate before each search with the run's id, the search's input and
+    # the tool call's id (jobs J23: its answer is told by `web_search_answered`),
     # it answers None to let it run or the refusal the model reads. None: no web search (every
     # agent but the website search). The gate also refuses past sdk_options.WEB_SEARCHES_MAX.
     web_search: WebSearchHook | None = field(default=None, hash=False, compare=False)
@@ -177,9 +179,10 @@ class AgentDefinition:
         kind in sdk_options.WEB_SEARCH_KINDS), and again, False, when Claude Code's first
         message does not list the tool. Nothing by default; the website search records it."""
 
-    def web_search_answered(self, run_id: uuid.UUID, failed: bool) -> None:
+    def web_search_answered(self, run_id: uuid.UUID, failed: bool, call: str | None = None) -> None:
         """Told by the runner after each WebSearch answer of run `run_id`, whether it was an
-        error (jobs J23). Nothing by default; the web source counts the errors in a row."""
+        error, and its tool call's id (jobs J23). Nothing by default; the web source counts the
+        errors in a row, and a query for its plan only once answered without one."""
 
     def __post_init__(self) -> None:
         kinds = {kind.value for kind in CredentialKind}

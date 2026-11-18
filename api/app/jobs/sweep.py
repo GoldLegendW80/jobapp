@@ -1185,6 +1185,7 @@ NOT_RETRIED = frozenset(
         "page_cap",
         "too_large",
         "rate_limited",
+        "web_search_failed",
         "blocked",
         "not_found",
         "host_rate_limited",

@@ -55,7 +55,7 @@ def _searches(most: int | None, count: int) -> tuple[list[dict], list[str]]:
 
     asked: list[str] = []
     gate = runner.make_gate(
-        frozenset(), denied, None, lambda found: asked.append(found["query"]), most
+        frozenset(), denied, None, lambda found, _: asked.append(found["query"]), most
     )
 
     async def search(n: int) -> dict:

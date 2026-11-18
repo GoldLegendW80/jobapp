@@ -166,8 +166,8 @@ def test_no_place_saved_or_no_limit_plans_each_search_language() -> None:
     assert web_plan.left(rows, [broad_fr, broad_en, *boards]) == []
     left = web_plan.left(rows, [broad_fr, broad_en])
     assert left == [
-        "with no place, in French: the national job boards by site: query "
-        "(site:candidat.francetravail.fr, site:apec.fr, site:hellowork.com)"
+        "with no place, in French: the national job boards, one site: query each or joined by "
+        "OR (site:candidat.francetravail.fr OR site:apec.fr OR site:hellowork.com)"
     ]
 
 
@@ -207,7 +207,7 @@ REUNION = plan("La Réunion")[0]
         (
             '"ingénieur IA" OR "data scientist" Saint-Denis La Réunion',
             {TITLE},
-            {"data scientist", "data"},
+            {"data scientist"},  # "data" is used up by "data scientist" (round 1 of #814)
             set(),
         ),
         (
@@ -219,17 +219,35 @@ REUNION = plan("La Réunion")[0]
         (
             "site:candidat.francetravail.fr data scientist 974",
             set(),
-            {"data scientist", "data"},
+            {"data scientist"},
             {"France Travail"},
         ),
         ("site:francetravail.fr développeur Réunion", set(), {"developer"}, {"France Travail"}),
         ("site:www.apec.fr La Réunion", set(), set(), {"APEC"}),
         ("SITE:apec.fr reunion", set(), set(), {"APEC"}),
         ("site:https://www.hellowork.com/fr-fr/emploi La Reunion", set(), set(), {"Hellowork"}),
-        ("python developer Reunion Island", set(), {"Python developer", "developer"}, set()),
+        ("python developer Reunion Island", set(), {"Python developer"}, set()),
+        # Round 1 of #814: role forms longest first, each word used by one form at most.
+        ("développeur python La Réunion", set(), {"Python developer"}, set()),
+        ("data scientist développeur python La Réunion", set(), {"data scientist"}, set()),
+        (
+            "data scientist OR développeur python La Réunion",
+            set(),
+            {"data scientist", "Python developer"},
+            set(),
+        ),
+        ("data engineer La Réunion", set(), set(), set()),  # a role of the table, not planned
+        ("data engineer OR data La Réunion", set(), {"data"}, set()),
+        ("développeur full stack La Réunion", set(), {"full stack developer"}, set()),
+        ("fullstack developer La Réunion", set(), {"full stack developer"}, set()),
+        ("data OR data scientist La Réunion", set(), {"data", "data scientist"}, set()),
+        ("data scientist OR data scientist La Réunion", set(), {"data scientist"}, set()),
+        ("data science La Réunion", set(), {"data scientist"}, set()),
+        ("data La Réunion", set(), {"data"}, set()),
+        ("Data Scientist OR DATA La Réunion", set(), {"data scientist", "data"}, set()),
+        ("intelligence artificielle La Réunion", set(), {"artificial intelligence"}, set()),
         # Refused: no place, another place, a longer word, another order, an exclusion.
         ("ingénieur IA CDI", set(), set(), set()),
-        ("ingénieur IA Saint-Denis", set(), set(), set()),
         ("ingénieur IA Guadeloupe", set(), set(), set()),
         ("ingénieur IA réunionnais", set(), set(), set()),
         ("ingénieur IA 9745", set(), set(), set()),
@@ -251,6 +269,134 @@ REUNION = plan("La Réunion")[0]
 def test_the_family_matching_table(query: str, titles, roles, boards) -> None:
     done = web_plan.coverage(REUNION, [query])
     assert (done["titles"], done["roles"], done["boards"]) == (titles, roles, boards)
+
+
+# Round 1 of #814: words side by side are ANDed by a search engine. The review's stuffed query.
+STUFFED = (
+    "ingénieur IA GenAI engineer AI engineer data scientist machine learning engineer MLOps "
+    "site:candidat.francetravail.fr site:apec.fr site:hellowork.com La Réunion Guadeloupe Tahiti"
+)
+OWNER = plan("La Réunion", "Guadeloupe", "Tahiti")
+
+
+@pytest.mark.parametrize(
+    ("query", "titles", "roles", "boards"),
+    [
+        (STUFFED, set(), set(), set()),
+        (
+            STUFFED.replace(" Guadeloupe Tahiti", ""),
+            {TITLE},
+            {"machine learning engineer"},  # the longest role form
+            set(),
+        ),
+        # Boards: two site: operators without OR name no page.
+        ("site:apec.fr site:hellowork.com La Réunion", set(), set(), set()),
+        ("site:apec.fr OR site:hellowork.com La Réunion", set(), set(), {"APEC", "Hellowork"}),
+        ("site:apec.fr | site:hellowork.com La Réunion", set(), set(), {"APEC", "Hellowork"}),
+        ("site:apec.fr or site:hellowork.com La Réunion", set(), set(), set()),  # lower case
+        ("-site:apec.fr site:hellowork.com La Réunion", set(), set(), {"Hellowork"}),
+        ("site:apec.fr site:fr La Réunion", set(), set(), set()),  # two operators all the same
+        # Places: two rows' places ANDed name none; with OR, each.
+        ("ingénieur IA La Réunion Tahiti", set(), set(), set()),
+        ("ingénieur IA La Réunion OR Tahiti", {TITLE}, set(), set()),
+        ("ingénieur IA La Réunion | Guadeloupe", {TITLE}, set(), set()),
+        ("ingénieur IA La Réunion or Tahiti", set(), set(), set()),
+        ("ingénieur IA La Réunion Papeete", set(), set(), set()),  # Tahiti by its town
+        ("ingénieur IA La Réunion 974", {TITLE}, set(), set()),  # one row's two names
+        ("site:apec.fr La Réunion Guadeloupe", set(), set(), set()),
+        ("site:apec.fr La Réunion OR Guadeloupe", set(), set(), {"APEC"}),
+        ("ingénieur IA Saint-Denis Pointe-à-Pitre", set(), set(), set()),
+        # One title and one role at most, the families apart.
+        ("ingénieur IA data scientist La Réunion", {TITLE}, {"data scientist"}, set()),
+        ("ingénieur IA | data scientist La Réunion", {TITLE}, {"data scientist"}, set()),
+        ("développeur data La Réunion", set(), {"developer"}, set()),
+        ("développeur OR data La Réunion", set(), {"developer", "data"}, set()),
+    ],
+)
+def test_a_query_without_or_counts_one_of_each_family(query: str, titles, roles, boards) -> None:
+    done = web_plan.coverage(OWNER[0], [query], OWNER)
+    assert (done["titles"], done["roles"], done["boards"]) == (titles, roles, boards)
+
+
+def test_without_or_the_longest_title_counts() -> None:
+    rows = plan("La Réunion", titles=(TITLE, "ingénieur IA générative"))
+    done = web_plan.coverage(rows[0], ["ingénieur IA générative La Réunion"], rows)
+    assert done["titles"] == {"ingénieur IA générative"}
+    ored = "ingénieur IA OR ingénieur IA générative La Réunion"
+    assert web_plan.coverage(rows[0], [ored], rows)["titles"] == {TITLE, "ingénieur IA générative"}
+
+
+def test_two_saved_names_of_one_place_are_no_two_places() -> None:
+    rows = plan("Tahiti", "Papeete")
+    for row in rows:
+        assert web_plan.coverage(row, ["ingénieur IA Tahiti Papeete"], rows)["titles"] == {TITLE}
+
+
+@pytest.mark.parametrize(
+    ("place", "query", "named"),
+    [
+        # The main towns (round 1 of #814), a town no other place has.
+        ("Guadeloupe", "ingénieur IA Pointe-à-Pitre", True),
+        ("Guadeloupe", "ingénieur IA pointe a pitre", True),
+        ("Guadeloupe", "ingénieur IA Les Abymes", True),
+        ("Guadeloupe", "ingénieur IA Baie-Mahault", True),
+        ("Guadeloupe", "ingénieur IA Basse-Terre", True),
+        ("Guadeloupe", "ingénieur IA Abymes", False),  # the town's name is "Les Abymes"
+        ("Guadeloupe", "ingénieur IA 971", True),
+        ("Tahiti", "ingénieur IA Papeete", True),
+        ("Tahiti", "ingénieur IA Faa'a", True),
+        ("Tahiti", "ingénieur IA FAAA", False),  # folded "faa a", not "faaa"
+        ("Tahiti", "ingénieur IA Punaauia", True),
+        ("Polynésie française", "ingénieur IA Punaauia", True),
+        ("Tahiti", "ingénieur IA Saint-Denis", False),  # another place's town
+        # A town another place has too: only when nothing names somewhere else.
+        ("La Réunion", "ingénieur IA Saint-Denis", True),
+        ("La Réunion", "ingénieur IA Saint-Denis CDI", True),
+        ("La Réunion", "ingénieur IA Saint-Denis 974", True),
+        ("La Réunion", "ingénieur IA Saint-Pierre 97410", True),
+        ("La Réunion", "ingénieur IA Saint-Paul", True),
+        ("La Réunion", "ingénieur IA Le Port", True),
+        ("La Réunion", "ingénieur IA Saint-Denis France", True),  # La Réunion is France
+        ("La Réunion", "ingénieur IA Saint-Denis 93", False),
+        ("La Réunion", "ingénieur IA Saint-Denis 93200", False),
+        ("La Réunion", "ingénieur IA Saint-Denis 2026", False),  # any other number: closed
+        ("La Réunion", "ingénieur IA Saint-Denis Paris", False),
+        ("La Réunion", "ingénieur IA Saint-Denis Seine-Saint-Denis", False),
+        ("La Réunion", "ingénieur IA Saint-Denis Île-de-France", False),
+        ("La Réunion", "ingénieur IA Saint-Denis région parisienne", False),
+        ("La Réunion", "ingénieur IA Saint-Denis France métropolitaine", False),
+        ("La Réunion", "ingénieur IA Saint-Denis hexagone", False),
+        ("La Réunion", "ingénieur IA Saint-Pierre Martinique", False),
+        ("La Réunion", "ingénieur IA Saint-Paul Minnesota", False),
+        ("La Réunion", "ingénieur IA Saint-Denis Guadeloupe", False),
+        ("La Réunion", "ingénieur IA Saint-Denis Pointe-à-Pitre", False),
+        ("La Réunion", "ingénieur IA Saint-Denis Tahiti", False),
+        ("La Réunion", "ingénieur IA Saint-Denis London", False),
+        ("La Réunion", "ingénieur IA Le Port Marseille", False),
+        ("La Réunion", "ingénieur IA port", False),  # "Le Port" whole only
+        ("La Réunion", "ingénieur IA Saint Denise", False),  # a longer word
+        ("La Réunion", "ingénieur IA Saint-Denis -Réunion", True),  # the exclusion is aside
+        ("Paris", "ingénieur IA Saint-Denis", False),  # the towns are the overseas places'
+    ],
+)
+def test_the_town_table(place: str, query: str, named: bool) -> None:
+    [row] = plan(place)
+    assert (web_plan.coverage(row, [query])["titles"] == {TITLE}) is named
+
+
+def test_titles_and_places_of_no_words_are_never_planned() -> None:
+    [row] = plan("!!!", "La Réunion", titles=("++", TITLE, " "))
+    assert (row.place, row.titles) == ("La Réunion", (TITLE,))
+    rows = plan("!!!", "  ", titles=("++",))
+    assert [(r.place, r.titles) for r in rows] == [(None, ()), (None, ())]
+    # An honest run can report no match: nothing is left that no query could name.
+    broad_fr = "développeur OR data OR intelligence artificielle CDI"
+    broad_en = "developer OR data OR artificial intelligence jobs"
+    boards = "site:candidat.francetravail.fr OR site:apec.fr OR site:hellowork.com data"
+    assert web_plan.left(rows, [broad_fr, broad_en, boards]) == []
+    titles = (*(f"titre{n} !!" for n in range(web_plan.TITLES_MAX)), "dernier")
+    [row] = plan("La Réunion", titles=("++", *titles))
+    assert row.titles == titles[: web_plan.TITLES_MAX]
 
 
 def test_a_place_without_boards_needs_a_jobs_query() -> None:
@@ -329,15 +475,17 @@ def web_session(
     return session
 
 
-def search(session: finder.FinderSession, *queries: str) -> None:
-    """WebSearch as the runner's gate asks the hook, then its answer (never an engine)."""
+def search(session: finder.FinderSession, *queries: str, failed: bool = False) -> None:
+    """WebSearch as the runner's gate asks the hook with the call's id, then its answer (never
+    an engine)."""
     run_id = uuid.uuid4()
     with finder._LOCK:
         finder._SESSIONS[run_id] = session
     try:
         for query in queries:
-            assert finder.web_search_hook(run_id, {"query": query}) is None
-            finder.WEB_FINDER.web_search_answered(run_id, False)
+            call = f"toolu_{uuid.uuid4().hex}"
+            assert finder.web_search_hook(run_id, {"query": query}, call) is None
+            finder.WEB_FINDER.web_search_answered(run_id, failed, call)
     finally:
         with finder._LOCK:
             finder._SESSIONS.pop(run_id, None)
@@ -360,7 +508,7 @@ def test_production_give_up_is_refused_with_what_is_left_then_accepted() -> None
     assert error
     assert session.outcome == ""
     assert said.startswith("Refused: do not give up yet")
-    assert "site:candidat.francetravail.fr, site:apec.fr, site:hellowork.com" in said
+    assert "site:candidat.francetravail.fr OR site:apec.fr OR site:hellowork.com" in said
     assert "3 more roles next to the profile" in said
     assert '"ingénieur IA"' not in said  # the title is searched
     search(session, *COVERING[:-1])
@@ -409,6 +557,81 @@ def test_web_search_not_offered_or_failing_lifts_the_plan() -> None:
     assert session.report_none("no_match")[1] is True  # not in a row
     session.web_search_answered(True)
     assert session.report_none("no_match")[1] is False
+
+
+def test_the_stuffed_query_leaves_the_plan_mostly_unsearched() -> None:
+    """Round 1 of #814: three titles, three roles, three site: operators and three places in one
+    query without OR search one narrow thing; the give up is refused for every place."""
+    session = web_session(places=("La Réunion", "Guadeloupe", "Tahiti"))
+    search(session, STUFFED)
+    said, error = session.report_none("no_match")
+    assert error
+    assert session.outcome == ""
+    for place in ("La Réunion", "Guadeloupe", "Tahiti"):
+        assert f'for {place}: the saved titles "{TITLE}"' in said
+    assert said.count("3 more roles next to the profile") == 3
+    assert said.count("site:candidat.francetravail.fr OR site:apec.fr OR site:hellowork.com") == 3
+
+
+def test_a_web_search_answered_with_an_error_counts_for_nothing() -> None:
+    session = web_session()
+    for query in COVERING:  # errors that alternate with answers never lift the plan
+        search(session, query, failed=True)
+        search(session, "ingénieur IA CDI")
+    assert session.web_queries == ["ingénieur IA CDI"] * len(COVERING)
+    assert session.report_none("no_match")[1] is True
+    # Not yet answered: not counted (the answer may be an error).
+    for n, query in enumerate(COVERING):
+        assert session.searched_web({"query": query}, f"call{n}") is None
+    assert session.report_none("no_match")[1] is True
+    for n in range(len(COVERING)):
+        session.web_search_answered(False, f"call{n}")
+    counted = ["ingénieur IA CDI"] * len(COVERING) + list(COVERING)
+    assert session.web_queries == counted
+    assert session.report_none("no_match")[1] is False
+    session.web_search_answered(False, "call0")  # an answer told twice counts once
+    assert session.web_queries == counted
+
+
+@pytest.mark.parametrize("code", ["lease_ended", "permission_revoked", "agent_cancelled"])
+def test_a_stopped_session_may_report_no_postings(code: str) -> None:
+    session = web_session()
+    search(session, "ingénieur IA La Réunion")
+    assert session.report_none("no_match")[1] is True
+    session.stopped = code
+    assert session.searched_web({"query": "data La Réunion"}, "late") == (
+        f"Stopped: {code}. Report what you found, then stop."
+    )
+    assert session.web_pending == {}
+    said, error = session.report_none("no_match")
+    assert not error
+    assert said == f"Noted. Stopped: {code}. Report what you found, then stop."
+    assert session.routes_left("no_match") == []
+    assert session.report_none("bogus")[1] is True  # still one reason of the list
+
+
+def test_web_search_failing_before_the_plan_is_searched_says_so() -> None:
+    from app.browser.sources import interactive
+
+    session = web_session()
+    search(session, "ingénieur IA La Réunion")
+    search(session, "data La Réunion", "site:apec.fr La Réunion", failed=True)
+    assert session.report_none("no_match")[1] is False  # lifted, not searched
+    assert interactive.outcome(session) == "web_search_failed"
+    # The plan searched first, then the errors: searched, nothing new.
+    session = web_session()
+    search(session, *COVERING)
+    search(session, "data La Réunion", "data Tahiti", failed=True)
+    assert session.report_none("no_match")[1] is False
+    assert interactive.outcome(session) is None
+    # WebSearch not offered: no failure of it.
+    session = web_session()
+    session.web_search_on = False
+    session.web_search_failures = finder.WEB_SEARCH_FAILS
+    assert session.report_none("no_match")[1] is False
+    assert not session.web_search_failed()
+    assert interactive.outcome(session) != "web_search_failed"
+    assert "web_search_failed" in sweep.NOT_RETRIED
 
 
 def test_routes_left_names_the_web_search_until_the_plan_is_searched() -> None:

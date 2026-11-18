@@ -639,7 +639,7 @@ def make_gate(
     allowed: frozenset[str],
     on_denied: Callable[[str], Awaitable[None]],
     budget: Budget | None = None,
-    web_search: Callable[[dict[str, Any]], str | None] | None = None,
+    web_search: Callable[[dict[str, Any], str | None], str | None] | None = None,
     web_searches_max: int | None = sdk_options.WEB_SEARCHES_MAX,
 ) -> Gate:
     """The PreToolUse hook: any tool outside the allow list is denied by this code, whatever
@@ -662,8 +662,8 @@ def make_gate(
     `web_search` (browser B28): Claude Code's WebSearch is allowed only with it, at most
     WEB_SEARCHES_MAX times a run (the definition's `web_searches_max`; None, no cap of the app's,
     Claude Code's own default of 200 a session holding, jobs J21); before each search it is asked
-    with the search's input and answers None, or the refusal the model reads (the definition's
-    `web_search` hook)."""
+    with the search's input and the tool call's id, and answers None, or the refusal the model
+    reads (the definition's `web_search` hook)."""
     searches = 0
 
     def refuse(reason: str) -> dict[str, Any]:
@@ -704,7 +704,7 @@ def make_gate(
                 return refuse(WEB_SEARCHES_SPENT)
             searches += 1
             raw = input_data.get("tool_input")
-            refusal = web_search(raw if isinstance(raw, dict) else {})
+            refusal = web_search(raw if isinstance(raw, dict) else {}, tool_use_id)
             return refuse(refusal) if refusal else {}
         if name in allowed:
             return {}
@@ -964,7 +964,7 @@ class _State:
     web_search_unlisted: Callable[[], None] | None = None
     # Jobs J23: tells the definition whether each WebSearch answer was an error; None when the
     # run was never offered WebSearch.
-    web_search_answered: Callable[[bool], None] | None = None
+    web_search_answered: Callable[[bool, str], None] | None = None
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
@@ -1020,7 +1020,7 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                         answered is not None
                         and recorder.called.get(block.tool_use_id) == sdk_options.WEB_SEARCH
                     ):
-                        answered(bool(block.is_error))
+                        answered(bool(block.is_error), block.tool_use_id)
                     await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
         state.result = message
@@ -1640,7 +1640,7 @@ async def _execute(
         if searching:
             state.web_search_unlisted = lambda: told(run_id, False)
             answered = definition.web_search_answered
-            state.web_search_answered = lambda failed: answered(run_id, failed)
+            state.web_search_answered = lambda failed, call: answered(run_id, failed, call)
         options = build_options(
             definition,
             tools,
@@ -1650,7 +1650,7 @@ async def _execute(
                 frozenset(tools.allowed_names),
                 denied,
                 state.budget,
-                (lambda found: hook(run_id, found)) if searching and hook else None,
+                (lambda found, call: hook(run_id, found, call)) if searching and hook else None,
                 definition.web_searches_max,
             ),
             stderr=stderr_lines.append,

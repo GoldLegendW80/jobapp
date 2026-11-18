@@ -1502,9 +1502,12 @@ class FinderSession:
     fetch_blocked_hosts: Counter[str] = field(default_factory=Counter)
     fetch_blocked: Counter[str] = field(default_factory=Counter)
     # Jobs J23: the web source's WebSearch queries, oldest first (web_plan.QUERIES_MAX), what its
-    # plan's coverage is counted from, and the WebSearch answers that were errors in a row.
+    # plan's coverage is counted from, and the WebSearch answers that were errors in a row. A
+    # query the gate named by its call waits in `web_pending` for its answer, and counts only
+    # once answered without an error (round 1 of #814).
     web_queries: list[str] = field(default_factory=list)
     web_search_failures: int = 0
+    web_pending: dict[str, str] = field(default_factory=dict, repr=False)
     # The start page's parse (`parsed_off_loop` of where it landed), made in a thread by the
     # caller before the session (#797): a session is built in the event loop.
     parsed: InitVar[tuple[list[str], Detail] | None] = None
@@ -1741,9 +1744,11 @@ class FinderSession:
             'whole, browser_snapshot(offset, source="script") reads it part by part.'
         )
 
-    def searched_web(self, found: dict[str, Any]) -> str | None:
+    def searched_web(self, found: dict[str, Any], call: str | None = None) -> str | None:
         """A WebSearch the runner's gate let through (B28, `web_search_hook`): counted, and the
-        `web_search` route once its query names this website (`names_site`). None: it runs."""
+        `web_search` route once its query names this website (`names_site`). None: it runs.
+        J23: its query counts for the plan once `call` (the tool call's id) is answered without
+        an error (`web_search_answered`); a search the gate named no call for counts now."""
         if self.stopped:
             return f"Stopped: {self.stopped}. Report what you found, then stop."
         self.web_searches += 1
@@ -1753,8 +1758,12 @@ class FinderSession:
             web or names_site(query[:QUERY_MAX], {self.start, self.landed})
         ):
             self.routes["web_search"] = None
-        if web and isinstance(query, str) and len(self.web_queries) < web_plan.QUERIES_MAX:
-            self.web_queries.append(query[:QUERY_MAX])  # J23: the plan's coverage
+        held = len(self.web_queries) + len(self.web_pending)
+        if web and isinstance(query, str) and held < web_plan.QUERIES_MAX:
+            if call:
+                self.web_pending[call] = query[:QUERY_MAX]
+            else:
+                self.web_queries.append(query[:QUERY_MAX])  # J23: the plan's coverage
         searching = getattr(self.pages.tools, "searching", None) if web else None
         if searching is not None:
             searching()  # J21: the web source's lease goes back while the agent searches
@@ -2148,6 +2157,11 @@ class FinderSession:
             return "Refused: this run has no interactive search permission.", True
         if not isinstance(reason, str) or reason not in NO_POSTINGS:
             return "Refused: give one reason of the list.", True
+        if self.stopped:
+            # Round 1 of #814: nothing can be searched any more (the lease ended, the permission
+            # was taken back, the run cancelled), so nothing is left; the stop is the outcome.
+            self.outcome = reason
+            return f"Noted. Stopped: {self.stopped}. Report what you found, then stop.", False
         if self.interactive.web:
             plan_left = self.web_left()
             if plan_left:
@@ -2166,10 +2180,14 @@ class FinderSession:
         self.outcome = reason
         return "Noted. Report any posting you opened, then stop.", False
 
-    def web_search_answered(self, failed: bool) -> None:
+    def web_search_answered(self, failed: bool, call: str | None = None) -> None:
         """J23: a WebSearch answer, an error or not (the runner's word, `web_search_answered` of
-        the definition): WEB_SEARCH_FAILS errors in a row lift the plan's coverage."""
+        the definition): WEB_SEARCH_FAILS errors in a row lift the plan's coverage. The query of
+        `call` counts for the plan only when its answer was no error (round 1 of #814)."""
         self.web_search_failures = self.web_search_failures + 1 if failed else 0
+        query = self.web_pending.pop(call, None) if call else None
+        if query is not None and not failed:
+            self.web_queries.append(query)
 
     def web_plan(self) -> tuple[web_plan.Row, ...]:
         """J23: the plan of the web source's searches (web_plan.plan_of), from its scope."""
@@ -2183,11 +2201,20 @@ class FinderSession:
         nothing: a posting kept, WebSearch not offered or failing WEB_SEARCH_FAILS times in a
         row, or every family of the plan searched (web_plan.left). A block or a refusal of the
         app spares nothing: they stop a page, never WebSearch."""
-        if self.found or self.verified_count or not self.web_search_on:
+        if self.found or self.verified_count or not self.web_search_on or self.stopped:
             return ""
         if self.web_search_failures >= WEB_SEARCH_FAILS:
             return ""
         return web_plan.left_text(self.web_plan(), self.web_queries)
+
+    def web_search_failed(self) -> bool:
+        """J23, round 1 of #814: whether WebSearch failing WEB_SEARCH_FAILS times in a row lifted
+        a plan that was not searched (the outcome `web_search_failed`, never "searched")."""
+        if self.found or self.verified_count or not self.web_search_on:
+            return False
+        if self.web_search_failures < WEB_SEARCH_FAILS:
+            return False
+        return bool(web_plan.left_text(self.web_plan(), self.web_queries))
 
     def routes_left(self, reason: str) -> list[str]:
         """The routes the agent must still try before `report_no_postings(reason)` holds (B27):
@@ -2549,13 +2576,16 @@ def session_of(run_id: uuid.UUID | None) -> FinderSession | None:
         return _SESSIONS.get(run_id) if run_id is not None else None
 
 
-def web_search_hook(run_id: uuid.UUID, found: dict[str, Any]) -> str | None:
-    """The runner's gate asks this before each WebSearch of a website's run (B28): its session
-    counts it (`FinderSession.searched_web`); a run without a session searches nothing."""
+def web_search_hook(
+    run_id: uuid.UUID, found: dict[str, Any], call: str | None = None
+) -> str | None:
+    """The runner's gate asks this before each WebSearch of a website's run (B28), with the tool
+    call's id when it has one: its session counts it (`FinderSession.searched_web`); a run
+    without a session searches nothing."""
     session = session_of(run_id)
     if session is None:
         return "This run has no site. Stop now."
-    return session.searched_web(found)
+    return session.searched_web(found, call)
 
 
 @dataclass(frozen=True)
@@ -2570,12 +2600,12 @@ class FinderDefinition(definitions.AgentDefinition):
         if session is not None:
             session.web_search_on = offered
 
-    def web_search_answered(self, run_id: uuid.UUID, failed: bool) -> None:
-        """J23: the runner's word on each WebSearch answer (an error or not), counted by the
-        session (`FinderSession.web_search_answered`)."""
+    def web_search_answered(self, run_id: uuid.UUID, failed: bool, call: str | None = None) -> None:
+        """J23: the runner's word on each WebSearch answer (an error or not) and its tool call,
+        counted by the session (`FinderSession.web_search_answered`)."""
         session = session_of(run_id)
         if session is not None:
-            session.web_search_answered(failed)
+            session.web_search_answered(failed, call)
 
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         with _LOCK:
