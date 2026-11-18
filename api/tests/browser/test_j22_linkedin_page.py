@@ -313,14 +313,19 @@ def test_a_wall_or_a_refusal_stops_the_page_at_once_and_is_recorded(tools: PageT
 
 def test_once_a_sweep_and_never_chained_with_the_retry_or_the_guest_fallback() -> None:
     entries, tools, _, _ = run(reunion())
-    # The page took the retry slot (B24) of the public search: never both.
+    # The page took the retry slot (B24) of the refused public search: never both.
+    assert entries[0]["not_retried"] == sweep.LINKEDIN_PAGE
     refused = {**entries[0], "fallback": None, "phase": "done", "outcome": "failed"}
     refused.update(reason="linkedin_rate_limited", not_searched=[{"title": "x", "place": None}])
     assert sweep.linkedin_page_due(refused)
     assert sweep._failed(sweep.Stats(sources=[refused]), {refused["source_id"]}) == []
+    # A failure B24 retries, or is about to, is not followed by the page.
+    failed = {**refused, "reason": "page_failed", "not_retried": None}
+    assert sweep.linkedin_page_due(failed)
+    assert not sweep.linkedin_page_due({**failed, "first_attempt": {"outcome": "failed"}})
+    assert not sweep.linkedin_page_due({**failed, "attempt": 2})
     # A public search that stood in for the browser search (J20) never falls back again.
     assert not sweep.linkedin_page_due({**refused, "fallback": "guest"})
-    assert not sweep.linkedin_page_due({**refused, "attempt": 2})
     assert not sweep.linkedin_page_due({**refused, "not_searched": []})
     assert not sweep.linkedin_page_due({**refused, "reason": "permission_revoked"})
     # A second call in the same sweep opens nothing.

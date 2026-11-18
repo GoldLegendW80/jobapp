@@ -895,6 +895,14 @@ async def _one(
         entry["error"] = entry["error"] or "store_failed"
         stop = "store_failed"
     sweep.finish_source(entry)
+    if (
+        getattr(runner, "linkedin_page", False)
+        and entry.get("reason") == RATE_LIMITED
+        and sweep.linkedin_page_due(entry)
+    ):
+        # Its public page in the browser takes the retry slot (jobs J22, linkedin_page): a
+        # retry would meet the cooldown this refusal started.
+        sweep.not_retried(entry, sweep.LINKEDIN_PAGE)
     # Cleared only while it still names this search: a source beside may have taken it.
     sweep.release_board(stats, entry["source_id"])
     await progress()

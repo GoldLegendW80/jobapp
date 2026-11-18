@@ -1214,17 +1214,19 @@ def _failed(stats: Stats, bound: set[str]) -> list[dict[str, Any]]:
         # LinkedIn's public job search stood in for its browser search (jobs J20): it took
         # the retry slot of both.
         and not entry.get("fallback")
-        # Its public page in the browser takes the slot of a refused public job search (J22).
-        and not linkedin_page_due(entry)
     ]
 
 
 # Jobs J22 (owner, 2026-11-18: "Yes, fall back to browser"): LinkedIn's public job search that
 # ended on one of these before it searched every saved title and place pair is followed, in the
 # same sweep, by LinkedIn's public job search page read in the browser for the pairs left
-# (app/browser/sources/linkedin_page.py, after the websites). That fallback takes its one retry
-# (B24): never both, never after a search that already stood in for the browser search (J20).
+# (app/browser/sources/linkedin_page.py, after the websites). Never both it and the one retry
+# (B24): a refusal is not retried while LinkedIn's cooldown runs, so the page takes its slot
+# (`not_retried` LINKEDIN_PAGE, set by linkedin_guest when the runner reads the page); a failure
+# retried or about to be is not followed by the page. Never after a search that already stood
+# in for the browser search (J20, `fallback` "guest").
 LINKEDIN_PAGE_AFTER = frozenset({"linkedin_rate_limited", "page_failed", "layout_changed"})
+LINKEDIN_PAGE = "linkedin_page"
 
 
 def linkedin_page_due(entry: dict[str, Any]) -> bool:
@@ -1237,6 +1239,7 @@ def linkedin_page_due(entry: dict[str, Any]) -> bool:
         and entry.get("reason") in LINKEDIN_PAGE_AFTER
         and not entry.get("fallback")
         and entry.get("attempt") != 2
+        and entry.get("first_attempt") is None
         and bool(entry.get("not_searched"))
     )
 
