@@ -1,5 +1,5 @@
 {
- "description": "The web search's default stream (jobs J21), the journeys': one WebSearch of the query that covers the run's plan (`{web_plan_query}`, filled by the web source's definition from web_plan.covering_query: every saved title, the roles next to the profile, the boards and the places, joined by OR, so it covers any journey's criteria; jobs J23, round 2 of #814), answered by the stub with results, then report_no_postings no_match, accepted: searched with nothing new, and no page opened. The erroring variant is web_discovery_failing.json.",
+ "description": "The web search's default stream (jobs J21), the journeys': one WebSearch of the query that covers the run's plan (`{web_plan_query}`, filled by the web source's definition from web_plan.covering_query: every saved title, the roles next to the profile, the boards and the places, joined by OR, so it covers any journey's criteria; jobs J23, round 2 of #814), then each place's town and AI boards query (`{web_plan_queries}`, one WebSearch each, jobs J25), answered by the stub with results, then report_no_postings no_match, accepted: searched with nothing new, and no page opened. The erroring variant is web_discovery_failing.json.",
  "web_search": [
   {
    "title": "Example Robotics careers",
@@ -64,6 +64,40 @@
       "output_tokens": 40,
       "cache_creation_input_tokens": 0,
       "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "each": "web_plan_queries",
+   "step": {
+    "message": {
+     "type": "assistant",
+     "session_id": "{session_id}",
+     "uuid": "00000000-0000-4000-8000-0000000003{index}",
+     "parent_tool_use_id": null,
+     "message": {
+      "id": "msg_fake_web_q{index}",
+      "type": "message",
+      "role": "assistant",
+      "model": "{model}",
+      "content": [
+       {
+        "type": "tool_use",
+        "id": "toolu_web_q{index}",
+        "name": "WebSearch",
+        "input": {
+         "query": "{item}"
+        }
+       }
+      ],
+      "stop_reason": "tool_use",
+      "usage": {
+       "input_tokens": 3000,
+       "output_tokens": 40,
+       "cache_creation_input_tokens": 0,
+       "cache_read_input_tokens": 0
+      }
      }
     }
    }

@@ -17,7 +17,17 @@ tests/browser/test_j23_web_breadth.py):
   broad FALLBACK roles of Claude Code's own query), each in a query that names the place;
 - `boards`: each national public job board of the place's country (BOARDS) by a `site:` query
   that names the place; a country the table does not know has the `jobs` family instead: a
-  query that names the place and a word for jobs (JOB_WORDS).
+  query that names the place and a word for jobs (JOB_WORDS);
+- `town` (jobs J25, #817): a query naming the place's main town (the first town of TOWNS:
+  Saint-Denis for La Réunion, Pointe-à-Pitre, Papeete); a place without a town table has none;
+- `ai_boards` (J25): a query aimed at AI and tech job boards: an offer phrase ("offre emploi",
+  OFFER_PHRASES) with a saved title or a planned role and the main town (the place itself for a
+  place without towns), or a `site:` query of a niche board (NICHE).
+The owner's sweep of 2026-11-19 (81ab9533) ran six broad OR queries, which covered the first
+three families, and missed the AI and data CDIs of Saint-Denis Claude Code had found the day
+before with "offre emploi" and the town on a niche board. So each of `town` and `ai_boards`
+needs a query of its own per place: one that names no other row's place (an OR inside it still
+counts), and the two families are not served by the same single query.
 With no place saved (or only a place that says no limit), one row per search language instead
 (`search_languages`: the profile's languages of LANGUAGES, else French and English): its queries
 need not name a place, its roles count only by their forms in that language, and its boards are
@@ -223,6 +233,7 @@ OR = re.compile(r"(?<!\S)OR(?!\S)|\|")  # a search engine's OR operator, in capi
 # name: Saint-Denis of Seine-Saint-Denis, Saint-Pierre of Martinique or of Saint-Pierre-et-
 # Miquelon, Saint-Paul and Le Port of metropolitan France). A shared town names the place only
 # right next to a postcode of the place (`_shared_named`).
+# The first town of a place is its main town, the one its `town` family must name (J25).
 TOWNS: dict[str, tuple[tuple[str, bool], ...]] = {
     "Reunion": (("Saint-Denis", True), ("Saint-Pierre", True), ("Le Port", True),
                 ("Saint-Paul", True)),
@@ -234,6 +245,17 @@ TOWNS: dict[str, tuple[tuple[str, bool], ...]] = {
 # is one of its postcodes ("97400").
 POSTCODES = {**DEPARTMENTS, "French Polynesia": "987"}
 POSTCODE = re.compile(r"\d{5}")
+# Jobs J25: the AI and tech job boards an `ai_boards` query may name by `site:`, and the offer
+# phrases (folded) of a person's own search for a job ("offre emploi data scientist Saint-Denis").
+NICHE: tuple[Board, ...] = (
+    Board("Welcome to the Jungle", ("welcometothejungle.com",)),
+    Board("Free-Work", ("free-work.com",)),
+    Board("LesJeudis", ("lesjeudis.com",)),
+    Board("Choose Your Boss", ("chooseyourboss.com",)),
+    Board("AI Jobs", ("aijobs.net", "ai-jobs.net")),
+)
+OFFER_PHRASES = ("offre emploi", "offres emploi", "offre d emploi", "offres d emploi",
+                 "job offer", "job offers")  # fmt: skip
 
 
 # With no place wanted, the search languages: the profile's languages this table names (folded),
@@ -260,6 +282,7 @@ class Row:
     language: str | None = None  # "fr" or "en" for a row with no place: its roles' forms
     shared: tuple[str, ...] = ()  # folded towns that name the place next to its postcode
     linkedin: str = ""  # LinkedIn's name for the place (linkedin_places.linkedin_name)
+    town: str = ""  # its main town as TOWNS writes it (J25), "" for a place without towns
 
 
 def _forms(text: str) -> set[str]:
@@ -301,6 +324,12 @@ def place_names(place: str) -> tuple[str, ...]:
         names.add(DEPARTMENTS[name])
     names |= {words(town) for town, shared in TOWNS.get(name, ()) if not shared}
     return tuple(sorted(n for n in names if n))
+
+
+def main_town(place: str) -> str:
+    """The main town of a saved place (J25: the first of TOWNS), "" when TOWNS has none."""
+    towns = TOWNS.get(linkedin_places.linkedin_name(place), ())
+    return towns[0][0] if towns else ""
 
 
 def shared_towns(place: str) -> tuple[str, ...]:
@@ -418,6 +447,7 @@ def plan_of(
                 country in (None, "France", "Belgium", "Switzerland", "Luxembourg", "Canada"),
                 shared=shared_towns(place),
                 linkedin=linkedin_places.linkedin_name(place),
+                town=main_town(place),
             )
         )
     return tuple(rows)
@@ -506,17 +536,21 @@ def coverage(row: Row, queries: list[str], rows: tuple[Row, ...] = ()) -> dict[s
     roles: set[str] = set()
     boards: set[str] = set()
     jobs = False
+    town_queries: set[str] = set()
+    ai_queries: set[str] = set()
     for query in queries[:QUERIES_MAX]:
         text = _text(query)
         ored = bool(OR.search(query))
+        alone = True  # names no other row's place (J25: a query of its own)
         if row.place is not None:
             named = _named_by(row, text)
             if not named:
                 continue
-            if not ored and any(
+            alone = not any(
                 other.place is not None and other is not row and _named_by(other, text) - named
                 for other in rows
-            ):
+            )
+            if not ored and not alone:
                 continue  # ANDed places: narrower, not wider
         found_titles = _consume(text, [(words(t), t) for t in row.titles])
         # Every role of the tables uses up its words, planned or not: "data engineer" is one
@@ -529,7 +563,18 @@ def coverage(row: Row, queries: list[str], rows: tuple[Row, ...] = ()) -> dict[s
             )
             if r in planned
         ]
-        found_boards = [b.name for b in row.boards if _board_named(b, _sites(query))]
+        sites = _sites(query)
+        found_boards = [b.name for b in row.boards if _board_named(b, sites)]
+        if row.place is not None and alone:
+            town = _has(text, words(row.town)) if row.town else False
+            if town:
+                town_queries.add(query.strip())
+            offer = any(_has(text, phrase) for phrase in OFFER_PHRASES)
+            named_role = bool(found_titles or found_roles) or not (row.titles or row.roles)
+            if (offer and named_role and (town or not row.town)) or any(
+                _board_named(b, sites) for b in NICHE
+            ):
+                ai_queries.add(query.strip())
         if not ored:
             found_titles, found_roles = found_titles[:1], found_roles[:1]
             if len(SITE.findall(EXCLUDED.sub(" ", query))) > 1:
@@ -538,7 +583,54 @@ def coverage(row: Row, queries: list[str], rows: tuple[Row, ...] = ()) -> dict[s
         roles |= set(found_roles)
         boards |= set(found_boards)
         jobs = jobs or any(word in JOB_WORDS for word in text.split())
-    return {"titles": titles, "roles": roles, "boards": boards, "jobs": jobs}
+    return {
+        "titles": titles,
+        "roles": roles,
+        "boards": boards,
+        "jobs": jobs,
+        "town_queries": town_queries,
+        "ai_queries": ai_queries,
+    }
+
+
+def own_families(row: Row, done: dict[str, Any]) -> tuple[bool, bool]:
+    """Whether the `town` and the `ai_boards` families of a row are searched (J25): each by a
+    query of its own, never both by one single query; a row with no place needs neither, a
+    place without towns no `town` query."""
+    if row.place is None:
+        return True, True
+    town_q, ai_q = done["town_queries"], done["ai_queries"]
+    if not row.town:
+        return True, bool(ai_q)
+    both = bool(town_q) and bool(ai_q)
+    if both and not any(a != t for t in town_q for a in ai_q):
+        return True, False  # one query for both: the AI boards one is still to make
+    return bool(town_q), bool(ai_q)
+
+
+def _first_term(row: Row) -> str:
+    if row.titles:
+        return row.titles[0]
+    return _role_name(row.roles[0], row.french) if row.roles else "emploi"
+
+
+def _town_place(row: Row) -> str:
+    """The main town and the place, as a query names them ("Saint-Denis La Réunion"), the place
+    alone when it names its town already ("Saint-Denis, La Réunion")."""
+    place = row.place or ""
+    if not row.town or _has(words(place), words(row.town)):
+        return place
+    return f"{row.town} {place}"
+
+
+def town_query(row: Row) -> str:
+    """A `town` query of the row (J25), "" when it needs none."""
+    return f"{_first_term(row)} {_town_place(row)}" if row.place and row.town else ""
+
+
+def ai_boards_query(row: Row) -> str:
+    """An `ai_boards` query of the row (J25), "" for a row with no place."""
+    return f"offre emploi {_first_term(row)} {_town_place(row)}" if row.place else ""
 
 
 def _role_name(role: Role, french: bool) -> str:
@@ -578,6 +670,18 @@ def left(rows: tuple[Row, ...], queries: list[str]) -> list[str]:
             )
         if row.place is not None and not row.boards and not done["jobs"]:
             parts.append(f'a jobs query of the place ("jobs {row.place}")')
+        town, ai = own_families(row, done)
+        if not town:
+            parts.append(
+                f'a query of its own naming the main town {row.town} ("{town_query(row)}")'
+            )
+        if not ai:
+            parts.append(
+                "a query of its own aimed at AI and tech job boards "
+                f'("{ai_boards_query(row)}", or '
+                + " OR ".join(f"site:{b.hosts[0]}" for b in NICHE)
+                + f" {row.place})"
+            )
         if parts:
             out.append(f"{_where(row)}: " + "; ".join(parts))
     return out
@@ -587,6 +691,16 @@ def left_text(rows: tuple[Row, ...], queries: list[str]) -> str:
     """The refusal's list of what is left, bounded (LEFT_MAX)."""
     text = ". ".join(left(rows, queries))
     return text if len(text) <= LEFT_MAX else text[: LEFT_MAX - 5].rsplit(" ", 1)[0] + " ..."
+
+
+def covering_queries(rows: tuple[Row, ...]) -> list[str]:
+    """The queries that search the whole plan `rows`: `covering_query`, then for each place its
+    `town` query and its `ai_boards` query (J25: each family needs a query of its own per
+    place). The fake backend's web stream searches them all (`{web_plan_query}`, then each of
+    `{web_plan_queries}`)."""
+    first = covering_query(rows)
+    rest = [q for row in rows for q in (town_query(row), ai_boards_query(row)) if q]
+    return [first, *rest] if first else []
 
 
 def covering_query(rows: tuple[Row, ...]) -> str:
@@ -616,7 +730,10 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
             f"{ADJACENT_NEEDED} of the adjacent roles, and every board by site: query; with "
             "no place saved, the same for each search language, the roles named in it. Words "
             "side by side are ANDed: a query without OR counts for one title, one role, one "
-            "board and one place at most"
+            "board and one place at most. For each place, also a query of its own (naming "
+            "no other place) naming its main_town, and another aimed at AI and tech job "
+            'boards: an offer phrase ("offre emploi") with a title or a role and the main '
+            "town, or a site: query of one of ai_boards"
         ),
         # Jobs J24 (#815): what a row's searches report, beside what they must search.
         "report": (
@@ -639,6 +756,12 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
                     {"boards": [f"site:{b.hosts[0]}" for b in row.boards]}
                     if row.boards
                     else {"jobs_query": f"jobs {row.place}"}
+                    if row.place
+                    else {}
+                ),
+                **({"main_town": row.town} if row.town else {}),
+                **(
+                    {"ai_boards": [ai_boards_query(row)] + [f"site:{b.hosts[0]}" for b in NICHE]}
                     if row.place
                     else {}
                 ),

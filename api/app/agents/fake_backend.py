@@ -160,6 +160,27 @@ def _fill(value: Any, variables: dict[str, str]) -> Any:
     return value
 
 
+def expanded(steps: list[dict[str, Any]], variables: dict[str, str]) -> list[dict[str, Any]]:
+    """The steps with each `{"each": <variable>, "step": {...}}` replaced by one copy of its
+    step per item of the variable (a JSON list of strings; none when it is missing, empty or
+    not such a list), `{item}` and `{index}` (two digits, from 00) filled in the copy (jobs J25:
+    the web stream searches each query of the plan)."""
+    out: list[dict[str, Any]] = []
+    for step in steps:
+        if "each" not in step:
+            out.append(step)
+            continue
+        try:
+            items = json.loads(variables.get(str(step["each"]), "[]"))
+        except ValueError:
+            items = []
+        if not isinstance(items, list):
+            items = []
+        for index, item in enumerate(i for i in items if isinstance(i, str)):
+            out.append(_fill(step["step"], {"item": item, "index": f"{index:02d}"}))
+    return out
+
+
 class FakeBackend:
     def __init__(self, speed: float = 1.0) -> None:
         self.speed = speed
@@ -201,7 +222,7 @@ class FakeBackend:
             **request.variables,
         }
         script = load(request.script or DEFAULT_SCRIPT)
-        steps: list[dict[str, Any]] = script["steps"]
+        steps: list[dict[str, Any]] = expanded(script["steps"], variables)
         asked = script.get("gate", "all")
         if asked not in ("all", "offered"):
             raise ValueError(f'a stream\'s "gate" is "all" or "offered", not {asked!r}')

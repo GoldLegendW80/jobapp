@@ -2623,12 +2623,17 @@ class FinderDefinition(definitions.AgentDefinition):
 
     def stream_variables(self, data: dict[str, Any]) -> dict[str, str]:
         """J23, round 2 of #814: the fake backend's web stream searches the one query that covers
-        the run's plan (`{web_plan_query}`, web_plan.covering_query), whatever the scope."""
+        the run's plan (`{web_plan_query}`, web_plan.covering_query), whatever the scope, then
+        each place's town and AI boards queries (J25, `{web_plan_queries}`, a JSON list)."""
         with _LOCK:
             session = _SCOPES.get(str(data.get("request")))
         if session is None or session.interactive is None or not session.interactive.web:
             return {}
-        return {"web_plan_query": web_plan.covering_query(session.web_plan())}
+        queries = web_plan.covering_queries(session.web_plan())
+        return {
+            "web_plan_query": queries[0] if queries else "",
+            "web_plan_queries": json.dumps(queries[1:]),
+        }
 
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         with _LOCK:
@@ -2715,8 +2720,10 @@ Method (what Claude Code did on 2026-11-18, and found the person's best fits wit
 roles next to the profile and the national public job boards of its country. The app refuses
 report_no_postings until, for each place, your WebSearch queries that name the place (as
 written or by a name of `also_named`) searched every title, at least three of the adjacent
-roles and every board by site: query; its refusal says what is left. With no place saved, the
-plan has one row per search language instead: the same, the roles named in that language,
+roles and every board by site: query, and in a query of its own (naming no other place) its
+`main_town`, and in another its `ai_boards` (an "offre emploi" search with a role and the main
+town, or a site: query of a niche board); its refusal says what is left. With no place saved,
+the plan has one row per search language instead: the same, the roles named in that language,
 queries naming no place. Search as many times as the search needs.
 2. Broad queries per place first, in the languages of the place (French and English for a
 French place, La Reunion or Tahiti included), several roles joined by OR: "developpeur OR data
