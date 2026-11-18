@@ -123,7 +123,11 @@ def setup(world: World) -> Sweep:
 
 def search_of() -> SearchSection:
     return SearchSection.model_validate(
-        {"title_include": {"terms": ["Robotics Engineer"]}, "interactive_sites": SITES}
+        {
+            "title_include": {"terms": ["Robotics Engineer"]},
+            "web_search": False,  # J21: these tests name their own sources
+            "interactive_sites": SITES,
+        }
     )
 
 

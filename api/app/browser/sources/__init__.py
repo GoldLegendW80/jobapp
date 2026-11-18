@@ -555,7 +555,7 @@ class Runner:
         public job search refused before it searched every pair falls back to its public page
         in the browser, signed out, read by code (jobs J22), once they all ended."""
         from app.browser.sources import linkedin_guest, linkedin_page
-        from app.browser.sources.interactive import run_selected
+        from app.browser.sources.interactive import run_selected, run_web
 
         unsigned = await linkedin_guest.unsigned(self, plan, stats)
         rest = linkedin_guest.without_api(plan, unsigned)
@@ -563,6 +563,9 @@ class Runner:
         await linkedin_guest.fall_back(self, plan, stats, progress, deadline, stop)
         if self.linkedin_page:
             await linkedin_page.fall_back(self, plan, stats, progress, deadline, stop)
+        # "Anywhere on the web" (jobs J21), after the websites and LinkedIn's fallbacks, on its
+        # own lease.
+        await run_web(self, plan, stats, progress, deadline, stop)
 
     async def __call__(
         self,

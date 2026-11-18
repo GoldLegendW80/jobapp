@@ -396,6 +396,10 @@ export function useSources(search: Search): Sources {
           : {}),
         job_feeds: draft.feeds,
         ...(draft.boards !== null ? { company_boards: draft.boards } : {}),
+        // J21: like company_boards, sent once changed or stored (true when absent).
+        ...(reviewed.web_search !== undefined || !draft.web
+          ? { web_search: draft.web }
+          : {}),
       });
       if (!isMounted()) return null;
       if (!isCurrent(saved, base))

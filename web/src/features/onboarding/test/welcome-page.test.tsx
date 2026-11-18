@@ -595,7 +595,9 @@ describe("the wizard", () => {
 
   it("warns on the summary while the list is empty, and opens Find jobs on Start", async () => {
     fakeSession(member);
-    fakeProfile(null);
+    const profile = fakeProfile(null);
+    // Jobs J21: Anywhere on the web unticked too, so nothing is searched at all.
+    profile.sections.search = { ...EMPTY.search, web_search: false };
     const calls = fakeOnboarding(withRoles);
     fakeDeck([]);
     const user = userEvent.setup();
@@ -726,7 +728,8 @@ describe("the wizard", () => {
     await screen.findByText(/Step 10 of 10/);
     expect(
       await screen.findByText(
-        /Start runs your first search on 2 places from your list/,
+        // Jobs J21: Anywhere on the web is one of them, ticked for everyone.
+        /Start runs your first search on 3 places from your list/,
       ),
     ).toBeInTheDocument();
     expect(

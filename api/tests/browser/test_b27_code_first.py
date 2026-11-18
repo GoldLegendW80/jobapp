@@ -719,6 +719,7 @@ def test_a_block_spares_the_search_box_only(reason, setup, accepted):
         ),
         routes=dict.fromkeys(r for r in finder.ROUTES if r in setup),
         web_search_on=False,  # B28: the run has no WebSearch (test_b28_web_search's table)
+        interactive=None,  # a website's run (J21: the web search's in test_j21_web_source)
     )
     assert (finder.FinderSession.routes_left(session, reason) == []) is accepted  # type: ignore[arg-type]
 

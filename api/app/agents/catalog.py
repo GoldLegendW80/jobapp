@@ -107,6 +107,7 @@ CATEGORY_OF: dict[str, str] = {
     "apply_form": "applying",
     "apply_followup": "applying",
     "browser_discovery": "finding",
+    "web_discovery": "finding",
     "document_transcribe": "profile",
     "documents_base": "documents",
     "documents_chat_base": "documents",
@@ -222,6 +223,7 @@ NAMES: dict[str, str] = {
     "profile_interpret": "About you reader",
     "profile_titles": "Job title suggester",
     "triage": "Triage",
+    "web_discovery": "Web search",
 }
 _PANEL_GROUP = "Hiring panel"
 
@@ -263,6 +265,7 @@ FLOWS: dict[str, Flow] = {
             _step("system", "sweep", "Sweep", 1, 1),
             _step("system", "backlog", "Reader backlog tick, every minute", 1, 3),
             _agent("browser_discovery", 2, 0),
+            _agent("web_discovery", 2, 1),
             _agent("posting_reader", 2, 2),
             _step("person", "help", "Let the assistant continue", 3, 0),
             _step("data", "postings", "Job postings", 3, 1),
@@ -279,6 +282,9 @@ FLOWS: dict[str, Flow] = {
             ("browser_discovery", "help", "asks for help"),
             ("help", "browser_discovery", "gives the browser back"),
             ("browser_discovery", "postings", "stores verified postings"),
+            # J21: "Anywhere on the web", after the websites.
+            ("sweep", "web_discovery", "searches the whole web"),
+            ("web_discovery", "postings", "stores verified postings"),
             ("sweep", "posting_reader", "then reads its postings"),
             # worker.py cron:posting_reader, reader.tick.
             ("backlog", "posting_reader", "reads the unread ones"),
@@ -591,7 +597,7 @@ class Ceiling:
 ON_THE_QUEUE = "It runs as its own job on the agents queue, which lets a run take this long."
 # The agent of a sweep (app/browser/finder.py): a worker meets it only once a sweep imports the
 # finder, so the agents queue's job timeout, built at the worker's start, never counts it.
-SWEEP_AGENTS = ("browser_discovery",)
+SWEEP_AGENTS = ("browser_discovery", "web_discovery")
 
 
 def _in_a_sweep() -> Ceiling:
@@ -665,6 +671,7 @@ _INSIDE: dict[str, Callable[[], Ceiling]] = {
     "apply_check": _in_a_decision,
     "apply_form": _in_a_fill_form,
     "browser_discovery": _in_a_sweep,
+    "web_discovery": _in_a_sweep,
     "document_transcribe": _in_an_import,
     "profile_extract": _in_an_import,
 }

@@ -141,6 +141,8 @@ def selected(url: str = START, **search: Any) -> SearchSection:
             "interactive_sites": [
                 {"platform": "custom", "url": url, "enabled": True, "mode": "llm_browser"}
             ],
+            # One website: "Anywhere on the web" (jobs J21, on by default) is tested on its own.
+            "web_search": False,
             **search,
         }
     )

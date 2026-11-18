@@ -108,6 +108,8 @@ async function prepare(
         days: 365,
         never_apply: rules,
         interactive_sites: website ? [WEBSITE] : [],
+        // Jobs J21: the journey names its own sources, "Anywhere on the web" left out.
+        web_search: false,
       },
     },
   });

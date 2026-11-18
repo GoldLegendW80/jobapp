@@ -425,6 +425,7 @@ def test_twelve_titles_in_three_places_are_all_searched_then_their_new_cards_rea
         title_include={"terms": TITLES},
         location={"terms": PLACES},
         location_exclude={"terms": []},
+        web_search=False,  # J21: these tests name their own sources
         interactive_sites=[LINKEDIN, *others],
     )
     entries, fake, _, _ = execute(search, FullPages, deadline=900.0)

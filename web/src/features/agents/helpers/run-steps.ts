@@ -110,12 +110,22 @@ function previewEntry([key, value]: [string, unknown]): [string, string] {
   return [key, text(value)];
 }
 
+/** Claude Code's web search (jobs J21): a private run keeps its query in `preview.query`
+ * (api runner.Recorder, 200 characters at most) and its answer's link count in `results`. */
+const WEB_SEARCH = "WebSearch";
+
 function toolCallView(data: Record<string, unknown>): StepView {
   const args =
     data.input && typeof data.input === "object"
       ? Object.entries(data.input as Record<string, unknown>)
       : [];
   const preview = previewOf(data);
+  if (data.name === WEB_SEARCH) {
+    const query = [preview.query, Object.fromEntries(args).query].find(
+      (value): value is string => typeof value === "string" && value !== "",
+    );
+    if (query) return { icon: "tool", title: `Web search: ${query}` };
+  }
   // The address of a navigation, or the pattern of a find, follows the tool's name.
   const subject = [preview.url, preview.pattern].find(
     (value): value is string => typeof value === "string" && value !== "",
@@ -162,6 +172,11 @@ function toolResultView(data: Record<string, unknown>): StepView {
         : "Tool result",
     tone: failed ? "error" : undefined,
   };
+  if (!failed && typeof data.results === "number") {
+    // A web search's answer: how many results it listed, never their text (jobs J21).
+    view.title = plural(data.results, "result");
+    return view;
+  }
   if (data.content === undefined && typeof data.size === "number") {
     // A private run stores the size of a result and its non-text blocks, never the content:
     // show them, and no box for a content that is not there.

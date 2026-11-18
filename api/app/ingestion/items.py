@@ -89,7 +89,8 @@ start, and a school with no date at all last. Every other list appends.
 document supports: a gate's `penalty`, every `advanced_regex`, `search.min_fit`,
 `search.days`, `search.browser_sources`, `search.sweep_schedule`, `search.documents`,
 `search.interactive_sites`, `search.interactive_instructions`, `search.linkedin_search`,
-`search.company_boards`, `search.job_feeds`, `search.alert_emails`, `search.company_types` and
+`search.web_search`, `search.company_boards`, `search.job_feeds`, `search.alert_emails`,
+`search.company_types` and
 `search.compensation` (wishes and pay a document does not state for the person), the whole
 `preferences` section (how the app behaves, and the wizard's dates), and the apply fields of
 `answers` (EEO, salary stance and ranges, consents, preferred name and the like). They are typed
@@ -362,6 +363,8 @@ FIELD_TYPES: Mapping[str, FieldType] = types.MappingProxyType(
         "search.interactive_instructions": _T.SETTING,
         # How a ticked LinkedIn is searched (owner, 2026-10-30), set in Find jobs only.
         "search.linkedin_search": _T.SETTING,
+        # Anywhere on the web (jobs J21): whether the web source runs, the person's choice.
+        "search.web_search": _T.SETTING,
         # Company job boards (owner, 2026-10-30): the person's own target companies.
         "search.company_boards[].company": _T.SETTING,
         "search.company_boards[].ats": _T.SETTING,
@@ -528,6 +531,7 @@ SLOTS: Mapping[str, Mapping[str, Slot]] = types.MappingProxyType(
             interactive_sites=_K.setting,
             interactive_instructions=_K.setting,
             linkedin_search=_K.setting,
+            web_search=_K.setting,
             company_boards=_K.setting,
         ),
         "answers": _slots(

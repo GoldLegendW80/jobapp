@@ -50,6 +50,7 @@ def test_permission_rows_never_add_legacy_frozen_modes(kind: str, selection: str
     search = SearchSection.model_validate(
         {
             "browser_sources": [entry(kind)],
+            "web_search": False,  # J21: these tests name their own sources
             "interactive_sites": []
             if selection == "removed"
             else [selected(kind, selection == "enabled")],
@@ -78,7 +79,7 @@ def test_real_runner_and_sweep_do_not_fall_back_after_setup_changes(
     kind: str,
     selection: str,
 ) -> None:
-    set_profile(factory, owner.id, {"interactive_sites": [selected(kind)]})
+    set_profile(factory, owner.id, {"interactive_sites": [selected(kind)], "web_search": False})
     accepted = api.request(
         "PUT",
         "/api/browser/linkedin" if kind == "linkedin" else f"/api/opportunities/platforms/{kind}",
@@ -137,7 +138,7 @@ def test_permission_alone_is_not_a_source_for_a_new_run(
     fake_queue: FakeQueue,
     kind: str,
 ) -> None:
-    set_profile(factory, owner.id, {"browser_sources": [entry(kind)]})
+    set_profile(factory, owner.id, {"browser_sources": [entry(kind)], "web_search": False})
     response = api.post("/api/jobs/sweeps", token=owner.token)
     assert response.status_code == 422, response.text
     assert fake_queue.calls == []
@@ -145,7 +146,10 @@ def test_permission_alone_is_not_a_source_for_a_new_run(
         type(
             "ProfileView",
             (),
-            {"sections": {"search": {"browser_sources": [entry(kind)]}}, "revision": 1},
+            {
+                "sections": {"search": {"browser_sources": [entry(kind)], "web_search": False}},
+                "revision": 1,
+            },
         )(),
         SweepTrigger.manual,
         clock(),

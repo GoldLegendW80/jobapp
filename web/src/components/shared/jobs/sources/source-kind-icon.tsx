@@ -1,10 +1,11 @@
-import { Building2, Globe, Rss } from "lucide-react";
+import { Building2, Globe, Rss, Search } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 import type { RowKind } from "@/features/jobs/helpers/sources";
 
 const ICONS: Record<RowKind, typeof Globe> = {
+  web: Search,
   website: Globe,
   feed: Rss,
   board: Building2,

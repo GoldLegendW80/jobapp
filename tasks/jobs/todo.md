@@ -152,6 +152,16 @@ Owner request of 2026-11-17 ([decisions](../../docs/decisions.md), issue [#793](
 
 Owns: `api/app/browser/sources/linkedin_guest.py`, `linkedin_places.py` (the alias table and `WantedPlaces`), the fallback's scheduling in `api/app/browser/sources/__init__.py` (`Runner.websites`) and `api/app/jobs/sweep.py` (`_failed` leaves a fallback out of B24's retry), the summary's fields (`api/app/jobs/schemas.py`, `sweep_router.py`, `web/src/features/jobs/api/sweeps-api.ts`, `helpers/labels.ts` `guestSentence`), Activity's note (`api/app/agents/activity_steps.py`), the LinkedIn guest fake and tests (`api/tests/browser/test_linkedin_guest.py`, `test_linkedin_guest_store.py`, `test_j20_linkedin_guest_finds.py`). Acceptance: a card titled outside the saved terms is read and stored; a saved place goes to LinkedIn by the alias table ("Tahiti" as "French Polynesia", "La Réunion" as "Reunion"), unknown places as written; a posting of a place none of the saved ones (LinkedIn's answer for a place it does not know, "Miami, FL") is not stored; 12 titles in 3 places are each searched once with details of new cards within one sweep, the pairs not searched named when it ends early; with the browser search, no LinkedIn sign in or a failed browser search runs the public job search in the same sweep (`fallback` "guest" in stats, shown in Activity), with no action of the person.
 
+### J21: Anywhere on the web, a search source that works like Claude Code's web search
+
+Owner request of 2026-11-18 ([decisions](../../docs/decisions.md), issue [#807](https://github.com/GoldLegendW80/jobapp/issues/807)). Branch `jobs/J21-anywhere-on-the-web`.
+
+| Id | Issue | What | Scope | Depends on | Migration | Group |
+|---|---|---|---|---|---|---|
+| J21 | #807 | "Anywhere on the web": a sweep source (`web_search`, on by default) run by `web_discovery`, a sibling of `browser_discovery` sharing its tools and verification, WebSearch with no cap of the app's (owner: "No cap, like the Mac"; Claude Code's own default of 200 a session holds), queries and result counts in Activity | M | none (J22 #808 edits sweep.py beside it) | none | 1 |
+
+Owns: `api/app/browser/sources/interactive.py` (`run_web`, `_web`, the web branch of `_search`), `api/app/browser/finder.py` (`WEB_NAME`, `WEB_START`, `WEB_PROMPT`, `InteractiveScope.web`), `api/app/agents/runner.py` (the WebSearch query preview and result count, the per definition cap, none for the web), `api/tests/browser/test_j21_web_source.py`. Touches: `sdk_options.py`, `definitions.py`, `catalog.py`, `workflows.py`, `activity_steps.py`, `profile/schemas.py` (`web_search`), `jobs/sweep.py` (`has_web`, `web_entry`, the frozen source), `browser/sources/__init__.py` (`Runner.websites` runs it last). Status: first slice in pull request, see its "Left to do".
+
 ### J22: LinkedIn's public job search page in the browser when the public API refuses
 
 Owner decision of 2026-11-18 ([decisions](../../docs/decisions.md), issue [#808](https://github.com/GoldLegendW80/jobapp/issues/808)): "Yes, fall back to browser". Spec: [SPEC-jobs, "LinkedIn's public job search"](../../SPEC-jobs.md#linkedins-public-job-search-owner-2026-10-30), Fallback to the public page.

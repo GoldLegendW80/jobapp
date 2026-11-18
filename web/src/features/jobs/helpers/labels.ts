@@ -131,6 +131,8 @@ const KIND_NAMES: Record<string, string> = {
   freework: "Free-Work",
   // A company job board read through its ATS's public API (owner, 2026-10-30).
   board: "Company board",
+  // The search of the whole web (jobs J21, mode web): its postings' source is "web".
+  web: "Anywhere on the web",
 };
 
 /** What each `error` of a source means, for the person. */
@@ -366,7 +368,7 @@ export function sourceName(source: {
  * ("remoteok" is "Remote OK", opportunities O8). */
 export function sourceLabel(current: string): string {
   const names = current.split(
-    /, (?=[a-z_]+:|(?:remoteok|weworkremotely|arbeitnow|himalayas|adzuna)(?:, |$))/,
+    /, (?=[a-z_]+:|(?:remoteok|weworkremotely|arbeitnow|himalayas|adzuna|web)(?:, |$))/,
   );
   return names.length > 1
     ? names.map(oneSource).join("; ")
@@ -389,6 +391,8 @@ function oneSource(current: string): string {
   // Opportunities O8: a freelance and project feed ("remoteok", "hackernews:freelance").
   const feed = feedSourceName(current);
   if (feed) return feed;
+  // Jobs J21: a posting "Anywhere on the web" found.
+  if (current === "web") return KIND_NAMES.web ?? current;
   const match = /^(google_careers|vie|site|linkedin):(.*)$/s.exec(current);
   if (!match) return current;
   const [, kind = "", rest = ""] = match;

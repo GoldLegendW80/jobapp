@@ -48,6 +48,7 @@ WORKFLOWS: tuple[Workflow, ...] = (
             "scope",
             "sweep",
             "browser_discovery",
+            "web_discovery",
             "posting_reader",
             "help",
             "postings",
@@ -182,6 +183,7 @@ BY_KEY: dict[str, Workflow] = {workflow.key: workflow for workflow in WORKFLOWS}
 # The workflow of an agent's run when its starter recorded none (an older run).
 AGENT_WORKFLOW: dict[str, str] = {
     "browser_discovery": "job_search",
+    "web_discovery": "job_search",
     "posting_reader": "posting_reading",
     "documents_cv": "posting_documents",
     "documents_letter": "posting_documents",

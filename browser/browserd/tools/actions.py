@@ -70,6 +70,9 @@ AGENT_ACTS = frozenset({
 ACTION_S = 5.0  # an element's actionability (scroll, hover, click, fill), a failure result past it
 SHOT_MAX = 8 * 1024 * 1024
 ABOUT_BLANK = "about:blank"
+# The calls that may begin a discovery (`Tab.begin_discovery`): a website's start page, or the
+# first read of "Anywhere on the web" (jobs J21), which has none.
+FIRST_CALLS = frozenset({"browser_navigate", "web_fetch"})
 FRAME_DEPTH = 10  # frames followed to the focused element, refused past it
 # A C0 or C1 control character, or DEL: typed key by key, a return presses Enter (and submits the
 # form), a tab moves the focus. Refused, but for a newline into a multi line field (inserted).
@@ -280,12 +283,13 @@ class Tab:
             return False
 
     async def begin_discovery(self, scope: "discovery.Scope", name: str, args: dict) -> None:
-        """The first call of a discovery makes its context: a navigation, on a browser whose
-        pages are all blank (loaded pages may hold listeners: never upgraded). Anonymous: a new
-        context, JavaScript on, service workers allowed, no download; signed in (B17): the
-        person's own persisted context. Either way the route of the line (`_line_route`) holds
-        every request from the first navigation on, and each page bypasses service workers so
-        its requests reach that route (`_watch`). A step that fails ends the discovery."""
+        """The first call of a discovery makes its context: a navigation (or a fetch,
+        FIRST_CALLS), on a browser whose pages are all blank (loaded pages may hold listeners:
+        never upgraded). Anonymous: a new context, JavaScript on, service workers allowed, no
+        download; signed in (B17): the person's own persisted context. Either way the route of
+        the line (`_line_route`) holds every request from the first navigation on, and each
+        page bypasses service workers so its requests reach that route (`_watch`). A step that
+        fails ends the discovery."""
         if self.state.native_failed:
             raise UnsupportedDiscovery
         given = self.state.scope
@@ -299,7 +303,9 @@ class Tab:
             if self.slot is not None
             else [p for c in browser.contexts for p in c.pages]
         )
-        if name != "browser_navigate" or any(p.url != ABOUT_BLANK for p in mine):
+        # The first call is a navigation, or a web_fetch: "Anywhere on the web" (jobs J21) has
+        # no start page, and its first read may be a fetch; its context is made all the same.
+        if name not in FIRST_CALLS or any(p.url != ABOUT_BLANK for p in mine):
             raise UnsupportedDiscovery
         self.state.discovery = True
         self.state.signed_in = scope.signed_in

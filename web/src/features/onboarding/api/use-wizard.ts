@@ -68,7 +68,9 @@ export function useWizard({
   // "Websites to search" is answered by the list itself (steps.ts UNSTORED).
   const sources = useSources(profile.sections.search);
   const current = client.getQueryData<Profile>(profileKey) ?? profile;
-  const listed = sourceCount(draftOfSearch(current.sections.search)) > 0;
+  // The step asks for her own places: "Anywhere on the web" is ticked for everyone (J21).
+  const listed =
+    sourceCount({ ...draftOfSearch(current.sections.search), web: false }) > 0;
   // "Model access" is done when a credential was saved before the wizard opened (steps.ts
   // UNSTORED): one saved on that step leaves the person there to see it, until Next.
   const key = useModelKey();

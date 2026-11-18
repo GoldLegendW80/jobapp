@@ -147,7 +147,7 @@ export function useSourcesEditor(sources: Sources) {
 
   const remove = (row: SourceRow) => {
     setDraft((current) => withoutRow(current, row));
-    done(`${row.name} removed.`);
+    done(row.kind === "web" ? `${row.name} paused.` : `${row.name} removed.`);
   };
 
   const resume = (row: SourceRow) => {

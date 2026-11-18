@@ -50,6 +50,9 @@ def search(**overrides: Any) -> dict[str, Any]:
         "days": 30,
         "interactive_sites": [SITE],
         "never_apply": ["No security roles: security, cyber (test rule)"],
+        # The sources these tests name: "Anywhere on the web" (jobs J21, on by default) is
+        # tested on its own (tests/jobs/test_j21_web_sweep.py).
+        "web_search": False,
     }
     data.update(overrides)
     return data

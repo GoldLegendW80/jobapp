@@ -730,9 +730,12 @@ def test_a_version_saved_above_a_lowered_ceiling_runs_at_the_ceiling(
     assert save(api, admin, "echo", {"wall_time_s": ceiling}).status_code == 201
     # The code then shortens its longest agent: the ceiling comes down with it, and so do the
     # worker's job timeout and stale bound (worker.longest_agent_s).
-    longest = max(catalog.load().values(), key=lambda agent: agent.wall_time_s)
-    shorter = dataclasses.replace(longest, wall_time_s=definitions.ECHO.wall_time_s)
-    monkeypatch.setitem(definitions.AGENTS, longest.name, shorter)
+    # Every agent at the longest wall time (jobs J21: the web search shares the websites').
+    loaded = catalog.load().values()
+    top = max(agent.wall_time_s for agent in loaded)
+    for longest in [agent for agent in loaded if agent.wall_time_s == top]:
+        shorter = dataclasses.replace(longest, wall_time_s=definitions.ECHO.wall_time_s)
+        monkeypatch.setitem(definitions.AGENTS, longest.name, shorter)
     lowered = overrides.ceiling_s()
     assert definitions.ECHO.wall_time_s < lowered < ceiling
     timeouts = _watch_the_runs_clock(monkeypatch)
@@ -816,6 +819,7 @@ def test_every_agent_has_the_ceiling_of_the_job_that_runs_it() -> None:
         "apply_form": form_agent.APPLY_FORM.wall_time_s,  # the fill's form deadline
         "apply_answer": leases.LEASE_MAX_S["apply_fill"],  # the fill's browser lease
         "browser_discovery": sweep.BROWSER_SEARCH_MAX_S,  # the sweep's own bound
+        "web_discovery": sweep.BROWSER_SEARCH_MAX_S,  # J21: the same bound
         "profile_extract": engine.RUN_TIME.total_seconds(),  # the ingestion run's deadline
         "document_transcribe": engine.RUN_TIME.total_seconds(),
     }

@@ -415,6 +415,11 @@ test("a reload, a fresh visit of /welcome and another device open the step left"
 }) => {
   // The account's skills.
   await putSection(pageN, "skills", () => SKILLS);
+  // Jobs J21: N unticks Anywhere on the web too, so her list is really empty.
+  await putSection(pageN, "search", (stored) => ({
+    ...stored,
+    web_search: false,
+  }));
   await pageN.reload();
   await step(pageN, 8);
   await pageN.goto("/welcome");
@@ -591,6 +596,7 @@ test("B, with roles and no website, ends the wizard without a sweep", async () =
   await putSection(pageB, "search", (stored) => ({
     ...stored,
     title_include: { terms: ["Analytics engineer"], advanced_regex: false },
+    web_search: false, // Jobs J21: nothing at all to search
   }));
   await pageB.goto("/welcome?step=summary");
   await step(pageB, 10);

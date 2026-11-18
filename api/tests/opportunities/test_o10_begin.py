@@ -14,7 +14,9 @@ from app.profile.schemas import SearchSection
 
 @pytest.mark.parametrize("enabled", [True, False])
 def test_a_feed_only_search_queues_nothing(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
-    search = SearchSection.model_validate({"feeds": [{"kind": "remoteok", "enabled": enabled}]})
+    search = SearchSection.model_validate(
+        {"feeds": [{"kind": "remoteok", "enabled": enabled}], "web_search": False}
+    )
     monkeypatch.setattr(sweep, "load_search", lambda *_: search)
     row = MagicMock(id=uuid.uuid4())
     start = MagicMock(return_value=row)

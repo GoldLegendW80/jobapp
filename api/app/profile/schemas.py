@@ -828,6 +828,7 @@ KEPT_WHEN_OMITTED = (
     "job_feeds",
     "company_boards",
     "linkedin_search",
+    "web_search",
 )
 INTERACTIVE_HOSTS = {
     "linkedin.com": "linkedin",
@@ -1033,6 +1034,9 @@ class SearchSection(_Section):
     # or "browser", the finder agent in the person's browser. Easy Apply uses the browser
     # either way. A section saved before it reads "api".
     linkedin_search: LinkedInSearchMode = "api"
+    # "Anywhere on the web" (jobs J21, owner 2026-11-18): the search of the whole web, ticked for
+    # everyone (a section saved before it reads True), untickable in Find jobs.
+    web_search: bool = True
     # Company job boards (app/jobs/boards). None: never saved (Find jobs offers its starter
     # list then); a list, the empty one included, is the person's own.
     company_boards: Annotated[list[CompanyBoard], Field(max_length=COMPANY_BOARDS_MAX)] | None = (
