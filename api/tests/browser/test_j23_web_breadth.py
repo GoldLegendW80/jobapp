@@ -11,13 +11,30 @@ import asyncio
 import json
 import random
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 
+from app.agents import fake_backend
+from app.agents.models import RunStatus
 from app.browser import finder, sources, web_plan
 from app.jobs import sweep
+from app.jobs.models import Job, JobEvent, Sweep, SweepTrigger
+from tests.browser.runtime_support import (  # noqa: F401  (fixtures)
+    Runtime,
+    alice,
+    clock,
+    db,
+    engine,
+    factory,
+    migrated_url,
+    one_connection,
+    runs_of,
+    runtime,
+)
 from tests.browser.test_b20_agent import text_of, tool
 
 PROFILE = json.dumps(
@@ -500,3 +517,153 @@ def test_the_date_shown_is_kept_only_as_the_page_words_it(value: object, kept) -
 def test_an_exact_date_is_exact() -> None:
     finding = SimpleNamespace(published_on="2026-11-02", evidence={"date_shown": "x"})
     assert sweep.discovery_date(finding) == "exact"
+
+
+# --- the recorded La Réunion session, replayed by the fake Claude Code ---------------------------
+
+
+def said(n: int, *calls: tuple[str, dict[str, Any]]) -> dict[str, Any]:
+    """One assistant message of the recorded session: its tool calls."""
+    return {
+        "message": {
+            "type": "assistant",
+            "session_id": "{session_id}",
+            "uuid": f"00000000-0000-4000-8000-{n:012d}",
+            "parent_tool_use_id": None,
+            "message": {
+                "id": f"msg_j23_{n}",
+                "type": "message",
+                "role": "assistant",
+                "model": "{model}",
+                "content": [
+                    {"type": "tool_use", "id": f"toolu_j23_{n}_{i}", "name": name, "input": args}
+                    for i, (name, args) in enumerate(calls)
+                ]
+                or [{"type": "text", "text": "Two postings reported."}],
+                "stop_reason": "tool_use" if calls else "end_turn",
+                "usage": {"input_tokens": 3000, "output_tokens": 40},
+            },
+        }
+    }
+
+
+def reunion_stream() -> dict[str, Any]:
+    """Claude Code's session of 2026-11-18 for La Réunion (scrubbed: invented hosts and
+    companies), opened by the production run's own give up after one narrow query."""
+    app = "mcp__app__"
+    postings = [
+        {
+            "title": "Ingénieur IA générative (CDI)",
+            "url": NICHE,
+            "text": "Agents, RAG and Python.",
+            "location": "Saint-Denis, La Réunion",
+            "date_shown": "il y a un mois",
+        },
+        {"title": "Data scientist (H/F)", "url": FRANCE_TRAVAIL, "text": "Builds models."},
+    ]
+    steps = [
+        {
+            "message": {
+                "type": "system",
+                "subtype": "init",
+                "session_id": "{session_id}",
+                "uuid": "00000000-0000-4000-8000-000000000001",
+                "model": "{model}",
+                "tools": ["WebSearch", *(app + n for n in finder_tools_names())],
+                "mcp_servers": [{"name": "app", "status": "connected"}],
+            }
+        },
+        said(1, ("WebSearch", {"query": "ingénieur IA générative CDI La Réunion"})),
+        said(2, (app + "report_no_postings", {"reason": "no_match"})),
+        said(3, *(("WebSearch", {"query": q}) for q in COVERING)),
+        said(4, (app + "web_fetch", {"url": NICHE}), (app + "web_fetch", {"url": FRANCE_TRAVAIL})),
+        said(5, (app + "report_postings", {"postings": postings})),
+        said(6),
+        {
+            "message": {
+                "type": "result",
+                "subtype": "success",
+                "is_error": False,
+                "duration_ms": 3000,
+                "duration_api_ms": 2500,
+                "num_turns": 6,
+                "session_id": "{session_id}",
+                "uuid": "00000000-0000-4000-8000-0000000009ff",
+                "total_cost_usd": 0.0,
+                "usage": {"input_tokens": 9000, "output_tokens": 120},
+                "result": "Two postings reported.",
+            }
+        },
+    ]
+    return {
+        "description": "J23 test: the recorded La Réunion session.",
+        "web_search": [
+            {"title": "Ingénieur IA générative", "url": NICHE},
+            {"title": "Data scientist (H/F), 974", "url": FRANCE_TRAVAIL},
+        ],
+        "steps": steps,
+    }
+
+
+def finder_tools_names() -> list[str]:
+    return ["web_fetch", "browser_navigate", "browser_snapshot", "report_postings",
+            "report_no_postings"]  # fmt: skip
+
+
+def test_the_recorded_la_reunion_session_is_stored_through_the_runner(
+    runtime: Runtime,  # noqa: F811
+    alice,  # noqa: F811
+    monkeypatch,
+    tmp_path,
+) -> None:
+    (tmp_path / "web_discovery.json").write_text(json.dumps(reunion_stream()), encoding="utf-8")
+    monkeypatch.setattr(fake_backend, "STREAMS", tmp_path)
+    runtime.give_key(alice)
+    with runtime.factory() as database:
+        row = Sweep(user_id=alice, trigger=SweepTrigger.manual, stats={})
+        database.add(row)
+        database.commit()
+        sweep_id = row.id
+    with runtime.factory() as database:
+        known = sweep.Known(database, alice)
+    stats = sweep.Stats()
+    plan_ = sweep.Plan(sweep_id=sweep_id, user_id=alice, rules=[], skills=None, known=known)
+    browser = Browser(
+        {NICHE: fetched(NICHE, NICHE_PAGE), FRANCE_TRAVAIL: fetched(FRANCE_TRAVAIL,
+                                                                     FRANCE_TRAVAIL_PAGE)}
+    )  # fmt: skip
+    session = web_session(browser=browser)
+    session.user_id = str(alice)
+
+    async def run() -> None:
+        commits = sweep.Commits(runtime.factory, plan_, stats, lambda: datetime.now(UTC))
+        commits.admit("web")
+
+        async def store(batch: finder.VerifiedBatch) -> None:
+            await commits.save("web", finder.WEB_NAME, batch)
+
+        session.on_verified = store
+        await finder.RuntimeFinder(lambda: runtime.context())(session)
+
+    asyncio.run(run())
+    [run_row] = runs_of(runtime.factory, alice)
+    assert run_row.status == RunStatus.done, run_row.error
+    assert session.web_searches == 1 + len(COVERING)
+    assert session.outcome == ""  # the early give up was refused, then postings came
+    with runtime.factory() as database:
+        jobs = {
+            job.url: job
+            for job in database.scalars(sa.select(Job).where(Job.user_id == alice)).all()
+        }
+        dates = {
+            url: [
+                data["discovery"]["date"]
+                for data in database.scalars(
+                    sa.select(JobEvent.data).where(JobEvent.job_id == job.id)
+                )
+                if isinstance(data, dict) and "discovery" in data
+            ]
+            for url, job in jobs.items()
+        }
+    assert sorted(jobs) == sorted([NICHE, FRANCE_TRAVAIL])
+    assert dates == {NICHE: ["approximate"], FRANCE_TRAVAIL: ["unknown"]}
