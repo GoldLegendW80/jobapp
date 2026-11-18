@@ -199,7 +199,11 @@ test.beforeAll(async ({ browser }) => {
     const context = await newContext(browser);
     contexts.push(context);
     const page = await context.newPage();
-    errors.push(watchErrors(page));
+    // The finder's key is invented: the Anthropic stub refuses it, so Model access's check on
+    // opening answers 400 (as in model-access.spec.ts).
+    errors.push(
+      watchErrors(page, [[400, /\/api\/me\/model-credential\/verify/]]),
+    );
     await page.goto(cliLink(email));
     await setPassword(page, `browser b10 journey ${run} passphrase`, name);
     // Model access for the website's finder, and the words a website search types.
