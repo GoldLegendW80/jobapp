@@ -405,4 +405,5 @@ def test_the_new_arguments_are_the_website_searchs_only(name):
         "max_matches",
         "offset",
         "length",
+        "source",  # B27: the page or the last script's kept result
     }

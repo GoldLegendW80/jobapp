@@ -334,6 +334,10 @@ class _Site:
     sent: set[str] = field(default_factory=set)
     # The sweep's run in Activity (agents A10), recorded by the website's agent run.
     flow: Any = None
+    # B27: the routes of the search the agent tried, and the reported postings the app opened
+    # itself (FinderSession.routes, opened_by_app).
+    routes: dict[str, None] = field(default_factory=dict)
+    opened_by_app: int = 0
 
     def _sort(self, title: str, location: str, url: str) -> set[str]:
         """Where a posting read goes: unwanted, of another contract, or kept. A posting of the
@@ -369,6 +373,8 @@ class _Site:
         self.refused.update(session.refused)
         self.refusals.update(session.refusals)
         self.searches.update(session.searches)
+        self.routes.update(session.routes)
+        self.opened_by_app += session.opened_by_app
 
     async def verified(self, batch: finder.VerifiedBatch) -> None:
         """A verified batch on its way to the store (module docstring)."""
@@ -406,6 +412,8 @@ class _Site:
             if self.commits is None:
                 entry["found"] = len(self.found)
             entry["refused"] = dict(self.refused)
+            entry["opened_by_app"] = self.opened_by_app
+            entry["routes"] = list(self.routes)
             if self.refusals:  # browserd's refusals by rule (browser B25)
                 entry["refusals"] = dict(self.refusals)
         if self.planned.contracts:
@@ -798,6 +806,8 @@ async def _search(
             if not landed:
                 return "unsupported_interaction"
             site.started = True
+            # #797: the start page (up to PAGE_MAX) is parsed off the event loop when large.
+            parsed = await finder.parsed_off_loop(landed, pages.last_text)
             session = finder.FinderSession(
                 pages,
                 scope.start,
@@ -807,6 +817,7 @@ async def _search(
                 on_verified=None if site.commits is None else site.verified,
                 landed="" if landed == scope.start else landed,
                 flow=site.flow,
+                parsed=parsed,
             )
             ran = await agent(session)
             site.input_tokens += ran.input_tokens

@@ -309,7 +309,9 @@ def test_a_script_s_result_returns_as_bounded_text_with_the_page():
 
     entry, _, _ = run(selected(), site, script)
     view = json.loads(text_of(seen[0]))
-    assert view["script_result"] == long[:20_000]
+    # B27: kept whole in the session, its start shown under an untrusted key.
+    assert view["untrusted_script_result"] == "x" * finder.COMPACT_MAX
+    assert "50,000 characters" in view["script"]
     assert view["untrusted_page_snapshot"] == HOME  # the page as it is after the script
     assert ("browser_evaluate", {"function": "() => document.title"}) in site.calls
     assert entry["error"] == "finding_persistence_pending"
