@@ -102,6 +102,10 @@ AI = [
     (REUNION, "site:https://www.free-work.com/fr data 974", True),
     (REUNION, "site:aijobs.net La Réunion", True),
     (REUNION, "site:ai-jobs.net La Réunion", True),
+    (REUNION, "site:the-intelligence-academy.com/job-board La Réunion", True),
+    (REUNION, "site:the-intelligence-academy.com data scientist Saint-Denis 974", True),
+    (REUNION, "site:the-intelligence-academy.com data scientist", False),  # no place
+    (REUNION, "site:intelligence-academy.example.test La Réunion", False),
     (REUNION, "offre emploi Saint-Denis La Réunion", False),  # no title nor role
     (REUNION, "offre emploi data scientist La Réunion", False),  # no town
     (REUNION, "offre emploi data scientist Saint-Denis", False),  # no place
@@ -169,9 +173,9 @@ def test_the_refusal_names_example_queries_and_the_niche_boards() -> None:
     said = web_plan.left_text((row,), [*COVERING])
     assert said == (
         "for La Réunion: a query of its own aimed at AI and tech job boards "
-        f'("offre emploi {TITLE} Saint-Denis La Réunion", or site:welcometothejungle.com OR '
-        "site:free-work.com OR site:lesjeudis.com OR site:chooseyourboss.com OR site:aijobs.net "
-        "La Réunion)"
+        f'("offre emploi {TITLE} Saint-Denis La Réunion", or site:the-intelligence-academy.com '
+        "OR site:welcometothejungle.com OR site:free-work.com OR "
+        "site:lesjeudis.com OR site:chooseyourboss.com OR site:aijobs.net La Réunion)"
     )
     said = web_plan.left_text((row,), [COVERING[1]])
     assert f'naming the main town Saint-Denis ("{TITLE} Saint-Denis La Réunion")' in said
@@ -206,6 +210,7 @@ def test_the_shown_plan_names_the_main_town_and_the_ai_boards() -> None:
     reunion = shown["places"][0]
     assert reunion["ai_boards"][0] == f"offre emploi {TITLE} Saint-Denis La Réunion"
     assert "site:welcometothejungle.com" in reunion["ai_boards"]
+    assert "site:the-intelligence-academy.com" in reunion["ai_boards"]
     lyon = web_plan.shown(plan("Lyon, France"))["places"][0]
     assert "main_town" not in lyon
     assert lyon["ai_boards"][0] == f"offre emploi {TITLE} Lyon, France"

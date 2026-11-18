@@ -248,7 +248,10 @@ POSTCODES = {**DEPARTMENTS, "French Polynesia": "987"}
 POSTCODE = re.compile(r"\d{5}")
 # Jobs J25: the AI and tech job boards an `ai_boards` query may name by `site:`, and the offer
 # phrases (folded) of a person's own search for a job ("offre emploi data scientist Saint-Denis").
+# Public job boards only. The Intelligence Academy's /job-board pages listed the owner's best
+# Réunion matches on 2026-11-18.
 NICHE: tuple[Board, ...] = (
+    Board("The Intelligence Academy", ("the-intelligence-academy.com",)),
     Board("Welcome to the Jungle", ("welcometothejungle.com",)),
     Board("Free-Work", ("free-work.com",)),
     Board("LesJeudis", ("lesjeudis.com",)),
