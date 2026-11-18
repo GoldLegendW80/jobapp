@@ -184,6 +184,12 @@ class AgentDefinition:
         error, and its tool call's id (jobs J23). Nothing by default; the web source counts the
         errors in a row, and a query for its plan only once answered without one."""
 
+    def stream_variables(self, data: dict[str, Any]) -> dict[str, str]:
+        """What the fake backend fills into this agent's stream for a run of input `data`, beside
+        `message` and `job_id` (`{name}` in the stream; the real backend reads none). Nothing by
+        default; the web source names the query that covers its plan (jobs J23)."""
+        return {}
+
     def __post_init__(self) -> None:
         kinds = {kind.value for kind in CredentialKind}
         unknown = sorted(str(key) for key in self.model_by_credential or {} if key not in kinds)

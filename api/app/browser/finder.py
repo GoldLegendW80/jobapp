@@ -2607,6 +2607,15 @@ class FinderDefinition(definitions.AgentDefinition):
         if session is not None:
             session.web_search_answered(failed, call)
 
+    def stream_variables(self, data: dict[str, Any]) -> dict[str, str]:
+        """J23, round 2 of #814: the fake backend's web stream searches the one query that covers
+        the run's plan (`{web_plan_query}`, web_plan.covering_query), whatever the scope."""
+        with _LOCK:
+            session = _SCOPES.get(str(data.get("request")))
+        if session is None or session.interactive is None or not session.interactive.web:
+            return {}
+        return {"web_plan_query": web_plan.covering_query(session.web_plan())}
+
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         with _LOCK:
             session = _SCOPES.get(str(data.get("request")))

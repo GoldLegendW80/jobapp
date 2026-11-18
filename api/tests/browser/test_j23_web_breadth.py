@@ -349,17 +349,36 @@ def test_two_saved_names_of_one_place_are_no_two_places() -> None:
         ("Tahiti", "ingénieur IA Punaauia", True),
         ("Polynésie française", "ingénieur IA Punaauia", True),
         ("Tahiti", "ingénieur IA Saint-Denis", False),  # another place's town
-        # A town another place has too: only when nothing names somewhere else.
-        ("La Réunion", "ingénieur IA Saint-Denis", True),
-        ("La Réunion", "ingénieur IA Saint-Denis CDI", True),
-        ("La Réunion", "ingénieur IA Saint-Denis 974", True),
+        ("Tahiti", "IA Papeete", True),  # the owner's search: an unshared town
+        ("Guadeloupe", "emploi Pointe-à-Pitre", True),  # the owner's search
+        # A town another place has too (round 2 of #814, an allow list): only right next to a
+        # postcode of its place; alone, or with anything else, it names nothing.
+        ("La Réunion", "ingénieur IA Saint-Denis", False),  # Saint-Denis (93) to an engine
+        ("La Réunion", "ingénieur IA Saint-Denis CDI", False),
+        ("La Réunion", "ingénieur IA Saint-Denis France", False),
+        ("La Réunion", "ingénieur IA Saint-Paul", False),
+        ("La Réunion", "ingénieur IA Le Port", False),
+        ("La Réunion", "ingénieur IA Saint-Denis -Réunion", False),  # the exclusion is aside
+        ("La Réunion", "ingénieur IA Saint-Denis 97400", True),
+        ("La Réunion", "ingénieur IA 97400 Saint-Denis", True),
         ("La Réunion", "ingénieur IA Saint-Pierre 97410", True),
-        ("La Réunion", "ingénieur IA Saint-Paul", True),
-        ("La Réunion", "ingénieur IA Le Port", True),
-        ("La Réunion", "ingénieur IA Saint-Denis France", True),  # La Réunion is France
+        ("La Réunion", "ingénieur IA Saint-Paul 97460", True),
+        ("La Réunion", "ingénieur IA Le Port 97420", True),
+        ("La Réunion", "Saint-Denis 97400", True),
+        ("La Réunion", "ingénieur IA Saint-Denis 974", True),  # by its département number
+        ("La Réunion", "data scientist Saint-Denis La Réunion", True),  # the owner's search
+        ("La Réunion", "développeur Saint-Denis 974", True),  # the owner's search
+        ("La Réunion", "ingénieur IA Saint-Denis CDI 97400", False),  # not next to it
+        ("La Réunion", "ingénieur IA Saint-Denis 97100", False),  # Guadeloupe's postcode
+        ("La Réunion", "ingénieur IA Saint-Denis 974000", False),  # six digits
+        ("La Réunion", "ingénieur IA Saint-Denis 9740", False),
+        ("La Réunion", "ingénieur IA Saint-Denis 97400a", False),
+        ("La Réunion", "ingénieur IA 97400", False),  # a postcode alone names nothing
+        ("Tahiti", "ingénieur IA Saint-Denis 97400", False),  # La Réunion's
+        ("Guadeloupe", "ingénieur IA Saint-Denis 97100", False),  # not a town of Guadeloupe
         ("La Réunion", "ingénieur IA Saint-Denis 93", False),
         ("La Réunion", "ingénieur IA Saint-Denis 93200", False),
-        ("La Réunion", "ingénieur IA Saint-Denis 2026", False),  # any other number: closed
+        ("La Réunion", "ingénieur IA Saint-Denis 2026", False),
         ("La Réunion", "ingénieur IA Saint-Denis Paris", False),
         ("La Réunion", "ingénieur IA Saint-Denis Seine-Saint-Denis", False),
         ("La Réunion", "ingénieur IA Saint-Denis Île-de-France", False),
@@ -375,13 +394,12 @@ def test_two_saved_names_of_one_place_are_no_two_places() -> None:
         ("La Réunion", "ingénieur IA Le Port Marseille", False),
         ("La Réunion", "ingénieur IA port", False),  # "Le Port" whole only
         ("La Réunion", "ingénieur IA Saint Denise", False),  # a longer word
-        ("La Réunion", "ingénieur IA Saint-Denis -Réunion", True),  # the exclusion is aside
         ("Paris", "ingénieur IA Saint-Denis", False),  # the towns are the overseas places'
     ],
 )
 def test_the_town_table(place: str, query: str, named: bool) -> None:
     [row] = plan(place)
-    assert (web_plan.coverage(row, [query])["titles"] == {TITLE}) is named
+    assert bool(web_plan._named_by(row, web_plan._text(query))) is named
 
 
 def test_titles_and_places_of_no_words_are_never_planned() -> None:
@@ -397,6 +415,58 @@ def test_titles_and_places_of_no_words_are_never_planned() -> None:
     titles = (*(f"titre{n} !!" for n in range(web_plan.TITLES_MAX)), "dernier")
     [row] = plan("La Réunion", titles=("++", *titles))
     assert row.titles == titles[: web_plan.TITLES_MAX]
+
+
+@pytest.mark.parametrize(
+    ("titles", "planned"),
+    [
+        (("ingénieur IA", "Ingenieur IA"), ("ingénieur IA",)),
+        (("Ingenieur IA", "ingénieur IA"), ("Ingenieur IA",)),  # the first is kept
+        (("INGÉNIEUR IA", "ingénieur ia", "ingenieur-IA"), ("INGÉNIEUR IA",)),
+        (("full-stack developer", "full stack developer"), ("full-stack developer",)),
+        (("Data Scientist.", "Data Scientist"), ("Data Scientist.",)),
+        (("data scientist", "ingénieur IA", "Data-Scientist"), ("data scientist", "ingénieur IA")),
+        (("data scientist", "data scientists"), ("data scientist", "data scientists")),
+        (("ingénieur IA", "ingénieure IA"), ("ingénieur IA", "ingénieure IA")),
+        (("dev", "++", "DEV!"), ("dev",)),
+    ],
+)
+def test_titles_that_fold_to_the_same_words_are_one_title(titles, planned) -> None:
+    """Round 2 of #814: a query uses its words up for one title, so folded duplicates are
+    planned once (the first), or one of them could never be covered."""
+    [row] = plan("La Réunion", titles=titles)
+    assert row.titles == planned
+    query = " OR ".join(titles) + " La Réunion"
+    assert web_plan.coverage(row, [query])["titles"] == set(planned)
+    assert "saved titles" not in web_plan.left_text((row,), [query])
+
+
+def test_folded_duplicates_still_fill_titles_max_with_distinct_titles() -> None:
+    titles = tuple(t for n in range(web_plan.TITLES_MAX + 2) for t in (f"titre {n}", f"Titre-{n}"))
+    [row] = plan("La Réunion", titles=titles)
+    assert row.titles == tuple(f"titre {n}" for n in range(web_plan.TITLES_MAX))
+
+
+@pytest.mark.parametrize(
+    "places",
+    [
+        ("La Réunion", "Guadeloupe", "Tahiti"),
+        (),
+        ("remote",),
+        ("Lyon, France", "Bruxelles", "Genève", "Montréal", "Berlin"),
+        ("Saint-Denis, La Réunion",),
+    ],
+)
+@pytest.mark.parametrize(
+    "titles", [(TITLE,), (TITLE, "Ingenieur IA", "data scientist"), ("++",), ()]
+)
+def test_the_covering_query_searches_the_whole_plan(places, titles) -> None:
+    """Round 2 of #814: the fake web stream's one query (`{web_plan_query}`) covers any plan."""
+    rows = plan(*places, titles=titles)
+    query = web_plan.covering_query(rows)
+    assert " OR " in query
+    assert web_plan.left(rows, [query]) == []
+    assert web_plan.covering_query(()) == ""
 
 
 def test_a_place_without_boards_needs_a_jobs_query() -> None:
@@ -458,7 +528,9 @@ class Browser:
 
 
 def web_session(
-    places: tuple[str, ...] = ("La Réunion",), browser: Browser | None = None
+    places: tuple[str, ...] = ("La Réunion",),
+    browser: Browser | None = None,
+    titles: tuple[str, ...] = (TITLE,),
 ) -> finder.FinderSession:
     pages = sources.Pages(
         browser or Browser(),
@@ -467,9 +539,7 @@ def web_session(
         rng=random.Random(5),  # noqa: S311  a seeded pacing, not a secret
         monotonic=lambda: 0,
     )
-    scope = finder.InteractiveScope(
-        finder.WEB_START, (TITLE,), places, (), profile=PROFILE, web=True
-    )
+    scope = finder.InteractiveScope(finder.WEB_START, titles, places, (), profile=PROFILE, web=True)
     session = finder.FinderSession(pages, finder.WEB_START, "", "u1", interactive=scope)
     session.web_search_on = True
     return session
@@ -522,6 +592,17 @@ def test_production_give_up_is_refused_with_what_is_left_then_accepted() -> None
         False,
     )
     assert session.outcome == "no_match"
+
+
+def test_a_folded_duplicate_title_is_accepted_after_one_query() -> None:
+    """Round 2 of #814: the probe ("ingénieur IA", "Ingenieur IA") is covered by one query."""
+    session = web_session(titles=(TITLE, "Ingenieur IA"))
+    search(session, "Ingenieur IA OR ingénieur IA La Réunion")
+    said, error = session.report_none("no_match")
+    assert error
+    assert "saved titles" not in said  # only the roles and boards are left
+    search(session, *COVERING)
+    assert session.report_none("no_match")[1] is False
 
 
 def test_every_place_needs_its_own_searches() -> None:

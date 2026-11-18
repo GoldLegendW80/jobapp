@@ -941,6 +941,21 @@ class Recorder:
 # --- the run ------------------------------------------------------------------------------------
 
 
+def _passing(
+    hook: definitions.WebSearchHook, run_id: uuid.UUID, passed: set[str]
+) -> Callable[[dict[str, Any], str | None], str | None]:
+    """The gate's WebSearch hook for run `run_id`: `hook`, and the id of each call it lets
+    through kept in `passed` (jobs J23: only their answers are the search engine's)."""
+
+    def searched(found: dict[str, Any], call: str | None) -> str | None:
+        refusal = hook(run_id, found, call)
+        if refusal is None and call:
+            passed.add(call)
+        return refusal
+
+    return searched
+
+
 @dataclass
 class _State:
     model: str | None = None
@@ -963,8 +978,11 @@ class _State:
     # first message (`init`) does not list it; None once told, or when it was never offered.
     web_search_unlisted: Callable[[], None] | None = None
     # Jobs J23: tells the definition whether each WebSearch answer was an error; None when the
-    # run was never offered WebSearch.
+    # run was never offered WebSearch. Only the answers of the calls the gate let through
+    # (`web_search_passed`, by call id): a refusal of the gate (WEB_SEARCHES_SPENT, the
+    # definition's own) is no failure of the search engine.
     web_search_answered: Callable[[bool, str], None] | None = None
+    web_search_passed: set[str] = field(default_factory=set)
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
@@ -1019,6 +1037,7 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                     if (
                         answered is not None
                         and recorder.called.get(block.tool_use_id) == sdk_options.WEB_SEARCH
+                        and block.tool_use_id in state.web_search_passed
                     ):
                         answered(bool(block.is_error), block.tool_use_id)
                     await recorder.emit("tool_result", recorder.tool_result(block))
@@ -1576,6 +1595,8 @@ async def _execute(
             recorder.on_done = _chat_reply(context, run_id)
         else:
             prompt = definition.prompt(data, run.job_id)
+        # The fake backend's stream may name what the definition says of this run (jobs J23).
+        variables.update(definition.stream_variables(data))
         binding: Mapping[str, Any] | None = None
         if definition.bind is not None:
             # What the run works on, decided here, in code, before a tool or a model call.
@@ -1650,7 +1671,7 @@ async def _execute(
                 frozenset(tools.allowed_names),
                 denied,
                 state.budget,
-                (lambda found, call: hook(run_id, found, call)) if searching and hook else None,
+                _passing(hook, run_id, state.web_search_passed) if searching and hook else None,
                 definition.web_searches_max,
             ),
             stderr=stderr_lines.append,

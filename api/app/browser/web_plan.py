@@ -32,14 +32,13 @@ scientist" is two. A place is named by itself as written, each comma separated p
 without a leading article, LinkedIn's name for it and that name's aliases
 (linkedin_places.ALIASES: "Papeete" or "Polynésie française" for "Tahiti"), the département
 number of an overseas département ("974"), and its main towns (TOWNS: "Pointe-à-Pitre" for
-Guadeloupe). A town another place has too (Saint-Denis, also in Seine-Saint-Denis) names it
-only when nothing in the query names somewhere else (`_elsewhere`): another country, territory,
-region or city, another overseas place or its towns, a word for metropolitan France, or a
-number of two to five digits other than the place's own département or postcode ("Saint-Denis
-93", "Saint-Denis Paris" and "Saint-Pierre Martinique" name no overseas place; "Saint-Denis
-974" and "Saint-Denis CDI" name La Réunion). A `site:` operator names a board when its host is
-the board's host, one of its subdomains, or its parent domain other than a public suffix
-("site:francetravail.fr" for candidat.francetravail.fr).
+Guadeloupe). A town another place has too (Saint-Denis, also in Seine-Saint-Denis, the larger
+city a search engine reads) names nothing alone (round 2 of #814, an allow list): only right
+next to a postcode of its place (POSTCODES: "Saint-Denis 97400", "97410 Saint-Pierre"); else
+the query names the place by one of its own names ("Saint-Denis La Réunion", "Saint-Denis 974")
+or not at all ("ingénieur IA Saint-Denis" is no search of La Réunion). A `site:` operator
+names a board when its host is the board's host, one of its subdomains, or its parent domain
+other than a public suffix ("site:francetravail.fr" for candidat.francetravail.fr).
 
 How a search engine reads a query (round 1 of #814): words side by side are ANDed, so a query
 with no OR operator (` OR ` in capitals, or `|`) searches one thing of each family at most. It
@@ -48,8 +47,10 @@ operators or more, and for no place when it names the places of two rows of the 
 place named by a name another row has too is no other place: "Tahiti" and "Papeete" saved).
 With an OR, every title, role, board and place it names counts. Planned are only the titles
 whose words fold to something and the places a query can name (`plan_of`): "++" or "!!!" is
-left out, never a plan nobody can search. Fails closed: a query read otherwise counts for
-nothing.
+left out, never a plan nobody can search; titles that fold to the same words ("ingénieur IA"
+and "Ingenieur IA", "full-stack" and "full stack") are one title, the first (round 2). Fails
+closed: a query read otherwise counts for nothing. `covering_query` is the one query with OR
+that covers a whole plan (the fake backend's web stream searches it).
 """
 
 from __future__ import annotations
@@ -221,7 +222,7 @@ OR = re.compile(r"(?<!\S)OR(?!\S)|\|")  # a search engine's OR operator, in capi
 # tests/browser/test_j23_web_breadth.py): (the town, whether another place has a town of that
 # name: Saint-Denis of Seine-Saint-Denis, Saint-Pierre of Martinique or of Saint-Pierre-et-
 # Miquelon, Saint-Paul and Le Port of metropolitan France). A shared town names the place only
-# when nothing in the query names somewhere else (`_elsewhere`).
+# right next to a postcode of the place (`_shared_named`).
 TOWNS: dict[str, tuple[tuple[str, bool], ...]] = {
     "Reunion": (("Saint-Denis", True), ("Saint-Pierre", True), ("Le Port", True),
                 ("Saint-Paul", True)),
@@ -229,11 +230,10 @@ TOWNS: dict[str, tuple[tuple[str, bool], ...]] = {
                    ("Basse-Terre", False)),
     "French Polynesia": (("Papeete", False), ("Faa'a", False), ("Punaauia", False)),
 }  # fmt: skip
-# The postcode prefix of an overseas place: a number of a query that starts with it is its own.
+# The postcode prefix of an overseas place: a five digit number of a query that starts with it
+# is one of its postcodes ("97400").
 POSTCODES = {**DEPARTMENTS, "French Polynesia": "987"}
-# Words for metropolitan France, which a shared town of an overseas place is then not.
-METROPOLE = ("metropole", "metropolitaine", "hexagone", "seine saint denis")
-NUMBER = re.compile(r"\d{2,5}")
+POSTCODE = re.compile(r"\d{5}")
 
 
 # With no place wanted, the search languages: the profile's languages this table names (folded),
@@ -258,7 +258,7 @@ class Row:
     country: str | None
     french: bool
     language: str | None = None  # "fr" or "en" for a row with no place: its roles' forms
-    shared: tuple[str, ...] = ()  # folded towns that name the place unless `_elsewhere`
+    shared: tuple[str, ...] = ()  # folded towns that name the place next to its postcode
     linkedin: str = ""  # LinkedIn's name for the place (linkedin_places.linkedin_name)
 
 
@@ -380,8 +380,14 @@ def plan_of(
     if not isinstance(summary, dict):
         summary = {}
     roles = adjacent_roles(summary, titles, _excluded(criteria))
-    # Only what a query can name (round 1 of #814): a title of no words, a place of no name.
-    titles = tuple(t for t in titles if words(t))[:TITLES_MAX]
+    # Only what a query can name (round 1 of #814): a title of no words, a place of no name;
+    # one title of those that fold to the same words, the first (round 2: a query uses its
+    # words up for one title only, `_consume`).
+    kept: dict[str, str] = {}
+    for title in titles:
+        if words(title):
+            kept.setdefault(words(title), title)
+    titles = tuple(kept.values())[:TITLES_MAX]
     wanted = [p for p in places if p.strip() and not _worldwide(p) and place_names(p)]
     wanted = wanted[:PLACES_MAX]
     if not wanted:
@@ -446,32 +452,29 @@ def _board_named(board: Board, sites: set[str]) -> bool:
     )
 
 
-def _elsewhere(row: Row, text: str, town: str) -> bool:
-    """Whether a query naming `town`, a town of the row's place another place has too, names
-    somewhere else (module docstring): then the town is not the place's."""
-    if any(_has(text, word) for word in METROPOLE):
-        return True
-    rest = f" {text} ".replace(f" {town} ", " ").strip()
+def _shared_named(row: Row, text: str) -> set[str]:
+    """The row's shared towns a query's text names right next to a postcode of its place
+    (module docstring): "saint denis 97400", "97410 saint pierre"."""
     own = POSTCODES.get(row.linkedin)
-    numbers = (n for n in rest.split() if NUMBER.fullmatch(n))
-    if any(own is None or not n.startswith(own) for n in numbers):
-        return True
-    homes = {row.linkedin, "France"}
-    if any(_has(rest, k) and c not in homes for k, c in linkedin_places.COUNTRIES.items()):
-        return True
-    if any(_has(rest, k) and n != row.linkedin for k, n in linkedin_places.LINKEDIN_NAMES.items()):
-        return True  # "Île-de-France", "région parisienne", "Londres"
-    others = (t for name, towns in TOWNS.items() if name != row.linkedin for t, _ in towns)
-    if any(_has(rest, words(t)) for t in others):
-        return True
-    return any(p.name != "France" for p in gazetteer.places_of(rest))
+    if own is None:
+        return set()
+    tokens = text.split()
+    found: set[str] = set()
+    for town in row.shared:
+        parts = town.split()
+        size = len(parts)
+        for i in range(len(tokens) - size + 1):
+            if tokens[i : i + size] != parts:
+                continue
+            near = (*tokens[max(i - 1, 0) : i], *tokens[i + size : i + size + 1])
+            if any(POSTCODE.fullmatch(n) and n.startswith(own) for n in near):
+                found.add(town)
+    return found
 
 
 def _named_by(row: Row, text: str) -> set[str]:
     """The names of the row's place a query's text names (module docstring)."""
-    named = {name for name in row.names if _has(text, name)}
-    shared = {t for t in row.shared if _has(text, t) and not _elsewhere(row, text, t)}
-    return named | shared
+    return {name for name in row.names if _has(text, name)} | _shared_named(row, text)
 
 
 def _consume(text: str, forms: list[tuple[str, str]]) -> list[str]:
@@ -584,6 +587,24 @@ def left_text(rows: tuple[Row, ...], queries: list[str]) -> str:
     """The refusal's list of what is left, bounded (LEFT_MAX)."""
     text = ". ".join(left(rows, queries))
     return text if len(text) <= LEFT_MAX else text[: LEFT_MAX - 5].rsplit(" ", 1)[0] + " ..."
+
+
+def covering_query(rows: tuple[Row, ...]) -> str:
+    """One query with OR that searches the whole plan `rows` (module docstring): every title,
+    the first ADJACENT_NEEDED roles of each row by a form of the row's language, each board's
+    `site:`, each place as written and a word for jobs; "" for no plan. The fake backend's web
+    stream searches it (`{web_plan_query}`), so a fake sweep searches its plan whatever the
+    journey's criteria (round 2 of #814)."""
+    terms: list[str] = []
+    for row in rows:
+        terms.extend(row.titles)
+        terms.extend(r.forms_in(row.language)[0] for r in row.roles[:ADJACENT_NEEDED])
+        terms.extend(f"site:{b.hosts[0]}" for b in row.boards)
+        if row.place is not None:
+            terms.append(row.place)
+    if terms:
+        terms.append("jobs")
+    return " OR ".join(dict.fromkeys(terms))
 
 
 def shown(rows: tuple[Row, ...]) -> dict[str, Any]:

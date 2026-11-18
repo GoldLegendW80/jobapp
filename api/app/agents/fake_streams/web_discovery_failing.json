@@ -1,0 +1,194 @@
+{
+ "description": "The web search's failing stream (jobs J23, round 2 of #814: a variant only the tests that ask for it run): two WebSearch calls, each answered by the stub with an error (Claude Code's WebSearch failing; two failures in a row let the web source give up without its plan searched), then report_no_postings no_match, so the source ends web_search_failed, never searched with nothing new, and opens no page.",
+ "web_search": [
+  {
+   "title": "Example Robotics careers",
+   "url": "https://jobs.example-robotics.test/"
+  }
+ ],
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "WebSearch",
+     "mcp__app__web_fetch",
+     "mcp__app__browser_navigate",
+     "mcp__app__browser_snapshot",
+     "mcp__app__report_postings",
+     "mcp__app__report_no_postings"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000201",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_web_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_web_01",
+       "name": "WebSearch",
+       "input": {
+        "query": "ai engineer job offer remote"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000211",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_web_1b",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_web_01b",
+       "name": "WebSearch",
+       "input": {
+        "query": "ai engineer OR data scientist jobs remote"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000202",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_web_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_web_02",
+       "name": "mcp__app__report_no_postings",
+       "input": {
+        "reason": "no_match"
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.05
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000203",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_web_3",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "No matching posting found."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 40,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 3000,
+    "duration_api_ms": 2500,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0,
+    "usage": {
+     "input_tokens": 9000,
+     "output_tokens": 120,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed",
+    "result": "No matching posting found."
+   }
+  }
+ ],
+ "web_search_error": "Web search error: the stub has no search engine."
+}
