@@ -38,6 +38,7 @@ import logging
 import re
 import secrets
 import threading
+import time
 import unicodedata
 import uuid
 from bisect import bisect_right
@@ -48,6 +49,7 @@ from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
+import regex
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -72,6 +74,7 @@ INTERACTIVE_TOOLS = (
     "browser_navigate_back",
     "browser_navigate_forward",
     "browser_snapshot",
+    "browser_find",
     "browser_take_screenshot",
     "browser_click",
     "browser_hover",
@@ -91,6 +94,7 @@ INTERACTIVE_TOOLS = (
 ACTIONS = frozenset(INTERACTIVE_TOOLS) - {
     "browser_navigate",
     "browser_snapshot",
+    "browser_find",
     "browser_take_screenshot",
     "browser_wait_for",
     "browser_ask_person",
@@ -115,8 +119,28 @@ POSTINGS_MAX = 100  # postings in one report call, and the most `_keep` keeps
 TITLE_MAX = 300
 LOCATION_MAX = 300
 TEXT_MAX = 200_000  # sweep.POSTING_TEXT_MAX
-SNAPSHOT_MAX = 40_000
 VERIFIED_BATCH_MAX = 5
+# The page snapshot as Playwright CLI gives it (B26, owner 2026-11-17): the whole snapshot of each
+# tab is kept in the session (`Kept`), PAGE_MAX characters at most (browserd's
+# DISCOVERY_SNAPSHOT_MAX); an action answers COMPACT_MAX characters of it at most (its top and the
+# lines that changed), each line LINE_SHOWN_MAX at most; browser_find searches it, answering
+# FIND_ANSWER_MAX characters at most, a regular expression within FIND_TIMEOUT_S over the whole
+# snapshot; browser_snapshot reads a window of it.
+PAGE_MAX = 2_000_000
+COMPACT_MAX = 6_000
+LINE_SHOWN_MAX = 1_000
+WINDOW_DEFAULT, WINDOW_MAX = 20_000, 50_000
+PATTERN_MAX = 500
+CONTEXT_DEFAULT, CONTEXT_MAX = 3, 10
+MATCHES_DEFAULT, MATCHES_MAX = 50, 200
+FIND_ANSWER_MAX = 20_000
+FIND_TIMEOUT_S = 2.0
+# A ref as Playwright's snapshot writes it after an element (`[ref=e12]`, `[ref=f1e3]` in a frame).
+REF_MARK = re.compile(r" ?\[ref=(?:f\d{1,4})?e\d{1,7}\]")
+REF_OF = re.compile(r"\[ref=((?:f\d{1,4})?e\d{1,7})\]")
+# browser_find's regular expression form: /expression/, or /expression/i for case aside.
+REGEX_FORM = re.compile(r"/(.+)/(i?)", re.DOTALL)
+NO_PAGE = "No page is read in this tab yet: open one with browser_navigate."
 # The saved values a job website's scope carries (browserd's discovery.VALUES_MAX, VALUE_MAX),
 # and its size as sent with every tool call (browserd takes a call of 64 KiB at most).
 SCOPE_VALUES_MAX = 100
@@ -125,10 +149,13 @@ SCOPE_BYTES_MAX = 32_768
 SEEN_MAX = 2000
 # The pages a job website's agent opened that its reports are verified on (B21): the last ones
 # read, each with its posting text, its visible lines, their words, its headings' words and its
-# fields. The text, the lines and the words can each reach one snapshot, and the headings' words
-# (with a gender marker and without) two: every record holds about five times SNAPSHOT_MAX
-# characters (more only for characters whose fold is longer, `_words`), in practice far less.
+# fields. The text (TEXT_MAX), the lines and the headings (LINES_MAX each, B26: a page is read
+# whole, up to PAGE_MAX) and their words: a record holds about five times LINES_MAX characters
+# at most (more only for characters whose fold is longer, `_words`), in practice far less, and
+# the records together READS_MAX characters of text, lines and headings, the oldest dropped.
 OPENED_MAX = 200
+LINES_MAX = TEXT_MAX
+READS_MAX = 40_000_000
 # The places of a reported title in a page's words that `title_on` compares, the first ones: the
 # smallest span of lines among them is stored (B21).
 SPANS_MAX = 8
@@ -249,12 +276,22 @@ place the person does not want: the app drops them, and skips the ones the perso
 apply rules exclude.
 
 You have the browser commands of a person: browser_navigate (any public address), back and
-forward, browser_snapshot (the page's elements, with refs), browser_take_screenshot (an image
-of the page), click (and double click), hover, type (with submit to press Enter), press key,
-scroll (the page or an element, to load more results), select option, check, tabs (at most 3),
-wait for, and browser_evaluate (run a script on the page and read its result). Accept or decline
-cookies as you see fit. Open the result lists, the next pages and the postings, on the website
-or on the company's own job site (an ATS), and go back when you need to.
+forward, browser_take_screenshot (an image of the page), click (and double click), hover, type
+(with submit to press Enter), press key, scroll (the page or an element, to load more results),
+select option, check, tabs (at most 3), wait for, and browser_evaluate (run a script on the page
+and read its result). Accept or decline cookies as you see fit. Open the result lists, the next
+pages and the postings, on the website or on the company's own job site (an ATS), and go back
+when you need to.
+
+Read pages as with Playwright CLI: every action answers the address, the title and a compact
+view of the page (its top, and the lines that changed when the same page changed), and the app
+keeps the page's full snapshot with its refs. Act, then browser_find what you need on it:
+browser_find(pattern) answers the matching lines with their refs and the lines around them
+(plain text, case aside, or a regular expression written /expression/), and those refs are
+clickable: the postings' titles, a "Next" or "Suivant" link, a page number, a "Load more"
+button, a filter. browser_snapshot(offset, length) reads the full snapshot part by part, from
+the top at offset 0 (which reads the page again). A long list is complete in the full snapshot,
+even when the compact view shows only its top.
 
 When a security check, a captcha or a sign in wall stops you, or the website needs the person,
 call browser_ask_person with one sentence for the person ("Please solve the security check on
@@ -959,6 +996,161 @@ def _detail(root: Any) -> tuple[str, list[str], dict[str, tuple[str, str]]]:
     return "\n".join(lines)[:TEXT_MAX], titles, fields
 
 
+@dataclass(frozen=True)
+class Kept:
+    """A tab's last snapshot (B26), whole up to PAGE_MAX: what browser_find searches and
+    browser_snapshot reads."""
+
+    url: str
+    title: str  # the page's title, as browserd read it (the page's own text)
+    text: str
+    cut: bool  # browserd or PAGE_MAX cut the snapshot
+
+
+def _head(text: str, limit: int) -> str:
+    """At most `limit` characters of `text`, cut at a line end when one is within them."""
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    return head[: head.rindex("\n")] if "\n" in head else head
+
+
+def _fit(lines: list[str], budget: int) -> int:
+    """How many of the first lines fit in `budget` characters, joined by line ends."""
+    size = -1
+    for count, line in enumerate(lines):
+        size += len(line) + 1
+        if size > budget:
+            return count
+    return len(lines)
+
+
+def _compact(text: str, previous: str | None) -> tuple[str, str]:
+    """An action's view of a page (B26): the whole snapshot when it holds COMPACT_MAX characters
+    at most; else its top lines and the lines below them that are new since `previous` (the same
+    page's snapshot before the action, refs aside), together COMPACT_MAX characters at most, the
+    changes half of it at most, each line LINE_SHOWN_MAX characters at most."""
+    if len(text) <= COMPACT_MAX:
+        return text, ""
+    lines = text.split("\n")
+    shown = [line[:LINE_SHOWN_MAX] for line in lines]
+    first = _fit(shown, COMPACT_MAX // 2)
+    picked: list[int] = []
+    size = 0
+    if previous:
+        before = {REF_MARK.sub("", line) for line in previous.split("\n")}
+        for index in range(first, len(lines)):
+            line = REF_MARK.sub("", lines[index])
+            cost = len(shown[index]) + 1
+            if line.strip() and line not in before and size + cost <= COMPACT_MAX // 2:
+                picked.append(index)
+                size += cost
+    top = max(_fit(shown, COMPACT_MAX - size), 1)
+    return "\n".join(shown[:top]), "\n".join(shown[i] for i in picked if i >= top)
+
+
+def _told(kept: Kept, shown: str) -> str:
+    """The line of an answer that says how long the kept snapshot is and how to read it."""
+    size = len(kept.text)
+    if shown == kept.text:
+        told = f"This is the whole snapshot ({size:,} characters)."
+    else:
+        told = (
+            f"The full snapshot holds {size:,} characters, kept for this tab: this shows its top "
+            "and the lines that changed. browser_find(pattern) searches it and answers the "
+            "matching lines with their refs, which you can click; browser_snapshot(offset, "
+            "length) reads a part of it."
+        )
+    if kept.cut:
+        told += f" The page was longer: its first {len(kept.text):,} characters are kept."
+    return told
+
+
+Matcher = Callable[[str, float], bool]
+
+
+def _matcher(pattern: str) -> Matcher | str:
+    """browser_find's test of one line (B26): plain text, case aside; or a regular expression
+    written /expression/ (/expression/i: case aside), run by `regex` with the time left as its
+    timeout. A refusal's text when the expression does not compile."""
+    form = REGEX_FORM.fullmatch(pattern)
+    if form is None:
+        needle = pattern.casefold()
+        return lambda line, _left: needle in line.casefold()
+    try:
+        compiled = regex.compile(form.group(1), regex.IGNORECASE if form.group(2) else 0)
+    except (regex.error, ValueError, OverflowError, RecursionError):
+        return (
+            "Refused: this regular expression does not compile. Give plain text, or an "
+            "expression as /expression/ (/expression/i: case aside)."
+        )
+    return lambda line, left: compiled.search(line, timeout=left, concurrent=True) is not None
+
+
+def _matches(
+    lines: list[str], matcher: Matcher, most: int, budget_s: float
+) -> tuple[list[int], int, bool]:
+    """The first `most` matching lines' indexes, how many lines match, and whether the search
+    ran out of `budget_s` over the snapshot (then the counts are those before it stopped)."""
+    end = time.monotonic() + budget_s
+    hits: list[int] = []
+    total = 0
+    for index, line in enumerate(lines):
+        left = end - time.monotonic()
+        if left <= 0:
+            return hits, total, True
+        try:
+            matched = matcher(line, left)
+        except TimeoutError:
+            return hits, total, True
+        if matched:
+            total += 1
+            if len(hits) < most:
+                hits.append(index)
+    return hits, total, False
+
+
+def _ref_at(lines: list[str], index: int) -> str:
+    """The ref of a snapshot line (its last one: a page's own text comes before it), else that of
+    the nearest element above that holds the line (less indented), else ""."""
+    refs = REF_OF.findall(lines[index])
+    if refs:
+        return str(refs[-1])
+    depth = len(lines[index]) - len(lines[index].lstrip(" "))
+    for above in range(index - 1, max(index - 500, -1), -1):
+        line = lines[above]
+        indent = len(line) - len(line.lstrip(" "))
+        if indent < depth:
+            refs = REF_OF.findall(line)
+            if refs:
+                return str(refs[-1])
+            depth = indent
+    return ""
+
+
+def _bounded(value: object, default: int, low: int, high: int) -> int:
+    """A model's whole number within [low, high]; `default` when it gave none."""
+    if type(value) is not int:
+        return default
+    return min(max(value, low), high)
+
+
+def _within(lines: list[str], budget: int) -> tuple[str, ...]:
+    """The first lines that hold `budget` characters together (B26: a record of a page read
+    whole stays bounded)."""
+    kept, size = [], 0
+    for line in lines:
+        size += len(line)
+        if size > budget:
+            break
+        kept.append(line)
+    return tuple(kept)
+
+
+def _record_size(record: PageRead) -> int:
+    return len(record.text) + sum(map(len, record.lines)) + sum(map(len, record.headings))
+
+
 @dataclass
 class FinderSession:
     """One website's run, as the agent's tools see it: the lease's pages and what was kept."""
@@ -1001,6 +1193,10 @@ class FinderSession:
     landed: str = ""
     # The sweep's run in Activity (agents A10): its agent run records it.
     flow: runs.WorkflowRef | None = None
+    # The last snapshot of each tab, whole up to PAGE_MAX (B26), by the tab's index, and the tab
+    # the agent is on (browser_tabs); dropped when the run ends (`RuntimeFinder.__call__`).
+    kept: dict[int, Kept] = field(default_factory=dict, repr=False)
+    tab: int = 0
 
     def __post_init__(self) -> None:
         if self.interactive is None or canonical(self.interactive.start) != self.start:
@@ -1009,6 +1205,8 @@ class FinderSession:
             raise ValueError("the start page landed on another website")
         self.current = self.landed or self.start
         self._read(self.current, self.first)
+        title = getattr(self.pages, "last_title", "")
+        self._hold(self.current, self.first, title if isinstance(title, str) else "", False)
         self.first = ""
 
     def on_site(self, url: str) -> bool:
@@ -1019,7 +1217,7 @@ class FinderSession:
         """Note the links of a page read and its visible text."""
         from app.browser import sources
 
-        root = sources.parse_snapshot(text[:SNAPSHOT_MAX])
+        root = sources.parse_snapshot(text[:PAGE_MAX])
         for node in root.walk():
             if node.url:
                 link = canonical(urljoin(url, node.url))
@@ -1035,18 +1233,42 @@ class FinderSession:
                 lines, headings = _seen_text(root)
                 self.pages_read[key] = PageRead(
                     (body or "\n".join(lines))[:TEXT_MAX],
-                    tuple(lines),
-                    tuple(headings),
+                    _within(lines, LINES_MAX),
+                    _within(headings, LINES_MAX),
                     titles[0] if titles else "",
                     fields,
                     self.clock().isoformat(),
                 )
                 while len(self.pages_read) > OPENED_MAX:
                     del self.pages_read[next(iter(self.pages_read))]
+                total = sum(map(_record_size, self.pages_read.values()))
+                while total > READS_MAX and len(self.pages_read) > 1:
+                    total -= _record_size(self.pages_read.pop(next(iter(self.pages_read))))
             self.seen.add(key)
 
-    def _view(self, url: str, text: str) -> str:
-        page: dict[str, Any] = {"url": url, "untrusted_page_snapshot": text[:SNAPSHOT_MAX]}
+    def _hold(self, url: str, text: str, title: str, cut: bool) -> Kept | None:
+        """Keep the tab's snapshot whole, up to PAGE_MAX (B26); the one it replaces."""
+        previous = self.kept.get(self.tab)
+        whole = _head(text, PAGE_MAX)
+        self.kept[self.tab] = Kept(url, title[:TITLE_MAX], whole, cut or len(whole) < len(text))
+        return previous
+
+    def _view(self, url: str, text: str, title: str = "", cut: bool = False) -> str:
+        """An action's answer (B26, as Playwright CLI gives it): the address, the title and a
+        compact view of the page (`_compact`), the full snapshot kept for the tab (`_hold`) and a
+        line saying how long it is and how to read it. The page's text is untrusted."""
+        previous = self._hold(url, text, title, cut)
+        kept = self.kept[self.tab]
+        before = previous.text if previous is not None and previous.url == url else None
+        top, changed = _compact(kept.text, before)
+        page: dict[str, Any] = {
+            "url": url,
+            "untrusted_page_title": kept.title,
+            "untrusted_page_snapshot": top,
+        }
+        if changed:
+            page["untrusted_changed_lines"] = changed
+        page["snapshot"] = _told(kept, top)
         return json.dumps(page, ensure_ascii=False)
 
     def _stop(self, code: str) -> tuple[str, bool]:
@@ -1106,7 +1328,8 @@ class FinderSession:
             while len(self.error_pages) > OPENED_MAX:
                 del self.error_pages[next(iter(self.error_pages))]
         self._read(opened, self.pages.last_text)
-        return self._view(opened, self.pages.last_text), False
+        pages = self.pages
+        return self._view(opened, pages.last_text, pages.last_title, pages.last_cut), False
 
     def _searched(self, title: str, place: str | None) -> None:
         """Count one search of the website (B20), once per title and place (case and spacing
@@ -1227,11 +1450,26 @@ class FinderSession:
         self.interactions[name] += 1
         self._note_search(name, args)
         self._read(url, self.pages.last_text)
-        view = json.loads(self._view(url, self.pages.last_text))
+        tabs = result.get("tabs") if isinstance(result.get("tabs"), list) else []
+        if name == "browser_tabs":
+            if args.get("action") == "close":
+                self.kept.clear()  # the tabs left moved: each is kept again once read
+            self.tab = next(
+                (
+                    tab["index"]
+                    for tab in tabs
+                    if isinstance(tab, dict)
+                    and tab.get("current") is True
+                    and type(tab.get("index")) is int
+                ),
+                self.tab,
+            )
+        pages = self.pages
+        view = json.loads(self._view(url, pages.last_text, pages.last_title, pages.last_cut))
         if name == "browser_evaluate":  # the script's own result, bounded by browserd
             view["script_result"] = str(result.get("result", ""))[:20_000]
         if name == "browser_tabs":
-            view["tabs"] = result.get("tabs") if isinstance(result.get("tabs"), list) else []
+            view["tabs"] = tabs
         return json.dumps(view, ensure_ascii=False), False
 
     async def screenshot(self) -> tuple[dict[str, Any] | str, bool]:
@@ -1288,11 +1526,51 @@ class FinderSession:
             return self._stop(exc.code)
         return answer, False
 
-    async def snapshot(self) -> tuple[str, bool]:
-        from app.browser.sources import SourceError
-
+    async def snapshot(self, offset: int = 0, length: int = WINDOW_DEFAULT) -> tuple[str, bool]:
+        """browser_snapshot (B26): at offset 0 the page is read again and kept; the answer is a
+        window of `length` characters of the tab's kept snapshot from `offset`, cut at a line
+        end, with where the next one starts."""
         if self.stopped:
             return self._stop(self.stopped)
+        if offset <= 0:
+            answer, error = await self._reread(compact=False)
+            if error:
+                return answer, error
+        kept = self.kept.get(self.tab)
+        if kept is None:
+            return NO_PAGE, True
+        offset, length = max(offset, 0), min(max(length, 1), WINDOW_MAX)
+        size = len(kept.text)
+        if offset and offset >= size:
+            return f"The snapshot holds {size:,} characters: give an offset below that.", True
+        end = min(offset + length, size)
+        if end < size and (line_end := kept.text.rfind("\n", offset, end)) > offset:
+            end = line_end + 1
+        part = kept.text[offset:end]
+        page: dict[str, Any] = {
+            "url": kept.url,
+            "untrusted_page_title": kept.title,
+            "untrusted_page_snapshot": part,
+            "offset": offset,
+            "end": end,
+            "snapshot_characters": size,
+        }
+        if part == kept.text:
+            page["snapshot"] = _told(kept, part)
+        elif end < size:
+            page["snapshot"] = (
+                f"Characters {offset:,} to {end:,} of {size:,}: browser_snapshot(offset={end}) "
+                "reads on, browser_find(pattern) searches the whole."
+            )
+        else:
+            page["snapshot"] = f"Characters {offset:,} to {end:,} of {size:,}: the end."
+        return json.dumps(page, ensure_ascii=False), False
+
+    async def _reread(self, compact: bool) -> tuple[str, bool]:
+        """Read the page open in the tab again and keep it (B26): with `compact`, the answer of
+        an action (`_view`); else an empty text. An answer that says why when it cannot."""
+        from app.browser.sources import SourceError
+
         try:
             shot = await self.pages.tools.snapshot()
         except BrowserError as exc:
@@ -1310,7 +1588,72 @@ class FinderSession:
             return "Refused: the page is on another site.", True
         self.current = url
         self._read(url, text)
-        return self._view(url, text), False
+        title = shot.get("title") if isinstance(shot.get("title"), str) else ""
+        if compact:
+            return self._view(url, text, title, shot.get("cut") is True), False
+        self._hold(url, text, title, shot.get("cut") is True)
+        return "", False
+
+    async def find(
+        self, pattern: object, context_lines: object = None, max_matches: object = None
+    ) -> tuple[str, bool]:
+        """browser_find (B26): the lines of the tab's kept snapshot that hold `pattern` (plain
+        text, case aside, or /expression/), each with its ref (`_ref_at`) and `context_lines`
+        lines around it, the first `max_matches`, in FIND_ANSWER_MAX characters; a regular
+        expression stops after FIND_TIMEOUT_S over the snapshot, and the answer says so."""
+        if self.interactive is None:
+            return "Refused: this run has no interactive search permission.", True
+        if self.stopped:
+            return self._stop(self.stopped)
+        if not isinstance(pattern, str) or not pattern.strip() or len(pattern) > PATTERN_MAX:
+            return f"Refused: give a pattern of 1 to {PATTERN_MAX} characters.", True
+        kept = self.kept.get(self.tab)
+        if kept is None:
+            return NO_PAGE, True
+        matcher = _matcher(pattern)
+        if isinstance(matcher, str):
+            return matcher, True
+        around = _bounded(context_lines, CONTEXT_DEFAULT, 0, CONTEXT_MAX)
+        most = _bounded(max_matches, MATCHES_DEFAULT, 1, MATCHES_MAX)
+        lines = kept.text.split("\n")
+        hits, total, stopped = await asyncio.to_thread(
+            _matches, lines, matcher, most, FIND_TIMEOUT_S
+        )
+        found: list[dict[str, Any]] = []
+        size = 0
+        for index in hits:
+            near = range(max(index - around, 0), min(index + around + 1, len(lines)))
+            text = "\n".join(
+                f"{'>' if at == index else ' '} {at + 1}: {lines[at][: LINE_SHOWN_MAX // 2]}"
+                for at in near
+            )
+            if size + len(text) > FIND_ANSWER_MAX:
+                break
+            found.append({"line": index + 1, "ref": _ref_at(lines, index), "lines": text})
+            size += len(text)
+        notes = []
+        if not total:
+            notes.append("No line of the snapshot matches.")
+        elif len(found) < total:
+            notes.append(
+                f"{total - len(found)} more matching lines not shown: narrow the pattern, or "
+                "raise max_matches."
+            )
+        if found:
+            notes.append("Click a match by its ref (browser_click).")
+        if stopped:
+            notes.append(
+                f"The search stopped after {FIND_TIMEOUT_S:g} s, before the end of the "
+                "snapshot: give plain text or a simpler expression."
+            )
+        answer = {
+            "url": kept.url,
+            "snapshot_characters": len(kept.text),
+            "matching_lines": total,
+            "untrusted_page_matches": found,
+            "find": " ".join(notes),
+        }
+        return json.dumps(answer, ensure_ascii=False), stopped and not found
 
     async def wait_for(self, text: str | None, seconds: float | None) -> tuple[str, bool]:
         from app.browser.sources import SourceError
@@ -1330,7 +1673,7 @@ class FinderSession:
             return self._stop(exc.code)
         if not done.get("ok"):
             return "The text did not appear.", True
-        return "Done. Read the page again with browser_snapshot.", False
+        return await self._reread(compact=True)  # B26: as every action, the page it left
 
     def report_none(self, reason: object) -> tuple[str, bool]:
         """`report_no_postings`: why the agent of a job website reports no posting (NO_POSTINGS);
@@ -1694,6 +2037,7 @@ class RuntimeFinder(FinderAgent):
             with _LOCK:
                 _SCOPES.pop(key, None)
                 _SESSIONS.pop(created, None)
+            session.kept.clear()  # B26: the pages kept for the run go with it
         ended = await asyncio.to_thread(_in_db, context.sessions, lambda db: _ended(db, created))
         return Ran(ended.input_tokens, ended.output_tokens, _stopped(ended.status, ended.error))
 

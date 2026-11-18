@@ -178,6 +178,7 @@ Note, 2026-10-28: LinkedIn's own fixed reader was deleted (owner, "Delete it"); 
 | B12b | to create | The sign in hand off for the person, and the later hand off | S | B12a, B4 | none | 7 |
 | B25 | in progress | A search run tells the truth: tool previews and errors in Activity, refusal rules, a sweep with no working source Failed, logs-browser (#789) | M | B24 | finder.py with B26 | 9 |
 | Checkpoint B | to create | The owner's own browser | human | B7, B12b, then B11 | none | after 5, 7 and 8 |
+| B26 | #790 | The page snapshot as Playwright CLI gives it: compact answers, browser_find, paged browser_snapshot | M | B20 | none | with B25 |
 
 **The first end to end slice** (one Greenhouse or Ashby application filled by the agent in the Jetson's browser, watched live, submitted after the person's approval) needs B1, B2, B3, B4 and B5 from this plan, and A1 to A7 from the apply plan, after the documents tasks it reads (see the apply plan's order). It lands after group 4 of this plan. B4 and B5 run in parallel because B5's journey does not use the live view; A4's journey does, so A4 waits for both. B7 and B12 are not in the slice, but apply's A10b (the sign in case), A15 and A18a start after B12b. **The short path to Full auto** (owner, 2026-10-19, issue #405) does not wait for B12: Full auto ships first for Ashby, Greenhouse and Lever, and until B12b and A10b a sign in wall sends the item to the review queue as "Needs you". Beside apply's A12, A13a and A13b, this plan runs B7, then B12a, then B12b, and apply's A10b follows.
 
@@ -477,3 +478,27 @@ Acceptance (issue #789):
 - `api/app/jobs/sweep.py` (`any_source_worked`, `NO_SOURCE_WORKED`): `finish_done` records Failed with that sentence when every selected source ended failed or not_attempted; Activity's sweep step and workflow run follow the status, the summary dialog shows "The search stopped", the sentence and each website's reason.
 - `ops/jetson-ops.sh`, `ops/remote.sh`, `.github/workflows/ops.yml`: `logs-browser`, printed as counts on the `JOBAPP-OPS` line (no log text), since the run log of the public repository is readable by anyone.
 - Tests: `api/tests/agents/test_b25_run_truth.py`, `api/tests/jobs/test_b25_sweep_status.py`, `api/tests/browser/test_b25_refusal_rule.py`, `api/tests/browser/test_b19_outcome.py`, `web/src/features/agents/test/agent-step-log.test.tsx`, `web/src/components/test/sweep-sources.test.tsx`, `tests/remote_ops_test.sh`.
+
+### B26: the page snapshot as Playwright CLI gives it
+
+Owner request of 2026-11-17, issue #790; branch `browser/B26-snapshot-cli`, beside B25 (#789). Decision: "The page as Playwright CLI gives it" in [decisions](../../docs/decisions.md) (Interactive job search); spec: [SPEC-browser, Interactive discovery](../../SPEC-browser.md#interactive-discovery-626).
+
+**Owner words (2026-11-17).** After a live audit of Find jobs on the Jetson: "make it works perfectly like claude code now. fix everything. let the agent write code in a sandbox or whatever. It must work, even if i'm not logged in". The audit: four short failed runs used 647k input tokens, a 40,000 character snapshot after every action, and a list longer than that was cut before its next page link.
+
+**Acceptance (#790):**
+1. Every browser action of `browser_discovery` answers the address, the title and a compact view of about 6,000 characters at most (the top, and the lines that changed when cheap), with a line saying how long the full snapshot is and how to read it.
+2. The full snapshot is kept per tab in the search session, no 40,000 character cut; a ceiling of 2,000,000 characters, its cut said; browserd's cut rises for discovery leases only.
+3. `browser_find(pattern, context_lines=3, max_matches=50)` (plain text or a regular expression, bounded and timeout safe) and `browser_snapshot(offset=0, length=20000)`; refs found are clickable.
+4. The posting text stored for a verified posting is read from the full snapshot.
+5. The prompt teaches: act, then `browser_find`.
+6. Tests on fakes: a list of 150 postings whose next link sits past 40,000 characters, reached through find then click; answer sizes; regex timeouts; refs from find.
+
+**As built:**
+- `api/app/browser/finder.py`: `Kept` and `FinderSession.kept` (the last snapshot of each tab by index, `tab` follows `browser_tabs`, a close forgets them, `RuntimeFinder` drops them when the run ends); `_view` answers `url`, `untrusted_page_title`, `untrusted_page_snapshot` (the top), `untrusted_changed_lines` (lines new since the same page's previous snapshot, refs aside) and `snapshot` (the size and how to read it), `COMPACT_MAX` 6,000 characters together, each line `LINE_SHOWN_MAX` 1,000; `find` (`_matcher`, `_matches`, `_ref_at`: plain text case aside, or `/expression/` through the `regex` package with `FIND_TIMEOUT_S` 2 s over the whole snapshot, run in a thread; the line's own ref, else its holder's; `FIND_ANSWER_MAX` 20,000 characters); `snapshot(offset, length)` (offset 0 reads the page again, windows cut at a line end, `WINDOW_MAX` 50,000); `browser_wait_for` answers the page it left; `_read` parses the whole page (`PAGE_MAX` 2,000,000), a record keeps `LINES_MAX` characters of lines and of headings, all records `READS_MAX` 40,000,000; the prompt's paragraph on reading pages. `browser_find` joins `INTERACTIVE_TOOLS` (the definition's tool list), not `ACTIONS`.
+- `api/app/browser/finder_tools.py`: the schemas and descriptions of `browser_find` and of `browser_snapshot`'s `offset` and `length` (One click Apply's agent, which shares the tool, reads its page whole and is told so when it passes them).
+- `api/app/browser/sources/__init__.py`: `Pages` keeps the title and browserd's cut flag of the snapshot it takes after each action; `sources/interactive.py`: `GuardedTools.snapshot` takes a snapshot up to `PAGE_MAX`.
+- `browser/browserd/tools/policy.py` `DISCOVERY_SNAPSHOT_MAX` 2,000,000 and `tools/actions.py` `snapshot`: a discovery's tab is cut there, every other lease at `SNAPSHOT_MAX` 40,000.
+- `api/pyproject.toml`, `api/uv.lock`: `regex==2025.11.3` (the timeout `re` lacks).
+- Tests: `api/tests/browser/test_b26_snapshot_cli.py` (the 150 posting list reached by find then click, answer sizes, regex and plain find, enclosing refs, the timeout, a bad expression, paged windows that rebuild the page, changed lines after a scroll, wait for, untrusted keys, the posting text past 40,000 characters, the ceiling, the tab's own store, browserd's cut by lease kind); `test_b21_verified.py`'s hostile page keeps its 40,000 character size.
+
+**Open:** a click that opens a popup the browser switches to is kept under the tab index the session last knew (browserd says the current tab on `browser_tabs` only); a ref spoofed in a page's own text is answered as the line's last ref (clicking it clicks whatever element holds it, under browserd's line as any click).

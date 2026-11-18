@@ -521,7 +521,7 @@ def test_a_hostile_page_of_the_largest_size_costs_a_report_what_a_plain_page_doe
     from collections import Counter
 
     hostile = page(*[f'- heading "{HOSTILE}" [level=2]'] * 128)
-    assert finder.SNAPSHOT_MAX - 2000 < len(hostile) <= finder.SNAPSHOT_MAX
+    assert 38_000 < len(hostile) <= 40_000  # the snapshot's size before B26 kept pages whole
     plain = page('- heading "Data Engineer" [level=2]', '- heading "Offres" [level=2]')
     titles = [f"Invented Role {index} (H/F)" for index in range(finder.POSTINGS_MAX)]
     items = [{"title": title, "url": JOB, "text": "x"} for title in titles]
