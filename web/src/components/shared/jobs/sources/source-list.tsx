@@ -36,6 +36,8 @@ export function SourceList({
   onResume: (row: SourceRow) => void;
 }) {
   const rows = rowsOf(sources.draft);
+  // Jobs J21: "Anywhere on the web" is always a line; the hint speaks of the person's own places.
+  const own = rows.filter((row) => row.kind !== "web");
   const count = sourceCount(sources.draft);
   const withdrawn = sources.withdrawn(reviewed);
   return (
@@ -48,7 +50,24 @@ export function SourceList({
           {count === 1 ? "1 place" : `${String(count)} places`}
         </Badge>
       </div>
-      {rows.length === 0 ? (
+      <ul aria-labelledby={`${id}-list`} className="flex flex-col gap-2">
+        {rows.map((row) => (
+          <SourceLine
+            key={row.key}
+            row={row}
+            sources={sources}
+            reviewed={reviewed}
+            disabled={disabled}
+            onRemove={() => {
+              onRemove(row);
+            }}
+            onResume={() => {
+              onResume(row);
+            }}
+          />
+        ))}
+      </ul>
+      {own.length === 0 ? (
         // On the grid: the sign in the gutter, the words at the column's edge.
         <Empty
           className={cn(
@@ -64,25 +83,7 @@ export function SourceList({
             searches every place on your list.
           </EmptyDescription>
         </Empty>
-      ) : (
-        <ul aria-labelledby={`${id}-list`} className="flex flex-col gap-2">
-          {rows.map((row) => (
-            <SourceLine
-              key={row.key}
-              row={row}
-              sources={sources}
-              reviewed={reviewed}
-              disabled={disabled}
-              onRemove={() => {
-                onRemove(row);
-              }}
-              onResume={() => {
-                onResume(row);
-              }}
-            />
-          ))}
-        </ul>
-      )}
+      ) : null}
       {withdrawn.length ? (
         <p className="text-xs text-muted-foreground">
           Saving takes back your permission to search{" "}

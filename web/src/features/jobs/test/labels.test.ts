@@ -26,6 +26,19 @@ describe("sourceLabel", () => {
     );
   });
 
+  it("names Anywhere on the web, alone and beside another source (jobs J21)", () => {
+    expect(sourceLabel("web")).toBe("Anywhere on the web");
+    expect(sourceLabel("linkedin:AI Engineer, web")).toBe(
+      "LinkedIn, AI Engineer; Anywhere on the web",
+    );
+    expect(sourceLabel("web, linkedin:AI Engineer")).toBe(
+      "Anywhere on the web; LinkedIn, AI Engineer",
+    );
+    expect(
+      sourceName({ kind: "web", query: "", location: null, host: "web" }),
+    ).toBe("Anywhere on the web");
+  });
+
   it("keeps a comma inside search words", () => {
     expect(sourceLabel("linkedin:AI Engineer, Agents")).toBe(
       "LinkedIn, AI Engineer, Agents",
