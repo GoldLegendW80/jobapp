@@ -163,10 +163,11 @@ class AgentDefinition:
     # it answers None to let it run or the refusal the model reads. None: no web search (every
     # agent but the website search). The gate also refuses past sdk_options.WEB_SEARCHES_MAX.
     web_search: WebSearchHook | None = field(default=None, hash=False, compare=False)
-    # The most WebSearch calls the gate lets one run make (jobs J21): the website search keeps
-    # sdk_options.WEB_SEARCHES_MAX, the search of the whole web (`web_discovery`) has
-    # sdk_options.WEB_SEARCHES_WEB_MAX. Claude Code's own session cap is set to the same number.
-    web_searches_max: int = 20
+    # The most WebSearch calls the gate lets one run make, Claude Code's own session cap set to
+    # the same number: sdk_options.WEB_SEARCHES_MAX for the website search. None (jobs J21,
+    # owner 2026-11-18, "No cap, like the Mac"): no cap of the app's and Claude Code's default,
+    # for the search of the whole web (`web_discovery`), bounded by its Cancel and the lease.
+    web_searches_max: int | None = 20
 
     def web_search_offered(self, run_id: uuid.UUID, offered: bool) -> None:
         """Told by the runner whether run `run_id` offers WebSearch (browser B28): once when the

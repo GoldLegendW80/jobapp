@@ -78,9 +78,6 @@ FORBIDDEN_TOOLS = (
 # left out of this set gets no web search at all, and the prompt says the tool may be missing.
 WEB_SEARCH = "WebSearch"
 WEB_SEARCHES_MAX = 20
-# Jobs J21 (owner, 2026-11-18): "Anywhere on the web" searches the whole web, so its agent has
-# more searches a run than a website's (AgentDefinition.web_searches_max).
-WEB_SEARCHES_WEB_MAX = 30
 WEB_SEARCHES_ENV = "CLAUDE_CODE_MAX_WEB_SEARCHES_PER_SESSION"
 WEB_SEARCH_KINDS = frozenset({"anthropic_api_key", "claude_subscription"})
 

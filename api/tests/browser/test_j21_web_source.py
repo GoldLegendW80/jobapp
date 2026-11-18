@@ -4,6 +4,7 @@ import asyncio
 import json
 
 from app.agents import definitions, runner, sdk_options
+from app.agents import tools as app_tools
 from app.browser import finder
 from app.jobs import sweep
 from app.profile.schemas import SearchSection
@@ -26,37 +27,65 @@ def test_results_are_counted_from_the_links_lines() -> None:
     assert runner.web_search_results("Links: [not json]\n") == 0
 
 
-def test_the_web_agent_has_thirty_searches_and_the_website_agent_twenty() -> None:
+def test_the_web_agent_has_no_cap_and_the_website_agent_twenty() -> None:
+    # Owner 2026-11-18, "No cap, like the Mac": no gate cap, Claude Code's default session cap.
     web = definitions.get(finder.WEB_NAME, "test")
     site = definitions.get(finder.INTERACTIVE_NAME, "test")
-    assert web.web_searches_max == sdk_options.WEB_SEARCHES_WEB_MAX == 30
+    assert web.web_searches_max is None
     assert site.web_searches_max == sdk_options.WEB_SEARCHES_MAX == 20
     assert web.tools == site.tools
     assert web.web_search is site.web_search
-    assert "30 searches" in web.system_prompt
+    assert web.model == site.model  # owner 2026-11-18: "Keep Sonnet"
+    assert "at most" not in web.system_prompt.split("Method:")[1].split("2.")[0]
     assert "site:candidat.francetravail.fr" in web.system_prompt
     for dash in ("—", "–", " - "):
         assert dash not in web.system_prompt
 
 
-def test_the_gate_refuses_the_thirty_first_search() -> None:
+def _searches(most: int | None, count: int) -> tuple[list[dict], list[str]]:
     async def denied(name: str) -> None:
         raise AssertionError(name)
 
     asked: list[str] = []
     gate = runner.make_gate(
-        frozenset(), denied, None, lambda found: asked.append(found["query"]), 30
+        frozenset(), denied, None, lambda found: asked.append(found["query"]), most
     )
 
     async def search(n: int) -> dict:
         call = {"tool_name": "WebSearch", "tool_input": {"query": f"q{n}"}}
         return await gate(call, f"t{n}", None)
 
-    answers = [asyncio.run(search(n)) for n in range(31)]
-    assert all(answer == {} for answer in answers[:30])
-    refusal = answers[30]["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "at most 30" in refusal
-    assert len(asked) == 30
+    return [asyncio.run(search(n)) for n in range(count)], asked
+
+
+def test_the_gate_has_no_cap_for_the_web_agent() -> None:
+    answers, asked = _searches(None, 60)
+    assert all(answer == {} for answer in answers)
+    assert len(asked) == 60
+
+
+def test_the_gate_still_refuses_the_website_agents_twenty_first_search() -> None:
+    answers, asked = _searches(sdk_options.WEB_SEARCHES_MAX, 21)
+    assert all(answer == {} for answer in answers[:20])
+    refusal = answers[20]["hookSpecificOutput"]["permissionDecisionReason"]
+    assert refusal == runner.WEB_SEARCHES_SPENT
+    assert len(asked) == 20
+
+
+def test_the_web_agent_leaves_claude_codes_session_cap_unset(tmp_path) -> None:
+    tools = app_tools.build(None, finder.uuid.uuid4(), ("get_job",))  # type: ignore[arg-type]
+
+    async def gate(*_: object) -> dict:
+        return {}
+
+    env = {"ANTHROPIC_API_KEY": "sk-test"}
+    web = runner.build_options(finder.WEB_FINDER, tools, env, tmp_path, gate, web_search=True)
+    assert web.tools == ["WebSearch"]
+    assert sdk_options.WEB_SEARCHES_ENV not in web.env
+    site = runner.build_options(
+        finder.INTERACTIVE_FINDER, tools, env, tmp_path, gate, web_search=True
+    )
+    assert site.env[sdk_options.WEB_SEARCHES_ENV] == str(sdk_options.WEB_SEARCHES_MAX)
 
 
 def test_a_search_is_ticked_by_default_and_frozen_as_a_source() -> None:

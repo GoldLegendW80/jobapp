@@ -170,7 +170,9 @@ class GuardedTools:
     async def _before(self, name: str) -> None:
         await _permit(self.policy, self.context)
         if not self.reserved:
-            if name != "browser_navigate":
+            # The first call opens the start page; "Anywhere on the web" (jobs J21) has none,
+            # its first may be a fetch (browserd's FIRST_CALLS).
+            if name not in ("browser_navigate", "web_fetch"):
                 raise SourceError("permission_unavailable")
             if self.policy:
                 _refuse(await self.policy.reserve(self.context))

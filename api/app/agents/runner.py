@@ -241,12 +241,6 @@ WEB_SEARCHES_SPENT = (
     "pages you found."
 )
 
-
-def web_searches_spent(most: int) -> str:
-    """WEB_SEARCHES_SPENT for a run allowed `most` searches (jobs J21)."""
-    return WEB_SEARCHES_SPENT.replace(str(sdk_options.WEB_SEARCHES_MAX), str(most), 1)
-
-
 # Argument names whose values are never stored in a tool call event.
 _SECRET_ARG = ("secret", "token", "password", "api_key", "apikey", "authorization", "cookie")
 # What a private run keeps of an app tool's call and error (browser B25, `preview_args`): the
@@ -646,7 +640,7 @@ def make_gate(
     on_denied: Callable[[str], Awaitable[None]],
     budget: Budget | None = None,
     web_search: Callable[[dict[str, Any]], str | None] | None = None,
-    web_searches_max: int = sdk_options.WEB_SEARCHES_MAX,
+    web_searches_max: int | None = sdk_options.WEB_SEARCHES_MAX,
 ) -> Gate:
     """The PreToolUse hook: any tool outside the allow list is denied by this code, whatever
     the options or the model say (hooks run first, and a hook deny holds in every mode).
@@ -666,9 +660,9 @@ def make_gate(
     instead of letting the call through on a count that may be behind.
 
     `web_search` (browser B28): Claude Code's WebSearch is allowed only with it, at most
-    `web_searches_max` times a run (the definition's, jobs J21); before each search it is
-    asked with the search's input and answers None, or the refusal the model reads (the
-    definition's `web_search` hook)."""
+    WEB_SEARCHES_MAX times a run (the definition's `web_searches_max`; None, no cap, jobs J21);
+    before each search it is asked with the search's input and answers None, or the refusal the
+    model reads (the definition's `web_search` hook)."""
     searches = 0
 
     def refuse(reason: str) -> dict[str, Any]:
@@ -705,8 +699,8 @@ def make_gate(
                 return stop(BUDGET_STOP)
         if name == sdk_options.WEB_SEARCH and web_search is not None:
             nonlocal searches
-            if searches >= web_searches_max:
-                return refuse(web_searches_spent(web_searches_max))
+            if web_searches_max is not None and searches >= web_searches_max:
+                return refuse(WEB_SEARCHES_SPENT)
             searches += 1
             raw = input_data.get("tool_input")
             refusal = web_search(raw if isinstance(raw, dict) else {})
@@ -733,7 +727,8 @@ def build_options(
 ) -> ClaudeAgentOptions:
     """`model` is the one chosen for the run's credential (AgentDefinition.model_for); the
     definition's own when none is given. `web_search` (B28): Claude Code's WebSearch is offered
-    and allowed too, and Claude Code's own cap of searches is WEB_SEARCHES_MAX."""
+    and allowed too, and Claude Code's own cap of searches is the definition's
+    `web_searches_max` (WEB_SEARCHES_MAX; left unset when None, jobs J21)."""
     if turn_budget is not None and (type(turn_budget) is not int or turn_budget < 1):
         raise ValueError("turn_budget must be a positive integer")
     turns = definition.max_turns
@@ -752,7 +747,7 @@ def build_options(
         cwd=str(workdir),
         env=(
             {**env, sdk_options.WEB_SEARCHES_ENV: str(definition.web_searches_max)}
-            if web_search
+            if web_search and definition.web_searches_max is not None
             else env
         ),
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[gate])]},  # type: ignore[list-item]

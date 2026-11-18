@@ -302,7 +302,8 @@ def test_the_tools_of_the_website_search():
     assert finder_tools.SCHEMAS["web_fetch"]["required"] == ["url"]
     assert finder_tools.SOURCE["enum"] == ["page", "script", "fetch"]
     assert finder.INTERACTIVE_FINDER.web_search is finder.web_search_hook
-    others = [d for name, d in definitions.AGENTS.items() if name != finder.INTERACTIVE_NAME]
+    searching = (finder.INTERACTIVE_NAME, finder.WEB_NAME)  # J21: the web search has it too
+    others = [d for name, d in definitions.AGENTS.items() if name not in searching]
     assert others
     assert all(d.web_search is None for d in others)
     assert "WebSearch" not in finder.INTERACTIVE_TOOLS
