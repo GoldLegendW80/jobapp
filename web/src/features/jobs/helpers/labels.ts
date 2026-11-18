@@ -317,7 +317,9 @@ export function guestSentence(source: {
   }
   if (source.fallback === "page") {
     parts.push(
-      "Searched with LinkedIn's public job search page, as the public API refused.",
+      source.fallback_after === "linkedin_rate_limited"
+        ? "Searched with LinkedIn's public job search page, as the public API refused."
+        : "Searched with LinkedIn's public job search page, as the public API failed.",
     );
   }
   const other = source.other_place ?? 0;

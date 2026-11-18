@@ -587,6 +587,9 @@ class Plan:
     commits: "Commits | None" = None
     # One parse of a big answer at a time for the whole run (`parse_one`), set by run_sweep.
     parsing: asyncio.Semaphore | None = None
+    # Jobs J22: every saved title and place pair LinkedIn's public job search did not search,
+    # by source id (its summary lists the first SEARCHES_LISTED): what its public page reads.
+    linkedin_not_searched: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)
 
     @property
     def flow(self) -> WorkflowRef:

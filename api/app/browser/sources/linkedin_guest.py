@@ -777,14 +777,19 @@ def by_api(plan: Any, site: InteractiveSite) -> bool:
     return sweep.linkedin_mode(search) == MODE
 
 
+def on_linkedin(name: str, host: str) -> bool:
+    """Whether the host `name` is LinkedIn's (linkedin.com or any subdomain, a country one such
+    as fr.linkedin.com too) or `host`, the one the search reads (the fixture host in tests)."""
+    return name == host or name == "linkedin.com" or name.endswith(".linkedin.com")
+
+
 def _known_ids(plan: Any, host: str) -> set[str]:
     """The LinkedIn ids of the person's postings (sweep.Known's addresses)."""
     known = getattr(plan, "known", None)
     ids: set[str] = set()
     for url in getattr(known, "urls", ()) or ():
         parts = urlsplit(url)
-        name = parts.hostname or ""
-        if not (name == host or name == "linkedin.com" or name.endswith(".linkedin.com")):
+        if not on_linkedin(parts.hostname or "", host):
             continue
         found = _VIEW.search(parts.path)
         if found:
@@ -1340,6 +1345,11 @@ def _write(entry: dict[str, Any], done: _Run, plan: Any) -> None:
     entry["not_searched"] = [
         {"title": title, "place": place} for title, place in left[:SEARCHES_LISTED]
     ]
+    # All of them, for LinkedIn's public page in the browser (jobs J22, linkedin_page): the
+    # summary lists the first SEARCHES_LISTED only.
+    every_left = getattr(plan, "linkedin_not_searched", None)
+    if isinstance(every_left, dict):
+        every_left[entry["source_id"]] = left
     if done.unwanted:
         entry["unwanted"] = done.unwanted
     if done.other_contract:

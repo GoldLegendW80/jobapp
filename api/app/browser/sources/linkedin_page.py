@@ -10,20 +10,24 @@ normal browser on the owner's Mac listed every card (14 searches, 256 cards).
 - When: LinkedIn's public job search ended `linkedin_rate_limited` (429 or 999, a sign in or
   security redirect, its cooldown) or failed (`page_failed`, `layout_changed`) before it searched
   every saved title and place pair (`sweep.linkedin_page_due`): the same sweep reads the page for
-  the pairs it did not search (the entry's `not_searched`), after the websites read in the
-  browser (sources.Runner.websites). Never after a search that stood in for the browser search
-  (jobs J20, `fallback` "guest"), never twice a sweep, and it takes the guest search's one retry
-  (B24): no chain, no loop.
+  the pairs it did not search (all of them, `sweep.Plan.linkedin_not_searched`), after the
+  websites read in the browser (sources.Runner.websites). Never after a search that stood in for
+  the browser search (jobs J20, `fallback` "guest"), never twice a sweep, and it takes the guest
+  search's one retry (B24): no chain, no loop.
 - How: one `sweep` lease of the person's browser and a discovery on it (browser B20) whose scope
   never says `signed_in`, so browserd opens a fresh anonymous context: never the person's
   LinkedIn login. Code builds every address (`page_url`, the place as LinkedIn names it,
   linkedin_places) and reads every page with one script (CARDS_SCRIPT, POSTING_SCRIPT, run by
   browser_evaluate): no model, no token. A search reads `start=0`, then 25 and 50 while a page
-  gives new cards, in rounds, breadth first as the guest search (the first page of every search,
-  then the posting pages of that round's new cards taken in turn from each search, then the next
-  pages). Each new card that passes J20's rules (the unwanted titles and places, the never apply
-  rules, the saved places, the person's postings) has its `/jobs/view/<id>` page read for its
-  text, then is stored through the run's commits as the guest search stores it.
+  lists a full page of cards and some are new, in rounds, breadth first as the guest search (the
+  first page of every search, then the posting pages of that round's new cards taken in turn from
+  each search, then the next pages). A page off LinkedIn ends it `page_failed` and a card whose
+  link leads off LinkedIn is dropped; a first page that read no card while its results list holds
+  items, or shows neither the list nor LinkedIn's no results message, ends it `layout_changed`;
+  a search page gone (404) leaves its pair not searched. Each new card that passes J20's rules
+  (the unwanted titles and places, the never apply rules, the saved places, the person's
+  postings) has its `/jobs/view/<id>` page read for its text, then is stored through the run's
+  commits as the guest search stores it.
 - Pace and stops: LinkedIn's page pace (sources/linkedin.py PAUSE_S, 10 to 30 s after the
   previous page of LinkedIn's host ended, whoever opened it, the shared pacer), the permission
   checks before every call (platform_policy), at most PAGES_MAX pages. A sign in wall, a
@@ -72,7 +76,11 @@ PAGE_CAP = "page_cap"  # PAGES_MAX reached: the fallback ends, what it read kept
 READ_THROUGH = "linkedin_public_page"
 
 # One script per page (browserd's browser_evaluate on a discovery, line.SCRIPT_GUARD_JS): the
-# result goes back as JSON text. Plain reads, no click, no request.
+# result goes back as JSON text. Plain reads, no click, no request. Beside the cards, the search
+# page's script says what the results list holds (`listed`: its list items and the elements that
+# carry a LinkedIn id), whether the list is there (`results`) and whether LinkedIn's no results
+# message is (`none`): a first page that read no card is an empty result only when the list is
+# there and empty, or when the message says so (`_layout_changed`).
 CARDS_SCRIPT = r"""() => {
   const text = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 600) : "");
   const cards = [];
@@ -90,7 +98,15 @@ CARDS_SCRIPT = r"""() => {
       date: (time && time.getAttribute("datetime")) || "",
     });
   }
-  return { cards };
+  const list = document.querySelector(".jobs-search__results-list");
+  const listed = Math.max(
+    list ? list.querySelectorAll(":scope > li").length : 0,
+    document.querySelectorAll("[data-entity-urn]").length,
+  );
+  const none = document.querySelector(
+    ".no-results, .jobs-search-no-results, .jobs-search-no-results-banner",
+  );
+  return { cards, listed, results: !!list, none: !!none };
 }"""
 POSTING_SCRIPT = r"""() => {
   const text = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 600) : "");
@@ -153,16 +169,29 @@ def _text(value: Any) -> str:
     return guest._clean(value) if isinstance(value, str) else ""
 
 
-def cards_of(value: dict[str, Any]) -> list[guest.Card]:
+def on_linkedin(url: str, host: str) -> bool:
+    """Whether `url` is an http(s) address on LinkedIn (linkedin.com or any subdomain) or on
+    `host`, the host the search reads (the fixture host in tests): `guest.on_linkedin`."""
+    if len(url) > 2000:
+        return False
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and guest.on_linkedin(parts.hostname or "", host)
+
+
+def cards_of(value: dict[str, Any], host: str) -> list[guest.Card]:
     """The cards CARDS_SCRIPT read, at most CARDS_MAX, each once: a card without its LinkedIn id
-    (on the card, else in its link) or a title is left out."""
+    (on the card, else in its link) or a title is left out, and so is a card whose link leads
+    off LinkedIn (`on_linkedin`, `host` the one the search reads)."""
     raw = value.get("cards")
     cards: list[guest.Card] = []
     seen: set[str] = set()
     for item in raw[:CARDS_MAX] if isinstance(raw, list) else []:
         if not isinstance(item, dict):
             continue
-        job_id = _job_id(item.get("urn"), item.get("link"))
+        job_id = _job_id(item.get("urn"), item.get("link"), host)
         title = _text(item.get("title"))
         if job_id is None or job_id in seen or not title:
             continue
@@ -180,19 +209,36 @@ def cards_of(value: dict[str, Any]) -> list[guest.Card]:
     return cards
 
 
-def _job_id(urn: Any, link: Any) -> str | None:
+def _job_id(urn: Any, link: Any, host: str) -> str | None:
+    """The card's LinkedIn id, from its urn, else from its link's `/jobs/view/<id>`; None when it
+    has neither, or when its link is not LinkedIn's (a card that leads elsewhere is not one)."""
+    if not isinstance(link, str):
+        link = ""
+    if link and not on_linkedin(link, host):
+        return None
     if isinstance(urn, str):
         found = guest._JOB_ID.match(urn)
         if found:
             return found.group(1)
-    if isinstance(link, str) and len(link) <= 2000:
-        try:
-            found = guest._VIEW.search(urlsplit(link).path)
-        except ValueError:
-            return None
-        if found:
-            return found.group(1)
-    return None
+    found = guest._VIEW.search(urlsplit(link).path) if link else None
+    return found.group(1) if found else None
+
+
+def _layout_changed(value: dict[str, Any]) -> bool:
+    """Whether a first search page that gave no card is a changed layout rather than an empty
+    result (the guest search's `looks_like_cards`): the results list holds items (cards of a
+    renamed class), or there is no results list and no LinkedIn no results message either. A
+    count or a flag that is not one says the script and the page disagree: changed too."""
+    listed, results, none = value.get("listed"), value.get("results"), value.get("none")
+    if not (
+        isinstance(listed, int)
+        and not isinstance(listed, bool)
+        and listed >= 0
+        and isinstance(results, bool)
+        and isinstance(none, bool)
+    ):
+        return True
+    return listed > 0 or not (results or none)
 
 
 def posting_of(value: dict[str, Any]) -> guest.Detail | None:
@@ -226,10 +272,11 @@ def posting_of(value: dict[str, Any]) -> guest.Detail | None:
 
 class _Reader:
     """The fallback's LinkedIn pages on one lease: each paced (Pages), its script run once,
-    a refusal or a wall the end of the source (`REFUSED`)."""
+    a refusal or a wall the end of the source (`REFUSED`), a page off LinkedIn its failure."""
 
     def __init__(self, pages: Pages, plan: Any, start: str, base_url: str | None) -> None:
         self.pages, self.plan, self.base_url = pages, plan, base_url
+        self.host = urlsplit(start).hostname or linkedin.HOST
         self.marker = {"_discovery": "native_get", "_discovery_scope": {"start": start}}
         self.opened = 0
 
@@ -252,6 +299,10 @@ class _Reader:
         await self.pages._act(go)
         status = result.get("status")
         here = self.pages.last_url or str(result.get("url") or "")
+        if not on_linkedin(here, self.host):
+            # A redirect off LinkedIn (discovery follows any public address, B20): nothing it
+            # shows is read, and the source ends.
+            raise guest.StopError("page_failed")
         if status in guest.STOPPED or linkedin.wall_by_url(here, self.base_url):
             raise guest.StopError(REFUSED)
         if status == 404:
@@ -316,6 +367,7 @@ class _PageRun(guest._Run):
     """The guest search's counters, plus the cards the pages listed."""
 
     cards: int = 0
+    missing: int = 0  # search pages that answered 404: their pair is not searched
 
 
 async def _one(
@@ -328,11 +380,19 @@ async def _one(
     progress: Callable[[], Awaitable[None]],
     deadline: float,
 ) -> None:
-    pairs = [
-        (one["title"], one.get("place"))
-        for one in entry.get("not_searched") or []
-        if isinstance(one, dict) and isinstance(one.get("title"), str)
-    ]
+    # Every pair the public job search left (all of them, the guest's `_write` kept them on the
+    # plan), else the ones its summary lists.
+    every_left = getattr(plan, "linkedin_not_searched", None)
+    left = every_left.get(entry["source_id"]) if isinstance(every_left, dict) else None
+    pairs = (
+        list(left)
+        if left is not None
+        else [
+            (one["title"], one.get("place"))
+            for one in entry.get("not_searched") or []
+            if isinstance(one, dict) and isinstance(one.get("title"), str)
+        ]
+    )
     before = int(entry.get("postings") or 0)
     entry.update(
         phase="running",
@@ -449,7 +509,9 @@ async def _rounds(
     done: _PageRun,
 ) -> None:
     """The pages in rounds, breadth first, as the guest search's (`guest._rounds`): a search
-    goes on to its next page while a page gives new cards."""
+    goes on to its next page while a page lists a full page of cards (PAGE_SIZE) and some are
+    new. A search page gone (404) leaves its pair not searched; a first page that read no card
+    on a changed layout ends the source `layout_changed` (`_layout_changed`)."""
     host = urlsplit(base).hostname or linkedin.HOST
     known = guest._known_ids(plan, host)
     seen: set[str] = set()
@@ -462,9 +524,15 @@ async def _rounds(
             value = await reader.read(
                 page_url(base, query, search.days, page * PAGE_SIZE), CARDS_SCRIPT
             )
+            if value is None:
+                done.missing += 1  # the search page is gone: its pair is not searched
+                await progress()
+                continue
             done.pages += 1
+            cards = cards_of(value, reader.host)
+            if page == 0 and not cards and _layout_changed(value):
+                raise guest.StopError("layout_changed")
             done.searches.setdefault((query.title, query.place), None)
-            cards = cards_of(value) if value is not None else []
             done.cards += len(cards)
             new = 0
             for card in cards:
@@ -480,7 +548,7 @@ async def _rounds(
                     guest._duplicate(stats, entry, done)
                 else:
                     pending.append((card, query))
-            if new:
+            if len(cards) >= PAGE_SIZE and new:
                 still.append(query)
             await progress()
         guest._in_turn(pending)
@@ -558,5 +626,6 @@ def _write(entry: dict[str, Any], done: _PageRun, plan: Any, before: int) -> Non
         "result_pages": done.pages,
         "cards": done.cards,
         "details": done.details,
+        "missing": done.missing,
         "postings": max(0, int(entry.get("postings") or 0) - before),
     }

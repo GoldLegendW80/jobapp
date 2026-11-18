@@ -249,6 +249,16 @@ describe("guestSentence", () => {
     ).toBe(
       "Searched with LinkedIn's public job search page, as the public API refused. Not searched this time: AI Engineer in Reunion.",
     );
+    expect(
+      guestSentence({ fallback: "page", fallback_after: "layout_changed" }),
+    ).toBe(
+      "Searched with LinkedIn's public job search page, as the public API failed.",
+    );
+    expect(
+      guestSentence({ fallback: "page", fallback_after: "page_failed" }),
+    ).toBe(
+      "Searched with LinkedIn's public job search page, as the public API failed.",
+    );
     expect(SOURCE_PROBLEMS.linkedin_page_refused).toContain(
       "public job search page",
     );

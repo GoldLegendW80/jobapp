@@ -42,9 +42,10 @@ _NOT_RETRIED = {
 # fall_back), by the browser search's reason.
 _FALLBACK_SIGNIN = "LinkedIn's public job search, as you are not signed in to LinkedIn"
 _FALLBACK_FAILED = "LinkedIn's public job search, as the browser search failed"
-# Its public page read in the browser when the public job search refused (jobs J22,
-# linkedin_page fall_back).
-_FALLBACK_PAGE = "LinkedIn's public job search page, as the public API refused"
+# Its public page read in the browser when the public job search refused or failed (jobs J22,
+# linkedin_page fall_back), by the public job search's reason.
+_FALLBACK_PAGE_REFUSED = "LinkedIn's public job search page, as the public API refused"
+_FALLBACK_PAGE_FAILED = "LinkedIn's public job search page, as the public API failed"
 _INGESTION = {
     IngestionStatus.running: "running",
     IngestionStatus.paused: "waiting",
@@ -201,7 +202,8 @@ def _source_note(source: Mapping[str, Any]) -> str | None:
         signin = source.get("fallback_after") == "linkedin_signin"
         parts.append(_FALLBACK_SIGNIN if signin else _FALLBACK_FAILED)
     if source.get("fallback") == "page" and source.get("mode") == "api":
-        parts.append(_FALLBACK_PAGE)
+        refused = source.get("fallback_after") == "linkedin_rate_limited"
+        parts.append(_FALLBACK_PAGE_REFUSED if refused else _FALLBACK_PAGE_FAILED)
     why = _NOT_RETRIED.get(str(source.get("not_retried")))
     if why is not None:
         parts.append(why)
