@@ -712,6 +712,36 @@ class ReasonsTest(unittest.TestCase):
             and id(node) not in docstrings
         ]
 
+    # The calls a bare folder name is a path part of (ROOT / "web" is the other way).
+    PATH_CALLS = frozenset(
+        {"Path", "PurePath", "open", "join", "joinpath", "glob", "rglob"}
+    )
+
+    def bare_parts(self, path: Path) -> set[int]:
+        """The ids of the bare "web" constants of a Python file used as a path part: an operand
+        of `/` or an argument of a PATH_CALLS call. A bare "web" elsewhere is a value (jobs
+        J21's source mode and kind), never a path."""
+        parts: set[int] = set()
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            operands: list[ast.AST] = []
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                operands = [node.left, node.right]
+            elif isinstance(node, ast.Call):
+                func = node.func
+                name = (
+                    func.attr
+                    if isinstance(func, ast.Attribute)
+                    else getattr(func, "id", "")
+                )
+                if name in self.PATH_CALLS:
+                    operands = list(node.args)
+            parts.update(
+                id(operand)
+                for operand in operands
+                if isinstance(operand, ast.Constant) and operand.value == "web"
+            )
+        return parts
+
     def test_no_api_file_reads_a_file_of_the_web_app(self) -> None:
         """The rule for web/ skips the api unit. An api test that opens a file under web/ would
         make that wrong: give that file a rule of its own in ci_plan.py first."""
@@ -719,8 +749,10 @@ class ReasonsTest(unittest.TestCase):
         for path in sorted((ROOT / "api").rglob("*.py")):
             if ".venv" in path.parts:
                 continue
+            parts = len(self.bare_parts(path))
             for text in self.strings(path):
-                if text == "web" or re.search(r"(^|[\"'/ ])web/", text):
+                bare = text == "web" and parts > 0
+                if bare or re.search(r"(^|[\"'/ ])web/", text):
                     units, why = ci_plan.units_for(text)
                     if why != "no rule names this path" and "api" in units:
                         continue  # a file with a rule of its own that runs the api unit
