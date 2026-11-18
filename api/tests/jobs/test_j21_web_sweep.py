@@ -14,16 +14,22 @@ import random
 import uuid
 from typing import Any
 
+import httpx
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser import finder
 from app.browser.client import BrowserError
 from app.browser.sources import MemoryPacer, Runner
+from app.browser.sources import linkedin_guest as guest
 from app.jobs import sweep
 from app.jobs.models import Job, JobStatus, Sweep, SweepStatus
 from tests.browser.fakes import FakeLeases, ScriptedFinder
 from tests.browser.test_b20_agent import text_of, tool
+from tests.browser.test_j22_linkedin_page import BASE as J22_BASE
+from tests.browser.test_j22_linkedin_page import BASE_URL as J22_BASE_URL
+from tests.browser.test_j22_linkedin_page import PageTools
+from tests.browser.test_linkedin_guest import LINKEDIN, Allow, LinkedInFake
 from tests.jobs.sweep_helpers import (
     HOST,
     SITE,
@@ -474,3 +480,144 @@ def test_a_lease_that_ended_idle_is_taken_again_by_the_next_fetch(
     assert (entry["found"], entry["postings"], entry["error"]) == (2, 2, None)
     assert [lease for lease, _ in leases.calls] == ["lease-1", "lease-2"]
     assert leases.released == ["lease-1", "lease-2"]
+
+
+# --- the merge of J22 (#810): LinkedIn's public page in the browser and the web source together
+
+LAGOON = "https://jobs.example-lagoon.test/offres/data-engineer-saint-denis-5120"
+LAGOON_PAGE = fetched(
+    LAGOON,
+    "Data Engineer",
+    "Employer: Example Lagoon Analytics",
+    "Location: Saint-Denis, La Réunion",
+    "Build data pipelines in Python for an invented island utility.",
+)
+
+
+class EverySourceTools(SiteAndWebTools):
+    """browserd for one sweep holding LinkedIn's public page (J22's fixture pages, by the
+    discovery's start), one website and the web source; `order` names each source as its first
+    browserd call (and LinkedIn's public API as its first request) arrives."""
+
+    def __init__(self, now: list[float]) -> None:
+        super().__init__()
+        self.linkedin = PageTools(now)
+        self.order: list[str] = []
+        self.last = ""
+
+    def mark(self, who: str) -> None:
+        self.last = who
+        if not self.order or self.order[-1] != who:
+            self.order.append(who)
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        start = (args.get("_discovery_scope") or {}).get("start", "")
+        if start.startswith(J22_BASE):
+            self.mark("linkedin_page")
+            return await self.linkedin.call(name, args)
+        if start == finder.WEB_START:
+            self.mark("web")
+            if name == "web_fetch" and args.get("url") == LAGOON:
+                args.pop("_discovery")
+                args.pop("_discovery_scope")
+                self.calls.append((name, LAGOON))
+                return LAGOON_PAGE
+            return await super().call(name, args)
+        self.mark("website")
+        return await super().call(name, args)
+
+    async def snapshot(self) -> dict[str, Any]:
+        if self.last == "linkedin_page":
+            return await self.linkedin.snapshot()
+        return await super().snapshot()
+
+
+def test_linkedin_refused_then_its_page_a_website_and_the_web_source_each_run_once(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """One sweep: LinkedIn's public API refused (429), then, in the browser, the website, then
+    LinkedIn's public page for the pairs left (J22, after the websites and J20's fallback), then
+    "Anywhere on the web" once, last (J21); each with its own entry in the stats."""
+    set_profile(
+        factory,
+        alice,
+        search(
+            title_include={"terms": ["AI Engineer", "Data Engineer"], "advanced_regex": False},
+            location={"terms": ["La Réunion"], "advanced_regex": False},
+            interactive_sites=[LINKEDIN, SITE],
+            never_apply=[],
+            web_search=True,
+        ),
+    )
+    clock = [0.0]
+    tools = EverySourceTools(clock)
+    linkedin_api = LinkedInFake(clock, answers={1: (429, {})})
+    runs = {"web": 0, "site": 0}
+
+    def api(request: httpx.Request) -> httpx.Response:
+        tools.mark("linkedin_api")
+        return linkedin_api.handler(request)
+
+    async def sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    async def script(session: finder.FinderSession) -> finder.Ran:
+        assert session.interactive is not None
+        if not session.interactive.web:
+            runs["site"] += 1
+            session.routes.update(dict.fromkeys(finder.ROUTES))
+            await tool(session, "browser_navigate", url=SITE["url"])
+            await tool(session, "report_no_postings", reason="no_match")
+            return finder.Ran()
+        runs["web"] += 1
+        assert searched_web(session, "data engineer La Réunion offre emploi") is None
+        await fetch(session, LAGOON)
+        posting = {
+            "title": "Data Engineer",
+            "company": "Example Lagoon Analytics",
+            "location": "Saint-Denis, La Réunion",
+            "url": LAGOON,
+            "text": "Build data pipelines in Python.",
+        }
+        answer = json.loads(text_of(await tool(session, "report_postings", postings=[posting])))
+        assert answer["kept"] == 1, answer
+        return finder.Ran()
+
+    hook = Runner(
+        FakeLeases(),  # type: ignore[arg-type]
+        lambda *_: tools,
+        sleep=sleep,
+        rng=random.Random(5),  # noqa: S311  a seeded pacing, not a secret
+        monotonic=lambda: clock[0],
+        pacer=MemoryPacer(lambda: clock[0]),
+        finder=ScriptedFinder(script),
+        interactive_policy=Allow(),
+        base_url=J22_BASE_URL,
+        guest_http=lambda: httpx.MockTransport(api),
+        guest_cooldown=guest.MemoryCooldown(lambda: clock[0]),
+        linkedin_page=True,
+    )
+    sweep_id = new_sweep(factory, alice)
+    asyncio.run(sweep.run_sweep(factory, sweep_id, now, browser=hook))
+    row = read_sweep(factory, sweep_id)
+
+    assert tools.order == ["linkedin_api", "website", "linkedin_page", "web"]
+    assert runs == {"web": 1, "site": 1}
+    assert len(linkedin_api.requests) == 1  # refused at once, never retried
+    [linkedin] = [s for s in row.stats["sources"] if s.get("kind") == "linkedin"]
+    assert (linkedin["mode"], linkedin["fallback"], linkedin["fallback_after"]) == (
+        "api",
+        "page",
+        "linkedin_rate_limited",
+    )
+    assert linkedin["not_retried"] == sweep.LINKEDIN_PAGE
+    assert (linkedin["found"], linkedin["not_searched"]) == (2, [])
+    site = site_entry(row)
+    assert (site["error"], site.get("first_attempt")) == (None, None)
+    web = web_entry(row)
+    assert (web["found"], web["postings"], web["error"]) == (1, 1, None)
+    assert web.get("first_attempt") is None
+    assert len(row.stats["sources"]) == 3
+    stored = {job.url for job in jobs_of(factory, alice)}
+    assert LAGOON in stored
+    assert len(stored) == 3  # LinkedIn's two postings read on its page, and the web's one
