@@ -320,10 +320,13 @@ def _ends(agent: definitions.AgentDefinition) -> list[str]:
 def _options(agent: definitions.AgentDefinition) -> dict[str, Any]:
     """The Claude Agent SDK options of a run of this agent, as runner.build_options builds
     them (the live objects named, never a value of the environment)."""
+    # B28: WebSearch for an agent whose definition asks for it, on WEB_SEARCH_KINDS only.
+    searching = agent.web_search is not None
+    allowed = sorted(sdk_options.full_name(name) for name in agent.tools)
     return {
-        **sdk_options.fixed(),
+        **sdk_options.fixed(searching),
         "system_prompt": "the system prompt above",
-        "allowed_tools": sorted(sdk_options.full_name(name) for name in agent.tools),
+        "allowed_tools": allowed + ([sdk_options.WEB_SEARCH] if searching else []),
         "mcp_servers": {
             sdk_options.SERVER: "in-process MCP server holding the tools above, bound to "
             "the run's user"

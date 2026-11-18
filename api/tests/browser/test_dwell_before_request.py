@@ -56,6 +56,8 @@ READS = {
     # app's own question to the person: neither sends an input the website reads as a request.
     "browser_hover",
     "browser_ask_person",
+    # B28: a GET of its own request context, never the tab: no hand on the page to pace.
+    "web_fetch",
 }
 
 

@@ -334,8 +334,6 @@ async def run(tab: Any, args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _fetch(tab: Any, url: str) -> dict[str, Any]:
-    from playwright.async_api import Error
-
     # A fresh request context, never the lease's own: no cookie of any context is sent.
     context = await tab.browser.playwright.request.new_context(
         proxy={"server": f"http://127.0.0.1:{PROXY_PORT}"}, ignore_https_errors=False
@@ -346,8 +344,8 @@ async def _fetch(tab: Any, url: str) -> dict[str, Any]:
                 response = await context.get(
                     url, max_redirects=0, fail_on_status_code=False, timeout=FETCH_S * 1000
                 )
-            except Error:
-                log.warning("lease %s: web_fetch failed", tab.lease_tag)
+            except Exception as exc:  # Playwright's Error, a proxy refusal, a reset: no page
+                log.warning("lease %s: web_fetch failed: %s", tab.lease_tag, type(exc).__name__)
                 return failure("fetch_failed", "The page could not be fetched.")
             status, headers = response.status, response.headers
             location = headers.get("location", "")

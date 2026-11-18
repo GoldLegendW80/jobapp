@@ -1705,7 +1705,7 @@ class FinderSession:
             return "Refused: this run has no interactive search permission.", True
         if self.stopped:
             return self._stop(self.stopped)
-        url = canonical(urljoin(self.current, raw)) if isinstance(raw, str) else ""
+        url = canonical(urljoin(self.current, raw)) if isinstance(raw, str) and raw.strip() else ""
         if not url:
             self.refused["not_an_address"] += 1
             return "Refused: give an http or https address.", True
