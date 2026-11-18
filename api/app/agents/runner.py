@@ -55,13 +55,18 @@ ask for it, and the agents of definitions.py ask for none):
   BINDING_GONE without a model call.
 - **A private run** (`private_io`). A `tool_call` event holds the tool's name and the size of
   its arguments, a `tool_result` event its error state and the size of the answer, never a
-  value; a tool name the model made up is not stored either (only the agent's own tools and
-  Claude Code's built-in names are names this code knows). The run's `output` holds counts
-  (`_State.counts`), never the answer. Nothing of the run is live, whatever `live_text` and
-  AGENTS_LIVE_TEXT say: no partial message is asked for and Redis is never written. What a
-  failure of such a run raised is logged by its type alone. The `text` events are stored as
-  for any run (the model's own words, scrubbed and shortened the same way): whoever owns the
-  documents deletes them with the document.
+  value, but for the app's own tools (browser B25, owner 2026-11-17, "a search run tells the
+  truth"): a call keeps a `preview` of its arguments that is safe to show (`preview_args`: the
+  address of a navigation without its user name, password or fragment, a find's pattern, a
+  ref, key or switch; of a typed text, a script or a list only its length), and an error keeps
+  its text, at most TOOL_ERROR_MAX characters (the app's tools answer an error in words their
+  code wrote, never a page). A tool name the model made up is not stored either (only the
+  agent's own tools and Claude Code's built-in names are names this code knows). The run's
+  `output` holds counts (`_State.counts`), never the answer. Nothing of the run is live,
+  whatever `live_text` and AGENTS_LIVE_TEXT say: no partial message is asked for and Redis is
+  never written. What a failure of such a run raised is logged by its type alone. The `text`
+  events are stored as for any run (the model's own words, scrubbed and shortened the same
+  way): whoever owns the documents deletes them with the document.
 - **A final hook** (`on_final`). Called once this runner has committed the run's final status
   and let go of everything of the run (no transaction open, no lock held, the scratch
   directory and the credential gone), so the hook can take any lock from the top of its own
@@ -126,6 +131,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -138,6 +144,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -221,6 +228,8 @@ ARGS_MAX = 1_000
 REDACTED = "[redacted]"
 # In place of a tool name the model made up, in the events and the log of a private run.
 NOT_STORED = "[not stored]"
+# The calls a private run remembers the tool name of, for their results (Recorder.called).
+CALLED_MAX = 256
 # The key of a run's input that holds its token budget, and what Claude Code is told when the
 # gate stops a run on it, or because it could not tell whether the budget was reached.
 BUDGET_KEY = "token_budget"
@@ -228,6 +237,18 @@ BUDGET_STOP = "The run reached its token budget."
 BUDGET_UNSURE = "The run's token count could not be confirmed."
 # Argument names whose values are never stored in a tool call event.
 _SECRET_ARG = ("secret", "token", "password", "api_key", "apikey", "authorization", "cookie")
+# What a private run keeps of an app tool's call and error (browser B25, `preview_args`): the
+# arguments shown as they are (an address, a pattern) and those shown when they are one short
+# word (a ref, a key, an action), at most PREVIEW_KEYS of them; any other string by its length.
+TOOL_ERROR_MAX = 500
+PREVIEW_ADDRESS_ARGS = frozenset({"url"})
+PREVIEW_PATTERN_ARGS = frozenset({"pattern"})
+PREVIEW_WORD_ARGS = frozenset({"ref", "key", "action", "kind", "element"})
+PREVIEW_ADDRESS_MAX = 500
+PREVIEW_PATTERN_MAX = 200
+PREVIEW_KEYS = 8
+_PREVIEW_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,39}")
+_PREVIEW_WORD = re.compile(r"[A-Za-z0-9_]{1,40}")
 
 
 @dataclass
@@ -335,6 +356,78 @@ def summarize_args(args: Any, secret: str | None = None) -> dict[str, Any]:
             out["..."] = "more arguments not shown"
             break
         out[name] = shown
+    return out
+
+
+def _safe_query(query: str) -> str:
+    """A query with the value of each parameter whose name says secret, token, password, ...
+    replaced (`_SECRET_ARG`), else as it is."""
+    if not any(marker in query.lower() for marker in _SECRET_ARG):
+        return query
+    pairs = parse_qsl(query, keep_blank_values=True)
+    return urlencode(
+        [(k, REDACTED if any(m in k.lower() for m in _SECRET_ARG) else v) for k, v in pairs]
+    )
+
+
+def safe_address(value: Any, secret: str | None = None) -> str | None:
+    """An address as a private run may show it (browser B25): http or https only, its host and
+    port without the user name and password, its path and query kept (`_safe_query`), its
+    fragment dropped, at most PREVIEW_ADDRESS_MAX characters; or a path on the page's own site
+    (the search agent's navigate joins it to the page) the same way. None for anything else."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parts = urlsplit(str(scrub(value.strip(), secret)))
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return None
+    query = _safe_query(parts.query)
+    if not parts.scheme and not parts.netloc and parts.path.startswith("/"):
+        return _clip(urlunsplit(("", "", parts.path, query, "")), PREVIEW_ADDRESS_MAX)
+    if parts.scheme.lower() not in {"http", "https"} or not host:
+        return None
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc += f":{port}"
+    address = urlunsplit((parts.scheme.lower(), netloc, parts.path, query, ""))
+    return _clip(address, PREVIEW_ADDRESS_MAX)
+
+
+def preview_args(args: Any, secret: str | None = None) -> dict[str, Any]:
+    """What a private run keeps of an app tool's arguments, safe to show in Activity (browser
+    B25): an address (`safe_address`), a pattern (at most PREVIEW_PATTERN_MAX characters), a
+    word argument when it is one short word, a number or a switch; of any other string (a typed
+    text, a script, a reason) its length as `<name>_length`, of a list its count as
+    `<name>_count`, and nothing of an object. Names the code adds (a leading underscore) and
+    names that are not plain identifiers are left out; at most PREVIEW_KEYS entries."""
+    if not isinstance(args, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key, value in args.items():
+        name = str(key)
+        if len(out) >= PREVIEW_KEYS:
+            break
+        if not _PREVIEW_NAME.fullmatch(name) or any(m in name.lower() for m in _SECRET_ARG):
+            continue
+        if name in PREVIEW_ADDRESS_ARGS:
+            address = safe_address(value, secret)
+            if address is not None:
+                out[name] = address
+            elif isinstance(value, str):
+                out[f"{name}_length"] = len(value)
+        elif name in PREVIEW_PATTERN_ARGS and isinstance(value, str):
+            out[name] = shorten(value, PREVIEW_PATTERN_MAX, secret)
+        elif isinstance(value, bool) or (isinstance(value, int | float) and abs(value) < 1e9):
+            out[name] = value
+        elif isinstance(value, str):
+            word = name in PREVIEW_WORD_ARGS and _PREVIEW_WORD.fullmatch(value)
+            if word and (not secret or secret not in value):
+                out[name] = value
+            else:
+                out[f"{name}_length"] = len(value)
+        elif isinstance(value, list | tuple):
+            out[f"{name}_count"] = len(value)
     return out
 
 
@@ -661,6 +754,10 @@ class Recorder:
     # value, and only the tool names this code knows are stored.
     private: bool = False
     known_tools: frozenset[str] = frozenset(FORBIDDEN_TOOLS)
+    # AgentDefinition.step_detail: a preview of an app tool's call and the text of its error.
+    detail: bool = False
+    # The tool name of each recent call by its id, so that its result knows whose it is.
+    called: dict[str, str] = field(default_factory=dict, repr=False)
     # A run with a token budget: what it has counted so far goes on the run row with each of
     # its events (runs.record_tokens), so that a run which never records its own end (the
     # worker is killed, a reaper fails the run) still says what it had used by then.
@@ -679,14 +776,24 @@ class Recorder:
         ones); any other could be a piece of what the run read."""
         return name if not self.private or name in self.known_tools else NOT_STORED
 
+    def app_tool(self, name: str) -> bool:
+        """Whether a stored tool name is one of the agent's own app tools (not Claude Code's)."""
+        return name.startswith(f"mcp__{sdk_options.SERVER}__") and name in self.known_tools
+
     def tool_call(self, block: ToolUseBlock) -> dict[str, Any]:
         """The `tool_call` event of a tool use block."""
+        if len(self.called) >= CALLED_MAX:
+            self.called.pop(next(iter(self.called)))
+        self.called[block.id] = self.tool_name(block.name)
         if self.private:
-            return {
-                "id": block.id,
-                "name": self.tool_name(block.name),
-                "input_size": size_of(block.input),
-            }
+            name = self.tool_name(block.name)
+            data: dict[str, Any] = {"id": block.id, "name": name}
+            data["input_size"] = size_of(block.input)
+            if self.detail and self.app_tool(name):
+                preview = preview_args(block.input, self.secret)
+                if preview:
+                    data["preview"] = preview
+            return data
         return {
             "id": block.id,
             "name": block.name,
@@ -698,6 +805,13 @@ class Recorder:
         data: dict[str, Any] = {"id": block.tool_use_id, "is_error": bool(block.is_error)}
         if self.private:
             data["size"], data["blocks"] = result_size(block.content)
+            if (
+                self.detail
+                and block.is_error
+                and self.app_tool(self.called.get(block.tool_use_id, ""))
+            ):
+                # The app's tools answer an error in words their code wrote (browser B25).
+                data["error"] = shorten(result_text(block.content), TOOL_ERROR_MAX, self.secret)
         else:
             data["content"] = shorten(result_text(block.content), TOOL_RESULT_MAX, self.secret)
         return data
@@ -1360,6 +1474,7 @@ async def _execute(
             # version: one saved in between does not outlive the job.
             definition = replace(definition, wall_time_s=wall_time_max_s)
         recorder.private = definition.private_io
+        recorder.detail = definition.step_detail
         # The definition's model until the credential says which one the run uses.
         model = definition.model
         data = dict(run.input or {})

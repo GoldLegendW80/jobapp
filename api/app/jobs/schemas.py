@@ -791,6 +791,8 @@ class SourceOut(BaseModel):
     # and the first SEARCHES_LISTED of them.
     searches: int = Field(default=0, ge=0)
     searched: list[SearchRanOut] = Field(default_factory=list)
+    # browserd's refusals of the website's agent by rule (browser B25): rule name, count.
+    refusals: dict[str, int] = Field(default_factory=dict)
     # LinkedIn's public job search: the searches it built from the saved titles and places, of
     # which `searches` ran before its caps (0 from an older sweep or another source).
     planned: int = Field(default=0, ge=0)

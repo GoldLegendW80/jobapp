@@ -324,6 +324,7 @@ class _Site:
     other_contract: set[str] = field(default_factory=set)
     unwanted: set[str] = field(default_factory=set)
     refused: Counter[str] = field(default_factory=Counter)
+    refusals: Counter[str] = field(default_factory=Counter)  # by browserd's rule (B25)
     tokens_seen: bool = False
     # With the run's commits (sweep.Commits): the website's source, and the addresses given to
     # the store (once each; `found` then stays empty, the commits count the source's postings).
@@ -370,6 +371,7 @@ class _Site:
             url = finder.canonical(posting.url) or posting.url
             self.place(url, self._sort(posting.title, posting.location, url))
         self.refused.update(session.refused)
+        self.refusals.update(session.refusals)
         self.searches.update(session.searches)
         self.routes.update(session.routes)
         self.opened_by_app += session.opened_by_app
@@ -412,6 +414,8 @@ class _Site:
             entry["refused"] = dict(self.refused)
             entry["opened_by_app"] = self.opened_by_app
             entry["routes"] = list(self.routes)
+            if self.refusals:  # browserd's refusals by rule (browser B25)
+                entry["refusals"] = dict(self.refusals)
         if self.planned.contracts:
             entry["other_contract"] = len(self.other_contract)
         if self.unwanted:

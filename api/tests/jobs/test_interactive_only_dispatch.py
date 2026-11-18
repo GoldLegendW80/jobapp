@@ -118,7 +118,8 @@ def test_real_runner_and_sweep_do_not_fall_back_after_setup_changes(
     leases, tools = FakeLeases(), FakeTools({})
     asyncio.run(sweep.run_sweep(factory, run_id, clock, browser=website_runner(tools, leases)))
     completed = read_sweep(factory, run_id)
-    assert completed.status is SweepStatus.done
+    # The only selected source failed (permission_unavailable): no website worked (B25).
+    assert completed.status is SweepStatus.failed
     [interactive] = completed.stats["sources"]
     assert interactive["mode"] == mode
     assert interactive["outcome"] == "failed"

@@ -775,7 +775,9 @@ def test_a_website_the_app_refuses_everywhere_ends_after_two_navigations(code):
         refusing_navigations(site, {"ok": False, "error": code})
         answers.append(session.report_none("app_refused"))
         said = text_of(await tool(session, "browser_navigate", url=BOARD))
-        assert said == finder.NAVIGATION_REFUSED
+        # browser B25: the refusal's rule travels with the answer
+        expected = f"{finder.NAVIGATION_REFUSED} (rule {finder.refusal_rule({'error': code})})"
+        assert said == expected
         answers.append(session.report_none("app_refused"))
         await tool(session, "browser_navigate", url=LISTING)
         answers.append(session.report_none("app_refused"))

@@ -244,7 +244,8 @@ def test_a_key_unreadable_by_this_server_skips_adzuna(
     api = fake_api()
     run_feeds(factory, sweep_id, api, Keyring(os.urandom(32)))  # another server key
     row = read_sweep(factory, sweep_id)
-    assert row.status is SweepStatus.done
+    # Adzuna was the only feed and it was skipped: no source worked (B25).
+    assert row.status is SweepStatus.failed
     assert row.stats["sources"][0]["reason"] == "key_unreadable"
     assert api.requests == []
 

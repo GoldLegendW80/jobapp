@@ -118,8 +118,13 @@ def described(facts: object) -> str:
     )
 
 
-def failure(code: str, message: str) -> dict[str, Any]:
-    return {"ok": False, "error": code, "message": message}
+def failure(code: str, message: str, rule: str | None = None) -> dict[str, Any]:
+    """A failed call's answer. A refusal names its `rule` (browser B25), the one its warning
+    logs, so the api can tell the agent and count it."""
+    answer: dict[str, Any] = {"ok": False, "error": code, "message": message}
+    if rule:
+        answer["rule"] = rule
+    return answer
 
 
 MESSAGES = {
@@ -142,8 +147,8 @@ MESSAGES = {
 }
 
 
-def refused(code: str) -> dict[str, Any]:
-    return failure(code, MESSAGES.get(code, "Refused."))
+def refused(code: str, rule: str | None = None) -> dict[str, Any]:
+    return failure(code, MESSAGES.get(code, "Refused."), rule or code)
 
 
 class OffList(Exception):  # noqa: N818  a control-flow signal, not an error
@@ -583,7 +588,7 @@ class Tab:
             # Expected before every send: the api reads the emergency stop, then sends the act
             # again with the capability. Info, so a WARNING still means a real refusal.
             log.info("lease %s: %s refused: submit_permit rule=%s", self.lease_tag, tool, code)
-            return refused("submit_permit")
+            return refused("submit_permit", code)
         if self.discovery:
             code = line.control(facts, "key" if action == "key" else action)
             if not code:
@@ -638,7 +643,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
             "lease %s: %s refused: %s rule=no_marker", tab.lease_tag, name, discovery.UNSUPPORTED
         )
         return failure(
-            "unsupported_discovery", "Refused: this lease requires discovery permission."
+            "unsupported_discovery",
+            "Refused: this lease requires discovery permission.",
+            "no_marker",
         )
     if marker is not None:
         if (
@@ -654,7 +661,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
                 discovery.UNSUPPORTED,
             )
             return failure(
-                "unsupported_discovery", "Refused: discovery is limited to a search sweep."
+                "unsupported_discovery",
+                "Refused: discovery is limited to a search sweep.",
+                "not_a_sweep_tool",
             )
         scope = discovery.Scope.parse(args.get("_discovery_scope"))
     try:
@@ -670,7 +679,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
                 "lease %s: %s refused: %s rule=boundary", tab.lease_tag, name, discovery.UNSUPPORTED
             )
             return failure(
-                discovery.UNSUPPORTED, "Refused: this native discovery flow is unsupported."
+                discovery.UNSUPPORTED,
+                "Refused: this native discovery flow is unsupported.",
+                "boundary",
             )
         except OffList:
             log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)

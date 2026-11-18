@@ -70,6 +70,8 @@ A sweep reads the ticked alert e-mails ([SPEC-mail, "Job alert e-mails: a narrow
 - Automatic sweeps per user, off by default: the user turns them on and picks weekdays, one to four local times and a time zone (`search.sweep_schedule`); a worker tick every 5 minutes starts each due slot once, daylight saving time handled.
 - `never_apply` rules from the profile mark matching rows `skipped` with the rule as the note. They are the person's own rules only: the app adds no rule of its own about a kind of role (owner, 2026-11-05). Sweeps and apply share `jobs/never_apply.py`: accents, case, compatibility forms, hidden characters and lookalike letters are folded, and a term at the start or end of a glued word also matches. The original title, company and rule note stay unchanged.
 
+**Sweep status (browser B25, #789).** A sweep whose every selected source ended `failed` or `not_attempted` ends `failed` with the error "No website of this search worked. Each one says why below." (`sweep.any_source_worked`); `partial`, `complete` and `no_matches` count as working; a sweep without selected sources (older) is not judged. Activity's sweep step and workflow run show Failed, the summary shows each website's reason.
+
 ## Posting reader (owner, 2026-11-09, #764)
 
 An agent reads each posting's text and fills its location, pay (min, max, currency, period), work mode, contract type, published date, company and a clean description (owner: "I want that it's an agent that create the jobs in the database"; [decisions](docs/decisions.md#interactive-job-search-2026-10-24-626)). Every source's postings are read (job websites, company boards, feeds, LinkedIn, alert e-mails).
