@@ -89,6 +89,8 @@ def test_the_summary_answer_names_the_counter() -> None:
         "titles_left_out",
         "places_left_out",
         "error",
+        # Browser B25: the app's refusals of a website search's actions, per rule.
+        "refusals",
         # Jobs J9: the frozen source identity and progress.
         "source_id",
         "mode",
@@ -144,6 +146,8 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "titles_left_out": 0,
         "places_left_out": 0,
         "error": "store_failed",
+        # Browser B25: no refusal counted in an older stats row.
+        "refusals": {},
         # Jobs J9: the frozen source identity and progress, absent from an older stats row.
         "source_id": None,
         "mode": None,
