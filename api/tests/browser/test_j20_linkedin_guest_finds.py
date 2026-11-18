@@ -147,6 +147,70 @@ OVERSEAS = ["Bora Bora", "Guadeloupe", "La Réunion"]
         (["Île-de-France"], "Courbevoie, Île-de-France, France", True),
         (["Île-de-France"], "Lyon, Auvergne-Rhône-Alpes, France", False),  # not France itself
         (["Région parisienne"], "Greater Paris Metropolitan Region", True),
+        # A Paris region alias covers Paris with its suburbs and the other name of the region
+        # (review 1 of #796), never the rest of France.
+        (["Région parisienne"], "Paris, Île-de-France, France", True),
+        (["Région parisienne"], "Courbevoie, Île-de-France, France", True),
+        (["Région parisienne"], "Nanterre, Île-de-France, France", True),
+        (["Région parisienne"], "Boulogne-Billancourt, Île-de-France, France", True),
+        (["Région parisienne"], "Île-de-France, France", True),
+        (["Région parisienne"], "Paris", True),
+        (["Grand Paris"], "Paris, Île-de-France, France", True),
+        (["Grand Paris"], "Greater Paris Metropolitan Region", True),
+        (["Paris area"], "La Défense, Île-de-France, France", True),
+        (["agglomération parisienne"], "Île-de-France, France", True),
+        (["Île-de-France"], "Greater Paris Metropolitan Region", True),
+        (["Île-de-France"], "Paris, Île-de-France, France", True),
+        (["IDF"], "La Défense, Île-de-France, France", True),
+        (["IDF"], "Greater Paris Metropolitan Region", True),
+        (["ile de france"], "Puteaux, Île-de-France, France", True),
+        (["Région parisienne"], "Lyon, Auvergne-Rhône-Alpes, France", False),
+        (["Région parisienne"], "France", False),
+        (["Région parisienne"], "Miami, FL", False),
+        (["Région parisienne"], "Parisot, Occitanie, France", False),
+        (["Région parisienne"], "Paris, TX", False),
+        (["Grand Paris"], "Bordeaux, Nouvelle-Aquitaine, France", False),
+        (["IDF"], "Lyon, Auvergne-Rhône-Alpes, France", False),
+        (["Île-de-France"], "Marseille, Provence-Alpes-Côte d'Azur, France", False),
+        # The last part of a location names its country: a known saved place of another
+        # country is not it (review 1 of #796), whatever words come before.
+        (["La Réunion"], "Reunion Tower, Dallas, TX", False),
+        (["La Réunion"], "Reunion, Dallas, Texas", False),
+        (["La Réunion"], "Reunion Park, Ontario, Canada", False),
+        (["La Réunion"], "Saint-Pierre, Réunion", True),
+        (["La Réunion"], "Saint-Denis, Réunion, France", True),
+        (["La Réunion"], "Saint-Denis, Île-de-France, France", False),
+        (["Tahiti"], "Papeete, Windward Islands, French Polynesia", True),
+        (["Tahiti"], "Tahiti Village, Las Vegas, NV", False),
+        (["Paris"], "Paris, TX", False),
+        (["Paris"], "Paris, Texas, United States", False),
+        (["Paris"], "Paris, Ontario, Canada", False),
+        (["Paris"], "Paris, ON", False),
+        (["Paris"], "Paris, Île-de-France, France (Hybrid)", True),
+        (["Paris"], "Greater Paris Metropolitan Region", True),
+        (["Paris"], "Paris", True),
+        (["Londres"], "London, Ontario, Canada", False),
+        (["Londres"], "London, England, United Kingdom", True),
+        (["London"], "London, ON", False),
+        (["London"], "London, England", True),
+        (["Bruxelles"], "Brussels, Brussels Region, Belgium", True),
+        (["Bruxelles"], "Brussels, WI", False),
+        (["Barcelone"], "Barcelona, Catalonia, Spain", True),
+        (["Barcelone"], "Barcelona, Anzoátegui, Venezuela", True),  # unknown country: words
+        (["Dallas"], "Dallas, TX", True),
+        (["Dallas"], "Dallas, Texas, United States", True),
+        (["Dallas"], "Dallas, Scotland, United Kingdom", False),
+        (
+            ["Allemagne"],
+            "Berlin, DE",
+            False,
+        ),  # capitals are a US state: LinkedIn writes no ISO code
+        # A saved country matches every location whose last part names it.
+        (["USA"], "New York, NY", True),
+        (["États-Unis"], "Austin, Texas", True),
+        (["United States"], "Toronto, ON", False),
+        (["France"], "Paris, TX", False),
+        (["Canada"], "Montréal, QC", True),
         (["Allemagne"], "Berlin, Germany", True),
         (["Allemagne"], "Allemagne", True),
         (["Londres"], "London Area, United Kingdom", True),
@@ -177,12 +241,95 @@ def test_a_posting_of_a_place_none_of_the_saved_ones_is_not_kept(
         (["Paris", "remote"], None, "Miami, FL", "AI Engineer", False),
         (["Paris", "remote"], None, "Remoteville, Texas", "AI Engineer", False),
         (["remote"], None, "Miami, FL", "AI Engineer", False),
+        # Only a part that is a work mode as a whole says remote (review 1 of #796): never a
+        # word of a longer title.
+        (["Paris", "remote"], None, "Miami, FL", "Remote Sensing Scientist", False),
+        (["Paris", "remote"], None, "Miami, FL", "Remote Pilot", False),
+        (["Paris"], "remote", "Miami, FL", "Remote Sensing Scientist", False),
+        (["Paris", "remote"], None, "Miami, FL", "Remote Systems Engineer (Hybrid)", False),
+        (["Paris", "remote"], None, "Miami, FL", "Senior Remoteness Analyst", False),
+        (["Paris", "remote"], None, "Remote Sensing Lab, Austin, TX", "AI Engineer", False),
+        (["Paris", "remote"], None, "Miami, FL", "AI Engineer - Remote", True),
+        (["Paris", "remote"], None, "Miami, FL", "AI Engineer, Full remote", True),
+        (["Paris", "remote"], None, "Miami, FL", "AI Engineer [100% remote]", True),
+        (["Paris", "remote"], None, "Miami, FL", "Ingénieur IA (télétravail)", True),
+        (["Paris", "remote"], None, "Miami, FL", "Ingénieur IA | À distance", True),
+        (["Paris", "remote"], None, "Remote, US", "AI Engineer", True),
+        (["Paris", "remote"], None, "Télétravail", "AI Engineer", True),
+        (["Paris", "remote"], None, "Full remote", "AI Engineer", True),
+        (["Paris", "remote"], None, "100% remote", "AI Engineer", True),
     ],
 )
 def test_a_remote_posting_is_kept_when_remote_is_wanted(
     saved: list[str], stance: str | None, location: str, title: str, kept: bool
 ) -> None:
     assert wanted(saved, stance).matches(location, title) is kept
+
+
+@pytest.mark.parametrize(
+    ("saved", "location", "kept"),
+    [
+        # A saved place longer than PLACE_MAX characters (review 1 of #796): judged by the places
+        # its first PLACE_MAX characters name; naming none, alone it keeps every place.
+        (["x" * 150], "Miami, FL", True),
+        (["x" * 150], "Paris, Île-de-France, France", True),
+        (["Paris, " + "x" * 150], "Paris, Île-de-France, France", True),
+        (["Paris, " + "x" * 150], "Lyon, Auvergne-Rhône-Alpes, France", False),
+        (["x" * 95 + " Paris"], "Paris, Île-de-France, France", True),  # Paris is cut off
+        (["x" * 150, "Bordeaux"], "Bordeaux, Nouvelle-Aquitaine, France", True),
+        (["x" * 150, "Bordeaux"], "Miami, FL", False),
+        (["x" * 150, "remote"], "Miami, FL", True),
+        (["x" * 100], "Miami, FL", False),  # PLACE_MAX itself is read as written
+    ],
+)
+def test_a_saved_place_too_long_to_read_never_drops_every_card(
+    saved: list[str], location: str, kept: bool
+) -> None:
+    assert wanted(saved).matches(location) is kept
+
+
+def test_a_saved_place_too_long_is_counted_unread() -> None:
+    assert wanted(["x" * 150, "Bordeaux"]).unread == 1
+    assert wanted(["Paris, " + "x" * 150]).unread == 0
+
+
+def test_every_gazetteer_city_and_every_covered_place_has_its_country() -> None:
+    from app.jobs import gazetteer
+
+    assert {c.name for c in gazetteer.gazetteer().cities} == set(places.CITY_HOME)
+    countries = set(places.COUNTRIES.values())
+    assert set(places.CITY_HOME.values()) <= countries
+    assert set(places.HOME.values()) <= countries
+    assert set(places.HOME) <= set(places.ALIASES)
+    cities = {c.name for c in gazetteer.gazetteer().cities}
+    for name, covered in places.COVERS.items():
+        assert name in places.ALIASES
+        assert all(c in places.ALIASES or c in cities for c in covered)
+
+
+@pytest.mark.parametrize(
+    ("location", "country"),
+    [
+        ("Dallas, TX", "United States"),
+        ("Dallas, tx", None),  # a code is LinkedIn's capitals only
+        ("Paris, Texas, United States", "United States"),
+        ("United States (Remote)", "United States"),
+        ("Toronto, ON", "Canada"),
+        ("Paris, Île-de-France, France", "France"),
+        ("London Area, United Kingdom", "United Kingdom"),
+        ("London, England", "United Kingdom"),
+        ("Saint-Denis, Réunion", "Reunion"),
+        ("Papeete, Windward Islands, French Polynesia", "French Polynesia"),
+        ("Berlin, Allemagne", "Germany"),
+        ("Greater Paris Metropolitan Region", None),
+        ("Île-de-France", None),
+        ("Miami-Fort Lauderdale Area", None),
+        ("EMEA", None),
+        ("", None),
+    ],
+)
+def test_the_last_part_of_a_location_names_its_country(location: str, country: str | None) -> None:
+    assert places.country_of(location) == country
 
 
 class PlaceAware(LinkedInFake):
@@ -393,6 +540,46 @@ def test_the_fallback_runs_once_and_takes_the_retry_slot() -> None:
     plan = SimpleNamespace(search=browser_search(), search_scope=None, commits=None, sweep_id=None)
     asyncio.run(guest.fall_back(runner, plan, stats, progress, 1000.0))  # type: ignore[arg-type]
     assert len(stats.sources) == 2
+
+
+@pytest.mark.parametrize("how", ["stop", "abandoned"])
+def test_a_fallback_that_never_starts_is_never_claimed(
+    how: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review 1 of #796: `unsigned` sets the browser search aside, then the sweep stops (an API
+    source took the browser away) or the run lets go of the row before the public search
+    starts: the browser entry says not searched, and no fallback."""
+    if how == "stop":
+
+        async def stopped(*args: Any) -> str:
+            return "lease_ended"
+
+        monkeypatch.setattr(guest, "run", stopped)
+    else:
+        monkeypatch.setattr(sweep, "abandoned", lambda plan: True)
+    entries, fake, _, _ = execute(browser_search(), logins=Logins())
+    [browser] = entries
+    assert (browser["outcome"], browser["reason"]) == ("not_attempted", "linkedin_signin")
+    assert "fallback" not in browser
+    assert fake.requests == []
+
+
+def test_a_browser_entry_already_searched_here_is_not_searched_twice() -> None:
+    """The guard of `fall_back`: a fresh failed browser entry beside an existing public search
+    entry of the same address (review 1 of #796, follow up)."""
+    entries, _, _, _ = execute(browser_search(), logins=Logins("www.linkedin.com"))
+    [browser, public] = entries
+    fresh = {k: v for k, v in browser.items() if k != "fallback"}
+    stats = sweep.Stats(sources=[fresh, dict(public)])
+
+    async def progress() -> None:
+        return None
+
+    runner = SimpleNamespace(base_url=None)
+    plan = SimpleNamespace(search=browser_search(), search_scope=None, commits=None, sweep_id=None)
+    asyncio.run(guest.fall_back(runner, plan, stats, progress, 1000.0))  # type: ignore[arg-type]
+    assert len(stats.sources) == 2
+    assert "fallback" not in stats.sources[0]
 
 
 @pytest.mark.parametrize("reason", ["store_failed", "not_started", "agent_cancelled"])

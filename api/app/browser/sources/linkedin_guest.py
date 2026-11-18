@@ -76,9 +76,9 @@ gives its one permission (linkedin_guard), which this source checks too.
 Fallback (jobs J20, owner 2026-11-17: "It must work, even if i'm not logged in"): with
 `search.linkedin_search` "browser", a person with no LinkedIn sign in has LinkedIn searched here
 instead of in the browser, and a browser search that ends failed has it searched here right
-after, in the same sweep (`unsigned`, `fall_back`, run by sources.Runner.websites). Both
-entries say `fallback` "guest"; the browser one is then not retried (B24): this search takes
-its retry slot.
+after, in the same sweep (`unsigned`, `fall_back`, run by sources.Runner.websites). Once it
+starts, both entries say `fallback` "guest"; the browser one is then not retried (B24): this
+search takes its retry slot.
 
 LinkedIn's User Agreement forbids automated access, these endpoints included; the owner accepted
 that risk in the LinkedIn checkbox. These requests send no cookie and no account: the worst case
@@ -937,8 +937,9 @@ def _browser_entry(stats: sweep.Stats, site: InteractiveSite) -> dict[str, Any] 
 
 async def unsigned(runner: Runner, plan: Any, stats: sweep.Stats) -> list[InteractiveSite]:
     """The LinkedIn addresses of the browser search whose person has no LinkedIn sign in (B17,
-    site_logins): their browser entry ends `linkedin_signin` not attempted, `fallback` "guest",
-    and `fall_back` searches them here instead. Unknown (no sign in store, or one that cannot
+    site_logins): their browser entry ends `linkedin_signin` not attempted, and `fall_back`
+    searches them here instead (it writes `fallback` "guest" once that search starts: a sweep
+    stopped before never claims one). Unknown (no sign in store, or one that cannot
     say) reads as signed in: the browser search runs, and a failure falls back after it."""
     from app.browser import platform_policy
 
@@ -963,7 +964,6 @@ async def unsigned(runner: Runner, plan: Any, stats: sweep.Stats) -> list[Intera
             outcome="not_attempted",
             reason="linkedin_signin",
             error="linkedin_signin",
-            fallback=FALLBACK,
         )
         out.append(site)
     return out
@@ -992,12 +992,10 @@ async def fall_back(
         entry = _browser_entry(stats, site)
         if entry is None or entry.get("phase") != "done":
             continue
-        due = entry.get("fallback") == FALLBACK and entry.get("outcome") == "not_attempted"
-        failed = (
-            not entry.get("fallback")
-            and entry.get("outcome") in sweep.FAILED
-            and entry.get("reason") not in NO_FALLBACK
-        )
+        if entry.get("fallback"):
+            continue
+        due = entry.get("outcome") == "not_attempted" and entry.get("reason") == "linkedin_signin"
+        failed = entry.get("outcome") in sweep.FAILED and entry.get("reason") not in NO_FALLBACK
         if not (due or failed):
             continue
         if _guest_entry(stats, site) is not None:
