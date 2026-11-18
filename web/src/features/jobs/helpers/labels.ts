@@ -183,6 +183,9 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
     "LinkedIn asked the app to slow down, so its search stopped for this time. Postings saved before are kept.",
   linkedin_searched_once:
     "LinkedIn was searched once through its public job search for all your LinkedIn addresses.",
+  // Its public page read in the browser after the public job search refused (jobs J22).
+  linkedin_page_refused:
+    "LinkedIn showed a sign in page or asked to slow down on its public job search page, so its search stopped for this time. Postings saved before are kept.",
   // The job websites searched in the person's browser (jobs J10, app/browser/sources/interactive.py).
   permission_unavailable:
     "Searching this website needs your permission for it, so it was not opened. Tick it in Find jobs and save to give it.",
@@ -296,7 +299,7 @@ export function leftOutSentence(source: {
 }
 
 /** LinkedIn's public job search (jobs J20, owner 2026-11-17): when it stood in for the browser
- * search, the postings of other places it left out, and the saved pairs it did not search.
+ * search, when its public page in the browser stood in for it (jobs J22), the postings of other places it left out, and the saved pairs it did not search.
  * Empty when none applies or the api is older. */
 export function guestSentence(source: {
   fallback?: string | null;
@@ -310,6 +313,13 @@ export function guestSentence(source: {
       source.fallback_after === "linkedin_signin"
         ? "Searched with LinkedIn's public job search, as you are not signed in to LinkedIn."
         : "Searched with LinkedIn's public job search, as the browser search failed.",
+    );
+  }
+  if (source.fallback === "page") {
+    parts.push(
+      source.fallback_after === "linkedin_rate_limited"
+        ? "Searched with LinkedIn's public job search page, as the public API refused."
+        : "Searched with LinkedIn's public job search page, as the public API failed.",
     );
   }
   const other = source.other_place ?? 0;

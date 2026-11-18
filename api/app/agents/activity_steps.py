@@ -42,6 +42,10 @@ _NOT_RETRIED = {
 # fall_back), by the browser search's reason.
 _FALLBACK_SIGNIN = "LinkedIn's public job search, as you are not signed in to LinkedIn"
 _FALLBACK_FAILED = "LinkedIn's public job search, as the browser search failed"
+# Its public page read in the browser when the public job search refused or failed (jobs J22,
+# linkedin_page fall_back), by the public job search's reason.
+_FALLBACK_PAGE_REFUSED = "LinkedIn's public job search page, as the public API refused"
+_FALLBACK_PAGE_FAILED = "LinkedIn's public job search page, as the public API failed"
 _INGESTION = {
     IngestionStatus.running: "running",
     IngestionStatus.paused: "waiting",
@@ -189,7 +193,7 @@ def _sweep_steps(key: uuid.UUID, row: Any) -> list[dict[str, Any]]:
 def _source_note(source: Mapping[str, Any]) -> str | None:
     """What a source found, and its one retry (browser B24, sweep.RETRIED): a website's retry is
     its second agent step. LinkedIn's public job search says when it stood in for the browser
-    search (jobs J20)."""
+    search (jobs J20), and when its public page in the browser stood in for it (jobs J22)."""
     found = source.get("found")
     parts = [f"{found} found"] if isinstance(found, int) else []
     if source.get("attempt") == 2:
@@ -197,6 +201,9 @@ def _source_note(source: Mapping[str, Any]) -> str | None:
     if source.get("fallback") == "guest" and source.get("mode") == "api":
         signin = source.get("fallback_after") == "linkedin_signin"
         parts.append(_FALLBACK_SIGNIN if signin else _FALLBACK_FAILED)
+    if source.get("fallback") == "page" and source.get("mode") == "api":
+        refused = source.get("fallback_after") == "linkedin_rate_limited"
+        parts.append(_FALLBACK_PAGE_REFUSED if refused else _FALLBACK_PAGE_FAILED)
     why = _NOT_RETRIED.get(str(source.get("not_retried")))
     if why is not None:
         parts.append(why)
