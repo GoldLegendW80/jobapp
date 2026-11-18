@@ -388,6 +388,7 @@ def stub_backend(results: list[dict[str, str]]) -> fake_backend.FakeBackend:
     backend = fake_backend.FakeBackend.__new__(fake_backend.FakeBackend)
     backend._gate_all = False
     backend._web_results = results
+    backend._web_error = None  # jobs J23: no stream error, the results answer
     return backend
 
 
