@@ -22,6 +22,9 @@ ALLOWED_SCHEMES = ("http", "https")
 URL_MAX = 2048
 
 SNAPSHOT_MAX = 40_000
+# A discovery's snapshot (browser B26, #790): the website search keeps the whole page in the api and
+# answers its agent compactly (app/browser/finder.py PAGE_MAX), so its cut is that store's ceiling.
+DISCOVERY_SNAPSHOT_MAX = 2_000_000
 TEXT_MAX = 10_000  # one browser_type
 SELECTORS_MAX, SELECTOR_MAX = 20, 200
 

@@ -37,6 +37,10 @@ dependencies = [
     # conscious change of the list. Checked on PyPI on 2026-10-14: no advisory.
     "publicsuffixlist==1.1.0.20261010",
     "pydantic-settings==2.15.0",
+    # The website search's browser_find (browser B26, app/browser/finder.py): a regular
+    # expression over a page snapshot of up to 2,000,000 characters with a timeout, which the
+    # standard `re` lacks. Wheels for aarch64 and x86_64 (manylinux), Apache-2.0 and CNRI-Python.
+    "regex==2025.11.3",
     "sqlalchemy==2.1.4",
     "tzdata==2026.5",
     "uvicorn[standard]==0.54.0",

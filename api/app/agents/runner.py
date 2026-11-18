@@ -235,6 +235,11 @@ CALLED_MAX = 256
 BUDGET_KEY = "token_budget"
 BUDGET_STOP = "The run reached its token budget."
 BUDGET_UNSURE = "The run's token count could not be confirmed."
+# B28: the run made its WEB_SEARCHES_MAX web searches (sdk_options).
+WEB_SEARCHES_SPENT = (
+    f"No more web searches in this run (at most {sdk_options.WEB_SEARCHES_MAX}): go on with the "
+    "pages you found."
+)
 # Argument names whose values are never stored in a tool call event.
 _SECRET_ARG = ("secret", "token", "password", "api_key", "apikey", "authorization", "cookie")
 # What a private run keeps of an app tool's call and error (browser B25, `preview_args`): the
@@ -633,6 +638,7 @@ def make_gate(
     allowed: frozenset[str],
     on_denied: Callable[[str], Awaitable[None]],
     budget: Budget | None = None,
+    web_search: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> Gate:
     """The PreToolUse hook: any tool outside the allow list is denied by this code, whatever
     the options or the model say (hooks run first, and a hook deny holds in every mode).
@@ -649,7 +655,21 @@ def make_gate(
 
     The gate fails closed: when it cannot tell that the message of the call is counted (the
     wait of `Budget.counted` ended, or the hook named no call), it stops the run as well,
-    instead of letting the call through on a count that may be behind."""
+    instead of letting the call through on a count that may be behind.
+
+    `web_search` (browser B28): Claude Code's WebSearch is allowed only with it, at most
+    WEB_SEARCHES_MAX times a run; before each search it is asked with the search's input and
+    answers None, or the refusal the model reads (the definition's `web_search` hook)."""
+    searches = 0
+
+    def refuse(reason: str) -> dict[str, Any]:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
 
     def stop(reason: str) -> dict[str, Any]:
         return {
@@ -674,16 +694,18 @@ def make_gate(
             if budget.used_up:
                 budget.refused = True
                 return stop(BUDGET_STOP)
+        if name == sdk_options.WEB_SEARCH and web_search is not None:
+            nonlocal searches
+            if searches >= sdk_options.WEB_SEARCHES_MAX:
+                return refuse(WEB_SEARCHES_SPENT)
+            searches += 1
+            raw = input_data.get("tool_input")
+            refusal = web_search(raw if isinstance(raw, dict) else {})
+            return refuse(refusal) if refusal else {}
         if name in allowed:
             return {}
         await on_denied(name)
-        return {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": f"The tool {name} is not available to this agent.",
-            }
-        }
+        return refuse(f"The tool {name} is not available to this agent.")
 
     return gate
 
@@ -698,9 +720,11 @@ def build_options(
     partial_messages: bool = False,
     model: str | None = None,
     turn_budget: int | None = None,
+    web_search: bool = False,
 ) -> ClaudeAgentOptions:
     """`model` is the one chosen for the run's credential (AgentDefinition.model_for); the
-    definition's own when none is given."""
+    definition's own when none is given. `web_search` (B28): Claude Code's WebSearch is offered
+    and allowed too, and Claude Code's own cap of searches is WEB_SEARCHES_MAX."""
     if turn_budget is not None and (type(turn_budget) is not int or turn_budget < 1):
         raise ValueError("turn_budget must be a positive integer")
     turns = definition.max_turns
@@ -709,15 +733,19 @@ def build_options(
     return ClaudeAgentOptions(
         # tools, disallowed_tools, permission_mode, strict_mcp_config, setting_sources and
         # thinking: the same for every agent (sdk_options.py, shown by the Agents tab).
-        **sdk_options.fixed(),
+        **sdk_options.fixed(web_search),
         system_prompt=definition.system_prompt,
-        allowed_tools=tools.allowed_names,
+        allowed_tools=tools.allowed_names + ([sdk_options.WEB_SEARCH] if web_search else []),
         mcp_servers={app_tools.SERVER: tools.server},
         model=model or definition.model,
         max_turns=turns,
         effort=definition.effort,  # type: ignore[arg-type]
         cwd=str(workdir),
-        env=env,
+        env=(
+            {**env, sdk_options.WEB_SEARCHES_ENV: str(sdk_options.WEB_SEARCHES_MAX)}
+            if web_search
+            else env
+        ),
         hooks={"PreToolUse": [HookMatcher(matcher=None, hooks=[gate])]},  # type: ignore[list-item]
         stderr=stderr,
         # StreamEvent messages next to the complete ones (the text deltas of the live answer).
@@ -898,6 +926,9 @@ class _State:
     text_chars: int = 0
     tool_calls: int = 0
     tool_errors: int = 0
+    # B28: tells the definition that WebSearch is not offered after all, when Claude Code's
+    # first message (`init`) does not list it; None once told, or when it was never offered.
+    web_search_unlisted: Callable[[], None] | None = None
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
@@ -961,6 +992,14 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
         if message.subtype == "init":
             data = message.data
             state.model = str(data.get("model") or "") or state.model
+            listed, unlisted = data.get("tools"), state.web_search_unlisted
+            state.web_search_unlisted = None  # the first `init` only
+            if (
+                unlisted is not None
+                and isinstance(listed, list)
+                and sdk_options.WEB_SEARCH not in listed
+            ):
+                unlisted()
             await recorder.emit(
                 "init",
                 {"model": data.get("model"), "tools": list(data.get("tools") or [])},
@@ -1547,16 +1586,33 @@ async def _execute(
         # Live text needs a store (AGENTS_LIVE_TEXT, Redis) and an agent that allows it: never
         # one that reads private documents.
         live_store = context.live_store if definition.live else None
+        # B28: Claude Code's web search, for an agent whose definition asks for it and a
+        # credential kind it runs on (sdk_options.WEB_SEARCH_KINDS).
+        hook = definition.web_search
+        searching = hook is not None and secret.kind.value in sdk_options.WEB_SEARCH_KINDS
+        # Told to the definition once, here, from this same decision (its `web_search` route is
+        # needed only when the tool was offered), and again, False, when Claude Code does not
+        # list it after all (`_handle`).
+        told = definition.web_search_offered
+        told(run_id, searching)
+        if searching:
+            state.web_search_unlisted = lambda: told(run_id, False)
         options = build_options(
             definition,
             tools,
             build_env(secret.kind, secret.value, scratch, context.settings.model_api_base_url),
             scratch / "work",
-            make_gate(frozenset(tools.allowed_names), denied, state.budget),
+            make_gate(
+                frozenset(tools.allowed_names),
+                denied,
+                state.budget,
+                (lambda found: hook(run_id, found)) if searching and hook else None,
+            ),
             stderr=stderr_lines.append,
             partial_messages=live_store is not None,
             model=model,
             turn_budget=data.get("turn_budget") if definition.name in TURN_BUDGETED else None,
+            web_search=searching,
         )
         if live_store is not None:
             state.live_text = live.LiveText(

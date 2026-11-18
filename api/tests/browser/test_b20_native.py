@@ -263,13 +263,39 @@ def test_the_line_on_real_chromium_every_path_on_an_ats_posting(b20, search):
     saved = ats.evaluate(FETCH.format(path="/api/saved-jobs"))
     assert json.loads(saved["result"]) == "sent 200", saved
     assert json.loads(ats.evaluate("() => document.title")["result"]).startswith("Robot")
-    long = ats.evaluate("() => 'y'.repeat(50000)")
+    long = ats.evaluate("() => 'y'.repeat(600000)")  # B27: a discovery's result ceiling
     assert long["ok"], long.get("error")
     assert long["cut"], long.get("error")
-    assert len(long["result"]) == 20_000, long.get("error")
+    assert len(long["result"]) == 500_000, long.get("error")
     log = seen(b20)[before:]
     posted = [s["path"] for s in log if s["method"] == "POST" and s["host"] == "ats.b20-hire.test"]
     assert posted == ["/api/saved-jobs", "/api/follows", "/api/saved-jobs"], posted
+
+
+# B27: a script of more than the 10,000 characters other leases take, which reads a page of the
+# website's own origin by fetch and DOMParser, then sends a POST that is no search from there.
+B27_SCRIPT = """async () => {
+  const html = await fetch('/example-robotics/jobs/42').then(r => r.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const sent = await fetch('/example-robotics/jobs/42/apply', {method: 'POST', body: 'x'})
+    .then(r => 'sent ' + r.status, e => 'refused ' + e.name);
+  return {title: doc.title, sent};
+}"""
+
+
+def test_a_long_script_reads_the_origin_by_fetch_and_the_line_holds_its_post(b20, search):
+    before = len(seen(b20))
+    ats = search(ATS)
+    script = B27_SCRIPT.replace("async () => {", "async () => {" + " " * 25_000, 1)
+    assert 10_000 < len(script) <= 40_000
+    answer = ats.evaluate(script)
+    assert answer["ok"], answer
+    result = json.loads(answer["result"])
+    assert result["title"].startswith("Robot"), result
+    assert result["sent"] == "refused TypeError", result
+    assert ats.evaluate(f"() => {APPLY}.click()")["error"] == "line"
+    log = seen(b20)[before:]
+    assert not [s for s in log if s["method"] == "POST" and s["path"].endswith("/apply")], log
 
 
 # Every name the control tables refuse or pass (test_b20_line), as a button or a link the

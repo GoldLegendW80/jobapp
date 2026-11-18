@@ -381,8 +381,11 @@ class Pages:
         self.pauses: list[float] = []
         # The holders of this lease's pages whose host Redis would not take back.
         self.unreleased: set[str] = set()
-        # The last page's snapshot text and address (the search agent reads them).
+        # The last page's snapshot text and address (the search agent reads them), its title,
+        # and whether browserd cut that snapshot (B26: whole up to finder.PAGE_MAX on a
+        # discovery's lease, browserd's policy.DISCOVERY_SNAPSHOT_MAX).
         self.last_text, self.last_url = "", ""
+        self.last_title, self.last_cut = "", False
 
     async def _act(
         self, action: Callable[[], Awaitable[dict[str, Any]]], tool: str = "browser_navigate"
@@ -467,6 +470,9 @@ class Pages:
             logger.warning("browser browser_snapshot failed: error=%s", failure_code(shot))
             raise SourceError("page_failed")
         self.last_text, self.last_url = shot["snapshot"], str(shot.get("url") or "")
+        title = shot.get("title")
+        self.last_title = title if isinstance(title, str) else ""
+        self.last_cut = shot.get("cut") is True
         return parse_snapshot(shot["snapshot"]), str(shot.get("url") or "")
 
 

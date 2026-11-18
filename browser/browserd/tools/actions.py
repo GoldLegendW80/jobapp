@@ -53,7 +53,7 @@ from urllib.parse import urlsplit
 
 from browserd import detect, pages
 from browserd.config import NAVIGATION_S
-from browserd.tools import ask_person, discovery, line, pacing, policy, request_signin
+from browserd.tools import ask_person, discovery, fetch, line, pacing, policy, request_signin
 
 log = logging.getLogger("browserd")
 
@@ -747,7 +747,8 @@ async def _here(tab: Tab) -> dict[str, Any]:
 
 async def snapshot(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     page = await tab.page()
-    text, cut = policy.cut_snapshot(await pages.snapshot_for_ai(page))
+    limit = policy.DISCOVERY_SNAPSHOT_MAX if tab.state.discovery else policy.SNAPSHOT_MAX
+    text, cut = policy.cut_snapshot(await pages.snapshot_for_ai(page), limit)
     native_files = await pages.native_files(page, text)
     credentials = await pages.credentials(page, text)
     return {
@@ -1376,6 +1377,14 @@ AGENT_SCRIPT_JS = """async (source) => {
   catch (e) { return String(value); }
 }"""
 RESULT_MAX = 20_000  # characters of its result returned
+# B27 (owner 2026-11-17: "let the agent write code in a sandbox or whatever"): a discovery's
+# script, the website search's, may read every result card and fetch the next pages from the
+# page's own origin in one run: DISCOVERY_SCRIPT_MAX characters, DISCOVERY_SCRIPT_S seconds,
+# its result DISCOVERY_RESULT_MAX characters (the api keeps it, finder.SCRIPT_RESULT_MAX). Every
+# other lease keeps SCRIPT_MAX, policy.WAIT_MAX_S and RESULT_MAX; the line is the same for both.
+DISCOVERY_SCRIPT_MAX = 40_000
+DISCOVERY_SCRIPT_S = 120.0
+DISCOVERY_RESULT_MAX = 500_000
 
 
 async def evaluate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
@@ -1390,8 +1399,9 @@ async def evaluate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     if not tab.discovery and not agent:
         return failure("bad_args", "browser_evaluate runs in a website search only.")
     source = args.get("function")
-    if not isinstance(source, str) or not 0 < len(source) <= SCRIPT_MAX:
-        return failure("bad_args", f"function is a script of at most {SCRIPT_MAX} characters.")
+    most = SCRIPT_MAX if agent else DISCOVERY_SCRIPT_MAX
+    if not isinstance(source, str) or not 0 < len(source) <= most:
+        return failure("bad_args", f"function is a script of at most {most} characters.")
     if agent:
         # A19: a script may submit the form, so it runs only with the capability (the
         # emergency stop off), with no guard of the line; its result as JSON text.
@@ -1417,10 +1427,10 @@ async def evaluate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     await tab.pacer.dwell()
     tab.require_input()
     try:
-        async with asyncio.timeout(policy.WAIT_MAX_S):
+        async with asyncio.timeout(DISCOVERY_SCRIPT_S):
             text = await page.evaluate(line.SCRIPT_GUARD_JS, [source, line.SCRIPT_RULES])
     except TimeoutError:
-        return failure("timeout", f"The script ran past {policy.WAIT_MAX_S:g} seconds.")
+        return failure("timeout", f"The script ran past {DISCOVERY_SCRIPT_S:g} seconds.")
     except Exception as exc:
         message = str(exc).splitlines()[0][:300] if str(exc) else type(exc).__name__
         refused_line = "browserd: refused by the line" in message
@@ -1429,7 +1439,11 @@ async def evaluate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             MESSAGES["line"] if refused_line else f"The script failed: {message}",
         )
     text = text if isinstance(text, str) else "null"
-    result = {"ok": True, "result": text[:RESULT_MAX], "cut": len(text) > RESULT_MAX}
+    result = {
+        "ok": True,
+        "result": text[:DISCOVERY_RESULT_MAX],
+        "cut": len(text) > DISCOVERY_RESULT_MAX,
+    }
     settled = await tab.settle(await _here(tab))
     return {**settled, **result} if settled.get("ok") else settled
 
@@ -1456,4 +1470,5 @@ TOOLS: dict[str, Tool] = {
     "browser_scroll": scroll,
     "browser_evaluate": evaluate,
     "browser_ask_person": ask_person.run,  # browserd/tools/ask_person.py
+    "web_fetch": fetch.run,  # B28: a discovery's GET of a public page
 }

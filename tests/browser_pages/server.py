@@ -12,6 +12,10 @@ proxy must refuse it for the address alone), and counts the UDP datagrams that r
 /count/<key> counts the requests of each key, which GET /counts answers: the off list host of the
 allow list tests (a navigation browserd stops never reaches it).
 
+Browser B28 (api/tests/browser/test_b28_web_fetch_container.py), web_fetch's bounds: GET
+/b28/endless answers an HTML body with no length that goes on to 64 MB unless the reader hangs up,
+and GET /b28/bomb 64 MB of zeros in about 64 KB of gzip (`Content-Encoding: gzip`).
+
 Jobs J15 (j15/, an invented job website, reached as http://jobs.example-robotics.test:8080/j15/
 through the service's alias): GET /j15/search answers results only for the words "engineer" in
 Paris, the relevant posting on their second page alone; every request under /j15/ is logged with
@@ -83,6 +87,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import zlib
 
 ROOT = sys.argv[1]
 SEARCH_WORD = re.compile(r"[a-z0-9]{1,40}")
@@ -236,12 +241,37 @@ def count_datagrams() -> None:
         DATAGRAMS["count"] += 1
 
 
+B28_BOMB: list = []
+
+
+def b28_bomb() -> bytes:
+    """64 MB of zeros as gzip, made once."""
+    if not B28_BOMB:
+        packer = zlib.compressobj(9, zlib.DEFLATED, 16 + zlib.MAX_WBITS)
+        zeros = bytes(1_048_576)
+        parts = [packer.compress(zeros) for _ in range(64)]
+        B28_BOMB.append(b"".join([*parts, packer.flush()]))
+    return B28_BOMB[0]
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=ROOT, **kwargs)
 
     def log_message(self, *args):
         pass
+
+    def b28_endless(self) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()  # no length: the body ends when the connection does
+        chunk = b"<p>" + b"x" * 65_530 + b"</p>"
+        try:
+            for _ in range(1024):  # 64 MB at most, this server's own bound
+                self.wfile.write(chunk)
+        except OSError:  # the reader hung up
+            pass
+        self.close_connection = True
 
     def send(self, body, ctype="application/json"):
         data = body.encode()
@@ -589,6 +619,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.send("<title>Elsewhere</title><p>Elsewhere</p>", "text/html")
         if url.path == "/counts":
             return self.send(json.dumps(COUNTS))
+        if url.path == "/b28/endless":
+            return self.b28_endless()
+        if url.path == "/b28/bomb":
+            data = b28_bomb()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return None
         if url.path == "/udp":
             return self.send(json.dumps(DATAGRAMS))
         if url.path == "/redirect":  # a server side 302 (browser B5's allow list test)
