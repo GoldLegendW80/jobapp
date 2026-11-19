@@ -16,8 +16,9 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from claude_agent_sdk import ResultMessage
 
-from app.agents import definitions, fake_backend, runner
+from app.agents import backend, definitions, fake_backend, runner
 from app.agents.models import AgentEvent, RunStatus
 from app.browser import finder
 from app.browser.sources import interactive
@@ -291,3 +292,59 @@ def test_a_run_without_its_session_and_other_agents_are_never_continued() -> Non
     assert finder.INTERACTIVE_FINDER.follow_up(uuid.uuid4()) is None
     # Every other agent: the base definition's answer.
     assert definitions.AgentDefinition.follow_up(finder.WEB_FINDER, uuid.uuid4()) is None
+
+
+class Client:
+    """A stand-in for the SDK's client: each response ends after its result, as the SDK's
+    `receive_response` does; the prompts it is asked, in order."""
+
+    prompts: list[str]
+
+    def __init__(self, options: Any = None) -> None:
+        self.options = options
+
+    async def connect(self) -> None:
+        pass
+
+    async def query(self, prompt: str) -> None:
+        self.prompts.append(prompt)
+
+    async def receive_response(self) -> Any:
+        yield ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s",
+            result="ended",
+        )
+
+    async def interrupt(self) -> None:
+        self.prompts.append("<interrupt>")
+
+    async def disconnect(self) -> None:
+        self.prompts.append("<disconnect>")
+
+
+def test_the_real_backend_continues_the_same_session_with_each_follow_up(monkeypatch) -> None:
+    class Fresh(Client):
+        prompts: list[str] = []  # noqa: RUF012, one list per test
+
+    monkeypatch.setattr(backend, "ClaudeSDKClient", Fresh)
+    told = ["Still to search: the boards.", None]
+
+    async def follow_up() -> str | None:
+        return told.pop(0)
+
+    request = backend.BackendRequest(
+        prompt="first", options=None, tools=None, gate=None, follow_up=follow_up
+    )  # type: ignore[arg-type]
+
+    async def go() -> list[Any]:
+        return [message async for message in backend.SdkBackend().stream(request)]
+
+    assert len(asyncio.run(go())) == 2  # a result per turn
+    # One client, one session: the follow up is a second query, never a new process.
+    assert Fresh.prompts == ["first", "Still to search: the boards.", "<disconnect>"]
+    assert told == []
