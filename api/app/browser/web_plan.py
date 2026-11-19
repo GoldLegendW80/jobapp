@@ -77,6 +77,7 @@ import json
 import re
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from app.browser.sources import linkedin_places
 from app.browser.words import words
@@ -805,3 +806,80 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
             for row in rows
         ],
     }
+
+
+# Jobs J28 (#823): the niche board results of the web source's searches. The sweep b9ca8a4b
+# (2026-11-19) searched its whole plan, `site:the-intelligence-academy.com` queries naming La
+# Réunion included, and never opened one of that board's pages, where three Saint-Denis CDIs
+# were online: the agent judged them from the results list. So code collects from each WebSearch
+# answer the results whose host is a NICHE board and whose title or address names a wanted place
+# (`niche_link`, accept and refuse table: tests/browser/test_j28_open_niche_results.py), at most
+# NICHE_LINKS_MAX a run in answer order, and the run may not finish before the agent opened,
+# reported or saw refused each of them (finder `FinderSession.niche_left`). Code fetches none.
+# Round 1 of #824: the real results of a La Réunion query named no place ("Programme IA sur
+# mesureC'est gratuit →" at /job-board/offre/data-engineer-senior-ia-agentique-cdi-<co>-10508),
+# so a result whose address has its board's job posting shape (POSTING) counts too when the
+# query that returned it named a wanted place. A board this table does not name, or another
+# page of a named one (a listing, a course), counts only by its own title or address.
+NICHE_LINKS_MAX = 15  # results a run must open, the first ones
+LINKS_READ_MAX = 100  # results read of one WebSearch answer, the first ones
+LINK_TITLE_MAX = 300  # characters of a result's title read and shown
+LINK_URL_MAX = 2000  # a longer address is no result (finder's report bound)
+# The path of one job posting per NICHE board, as the board's pages wrote it on 2026-11-19:
+# The Intelligence Academy `/job-board/offre/<slug>`, Hellowork `/fr-fr/emplois/<id>.html`.
+POSTING = {
+    "The Intelligence Academy": re.compile(r"/job-board/offre/[^/]+/?"),
+    "Hellowork": re.compile(r"/[a-z]{2}-[a-z]{2}/emplois/\d+\.html"),
+}
+
+
+def niche_board(url: str) -> Board | None:
+    """The NICHE board an address is on: its host is the board's host or one of its
+    subdomains (never a parent domain, nor a host that merely ends with the same letters), on
+    http or https; None otherwise."""
+    if len(url) > LINK_URL_MAX:
+        return None
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError:
+        return None
+    host = (parts.hostname or "").rstrip(".")
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return None
+    for board in NICHE:
+        if any(host == h or host.endswith("." + h) for h in board.hosts):
+            return board
+    return None
+
+
+def _link_text(title: str, url: str) -> str:
+    """A result's words as a place is looked for in them: its title, then its address's path
+    and query decoded (`/offres/data-scientist-la-reunion`), the host aside (a board's own name
+    is no place)."""
+    parts = urlsplit(url.strip())
+    address = unquote(f"{parts.path} {parts.query}")
+    return words(f"{title[:LINK_TITLE_MAX]} {address}")
+
+
+def posting(url: str) -> bool:
+    """Whether a NICHE board address has its board's job posting shape (POSTING), the path
+    whole; False for a board POSTING does not name."""
+    board = niche_board(url)
+    shape = POSTING.get(board.name) if board is not None else None
+    return shape is not None and shape.fullmatch(urlsplit(url.strip()).path) is not None
+
+
+def niche_link(rows: tuple[Row, ...], title: str, url: str, query: str | None = None) -> bool:
+    """Whether a WebSearch result must be opened (J28): it is on a NICHE board and its title or
+    address names the place of a row of the plan, by the rules a query names a place by
+    (`_named_by`: the place, its other names and département number, its towns no other place
+    has, a shared town only right next to a postcode of the place); or (round 1 of #824) its
+    address is a job posting of its board (`posting`) and `query`, the WebSearch query that
+    returned it, names such a place by the same rules. A plan with no place wants no place, so
+    no result is needed."""
+    if not isinstance(title, str) or not isinstance(url, str) or niche_board(url) is None:
+        return False
+    texts = [_link_text(title, url)]
+    if isinstance(query, str) and posting(url):
+        texts.append(_text(query))
+    return any(row.place is not None and _named_by(row, t) for row in rows for t in texts)
