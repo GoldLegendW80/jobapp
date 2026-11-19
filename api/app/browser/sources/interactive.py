@@ -746,7 +746,12 @@ def outcome(session: finder.FinderSession) -> str | None:
     `nothing_reported`. The web source whose plan WebSearch failing lifted before it was searched
     (`FinderSession.web_search_failed`) ends `web_search_failed` (round 1 of #814). Opening a
     search page by its address, pressing a link or a failed click that it recovered from are how
-    a person searches too: no kind of action is required, and nothing read is no success."""
+    a person searches too: no kind of action is required, and nothing read is no success.
+    The web source whose agent ended without report_no_postings while its plan was left, its
+    follow ups spent (`FinderSession.plan_unfinished`), ends `plan_unfinished` whatever it
+    reported (jobs J27): its postings are kept, the source is partial, never "searched"."""
+    if session.plan_unfinished():
+        return "plan_unfinished"  # J27: never searched while the plan is left
     if session.found or session.verified_count:
         return None
     if session.web_search_failed():

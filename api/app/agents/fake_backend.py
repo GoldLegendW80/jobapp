@@ -66,6 +66,11 @@ the CLI prints, in the order recorded from the pinned CLI (2.1.286) against a st
     user message with the tool results (when the message called tools)
     stream_event message_delta, stream_event message_stop
 
+Follow ups (jobs J27). After a result (a `result` step, or the one made at the end), the replay
+asks the request's `follow_up`, as the real backend does before its next query: a message
+continues the same session, and the steps after that result are its turn (none left: the turn
+ends at once with a result of its own). `seen_follow_ups` lists the messages.
+
 A stream that holds `stream_event` steps itself (`partial_recorded`, the recording) is replayed
 as it is. For every other stream they are built from each assistant message: its blocks one by
 one, the text cut into pieces of `partial.chars` characters (cut anywhere, also inside a
@@ -198,6 +203,8 @@ class FakeBackend:
         self._gate_all = True
         self._web_results: list[dict[str, str]] = []
         self._web_error: str | None = None
+        # Jobs J27: the follow up messages the runner continued the session with.
+        self.seen_follow_ups: list[str] = []
 
     async def interrupt(self) -> None:
         self._interrupted.set()
@@ -280,7 +287,9 @@ class FakeBackend:
                     continue
                 yield message
             if raw.get("type") == "result":
-                return
+                if not await self._follow(request):
+                    return
+                continue  # J27: the steps after a result are the follow up's turn
             calls = [
                 block
                 for block in raw.get("message", {}).get("content", [])
@@ -324,6 +333,20 @@ class FakeBackend:
             for event in self._closing(variables, raw) if built else ():
                 yield event
         yield self._result(variables, started, turns, "success", False)
+        # J27: past the stream's last step, the model ends each follow up's turn at once.
+        while await self._follow(request):
+            yield self._result(variables, started, turns, "success", False)
+
+    async def _follow(self, request: BackendRequest) -> bool:
+        """Jobs J27: after a result, whether the runner continues the session with a follow up
+        message (kept in `seen_follow_ups`): the stream's next steps are then that turn."""
+        if request.follow_up is None or self._interrupted.is_set():
+            return False
+        text = await request.follow_up()
+        if text is None:
+            return False
+        self.seen_follow_ups.append(text)
+        return True
 
     def _event(self, variables: dict[str, str], event: dict[str, Any]) -> Any:
         return parse_message(

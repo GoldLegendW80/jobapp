@@ -971,6 +971,11 @@ def test_the_recorded_la_reunion_session_is_stored_through_the_runner(
     assert run_row.status == RunStatus.done, run_row.error
     assert session.web_searches == 1 + len(COVERING)
     assert session.outcome == ""  # the early give up was refused, then postings came
+    # Jobs J27: AI_BOARDS was never searched, so the two follow ups changed nothing and the
+    # source ends plan_unfinished, its postings kept.
+    from app.browser.sources import interactive
+
+    assert interactive.outcome(session) == "plan_unfinished"
     with runtime.factory() as database:
         jobs = {
             job.url: job

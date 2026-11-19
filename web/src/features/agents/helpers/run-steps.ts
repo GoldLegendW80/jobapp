@@ -265,6 +265,27 @@ export function describeStep(
         body: { kind: "note", text: text(data.error) },
         tone: "error",
       };
+    // The app continued the session: the agent ended its turn with work left (jobs J27).
+    case "follow_up":
+      return {
+        icon: "measure",
+        title: `Asked to go on (${Number(data.attempt ?? 0)} of ${Number(data.of ?? 0)})`,
+        body: {
+          kind: "note",
+          text: "The assistant ended its turn with searches of its plan left, so the app asked it to go on.",
+        },
+        tone: "muted",
+      };
+    case "unfinished":
+      return {
+        icon: "problem",
+        title: "Ended with its plan unfinished",
+        body: {
+          kind: "note",
+          text: "The assistant ended its turn again after the app asked it to go on. What it found is kept.",
+        },
+        tone: "warning",
+      };
     case "rate_limit":
       return {
         icon: "problem",

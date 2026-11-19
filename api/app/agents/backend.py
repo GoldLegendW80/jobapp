@@ -39,6 +39,10 @@ class BackendRequest:
     # Fake backend only: the recorded stream to replay and the values put into it.
     script: str | None = None
     variables: dict[str, str] = field(default_factory=dict, repr=False)
+    # Asked after each result message of a clean turn (jobs J27): a follow up user message that
+    # continues the same session, or None to end the stream. None: the stream ends after the
+    # first result, as before.
+    follow_up: Callable[[], Awaitable[str | None]] | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:  # never print the prompt or the options
         return f"BackendRequest(script={self.script!r})"
@@ -75,12 +79,19 @@ class SdkBackend:
         ended = False
         try:
             await client.connect()
-            await client.query(request.prompt)
-            # receive_response() ends after the ResultMessage (SDK docs). Never `break` out of
-            # it: the SDK warns that breaking early can leave its tasks half cleaned up.
-            async for message in client.receive_response():
-                ended = ended or isinstance(message, ResultMessage)
-                yield message
+            prompt: str | None = request.prompt
+            while prompt is not None:
+                await client.query(prompt)
+                ended = False
+                # receive_response() ends after the ResultMessage (SDK docs). Never `break` out
+                # of it: the SDK warns that breaking early can leave its tasks half cleaned up.
+                async for message in client.receive_response():
+                    ended = ended or isinstance(message, ResultMessage)
+                    yield message
+                # Jobs J27: the same session goes on with a follow up message, when one is due
+                # (the SDK's client takes another query once a response ended).
+                follow_up = request.follow_up
+                prompt = await follow_up() if follow_up is not None and ended else None
         finally:
             self._client = None
             try:

@@ -983,6 +983,8 @@ class _State:
     # definition's own) is no failure of the search engine.
     web_search_answered: Callable[[bool, str], None] | None = None
     web_search_passed: set[str] = field(default_factory=set)
+    # Jobs J27: the follow up messages that continued the session (`_follow_up`).
+    follow_ups: int = 0
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
@@ -1243,6 +1245,48 @@ async def _drive_counting(messages: Any, budget: Budget, state: _State, recorder
             reader.cancel()
         # Awaited inside the caller's `aclosing`: the stream's `finally` runs in the reader.
         await asyncio.gather(reader, return_exceptions=True)
+
+
+# Jobs J27: the most follow up messages one run is continued with when its agent ends its turn
+# with work its definition says is left (AgentDefinition.follow_up); past them the run ends,
+# and its definition labels the end (the web source: `plan_unfinished`).
+FOLLOW_UPS_MAX = 2
+
+
+def _follow_up(
+    definition: definitions.AgentDefinition,
+    run_id: uuid.UUID,
+    state: _State,
+    recorder: Recorder,
+) -> Callable[[], Awaitable[str | None]]:
+    """The backend's `follow_up` of a run (jobs J27): after a clean turn (a success result, no
+    budget, no credit error), the definition's follow up message, at most FOLLOW_UPS_MAX times,
+    each recorded as a `follow_up` event (numbers only: the message names the person's
+    search); the definition still asking past them is recorded once as `unfinished`. A run
+    with a token budget is never continued: its events are handled behind the stream
+    (`_drive_counting`), so the definition could be asked before it heard every answer."""
+
+    async def follow_up() -> str | None:
+        result = state.result
+        if (
+            result is None
+            or result.is_error
+            or result.subtype != "success"
+            or state.budget is not None
+            or state.no_credit
+        ):
+            return None
+        text = definition.follow_up(run_id)
+        if not text:
+            return None
+        if state.follow_ups >= FOLLOW_UPS_MAX:
+            await recorder.emit("unfinished", {"follow_ups": state.follow_ups})
+            return None
+        state.follow_ups += 1
+        await recorder.emit("follow_up", {"attempt": state.follow_ups, "of": FOLLOW_UPS_MAX})
+        return text
+
+    return follow_up
 
 
 async def _watch_cancel(context: RunContext, run_id: uuid.UUID) -> None:
@@ -1701,6 +1745,7 @@ async def _execute(
             # Fake backend only: the input's recorded stream, else the one named after the agent.
             script=data.get("script") or definition.name,
             variables=variables,
+            follow_up=_follow_up(definition, run_id, state, recorder),
         )
         backend = context.backend_factory()
         try:
