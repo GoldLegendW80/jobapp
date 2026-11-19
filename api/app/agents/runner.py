@@ -789,6 +789,33 @@ def web_search_results(text: str) -> int:
     return count
 
 
+# Jobs J28: the results of one WebSearch answer told to the definition, the first ones.
+WEB_LINKS_MAX = 100
+
+
+def web_search_links(text: str) -> tuple[tuple[str, str], ...]:
+    """The results of a WebSearch answer, (title, address) in answer order, at most
+    WEB_LINKS_MAX: each JSON object of a `Links:` line with a string "url" ("" for a title that
+    is not a string); none when its shape is not Claude Code's (told to the definition, never
+    stored)."""
+    found: list[tuple[str, str]] = []
+    for line in _LINKS_LINE.finditer(text):
+        try:
+            links = json.loads(line.group(1))
+        except ValueError:
+            continue
+        if not isinstance(links, list):
+            continue
+        for link in links:
+            url = link.get("url") if isinstance(link, dict) else None
+            if isinstance(url, str) and url:
+                title = link.get("title")
+                found.append((title if isinstance(title, str) else "", url))
+                if len(found) >= WEB_LINKS_MAX:
+                    return tuple(found)
+    return tuple(found)
+
+
 @dataclass
 class Recorder:
     """Appends a run's events in order (one writer per run, so seq is a plain counter)."""
@@ -981,7 +1008,8 @@ class _State:
     # run was never offered WebSearch. Only the answers of the calls the gate let through
     # (`web_search_passed`, by call id): a refusal of the gate (WEB_SEARCHES_SPENT, the
     # definition's own) is no failure of the search engine.
-    web_search_answered: Callable[[bool, str], None] | None = None
+    # Jobs J28: with the answer's results (title, address), `web_search_links`.
+    web_search_answered: Callable[[bool, str, tuple[tuple[str, str], ...]], None] | None = None
     web_search_passed: set[str] = field(default_factory=set)
     # Jobs J27: the follow up messages that continued the session (`_follow_up`).
     follow_ups: int = 0
@@ -1055,7 +1083,9 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                         and recorder.called.get(block.tool_use_id) == sdk_options.WEB_SEARCH
                         and block.tool_use_id in state.web_search_passed
                     ):
-                        answered(bool(block.is_error), block.tool_use_id)
+                        failed = bool(block.is_error)
+                        links = () if failed else web_search_links(result_text(block.content))
+                        answered(failed, block.tool_use_id, links)
                     await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
         state.took(message)
@@ -1724,7 +1754,9 @@ async def _execute(
         if searching:
             state.web_search_unlisted = lambda: told(run_id, False)
             answered = definition.web_search_answered
-            state.web_search_answered = lambda failed, call: answered(run_id, failed, call)
+            state.web_search_answered = lambda failed, call, links: answered(
+                run_id, failed, call, links
+            )
         options = build_options(
             definition,
             tools,

@@ -43,7 +43,7 @@ import unicodedata
 import uuid
 from bisect import bisect_right
 from collections import Counter
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
@@ -1525,6 +1525,11 @@ class FinderSession:
     web_queries: list[str] = field(default_factory=list)
     web_search_failures: int = 0
     web_pending: dict[str, str] = field(default_factory=dict, repr=False)
+    # Jobs J28: the niche board results in a wanted place the WebSearch answers listed
+    # (web_plan.niche_link), canonical address to title, the first web_plan.NICHE_LINKS_MAX in
+    # answer order, and those the agent opened (web_fetch or browser_navigate) or reported.
+    niche_links: dict[str, str] = field(default_factory=dict)
+    niche_done: set[str] = field(default_factory=set)
     # The start page's parse (`parsed_off_loop` of where it landed), made in a thread by the
     # caller before the session (#797): a session is built in the event loop.
     parsed: InitVar[tuple[list[str], Detail] | None] = None
@@ -1614,6 +1619,7 @@ class FinderSession:
         if not self.on_site(url):
             self.refused["other_host"] += 1
             return "Refused: only this site's own pages can be opened. Go on with this site.", True
+        self._niche_opened(url)  # J28: opened, whatever the page answers
         from app.browser.sources import SourceError
 
         result: dict[str, Any] = {}
@@ -1800,6 +1806,7 @@ class FinderSession:
         if not url:
             self.refused["not_an_address"] += 1
             return "Refused: give an http or https address.", True
+        self._niche_opened(url)  # J28: opened, whatever the page or the app answers
         host = urlsplit(url).hostname or ""
         if self.fetch_blocked_hosts[host] >= FETCH_BLOCKED_MAX:
             return (
@@ -2188,6 +2195,14 @@ class FinderSession:
                     "Refused: do not give up yet, the plan of your first message is not searched."
                     f" Still to search with WebSearch, each query naming the place: {plan_left}."
                 ), True
+            niche = self.niche_left_text()
+            if niche:
+                # J28: a niche board result in a wanted place is judged on its own page.
+                return (
+                    "Refused: do not give up yet, the AI job board results of your searches in"
+                    " a wanted place are not opened. Open each with web_fetch (browser_navigate"
+                    f" when it reads empty) and report each posting that fits: {niche}."
+                ), True
         left = self.routes_left(reason)
         if left:
             return (
@@ -2236,24 +2251,37 @@ class FinderSession:
         the run may end: not the web source, finished, or nothing left (`web_left`)."""
         if self.finished:
             return None
-        left = self.web_left()
-        if not left:
+        left, niche = self.web_left(), self.niche_left_text()
+        if not left and not niche:
             return None
+        said = []
+        if left:
+            said.append(
+                "the search plan of your first message is not searched. Still to search with"
+                f" WebSearch, each query naming the place: {left}."
+            )
+        if niche:
+            # J28: the niche board results in a wanted place, to open before judging them.
+            said.append(
+                "the AI job board results of your searches in a wanted place are not opened."
+                f" Still to open with web_fetch: {niche}."
+            )
         return (
-            "You ended your turn, but the search plan of your first message is not searched."
-            f" Still to search with WebSearch, each query naming the place: {left}. Go on:"
-            " search them, open and report each posting that fits with report_postings, then"
-            ' end with report_no_postings("no_match") once nothing is left.'
+            "You ended your turn, but "
+            + " Also, ".join(said)
+            + " Go on: search them, open and report each posting that fits with"
+            ' report_postings, then end with report_no_postings("no_match") once nothing is'
+            " left."
         )
 
     def plan_unfinished(self) -> bool:
         """J27: the web run ended without report_no_postings while its plan was left (the
         runner's follow ups spent): the outcome `plan_unfinished`, whatever was reported."""
-        return not self.finished and bool(self.web_left())
+        return not self.finished and bool(self.web_left() or self.niche_left())
 
     def _with_plan(self, answer: dict[str, Any]) -> str:
         """J27: a report_postings answer of the web source, with what is left of its plan and
-        the word to go on while anything is."""
+        the word to go on while anything is. J28: and the niche board results left to open."""
         left = self.web_left()
         if left and not self.stopped:
             answer["plan_left"] = left
@@ -2262,7 +2290,66 @@ class FinderSession:
                 " left with WebSearch, report what fits, then end with"
                 ' report_no_postings("no_match").'
             )
+        niche = self.niche_left_text()
+        if niche:
+            answer["niche_results_left"] = niche
+            answer["open_next"] = (
+                "Open each AI job board result left with web_fetch and report each posting that"
+                " fits before you end."
+            )
         return json.dumps(answer)
+
+    def note_niche_links(self, links: Sequence[tuple[str, str]]) -> None:
+        """J28: keep the niche board results in a wanted place of a WebSearch answer (the
+        runner's word, `web_search_answered`), the first web_plan.NICHE_LINKS_MAX of the run in
+        answer order, each once. A result the agent already opened or reported counts as done."""
+        if self.interactive is None or not self.interactive.web or self.stopped:
+            return
+        rows = None
+        for title, url in list(links)[: web_plan.LINKS_READ_MAX]:
+            if len(self.niche_links) >= web_plan.NICHE_LINKS_MAX:
+                return
+            if not isinstance(url, str) or len(url) > web_plan.LINK_URL_MAX:
+                continue
+            key = canonical(url)
+            if not key or key in self.niche_links:
+                continue
+            if not isinstance(title, str):
+                title = ""
+            title = " ".join(title[: web_plan.LINK_TITLE_MAX * 4].split())[
+                : web_plan.LINK_TITLE_MAX
+            ]
+            rows = self.web_plan() if rows is None else rows
+            if not web_plan.niche_link(rows, title, key):
+                continue
+            self.niche_links[key] = title
+            if key in self.pages_read or key in self.error_pages or key in self.reported_urls:
+                self.niche_done.add(key)
+
+    def _niche_opened(self, url: str) -> None:
+        """J28: a niche board result opened or reported (its canonical address) is done."""
+        if url in self.niche_links:
+            self.niche_done.add(url)
+
+    def niche_left(self) -> list[str]:
+        """J28: the niche board results in a wanted place still to open, "title" address each,
+        none when the plan is lifted as `web_left` is (not the web source, WebSearch not offered
+        or failing WEB_SEARCH_FAILS times in a row, a stopped session)."""
+        if self.interactive is None or not self.interactive.web:
+            return []
+        if not self.web_search_on or self.stopped:
+            return []
+        if self.web_search_failures >= WEB_SEARCH_FAILS:
+            return []
+        return [
+            f'"{title}" {url}' if title else url
+            for url, title in self.niche_links.items()
+            if url not in self.niche_done
+        ]
+
+    def niche_left_text(self) -> str:
+        """J28: `niche_left` as the refusal and the answers name it, "" when none."""
+        return "; ".join(self.niche_left())
 
     def web_search_failed(self) -> bool:
         """J23, round 1 of #814: whether WebSearch failing WEB_SEARCH_FAILS times in a row lifted
@@ -2303,6 +2390,7 @@ class FinderSession:
         answer what was kept and why the rest was refused, by index."""
         if not isinstance(items, list):
             return "postings must be a list.", True
+        self._niche_reported(items)
         kept = 0
         refusals: list[dict[str, Any]] = []
         for index, item in enumerate(items):
@@ -2327,6 +2415,7 @@ class FinderSession:
             return self._stop(self.stopped)
         if not isinstance(items, list) or len(items) > POSTINGS_MAX:
             return "postings must be a bounded list.", True
+        self._niche_reported(items)
         kept, refusals = 0, []
         pending: list[VerifiedFinding] = []
 
@@ -2479,6 +2568,14 @@ class FinderSession:
         if not restored:
             self.stopped = self.stopped or GUARD_FAILED
         return restored
+
+    def _niche_reported(self, items: list[Any]) -> None:
+        """J28: each niche board result a report names is done, kept or refused by the
+        verification (the app judged it on the page, or the agent said why not)."""
+        for item in items[:POSTINGS_MAX]:
+            url = item.get("url") if isinstance(item, dict) else None
+            if isinstance(url, str) and len(url) <= web_plan.LINK_URL_MAX:
+                self._niche_opened(canonical(urljoin(self.current, url)))
 
     def _refusal(self, index: int, reason: str) -> dict[str, Any]:
         """A refused posting as the agent reads it: its index, the reason and what to do about
@@ -2657,12 +2754,21 @@ class FinderDefinition(definitions.AgentDefinition):
         if session is not None:
             session.web_search_on = offered
 
-    def web_search_answered(self, run_id: uuid.UUID, failed: bool, call: str | None = None) -> None:
+    def web_search_answered(
+        self,
+        run_id: uuid.UUID,
+        failed: bool,
+        call: str | None = None,
+        links: Sequence[tuple[str, str]] = (),
+    ) -> None:
         """J23: the runner's word on each WebSearch answer (an error or not) and its tool call,
-        counted by the session (`FinderSession.web_search_answered`)."""
+        counted by the session (`FinderSession.web_search_answered`); J28: with its results
+        (title, address), whose niche board ones in a wanted place the agent must open."""
         session = session_of(run_id)
         if session is not None:
             session.web_search_answered(failed, call)
+            if not failed:
+                session.note_niche_links(links)
 
     def follow_up(self, run_id: uuid.UUID) -> str | None:
         """J27: the runner asks this when the agent ends its turn; what is left of the web
@@ -2806,6 +2912,10 @@ plan, and you go on until it is searched, as Claude Code keeps searching after a
 9. End the search with report_no_postings("no_match") once the plan is searched (it then says
 that no more postings fit, whatever you reported before): ending your turn earlier is not the
 end, the app asks you to go on.
+10. Open niche board results in wanted places before judging them (J28): each result of an AI
+and tech job board of the plan's `ai_boards` whose title or address names a wanted place or its
+main town is opened with web_fetch and judged on its own page, never from the results list; the
+app refuses report_no_postings while one is not opened or reported, and names those left.
 
 Rules: never bypass a security check, a captcha or a sign in page: a page that answers blocked
 is left, and another source of the same posting is fine. Never sign in, apply, write to anyone

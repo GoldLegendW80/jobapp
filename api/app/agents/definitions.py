@@ -34,7 +34,7 @@ default stays `model`, which is what every agent defined in this file runs on.
 import re
 import sys
 import uuid
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -179,10 +179,18 @@ class AgentDefinition:
         kind in sdk_options.WEB_SEARCH_KINDS), and again, False, when Claude Code's first
         message does not list the tool. Nothing by default; the website search records it."""
 
-    def web_search_answered(self, run_id: uuid.UUID, failed: bool, call: str | None = None) -> None:
+    def web_search_answered(
+        self,
+        run_id: uuid.UUID,
+        failed: bool,
+        call: str | None = None,
+        links: Sequence[tuple[str, str]] = (),
+    ) -> None:
         """Told by the runner after each WebSearch answer of run `run_id`, whether it was an
-        error, and its tool call's id (jobs J23). Nothing by default; the web source counts the
-        errors in a row, and a query for its plan only once answered without one."""
+        error, and its tool call's id (jobs J23), with its results, (title, address) in answer
+        order (jobs J28, runner.web_search_links; none for an error). Nothing by default; the
+        web source counts the errors in a row, a query for its plan only once answered without
+        one, and keeps the niche board results in a wanted place its agent must open."""
 
     def follow_up(self, run_id: uuid.UUID) -> str | None:
         """Asked by the runner when run `run_id`'s agent ended its turn cleanly: a message that
