@@ -711,7 +711,9 @@ def left(rows: tuple[Row, ...], queries: list[str]) -> list[str]:
             parts.append(
                 "a query of its own with site: of one or more AI and tech job boards ("
                 + " OR ".join(f"site:{b.hosts[0]}" for b in NICHE)
-                + f'), naming the place or its main town ("{ai_boards_query(row)}")'
+                + "), naming the place"
+                + (" or its main town" if row.town else "")
+                + f' ("{ai_boards_query(row)}")'
             )
         if parts:
             out.append(f"{_where(row)}: " + "; ".join(parts))

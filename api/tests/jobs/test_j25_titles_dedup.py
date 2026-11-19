@@ -116,7 +116,7 @@ KEPT = [
     ("Data Engineer - Full Stack", None, ""),
     ("Lead Data - Machine Learning", None, ""),
     ("Head of AI | Agents", None, ""),
-    ("Ingénieur IA - CDI", None, ""),
+    ("Ingénieur IA - Temps plein", None, ""),  # J26 takes "- CDI" out
     ("Emploi store manager", "Example Lagoon", ""),
     ("Offres", "Example Lagoon", ""),
     ("", "Example Lagoon", ""),

@@ -92,11 +92,12 @@ def test_a_place_without_towns_needs_no_town_query() -> None:
 # --- the AI boards family: accept and refuse ----------------------------------------------------
 
 AI = [
-    (REUNION, "offre emploi data scientist Saint-Denis La Réunion", True),
-    (REUNION, "offre d'emploi ingénieur IA Saint-Denis La Réunion", True),
-    (REUNION, "Offres d’emploi data Saint-Denis La Réunion", True),
-    (REUNION, "offres emploi data scientist OR MLOps Saint-Denis 974", True),
-    (REUNION, "job offer data scientist Saint-Denis La Réunion", True),
+    # J26 (#819): an offer phrase without site: of a niche board no longer counts.
+    (REUNION, "offre emploi data scientist Saint-Denis La Réunion", False),
+    (REUNION, "offre d'emploi ingénieur IA Saint-Denis La Réunion", False),
+    (REUNION, "Offres d’emploi data Saint-Denis La Réunion", False),
+    (REUNION, "offres emploi data scientist OR MLOps Saint-Denis 974", False),
+    (REUNION, "job offer data scientist Saint-Denis La Réunion", False),
     (REUNION, "site:welcometothejungle.com La Réunion", True),
     (REUNION, "site:fr.welcometothejungle.com data La Réunion", True),
     (REUNION, "site:https://www.free-work.com/fr data 974", True),
@@ -128,14 +129,14 @@ AI = [
     (REUNION, "welcometothejungle data La Réunion", False),
     (THREE, "site:welcometothejungle.com La Réunion OR Tahiti", False),
     (THREE, "offre emploi data Saint-Denis La Réunion Guadeloupe", False),
-    (("Lyon, France",), "offre emploi data scientist Lyon", True),
+    (("Lyon, France",), "offre emploi data scientist Lyon", False),  # J26
     (("Lyon, France",), "offre emploi Lyon", False),
     (("Lyon, France",), "site:hellowork.com data Lyon", True),  # no towns: the place itself
 ]
 
 
 @pytest.mark.parametrize(("places", "query", "aimed"), AI)
-def test_an_ai_boards_query_is_an_offer_search_or_a_niche_board(
+def test_an_ai_boards_query_is_a_niche_board_by_site(
     places: tuple[str, ...], query: str, aimed: bool
 ) -> None:
     assert bool(done(places, [query])["ai_queries"]) is aimed
@@ -146,7 +147,7 @@ def test_an_ai_boards_query_is_an_offer_search_or_a_niche_board(
 
 def test_one_query_serves_one_of_the_two_families_only() -> None:
     [row] = plan(*REUNION)
-    both = "offre emploi data scientist Saint-Denis La Réunion"
+    both = "site:the-intelligence-academy.com data scientist Saint-Denis La Réunion"
     assert web_plan.own_families(row, web_plan.coverage(row, [both], (row,))) == (True, False)
     assert web_plan.own_families(row, web_plan.coverage(row, [both, both], (row,))) == (
         True,
@@ -175,17 +176,18 @@ def test_the_production_or_queries_leave_both_families_for_every_place() -> None
     assert len(left) == 3
     for line, row in zip(left, rows, strict=True):
         assert f"a query of its own naming the main town {row.town}" in line
-        assert "aimed at AI and tech job boards" in line
+        assert "site: of one or more AI and tech job boards" in line
 
 
 def test_the_refusal_names_example_queries_and_the_niche_boards() -> None:
     [row] = plan(*REUNION)
     said = web_plan.left_text((row,), [*COVERING])
     assert said == (
-        "for La Réunion: a query of its own aimed at AI and tech job boards "
-        f'("offre emploi {TITLE} Saint-Denis La Réunion", or site:the-intelligence-academy.com '
-        "OR site:hellowork.com OR site:welcometothejungle.com OR site:free-work.com OR "
-        "site:lesjeudis.com OR site:chooseyourboss.com OR site:aijobs.net La Réunion)"
+        "for La Réunion: a query of its own with site: of one or more AI and tech job boards "
+        "(site:the-intelligence-academy.com OR site:hellowork.com OR "
+        "site:welcometothejungle.com OR site:free-work.com OR site:lesjeudis.com OR "
+        "site:chooseyourboss.com OR site:aijobs.net), naming the place or its main town "
+        '("site:the-intelligence-academy.com OR site:hellowork.com data Saint-Denis La Réunion")'
     )
     said = web_plan.left_text((row,), [COVERING[1]])
     assert f'naming the main town Saint-Denis ("{TITLE} Saint-Denis La Réunion")' in said
@@ -218,13 +220,17 @@ def test_the_shown_plan_names_the_main_town_and_the_ai_boards() -> None:
         "Papeete",
     ]
     reunion = shown["places"][0]
-    assert reunion["ai_boards"][0] == f"offre emploi {TITLE} Saint-Denis La Réunion"
+    assert reunion["ai_boards_query"] == (
+        "site:the-intelligence-academy.com OR site:hellowork.com data Saint-Denis La Réunion"
+    )
     assert "site:welcometothejungle.com" in reunion["ai_boards"]
     assert "site:the-intelligence-academy.com" in reunion["ai_boards"]
     assert "site:hellowork.com" in reunion["ai_boards"]
     lyon = web_plan.shown(plan("Lyon, France"))["places"][0]
     assert "main_town" not in lyon
-    assert lyon["ai_boards"][0] == f"offre emploi {TITLE} Lyon, France"
+    assert lyon["ai_boards_query"] == (
+        "site:the-intelligence-academy.com OR site:hellowork.com data Lyon, France"
+    )
 
 
 # --- the fake backend's web stream: one WebSearch per query of the plan -----------------------
