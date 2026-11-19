@@ -20,15 +20,21 @@ tests/browser/test_j23_web_breadth.py):
   query that names the place and a word for jobs (JOB_WORDS);
 - `town` (jobs J25, #817): a query naming the place's main town (the first town of TOWNS:
   Saint-Denis for La Réunion, Pointe-à-Pitre, Papeete); a place without a town table has none;
-- `ai_boards` (J25): a query aimed at AI and tech job boards: an offer phrase ("offre emploi",
-  OFFER_PHRASES) with a saved title or a planned role and the main town (the place itself for a
-  place without towns), or a `site:` query of a niche board (NICHE); a niche board that is also
-  a national board of the row (Hellowork) only in a query naming the main town.
+- `ai_boards` (J25, jobs J26 #819): a `site:` query of at least one niche AI and tech job board
+  (NICHE; several joined by OR in one query count too) that names the place or its main town
+  (the main town by the rules of a place's names below: "Saint-Denis La Réunion", "Pointe-à-
+  Pitre"); a niche board that is also a national board of the row (Hellowork) only in a query
+  naming the main town (the place itself for a place without towns); two `site:` operators
+  with no OR are ANDed and count for nothing.
 The owner's sweep of 2026-11-19 (81ab9533) ran six broad OR queries, which covered the first
 three families, and missed the AI and data CDIs of Saint-Denis Claude Code had found the day
-before with "offre emploi" and the town on a niche board. So each of `town` and `ai_boards`
-needs a query of its own per place: one that names no other row's place (an OR inside it still
-counts), and the two families are not served by the same single query.
+before on a niche board. So each of `town` and `ai_boards` needs a query of its own per place:
+one that names no other row's place (an OR inside it still counts), and the two families are
+not served by the same single query. J25 also counted an offer phrase ("offre emploi") with a
+role and the town as `ai_boards`; the sweep f769661a (2026-11-19) met the family so with
+"offre emploi genai engineer Saint-Denis La Réunion", and the search engine returned none of
+the niche board's pages, where four Saint-Denis AI and data CDIs were online (J26). So only a
+`site:` query of a niche board counts now.
 With no place saved (or only a place that says no limit), one row per search language instead
 (`search_languages`: the profile's languages of LANGUAGES, else French and English): its queries
 need not name a place, its roles count only by their forms in that language, and its boards are
@@ -247,12 +253,12 @@ TOWNS: dict[str, tuple[tuple[str, bool], ...]] = {
 # is one of its postcodes ("97400").
 POSTCODES = {**DEPARTMENTS, "French Polynesia": "987"}
 POSTCODE = re.compile(r"\d{5}")
-# Jobs J25: the AI and tech job boards an `ai_boards` query may name by `site:`, and the offer
-# phrases (folded) of a person's own search for a job ("offre emploi data scientist Saint-Denis").
-# Public job boards only. The Intelligence Academy's /job-board pages listed the owner's best
-# Réunion matches on 2026-11-18. A board that is also a national board of the row (Hellowork)
-# counts here only in a query naming the main town (the place itself for a place without
-# towns): its `boards` query of the place alone asks nothing new of the AI boards.
+# Jobs J25 and J26: the AI and tech job boards an `ai_boards` query names by `site:` (the only
+# form that counts, J26). Public job boards only. The Intelligence Academy's /job-board pages
+# listed the owner's best Réunion matches on 2026-11-18. A board that is also a national board
+# of the row (Hellowork) counts here only in a query naming the main town (the place itself for
+# a place without towns): its `boards` query of the place alone asks nothing new of the AI
+# boards.
 NICHE: tuple[Board, ...] = (
     Board("The Intelligence Academy", ("the-intelligence-academy.com",)),
     Board("Hellowork", ("hellowork.com",)),
@@ -262,8 +268,6 @@ NICHE: tuple[Board, ...] = (
     Board("Choose Your Boss", ("chooseyourboss.com",)),
     Board("AI Jobs", ("aijobs.net", "ai-jobs.net")),
 )
-OFFER_PHRASES = ("offre emploi", "offres emploi", "offre d emploi", "offres d emploi",
-                 "job offer", "job offers")  # fmt: skip
 
 
 # With no place wanted, the search languages: the profile's languages this table names (folded),
@@ -583,14 +587,14 @@ def coverage(row: Row, queries: list[str], rows: tuple[Row, ...] = ()) -> dict[s
             town = _has(text, words(row.town)) if row.town else False
             if town:
                 town_queries.add(query.strip())
-            offer = any(_has(text, phrase) for phrase in OFFER_PHRASES)
-            named_role = bool(found_titles or found_roles) or not (row.titles or row.roles)
+            # J26: a niche board by `site:` only; ANDed sites name no page.
             national = {host for b in row.boards for host in b.hosts}
-            niche = any(
+            anded = not ored and len(SITE.findall(EXCLUDED.sub(" ", query))) > 1
+            niche = not anded and any(
                 _board_named(b, sites) and (town or not row.town or not national & set(b.hosts))
                 for b in NICHE
             )
-            if (offer and named_role and (town or not row.town)) or niche:
+            if niche:
                 ai_queries.add(query.strip())
         if not ored:
             found_titles, found_roles = found_titles[:1], found_roles[:1]
@@ -645,9 +649,20 @@ def town_query(row: Row) -> str:
     return f"{_first_term(row)} {_town_place(row)}" if row.place and row.town else ""
 
 
+# The niche boards of the example `ai_boards` query: the board that listed the owner's
+# Saint-Denis matches, and Hellowork (J26).
+AI_EXAMPLE = NICHE[:2]
+
+
 def ai_boards_query(row: Row) -> str:
-    """An `ai_boards` query of the row (J25), "" for a row with no place."""
-    return f"offre emploi {_first_term(row)} {_town_place(row)}" if row.place else ""
+    """An `ai_boards` query of the row (J26: "site:the-intelligence-academy.com OR
+    site:hellowork.com data Saint-Denis La Réunion"), "" for a row with no place. A niche board
+    lists only its field's jobs, so the broad role "data" when planned, else the first term."""
+    if not row.place:
+        return ""
+    broad = next((r.en for r in row.roles if r.en == "data"), "")
+    sites = " OR ".join(f"site:{b.hosts[0]}" for b in AI_EXAMPLE)
+    return f"{sites} {broad or _first_term(row)} {_town_place(row)}"
 
 
 def _role_name(role: Role, french: bool) -> str:
@@ -694,10 +709,11 @@ def left(rows: tuple[Row, ...], queries: list[str]) -> list[str]:
             )
         if not ai:
             parts.append(
-                "a query of its own aimed at AI and tech job boards "
-                f'("{ai_boards_query(row)}", or '
+                "a query of its own with site: of one or more AI and tech job boards ("
                 + " OR ".join(f"site:{b.hosts[0]}" for b in NICHE)
-                + f" {row.place})"
+                + "), naming the place"
+                + (" or its main town" if row.town else "")
+                + f' ("{ai_boards_query(row)}")'
             )
         if parts:
             out.append(f"{_where(row)}: " + "; ".join(parts))
@@ -748,9 +764,9 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
             "no place saved, the same for each search language, the roles named in it. Words "
             "side by side are ANDed: a query without OR counts for one title, one role, one "
             "board and one place at most. For each place, also a query of its own (naming "
-            "no other place) naming its main_town, and another aimed at AI and tech job "
-            'boards: an offer phrase ("offre emploi") with a title or a role and the main '
-            "town, or a site: query of one of ai_boards"
+            "no other place) naming its main_town, and another with site: of one or more of "
+            "its ai_boards (joined by OR) naming the place or its main town, as its "
+            'ai_boards_query; a search without site: ("offre emploi ...") is not one'
         ),
         # Jobs J24 (#815): what a row's searches report, beside what they must search.
         "report": (
@@ -778,7 +794,10 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
                 ),
                 **({"main_town": row.town} if row.town else {}),
                 **(
-                    {"ai_boards": [ai_boards_query(row)] + [f"site:{b.hosts[0]}" for b in NICHE]}
+                    {
+                        "ai_boards": [f"site:{b.hosts[0]}" for b in NICHE],
+                        "ai_boards_query": ai_boards_query(row),
+                    }
                     if row.place
                     else {}
                 ),

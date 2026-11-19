@@ -575,9 +575,10 @@ COVERING = (
     "site:apec.fr développeur La Réunion",
     "site:hellowork.com intelligence artificielle La Réunion",
 )
-# Jobs J25 (#817): the query of its own aimed at AI and tech boards, the main town named, that
-# Claude Code found the Saint-Denis AI and data CDIs with (COVERING[0] names the town already).
-AI_BOARDS = "offre emploi data scientist Saint-Denis La Réunion"
+# Jobs J25 (#817) and J26 (#819): the query of its own of the niche AI and tech boards by
+# site:, the main town named, where the Saint-Denis AI and data CDIs were (COVERING[0] names
+# the town already).
+AI_BOARDS = "site:the-intelligence-academy.com OR site:hellowork.com data Saint-Denis La Réunion"
 PLAN = (*COVERING, AI_BOARDS)
 
 
@@ -600,7 +601,7 @@ def test_production_give_up_is_refused_with_what_is_left_then_accepted() -> None
     search(session, COVERING[-1])
     said, error = session.report_none("no_match")
     assert error
-    assert "aimed at AI and tech job boards" in said
+    assert "site: of one or more AI and tech job boards" in said
     assert "naming the main town" not in said  # COVERING[0] names Saint-Denis La Réunion
     search(session, AI_BOARDS)
     assert session.report_none("no_match") == (

@@ -20,6 +20,16 @@ Jobijoba's "Data scientist h/f". Accept and refuse tables: tests/jobs/test_j25_t
   anything else stays in the title (fail closed: "Chef de projet Data & IA" keeps "Data & IA",
   "Data Scientist - Saint-Denis" its place, "Développeur Java H/F Expérimenté" its
   "Expérimenté");
+- a contract marker (jobs J26, #819: the sweep f769661a stored Jobijoba's "Data scientist -
+  (cdi)" of LHH apart from the LHH job already stored) is taken out, its words kept in
+  `Cleaned.contract` for the contract type: CDI, CDD, Stage, Alternance, Freelance, Intérim or
+  VIE (any case, VIE in capitals only: "vie" is a word of titles, "Actuaire (Vie)"), alone or
+  joined ("CDI ou CDD", "CDI/CDD"), with a duration or not ("CDD 6 mois", "Stage de 6 mois"),
+  when it is a part in parentheses or brackets ("(CDI)"), a whole part between separators or
+  the title's edges ("- CDI", "CDI -", "CDI : ", ", CDD"), a tail "en CDI" or "en CDD", or a
+  tail with its duration ("CDD 6 mois"); a contract word beside the title's own words stays
+  (fail closed: "Gestionnaire CDD", "Responsable des contrats CDI", "Stage Manager",
+  "Responsable alternance");
 - a title that would be left with no letter is kept as it was.
 
 `cross_key(company, title, location)`: the company without its generic words (`company_core`:
@@ -131,6 +141,25 @@ SHARED_TOWNS = frozenset(
      "sainte rose", "sainte anne", "saint francois", "saint claude", "le lamentin",
      "trois rivieres"}
 )  # fmt: skip
+# Jobs J26: contract markers (module docstring). A run of markers is one marker or several
+# joined by "/", ",", "ou", "or", "et", "&" or "+".
+_CONTRACT = (
+    r"(?:contrat\s+(?:en\s+)?)?"
+    r"(?:cdi|cdd|stage|alternance|freelance|int[eé]rim|(?-i:VIE|V\.I\.E\.?))"
+)
+_DURATION = (
+    r"\s*[-:,]?\s*(?:de\s+|d['\u2019]\s*|of\s+)?"
+    r"\d{1,2}\s*(?:mois|ans?|months?|semaines?|weeks?)\b"
+)
+_ONE = rf"{_CONTRACT}(?:{_DURATION})?"
+_RUN = rf"{_ONE}(?:\s*(?:/|,|&|\+|\bou\b|\bor\b|\bet\b)\s*{_ONE})*"
+CONTRACT_PART = re.compile(rf"[(\[]\s*{_RUN}\s*[)\]]", re.I)
+CONTRACT_WHOLE = re.compile(rf"\s*{_RUN}\s*", re.I)
+CONTRACT_TAIL = re.compile(
+    rf"\s+(?:en\s+(?:cdi|cdd)(?:{_DURATION})?|{_CONTRACT}{_DURATION})\s*$", re.I
+)
+# What a title's parts are split by for contract markers, kept to join the parts again.
+CONTRACT_SPLIT = re.compile(r"(\s+[-\u2013\u2014|\u00b7\u2022/]\s+|\s*\|\s*|\s*[:,;]\s+)")
 PLACE_SPLIT = re.compile(r"[,()\[\]/|\u2013\u2014]|\s-\s")
 NUMBER = re.compile(r"\b(\d{5}|\d{3}|\d{2}|2[ab])\b", re.I)
 
@@ -140,6 +169,7 @@ class Cleaned:
     title: str
     company: str | None  # the company the title named when none was stated, else None
     changed: bool
+    contract: str = ""  # the contract markers taken out (J26), for the contract type
 
 
 def _markers(text: str) -> list[re.Match[str]]:
@@ -234,6 +264,29 @@ def _tidy(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip(EDGES).strip()
 
 
+def _contracts(text: str, found: list[str]) -> str:
+    """The text without its contract markers (module docstring), each appended to `found`."""
+
+    def take(match: re.Match[str]) -> str:
+        found.append(match.group(0).strip(" ()[]"))
+        return " "
+
+    text = CONTRACT_PART.sub(take, text)
+    pieces = CONTRACT_SPLIT.split(text)
+    parts = [("", pieces[0]), *zip(pieces[1::2], pieces[2::2], strict=True)]
+    kept: list[tuple[str, str]] = []
+    for separator, part in parts:
+        if CONTRACT_WHOLE.fullmatch(part):
+            found.append(part.strip())
+        else:
+            kept.append((separator, part))
+    if len(kept) < len(parts) and kept:
+        kept[0] = ("", kept[0][1])  # a head marker's separator goes with it
+    text = "".join(f"{separator}{part}" for separator, part in kept)
+    text = CONTRACT_TAIL.sub(take, _tidy(text))
+    return text
+
+
 def clean(title: str, company: str | None, location: str | None = None) -> Cleaned:
     """The title without its gender markers and board boilerplate, and the company it names when
     none was stated (module docstring)."""
@@ -242,6 +295,8 @@ def clean(title: str, company: str | None, location: str | None = None) -> Clean
     known = stated(company)
     named: str | None = None
     text = LEADING.sub("", text)
+    contracts: list[str] = []
+    text = _contracts(text, contracts)
     # Trailing boards or the company after a separator, as often as they repeat.
     while True:
         parts = SEPARATOR.split(text)
@@ -265,10 +320,11 @@ def clean(title: str, company: str | None, location: str | None = None) -> Clean
         for mark in reversed(marks[:-1]):
             head = head[: mark.start()] + " " + head[mark.end() :]
         text = _tidy(f"{head} {tail}")
+        text = _contracts(text, contracts)  # "Data Scientist - CDI H/F"
     text = _tidy(text)
     if not re.search(r"[^\W\d_]", text):
         return Cleaned(original, None, False)
-    return Cleaned(text, named, text != original)
+    return Cleaned(text, named, text != original, " ".join(contracts))
 
 
 def _code(number: str) -> str:

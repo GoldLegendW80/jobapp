@@ -912,7 +912,10 @@ def test_the_sweep_stores_what_the_text_and_location_state(
     _sweep(factory, person_a)
     found = _postings(factory, person_a)
     assert _pay_columns(found["AI Engineer, Pay Stated"]) == (60000, 70000, "EUR", "year", "hybrid")
-    assert _pay_columns(found["GenAI Engineer, Freelance"]) == (600, 600, "EUR", "day", "remote")
+    # Jobs J26: the contract marker leaves the stored title; the contract type keeps it.
+    freelance = found["GenAI Engineer"]
+    assert freelance.contract_type is ContractType.Freelance
+    assert _pay_columns(freelance) == (600, 600, "EUR", "day", "remote")
     assert _pay_columns(found["AI Engineer, Pay Not Stated"]) == (None,) * 5
     # The meal voucher is no pay.
     meal = found["AI Engineer, Meal Vouchers"]

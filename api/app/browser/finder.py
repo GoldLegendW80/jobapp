@@ -2722,8 +2722,9 @@ roles next to the profile and the national public job boards of its country. The
 report_no_postings until, for each place, your WebSearch queries that name the place (as
 written or by a name of `also_named`) searched every title, at least three of the adjacent
 roles and every board by site: query, and in a query of its own (naming no other place) its
-`main_town`, and in another its `ai_boards` (an "offre emploi" search with a role and the main
-town, or a site: query of a niche board); its refusal says what is left. With no place saved,
+`main_town`, and in another a site: query of its `ai_boards` naming the place or its main town
+(several boards joined by OR are fine: its `ai_boards_query`; a search without site:, "offre
+emploi ...", is not one); its refusal says what is left. With no place saved,
 the plan has one row per search language instead: the same, the roles named in that language,
 queries naming no place. Search as many times as the search needs.
 2. Broad queries per place first, in the languages of the place (French and English for a
