@@ -2332,20 +2332,17 @@ class FinderSession:
             self.niche_done.add(url)
 
     def niche_left(self) -> list[str]:
-        """J28: the niche board results in a wanted place still to open, "title" address each,
-        none when the plan is lifted as `web_left` is (not the web source, WebSearch not offered
-        or failing WEB_SEARCH_FAILS times in a row, a stopped session)."""
+        """J28: the addresses of the niche board results in a wanted place still to open, none
+        when the plan is lifted as `web_left` is (not the web source, WebSearch not offered or
+        failing WEB_SEARCH_FAILS times in a row, a stopped session). Addresses only, canonical:
+        the refusal is an app tool error Activity keeps, and a result's title is web text."""
         if self.interactive is None or not self.interactive.web:
             return []
         if not self.web_search_on or self.stopped:
             return []
         if self.web_search_failures >= WEB_SEARCH_FAILS:
             return []
-        return [
-            f'"{title}" {url}' if title else url
-            for url, title in self.niche_links.items()
-            if url not in self.niche_done
-        ]
+        return [url for url in self.niche_links if url not in self.niche_done]
 
     def niche_left_text(self) -> str:
         """J28: `niche_left` as the refusal and the answers name it, "" when none."""

@@ -197,7 +197,7 @@ def test_two_reunion_results_must_be_opened_before_the_run_finishes_not_the_pari
     assert REUNION_1 in said_
     assert REUNION_2 in said_
     assert PARIS not in said_
-    assert '"Data engineer (CDI), Example Data"' in said_
+    assert "Example Data" not in said_  # addresses only: a title is web text Activity keeps
     assert session.plan_unfinished()
     asyncio.run(session.web_fetch(REUNION_1))
     said_, error = session.report_none("no_match")
@@ -265,7 +265,7 @@ def test_a_result_twice_counts_once_and_one_opened_before_is_done() -> None:
     answer(session, LINKS)
     answer(session, LINKS)
     assert list(session.niche_links) == [REUNION_1, REUNION_2]
-    assert session.niche_left() == ['"Data engineer (CDI), Example Data" ' + REUNION_2]
+    assert session.niche_left() == [REUNION_2]
 
 
 def test_a_failed_answer_and_a_website_run_collect_nothing() -> None:
