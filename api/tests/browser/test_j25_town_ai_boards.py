@@ -105,6 +105,15 @@ AI = [
     (REUNION, "site:the-intelligence-academy.com/job-board La Réunion", True),
     (REUNION, "site:the-intelligence-academy.com data scientist Saint-Denis 974", True),
     (REUNION, "site:the-intelligence-academy.com data scientist", False),  # no place
+    # Round 1 of #818: Hellowork, a national board of the place too, only with the main town.
+    (REUNION, "site:hellowork.com data scientist Saint-Denis La Réunion", True),
+    (REUNION, "site:hellowork.com data scientist Saint-Denis 97400", True),
+    (REUNION, "site:www.hellowork.com/fr-fr/emploi data Saint-Denis La Réunion", True),
+    (REUNION, "site:hellowork.com data scientist La Réunion", False),  # the J23 boards query
+    (REUNION, "site:hellowork.com intelligence artificielle La Réunion", False),
+    (REUNION, "site:hellowork.com data scientist 974", False),
+    (REUNION, "site:hellowork.com data scientist Saint-Denis", False),  # no place
+    (THREE, "site:hellowork.com data Saint-Denis La Réunion OR Tahiti", False),
     (REUNION, "site:intelligence-academy.example.test La Réunion", False),
     (REUNION, "offre emploi Saint-Denis La Réunion", False),  # no title nor role
     (REUNION, "offre emploi data scientist La Réunion", False),  # no town
@@ -121,6 +130,7 @@ AI = [
     (THREE, "offre emploi data Saint-Denis La Réunion Guadeloupe", False),
     (("Lyon, France",), "offre emploi data scientist Lyon", True),
     (("Lyon, France",), "offre emploi Lyon", False),
+    (("Lyon, France",), "site:hellowork.com data Lyon", True),  # no towns: the place itself
 ]
 
 
@@ -174,7 +184,7 @@ def test_the_refusal_names_example_queries_and_the_niche_boards() -> None:
     assert said == (
         "for La Réunion: a query of its own aimed at AI and tech job boards "
         f'("offre emploi {TITLE} Saint-Denis La Réunion", or site:the-intelligence-academy.com '
-        "OR site:welcometothejungle.com OR site:free-work.com OR "
+        "OR site:hellowork.com OR site:welcometothejungle.com OR site:free-work.com OR "
         "site:lesjeudis.com OR site:chooseyourboss.com OR site:aijobs.net La Réunion)"
     )
     said = web_plan.left_text((row,), [COVERING[1]])
@@ -211,6 +221,7 @@ def test_the_shown_plan_names_the_main_town_and_the_ai_boards() -> None:
     assert reunion["ai_boards"][0] == f"offre emploi {TITLE} Saint-Denis La Réunion"
     assert "site:welcometothejungle.com" in reunion["ai_boards"]
     assert "site:the-intelligence-academy.com" in reunion["ai_boards"]
+    assert "site:hellowork.com" in reunion["ai_boards"]
     lyon = web_plan.shown(plan("Lyon, France"))["places"][0]
     assert "main_town" not in lyon
     assert lyon["ai_boards"][0] == f"offre emploi {TITLE} Lyon, France"

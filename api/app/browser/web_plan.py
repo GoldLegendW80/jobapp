@@ -22,7 +22,8 @@ tests/browser/test_j23_web_breadth.py):
   Saint-Denis for La Réunion, Pointe-à-Pitre, Papeete); a place without a town table has none;
 - `ai_boards` (J25): a query aimed at AI and tech job boards: an offer phrase ("offre emploi",
   OFFER_PHRASES) with a saved title or a planned role and the main town (the place itself for a
-  place without towns), or a `site:` query of a niche board (NICHE).
+  place without towns), or a `site:` query of a niche board (NICHE); a niche board that is also
+  a national board of the row (Hellowork) only in a query naming the main town.
 The owner's sweep of 2026-11-19 (81ab9533) ran six broad OR queries, which covered the first
 three families, and missed the AI and data CDIs of Saint-Denis Claude Code had found the day
 before with "offre emploi" and the town on a niche board. So each of `town` and `ai_boards`
@@ -249,9 +250,12 @@ POSTCODE = re.compile(r"\d{5}")
 # Jobs J25: the AI and tech job boards an `ai_boards` query may name by `site:`, and the offer
 # phrases (folded) of a person's own search for a job ("offre emploi data scientist Saint-Denis").
 # Public job boards only. The Intelligence Academy's /job-board pages listed the owner's best
-# Réunion matches on 2026-11-18.
+# Réunion matches on 2026-11-18. A board that is also a national board of the row (Hellowork)
+# counts here only in a query naming the main town (the place itself for a place without
+# towns): its `boards` query of the place alone asks nothing new of the AI boards.
 NICHE: tuple[Board, ...] = (
     Board("The Intelligence Academy", ("the-intelligence-academy.com",)),
+    Board("Hellowork", ("hellowork.com",)),
     Board("Welcome to the Jungle", ("welcometothejungle.com",)),
     Board("Free-Work", ("free-work.com",)),
     Board("LesJeudis", ("lesjeudis.com",)),
@@ -581,9 +585,12 @@ def coverage(row: Row, queries: list[str], rows: tuple[Row, ...] = ()) -> dict[s
                 town_queries.add(query.strip())
             offer = any(_has(text, phrase) for phrase in OFFER_PHRASES)
             named_role = bool(found_titles or found_roles) or not (row.titles or row.roles)
-            if (offer and named_role and (town or not row.town)) or any(
-                _board_named(b, sites) for b in NICHE
-            ):
+            national = {host for b in row.boards for host in b.hosts}
+            niche = any(
+                _board_named(b, sites) and (town or not row.town or not national & set(b.hosts))
+                for b in NICHE
+            )
+            if (offer and named_role and (town or not row.town)) or niche:
                 ai_queries.add(query.strip())
         if not ored:
             found_titles, found_roles = found_titles[:1], found_roles[:1]

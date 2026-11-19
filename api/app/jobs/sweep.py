@@ -529,7 +529,7 @@ class Known:
             .order_by(Job.created_at)
         )  # fmt: skip
         for company, title, location, url, slug, job_id, source, found_on in rows:
-            self.add(slugs.PostingKey.of(company, title, location, url), slug, job_id, source)
+            self.add_stored(company, title, location, url, slug, job_id, source)
             self.add_cross(_stored_cross(company, title, location), job_id, found_on)
 
     def add(
@@ -553,11 +553,36 @@ class Known:
                 self.jobs.setdefault(identity, job_id)
             self.sources[job_id] = source or ""
 
+    def add_stored(
+        self,
+        company: str,
+        title: str,
+        location: str | None,
+        url: str | None,
+        slug: str | None,
+        job_id: uuid.UUID,
+        source: str | None,
+    ) -> None:
+        """A stored row's keys: as it was written, and as J25 writes a new finding (the title
+        cleaned, the company the title names when none is stated), so a row stored before J25
+        with "Data Scientist H/F" is still the same posting by its employer, title and location.
+        The row itself is never edited."""
+        self.add(slugs.PostingKey.of(company, title, location, url), slug, job_id, source)
+        known = posting_titles.stated(company)
+        cleaned = posting_titles.clean(title, known, location)
+        named = known or cleaned.company or UNKNOWN_EMPLOYER
+        self.add(slugs.PostingKey.of(named, cleaned.title, location, url), slug, job_id, source)
+
     def add_cross(
         self, key: tuple[str, str, str] | None, job_id: uuid.UUID, found_on: date | None
     ) -> None:
-        if key is not None and found_on is not None:
-            self.cross.setdefault(key, (job_id, found_on))
+        """The newest row of a key wins (on a tie the later one): a copy is compared with the
+        last time the job was found, never with an older row past the window."""
+        if key is None or found_on is None:
+            return
+        kept = self.cross.get(key)
+        if kept is None or found_on >= kept[1]:
+            self.cross[key] = (job_id, found_on)
 
     def cross_job(self, key: tuple[str, str, str] | None, today: date) -> uuid.UUID | None:
         """The job found on another board this one is (J25), within WINDOW_DAYS of its day."""
@@ -1644,7 +1669,7 @@ def _store_finding(
             .where(sa.or_(Job.url == new.row["url"], Job.slug == new.row["slug"]))
         )
         for company_, title, location, url, slug, job_id, noted in rows:
-            plan.known.add(slugs.PostingKey.of(company_, title, location, url), slug, job_id, noted)
+            plan.known.add_stored(company_, title, location, url, slug, job_id, noted)
     delta.duplicates += 1
     job_id = plan.known.job_of(key) or plan.known.cross_job(cross, today)
     joined = plan.known.note(job_id, source) if job_id is not None else None
