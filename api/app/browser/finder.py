@@ -2215,14 +2215,25 @@ class FinderSession:
         self.finished = True
         return "Noted. Report any posting you opened, then stop.", False
 
-    def web_search_answered(self, failed: bool, call: str | None = None) -> None:
+    def web_search_answered(
+        self,
+        failed: bool,
+        call: str | None = None,
+        links: Sequence[tuple[str, str]] = (),
+    ) -> None:
         """J23: a WebSearch answer, an error or not (the runner's word, `web_search_answered` of
         the definition): WEB_SEARCH_FAILS errors in a row lift the plan's coverage. The query of
-        `call` counts for the plan only when its answer was no error (round 1 of #814)."""
+        `call` counts for the plan only when its answer was no error (round 1 of #814). J28: the
+        results (title, address) of an answer that is no error, read with that query (round 1
+        of #824: `note_niche_links`)."""
         self.web_search_failures = self.web_search_failures + 1 if failed else 0
         query = self.web_pending.pop(call, None) if call else None
-        if query is not None and not failed:
+        if failed:
+            return
+        if query is not None:
             self.web_queries.append(query)
+        if links:
+            self.note_niche_links(links, query)
 
     def web_plan(self) -> tuple[web_plan.Row, ...]:
         """J23: the plan of the web source's searches (web_plan.plan_of), from its scope."""
@@ -2299,10 +2310,12 @@ class FinderSession:
             )
         return json.dumps(answer)
 
-    def note_niche_links(self, links: Sequence[tuple[str, str]]) -> None:
+    def note_niche_links(self, links: Sequence[tuple[str, str]], query: str | None = None) -> None:
         """J28: keep the niche board results in a wanted place of a WebSearch answer (the
         runner's word, `web_search_answered`), the first web_plan.NICHE_LINKS_MAX of the run in
-        answer order, each once. A result the agent already opened or reported counts as done."""
+        answer order, each once. A result the agent already opened or reported counts as done.
+        `query`, the answer's WebSearch query when one was pending, places a job posting address
+        of a board (web_plan.niche_link, round 1 of #824); None: the title and address only."""
         if self.interactive is None or not self.interactive.web or self.stopped:
             return
         rows = None
@@ -2320,7 +2333,7 @@ class FinderSession:
                 : web_plan.LINK_TITLE_MAX
             ]
             rows = self.web_plan() if rows is None else rows
-            if not web_plan.niche_link(rows, title, key):
+            if not web_plan.niche_link(rows, title, key, query):
                 continue
             self.niche_links[key] = title
             if key in self.pages_read or key in self.error_pages or key in self.reported_urls:
@@ -2763,9 +2776,7 @@ class FinderDefinition(definitions.AgentDefinition):
         (title, address), whose niche board ones in a wanted place the agent must open."""
         session = session_of(run_id)
         if session is not None:
-            session.web_search_answered(failed, call)
-            if not failed:
-                session.note_niche_links(links)
+            session.web_search_answered(failed, call, links)
 
     def follow_up(self, run_id: uuid.UUID) -> str | None:
         """J27: the runner asks this when the agent ends its turn; what is left of the web
@@ -2911,8 +2922,9 @@ that no more postings fit, whatever you reported before): ending your turn earli
 end, the app asks you to go on.
 10. Open niche board results in wanted places before judging them (J28): each result of an AI
 and tech job board of the plan's `ai_boards` whose title or address names a wanted place or its
-main town is opened with web_fetch and judged on its own page, never from the results list; the
-app refuses report_no_postings while one is not opened or reported, and names those left.
+main town, or that is a job posting of that board found by a query naming one, is opened with
+web_fetch and judged on its own page, never from the results list; the app refuses
+report_no_postings while one is not opened or reported, and names those left.
 
 Rules: never bypass a security check, a captcha or a sign in page: a page that answers blocked
 is left, and another source of the same posting is fine. Never sign in, apply, write to anyone
