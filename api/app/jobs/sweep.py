@@ -100,7 +100,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.agents.runs import WorkflowRef
 from app.identity.models import User
-from app.jobs import schedule, scoring, service, signals
+from app.jobs import posting_titles, schedule, scoring, service, signals
 from app.jobs import slug as slugs
 from app.jobs.boards import catalog as boards
 from app.jobs.importer import kind
@@ -517,13 +517,20 @@ class Known:
         # sources is one row naming both). Filled by the constructor and `add`.
         self.jobs: dict[str | tuple[str, str, str], uuid.UUID] = {}
         self.sources: dict[uuid.UUID, str] = {}
+        # Jobs J25: one job across boards (posting_titles.cross_key), the job and the day it
+        # was found, read from the stored rows as they are (their titles cleaned to compare).
+        self.cross: dict[tuple[str, str, str], tuple[uuid.UUID, date]] = {}
         rows = db.execute(
-            sa.select(Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source)
+            sa.select(
+                Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source,
+                Job.found_on,
+            )
             .where(Job.user_id == user_id)
             .order_by(Job.created_at)
-        )
-        for company, title, location, url, slug, job_id, source in rows:
-            self.add(slugs.PostingKey.of(company, title, location, url), slug, job_id, source)
+        )  # fmt: skip
+        for company, title, location, url, slug, job_id, source, found_on in rows:
+            self.add_stored(company, title, location, url, slug, job_id, source)
+            self.add_cross(_stored_cross(company, title, location), job_id, found_on)
 
     def add(
         self,
@@ -546,12 +553,50 @@ class Known:
                 self.jobs.setdefault(identity, job_id)
             self.sources[job_id] = source or ""
 
+    def add_stored(
+        self,
+        company: str,
+        title: str,
+        location: str | None,
+        url: str | None,
+        slug: str | None,
+        job_id: uuid.UUID,
+        source: str | None,
+    ) -> None:
+        """A stored row's keys: as it was written, and as J25 writes a new finding (the title
+        cleaned, the company the title names when none is stated), so a row stored before J25
+        with "Data Scientist H/F" is still the same posting by its employer, title and location.
+        The row itself is never edited."""
+        self.add(slugs.PostingKey.of(company, title, location, url), slug, job_id, source)
+        known = posting_titles.stated(company)
+        cleaned = posting_titles.clean(title, known, location)
+        named = known or cleaned.company or UNKNOWN_EMPLOYER
+        self.add(slugs.PostingKey.of(named, cleaned.title, location, url), slug, job_id, source)
+
+    def add_cross(
+        self, key: tuple[str, str, str] | None, job_id: uuid.UUID, found_on: date | None
+    ) -> None:
+        """The newest row of a key wins (on a tie the later one): a copy is compared with the
+        last time the job was found, never with an older row past the window."""
+        if key is None or found_on is None:
+            return
+        kept = self.cross.get(key)
+        if kept is None or found_on >= kept[1]:
+            self.cross[key] = (job_id, found_on)
+
+    def cross_job(self, key: tuple[str, str, str] | None, today: date) -> uuid.UUID | None:
+        """The job found on another board this one is (J25), within WINDOW_DAYS of its day."""
+        found = self.cross.get(key) if key is not None else None
+        if found is None or abs((today - found[1]).days) > posting_titles.WINDOW_DAYS:
+            return None
+        return found[0]
+
     def copy(self) -> "Known":
         """An independent copy: a commit stages its keys there and publishes them after it."""
         other = Known.__new__(Known)
         other.urls, other.identities = set(self.urls), set(self.identities)
         other.slugs, other.jobs = set(self.slugs), dict(self.jobs)
-        other.sources = dict(self.sources)
+        other.sources, other.cross = dict(self.sources), dict(self.cross)
         return other
 
     def job_of(self, key: slugs.PostingKey) -> uuid.UUID | None:
@@ -575,6 +620,15 @@ class Known:
 
     def has(self, key: slugs.PostingKey) -> bool:
         return (key.url is not None and key.url in self.urls) or _identity(key) in self.identities
+
+
+def _stored_cross(
+    company: str | None, title: str, location: str | None
+) -> tuple[str, str, str] | None:
+    """The cross-board key of a stored row: its company, else the one its title names."""
+    if posting_titles.stated(company) is None:
+        company = posting_titles.clean(title, None, location).company
+    return posting_titles.cross_key(company, title, location)
 
 
 # A job's `source` names every source that found it, the first one first, joined by SOURCES_SEP
@@ -1551,15 +1605,24 @@ def _store_finding(
     db: Session, plan: Plan, source_id: str, source: str, finding: Any, delta: Stats,
     now: datetime,
 ) -> None:  # fmt: skip
-    company = finding.company or UNKNOWN_EMPLOYER
+    # Jobs J25: the title without gender markers and board boilerplate, the company it names
+    # when none is stated; the title as shown stays in the posting's text.
+    cleaned = posting_titles.clean(finding.title, finding.company, finding.location)
+    company = finding.company or cleaned.company or UNKNOWN_EMPLOYER
+    text = finding.text
+    shown = posting_titles.title_key(finding.title)
+    if cleaned.changed and f" {shown} " not in f" {posting_titles.title_key(text)} ":
+        text = f"{finding.title}\n\n{text}"
     posting = Posting(
-        finding.title, finding.location, finding.url, finding.published_on or "", finding.text
+        cleaned.title, finding.location, finding.url, finding.published_on or "", text
     )
     delta.seen += 1
     delta.matched += 1
     key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
+    cross = posting_titles.cross_key(company, posting.title, posting.location)
+    today = now.astimezone(SWEEP_TZ).date()
     for _ in range(2):
-        if plan.known.has(key):
+        if plan.known.has(key) or plan.known.cross_job(cross, today) is not None:
             break
         new = _new_job(
             plan,
@@ -1578,12 +1641,15 @@ def _store_finding(
             "unknown": [
                 name
                 for name, value in (
-                    ("company", finding.company),
+                    ("company", finding.company or cleaned.company),
                     ("published_on", finding.published_on),
                     ("location", finding.location),
                 )
                 if not value
             ],
+            **({"title_shown": finding.title} if cleaned.changed else {}),
+            **({"company_from_title": True} if cleaned.company and not finding.company else {}),
+            **({"recruiter": True} if posting_titles.is_recruiter(company) else {}),
         }
         inserted = db.execute(
             pg_insert(Job).values(new.row).on_conflict_do_nothing().returning(Job.id)
@@ -1591,6 +1657,7 @@ def _store_finding(
         if inserted is not None:
             db.execute(sa.insert(JobEvent), new.events)
             plan.known.add(key, new.row["slug"], new.row["id"], source)
+            plan.known.add_cross(cross, new.row["id"], today)
             delta.new += 1
             delta.skipped_by_rule += new.rule is not None
             return
@@ -1602,9 +1669,9 @@ def _store_finding(
             .where(sa.or_(Job.url == new.row["url"], Job.slug == new.row["slug"]))
         )
         for company_, title, location, url, slug, job_id, noted in rows:
-            plan.known.add(slugs.PostingKey.of(company_, title, location, url), slug, job_id, noted)
+            plan.known.add_stored(company_, title, location, url, slug, job_id, noted)
     delta.duplicates += 1
-    job_id = plan.known.job_of(key)
+    job_id = plan.known.job_of(key) or plan.known.cross_job(cross, today)
     joined = plan.known.note(job_id, source) if job_id is not None else None
     if joined is not None:
         db.execute(

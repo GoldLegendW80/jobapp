@@ -1,7 +1,8 @@
 """Jobs J21, round 1 of #809: the fake backend's web search stream (fake_streams/
 web_discovery.json), the one every journey stack's sweep runs for "Anywhere on the web": one
 stubbed WebSearch of the query that covers the run's plan (jobs J23, round 2 of #814:
-`{web_plan_query}`, web_plan.covering_query), answered with results, then no_match, accepted,
+`{web_plan_query}`, web_plan.covering_query), then each place's town and AI boards query (jobs
+J25, `{web_plan_queries}`), answered with results, then no_match, accepted,
 no browserd call: searched with nothing new, whatever the scope. Its variant
 web_discovery_failing.json answers each WebSearch with an error: the source then ends
 `web_search_failed` and the failed queries count for no plan (round 1 of #814). A refusal of the
@@ -107,11 +108,14 @@ def test_the_fake_web_stream_searches_its_plan_and_finds_nothing_new(
     profile: str,
 ) -> None:
     session, browser = run_web(runtime, alice, places, profile=profile)
-    query = web_plan.covering_query(session.web_plan())
-    assert query
-    assert (session.web_searches, session.outcome, session.stopped) == (1, "no_match", "")
+    # J25: the covering query, then each place's town and AI boards queries.
+    queries = web_plan.covering_queries(session.web_plan())
+    assert queries
+    assert queries[0] == web_plan.covering_query(session.web_plan())
+    searched = (session.web_searches, session.outcome, session.stopped)
+    assert searched == (len(queries), "no_match", "")
     assert session.web_search_failures == 0
-    assert (session.web_queries, session.web_pending) == ([query], {})  # counted once answered
+    assert (session.web_queries, session.web_pending) == (queries, {})  # counted once answered
     assert session.web_left() == ""  # the plan is searched: accepted on the first try
     assert interactive.outcome(session) is None  # searched with nothing new
     assert browser.calls == []

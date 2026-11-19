@@ -224,7 +224,8 @@ def test_adzuna_reads_the_stored_key(factory: sessionmaker[Session], alice: uuid
     assert entry["outcome"] == "complete"
     assert entry["postings"] == 2
     assert api.requests[0].url.params["app_key"] == APP_KEY
-    job = next(job for job in jobs_of(factory, alice) if job.title == "AI Engineer H/F")
+    # Jobs J25: the gender marker is taken out of the stored title.
+    job = next(job for job in jobs_of(factory, alice) if job.title == "AI Engineer")
     assert job.source == "adzuna"
     assert job.url == "https://www.adzuna.fr/land/ad/4001"
     assert job.contract_type is ContractType.CDI

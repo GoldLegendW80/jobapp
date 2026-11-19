@@ -97,8 +97,18 @@ def test_settings_refuse_the_fake_in_production() -> None:
 
 @pytest.mark.parametrize("name", fake_backend.scripts())
 def test_every_recorded_stream_parses(name: str) -> None:
-    steps = fake_backend.load_script(name)
+    script = fake_backend.load(name)
     variables = {"model": "claude-opus-5-5", "session_id": "s", "message": "m", "job_id": "j"}
+    allowed_keys = {"sleep", "message", "raise", "if_prompt", "unless_prompt"}
+    # Jobs J25: an `each` step is one copy of its step per item of a JSON list variable; check
+    # its own shape, then parse two copies of it (the replayed stream).
+    for step in script["steps"]:
+        if "each" in step:
+            assert set(step) == {"each", "step"}, step
+            assert isinstance(step["each"], str), step
+            assert set(step["step"]) <= allowed_keys, step
+            variables[step["each"]] = json.dumps(["data scientist La Réunion", "offre emploi"])
+    steps = fake_backend.expanded(script["steps"], variables)
     seen = []
     for step in steps:
         assert set(step) <= {"sleep", "message", "raise", "if_prompt", "unless_prompt"}, step

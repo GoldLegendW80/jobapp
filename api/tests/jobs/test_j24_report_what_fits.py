@@ -165,7 +165,7 @@ def stored(factory: sessionmaker[Session], user: uuid.UUID) -> dict[str, Job]:
 def assert_kept_what_fits(jobs: dict[str, Job]) -> None:
     # Full stack and data engineer postings, AI titles saved: stored, scored, found.
     assert set(jobs) == KEPT
-    assert jobs[FULL_STACK].title == "Developpeur Full Stack (H/F)"
+    assert jobs[FULL_STACK].title == "Developpeur Full Stack"  # J25: the marker taken out
     assert jobs[DATA_ENGINEER].title == "Data Engineer"
     for job in jobs.values():
         assert job.status is JobStatus.found
