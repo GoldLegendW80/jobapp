@@ -184,6 +184,13 @@ class AgentDefinition:
         error, and its tool call's id (jobs J23). Nothing by default; the web source counts the
         errors in a row, and a query for its plan only once answered without one."""
 
+    def follow_up(self, run_id: uuid.UUID) -> str | None:
+        """Asked by the runner when run `run_id`'s agent ended its turn cleanly: a message that
+        continues the same session (a follow up user message, at most runner.FOLLOW_UPS_MAX a
+        run), or None to let the run end. None by default; the web source names what is left
+        of its search plan (jobs J27)."""
+        return None
+
     def stream_variables(self, data: dict[str, Any]) -> dict[str, str]:
         """What the fake backend fills into this agent's stream for a run of input `data`, beside
         `message` and `job_id` (`{name}` in the stream; the real backend reads none). Nothing by

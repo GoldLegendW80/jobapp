@@ -1240,6 +1240,7 @@ NOT_RETRIED = frozenset(
         "too_large",
         "rate_limited",
         "web_search_failed",
+        "plan_unfinished",
         "blocked",
         "not_found",
         "host_rate_limited",

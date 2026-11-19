@@ -983,11 +983,27 @@ class _State:
     # definition's own) is no failure of the search engine.
     web_search_answered: Callable[[bool, str], None] | None = None
     web_search_passed: set[str] = field(default_factory=set)
+    # Jobs J27: the follow up messages that continued the session (`_follow_up`).
+    follow_ups: int = 0
+    # Jobs J27: every result of the run, one per query. Measured in Claude Code 2.1.286: a
+    # result's `usage` and `num_turns` are its own query's, while `total_cost_usd` is the
+    # session's total so far; the run's tokens and turns are the sums, its cost the last one.
+    results: list[ResultMessage] = field(default_factory=list)
+
+    def took(self, message: ResultMessage) -> None:
+        """Keep a result once: the counting reader and the handler both see it."""
+        if not any(seen is message for seen in self.results):
+            self.results.append(message)
+        self.result = message
+
+    @property
+    def turns(self) -> int:
+        return sum(_int(result.num_turns) for result in self.results)
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
         return {
-            "turns": _int(self.result.num_turns) if self.result is not None else 0,
+            "turns": self.turns,
             "text_blocks": self.text_blocks,
             "text_chars": self.text_chars,
             "tool_calls": self.tool_calls,
@@ -1042,13 +1058,16 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                         answered(bool(block.is_error), block.tool_use_id)
                     await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
-        state.result = message
+        state.took(message)
         # The kind goes with the amount: the browser words the amount by kind (a cost, or an
         # estimate on a subscription) and has it in the same step, without waiting for the
         # run's detail to be read again (issue #80: the label flickered until then).
-        await recorder.emit(
-            "usage", {**usage_of(message), "credential_kind": state.credential_kind}
-        )
+        usage = {**usage_of(message), "credential_kind": state.credential_kind}
+        if state.follow_ups:
+            # Jobs J27: a follow up's query. Its tokens and turns are that query's own, its
+            # cost the session's total so far (the CLI's); the step log words them so.
+            usage["follow_ups"] = state.follow_ups
+        await recorder.emit("usage", usage)
     elif isinstance(message, SystemMessage):
         if message.subtype == "init":
             data = message.data
@@ -1096,16 +1115,18 @@ def _cost(value: Any) -> Decimal | None:
     return cost.quantize(Decimal("0.000001")) if cost.is_finite() and cost >= 0 else None
 
 
-def _tokens(result: ResultMessage | None) -> tuple[int | None, int | None]:
-    if result is None or not result.usage:
+def _tokens(state: _State) -> tuple[int | None, int | None]:
+    """The run's tokens: the sum over its results, each giving its own query's usage."""
+    used = [usage_of(result) for result in state.results if result.usage]
+    if not used:
         return None, None
-    usage = usage_of(result)
-    total_in = (
+    total_in = sum(
         usage["input_tokens"]
         + usage["cache_creation_input_tokens"]
         + usage["cache_read_input_tokens"]
+        for usage in used
     )
-    return total_in, usage["output_tokens"]
+    return total_in, sum(usage["output_tokens"] for usage in used)
 
 
 def _minutes(seconds: float) -> str:
@@ -1124,7 +1145,7 @@ def outcome_of(
     """How the run ended. `stopped` is what `_run_stream` returned; `model` the one chosen for
     the run's credential (the definition's own when none is given)."""
     result = state.result
-    input_tokens, output_tokens = _tokens(result)
+    input_tokens, output_tokens = _tokens(state)
     usage = {
         "model": state.model or model or definition.model,
         "input_tokens": input_tokens,
@@ -1228,7 +1249,7 @@ async def _drive_counting(messages: Any, budget: Budget, state: _State, recorder
                 elif isinstance(message, ResultMessage):
                     # What the run used in all: kept even when the run is cut while its
                     # events are still being written.
-                    state.result = message
+                    state.took(message)
                 queue.put_nowait(message)
         finally:
             queue.put_nowait(end)
@@ -1243,6 +1264,48 @@ async def _drive_counting(messages: Any, budget: Budget, state: _State, recorder
             reader.cancel()
         # Awaited inside the caller's `aclosing`: the stream's `finally` runs in the reader.
         await asyncio.gather(reader, return_exceptions=True)
+
+
+# Jobs J27: the most follow up messages one run is continued with when its agent ends its turn
+# with work its definition says is left (AgentDefinition.follow_up); past them the run ends,
+# and its definition labels the end (the web source: `plan_unfinished`).
+FOLLOW_UPS_MAX = 2
+
+
+def _follow_up(
+    definition: definitions.AgentDefinition,
+    run_id: uuid.UUID,
+    state: _State,
+    recorder: Recorder,
+) -> Callable[[], Awaitable[str | None]]:
+    """The backend's `follow_up` of a run (jobs J27): after a clean turn (a success result, no
+    budget, no credit error), the definition's follow up message, at most FOLLOW_UPS_MAX times,
+    each recorded as a `follow_up` event (numbers only: the message names the person's
+    search); the definition still asking past them is recorded once as `unfinished`. A run
+    with a token budget is never continued: its events are handled behind the stream
+    (`_drive_counting`), so the definition could be asked before it heard every answer."""
+
+    async def follow_up() -> str | None:
+        result = state.result
+        if (
+            result is None
+            or result.is_error
+            or result.subtype != "success"
+            or state.budget is not None
+            or state.no_credit
+        ):
+            return None
+        text = definition.follow_up(run_id)
+        if not text:
+            return None
+        if state.follow_ups >= FOLLOW_UPS_MAX:
+            await recorder.emit("unfinished", {"follow_ups": state.follow_ups})
+            return None
+        state.follow_ups += 1
+        await recorder.emit("follow_up", {"attempt": state.follow_ups, "of": FOLLOW_UPS_MAX})
+        return text
+
+    return follow_up
 
 
 async def _watch_cancel(context: RunContext, run_id: uuid.UUID) -> None:
@@ -1701,6 +1764,7 @@ async def _execute(
             # Fake backend only: the input's recorded stream, else the one named after the agent.
             script=data.get("script") or definition.name,
             variables=variables,
+            follow_up=_follow_up(definition, run_id, state, recorder),
         )
         backend = context.backend_factory()
         try:
@@ -1717,8 +1781,8 @@ async def _execute(
                 status=RunStatus.failed,
                 error=error_of(exc),
                 model=state.model or model,
-                input_tokens=_tokens(state.result)[0],
-                output_tokens=_tokens(state.result)[1],
+                input_tokens=_tokens(state)[0],
+                output_tokens=_tokens(state)[1],
                 cost_usd=_cost(state.result.total_cost_usd) if state.result else None,
             )
             return RunStatus.failed

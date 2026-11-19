@@ -209,6 +209,20 @@ function usageView(
     // The step says which kind of credential the run used; older steps do not.
     kindOfUsage(data) ?? kind,
   );
+  // Jobs J27: a follow up is a new query of the same session. Its result gives that query's
+  // tokens but the session's cost so far, so the step says which is which.
+  const followUps = Number(data.follow_ups ?? 0);
+  if (followUps > 0) {
+    return {
+      icon: "measure",
+      title: `Usage of follow up ${followUps}`,
+      body: {
+        kind: "note",
+        text: `This query: ${tokens}. Total so far: ${cost}`,
+      },
+      tone: "muted",
+    };
+  }
   return {
     icon: "measure",
     title: "Usage",
@@ -264,6 +278,27 @@ export function describeStep(
         title: "Model API error",
         body: { kind: "note", text: text(data.error) },
         tone: "error",
+      };
+    // The app continued the session: the agent ended its turn with work left (jobs J27).
+    case "follow_up":
+      return {
+        icon: "measure",
+        title: `Asked to go on (${Number(data.attempt ?? 0)} of ${Number(data.of ?? 0)})`,
+        body: {
+          kind: "note",
+          text: "The assistant ended its turn with searches of its plan left, so the app asked it to go on.",
+        },
+        tone: "muted",
+      };
+    case "unfinished":
+      return {
+        icon: "problem",
+        title: "Ended with its plan unfinished",
+        body: {
+          kind: "note",
+          text: "The assistant ended its turn again after the app asked it to go on. What it found is kept.",
+        },
+        tone: "warning",
       };
     case "rate_limit":
       return {

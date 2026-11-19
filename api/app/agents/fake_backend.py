@@ -51,7 +51,8 @@ and `tests/agents/test_g6_real_cli.py` (opt-in) runs the CLI itself.
    replayed as the CLI behaves: the gate is asked about the run's own tools only, and any other
    call is answered at once with the CLI's error.
 3. **A result the replay makes up reports no usage** (interrupt, turn limit, hook stop, a
-   stream without its own result step). The real CLI's result is cumulative over the run.
+   stream without its own result step). Like the CLI's, its `num_turns` counts its own query's
+   turns and its `total_cost_usd` is the session's total so far (the last result's cost).
 
 Partial messages (issue #33; facts and the recording in tasks/agents/todo.md). When the options
 ask for them (`include_partial_messages`), the replay also yields the `stream_event` messages
@@ -65,6 +66,13 @@ the CLI prints, in the order recorded from the pinned CLI (2.1.286) against a st
                         stream_event content_block_stop
     user message with the tool results (when the message called tools)
     stream_event message_delta, stream_event message_stop
+
+Follow ups (jobs J27). After a result (a `result` step, or the one made at the end), the replay
+asks the request's `follow_up`, as the real backend does before its next query: a message
+continues the same session, and the steps after that result are its turn (none left: the turn
+ends at once with a result of its own). `seen_follow_ups` lists the messages. Measured in the
+pinned CLI (2.1.286): each result's `usage` and `num_turns` are its own query's, its
+`total_cost_usd` the session's total so far; a stream's recorded results say the same.
 
 A stream that holds `stream_event` steps itself (`partial_recorded`, the recording) is replayed
 as it is. For every other stream they are built from each assistant message: its blocks one by
@@ -198,6 +206,10 @@ class FakeBackend:
         self._gate_all = True
         self._web_results: list[dict[str, str]] = []
         self._web_error: str | None = None
+        # Jobs J27: the follow up messages the runner continued the session with.
+        self.seen_follow_ups: list[str] = []
+        # The session's cost so far: the last recorded result's (the CLI's is cumulative).
+        self._session_cost = 0.0
 
     async def interrupt(self) -> None:
         self._interrupted.set()
@@ -236,7 +248,8 @@ class FakeBackend:
         recorded = any(_is_stream_event(step) for step in steps)
         pacing = script.get("partial") or {}
         started = time.monotonic()
-        turns = 0
+        turns = 0  # of the current query: a follow up starts a new count, as in the CLI
+        self._session_cost = 0.0
         replayed: set[int] = set()  # recorded steps already yielded ahead of their turn
         for position, step in enumerate(steps):
             if position in replayed or not kept(step, request.prompt or ""):
@@ -280,7 +293,13 @@ class FakeBackend:
                     continue
                 yield message
             if raw.get("type") == "result":
-                return
+                cost = raw.get("total_cost_usd")
+                if isinstance(cost, int | float) and not isinstance(cost, bool):
+                    self._session_cost = float(cost)
+                if not await self._follow(request):
+                    return
+                turns = 0
+                continue  # J27: the steps after a result are the follow up's turn
             calls = [
                 block
                 for block in raw.get("message", {}).get("content", [])
@@ -324,6 +343,20 @@ class FakeBackend:
             for event in self._closing(variables, raw) if built else ():
                 yield event
         yield self._result(variables, started, turns, "success", False)
+        # J27: past the stream's last step, the model ends each follow up's turn at once.
+        while await self._follow(request):
+            yield self._result(variables, started, 0, "success", False)
+
+    async def _follow(self, request: BackendRequest) -> bool:
+        """Jobs J27: after a result, whether the runner continues the session with a follow up
+        message (kept in `seen_follow_ups`): the stream's next steps are then that turn."""
+        if request.follow_up is None or self._interrupted.is_set():
+            return False
+        text = await request.follow_up()
+        if text is None:
+            return False
+        self.seen_follow_ups.append(text)
+        return True
 
     def _event(self, variables: dict[str, str], event: dict[str, Any]) -> Any:
         return parse_message(
@@ -500,7 +533,7 @@ class FakeBackend:
             "duration_api_ms": 0,
             "num_turns": turns + 1,
             "session_id": variables["session_id"],
-            "total_cost_usd": 0.0,
+            "total_cost_usd": self._session_cost,
             "usage": {"input_tokens": 0, "output_tokens": 0},
             "terminal_reason": "aborted_streaming"
             if subtype == "error_during_execution"

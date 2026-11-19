@@ -1467,6 +1467,9 @@ class FinderSession:
     seen: set[str] = field(default_factory=set)  # canonical addresses linked from a page read
     interactions: Counter[str] = field(default_factory=Counter)
     outcome: str = ""  # why the agent reported no posting, a NO_POSTINGS key (the last word)
+    # Jobs J27: report_no_postings was accepted (or answered a stopped session), the web
+    # source's one explicit end: a turn ended without it while its plan is left is continued.
+    finished: bool = False
     current: str = ""
     interactive: InteractiveScope | None = None
     on_verified: Callable[[VerifiedBatch], Awaitable[None]] | None = None
@@ -2175,10 +2178,12 @@ class FinderSession:
             # Round 1 of #814: nothing can be searched any more (the lease ended, the permission
             # was taken back, the run cancelled), so nothing is left; the stop is the outcome.
             self.outcome = reason
+            self.finished = True
             return f"Noted. Stopped: {self.stopped}. Report what you found, then stop.", False
         if self.interactive.web:
             plan_left = self.web_left()
             if plan_left:
+                # J27: a posting reported spares nothing of the plan.
                 return (
                     "Refused: do not give up yet, the plan of your first message is not searched."
                     f" Still to search with WebSearch, each query naming the place: {plan_left}."
@@ -2192,6 +2197,7 @@ class FinderSession:
                 "(browser_ask_person): the search box may then be left, the other routes not."
             ), True
         self.outcome = reason
+        self.finished = True
         return "Noted. Report any posting you opened, then stop.", False
 
     def web_search_answered(self, failed: bool, call: str | None = None) -> None:
@@ -2212,14 +2218,51 @@ class FinderSession:
 
     def web_left(self) -> str:
         """J23: what the web source must still search before `report_no_postings` holds, "" when
-        nothing: a posting kept, WebSearch not offered or failing WEB_SEARCH_FAILS times in a
-        row, or every family of the plan searched (web_plan.left). A block or a refusal of the
-        app spares nothing: they stop a page, never WebSearch."""
-        if self.found or self.verified_count or not self.web_search_on or self.stopped:
+        nothing: WebSearch not offered or failing WEB_SEARCH_FAILS times in a row, a stopped
+        session, or every family of the plan searched (web_plan.left). A block or a refusal of
+        the app spares nothing: they stop a page, never WebSearch. Jobs J27: a posting kept
+        spares nothing either, as Claude Code goes on searching after a first find."""
+        if self.interactive is None or not self.interactive.web:
+            return ""
+        if not self.web_search_on or self.stopped:
             return ""
         if self.web_search_failures >= WEB_SEARCH_FAILS:
             return ""
         return web_plan.left_text(self.web_plan(), self.web_queries)
+
+    def go_on(self) -> str | None:
+        """J27: the follow up message of a web run whose agent ended its turn without
+        report_no_postings while its plan is left (`FinderDefinition.follow_up`), None when
+        the run may end: not the web source, finished, or nothing left (`web_left`)."""
+        if self.finished:
+            return None
+        left = self.web_left()
+        if not left:
+            return None
+        return (
+            "You ended your turn, but the search plan of your first message is not searched."
+            f" Still to search with WebSearch, each query naming the place: {left}. Go on:"
+            " search them, open and report each posting that fits with report_postings, then"
+            ' end with report_no_postings("no_match") once nothing is left.'
+        )
+
+    def plan_unfinished(self) -> bool:
+        """J27: the web run ended without report_no_postings while its plan was left (the
+        runner's follow ups spent): the outcome `plan_unfinished`, whatever was reported."""
+        return not self.finished and bool(self.web_left())
+
+    def _with_plan(self, answer: dict[str, Any]) -> str:
+        """J27: a report_postings answer of the web source, with what is left of its plan and
+        the word to go on while anything is."""
+        left = self.web_left()
+        if left and not self.stopped:
+            answer["plan_left"] = left
+            answer["next"] = (
+                "Go on searching: the plan of your first message is not searched. Search what is"
+                " left with WebSearch, report what fits, then end with"
+                ' report_no_postings("no_match").'
+            )
+        return json.dumps(answer)
 
     def web_search_failed(self) -> bool:
         """J23, round 1 of #814: whether WebSearch failing WEB_SEARCH_FAILS times in a row lifted
@@ -2270,7 +2313,7 @@ class FinderSession:
             else:
                 kept += 1
         answer = {"kept": kept, "refused": refusals[:50], "kept_in_all": len(self.found)}
-        return json.dumps(answer), False
+        return self._with_plan(answer), False
 
     async def report_verified(self, items: Any) -> tuple[str, bool]:
         """Commit bounded code-read observations before acknowledging any saved finding."""
@@ -2333,7 +2376,7 @@ class FinderSession:
             return self._stop("store_failed")
         if self.stopped:
             return self._stop(self.stopped)
-        return json.dumps(
+        return self._with_plan(
             {"kept": kept, "refused": refusals[:50], "kept_in_all": self.verified_count}
         ), False
 
@@ -2621,6 +2664,12 @@ class FinderDefinition(definitions.AgentDefinition):
         if session is not None:
             session.web_search_answered(failed, call)
 
+    def follow_up(self, run_id: uuid.UUID) -> str | None:
+        """J27: the runner asks this when the agent ends its turn; what is left of the web
+        source's plan is said, so the same session goes on (`FinderSession.go_on`)."""
+        session = session_of(run_id)
+        return session.go_on() if session is not None else None
+
     def stream_variables(self, data: dict[str, Any]) -> dict[str, str]:
         """J23, round 2 of #814: the fake backend's web stream searches the one query that
         covers most of the run's plan (`{web_plan_query}`, web_plan.covering_query), whatever
@@ -2752,7 +2801,11 @@ address), and its text. The app checks each against the pages you opened and say
 for its date: the person sees the flag. Leave only a posting whose date is clearly older than
 the saved window (`criteria.days`, in days), such as an exact date before it or "il y a 3
 mois" for 30 days.
-8. When the plan is searched and nothing fits, say so with report_no_postings("no_match").
+8. A find never ends the search (J27): every report_postings answer says what is left of the
+plan, and you go on until it is searched, as Claude Code keeps searching after a first find.
+9. End the search with report_no_postings("no_match") once the plan is searched (it then says
+that no more postings fit, whatever you reported before): ending your turn earlier is not the
+end, the app asks you to go on.
 
 Rules: never bypass a security check, a captcha or a sign in page: a page that answers blocked
 is left, and another source of the same posting is fine. Never sign in, apply, write to anyone

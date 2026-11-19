@@ -39,6 +39,10 @@ class BackendRequest:
     # Fake backend only: the recorded stream to replay and the values put into it.
     script: str | None = None
     variables: dict[str, str] = field(default_factory=dict, repr=False)
+    # Asked after each result message of a clean turn (jobs J27): a follow up user message that
+    # continues the same session, or None to end the stream. None: the stream ends after the
+    # first result, as before.
+    follow_up: Callable[[], Awaitable[str | None]] | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:  # never print the prompt or the options
         return f"BackendRequest(script={self.script!r})"
@@ -68,6 +72,10 @@ class SdkBackend:
 
     def __init__(self) -> None:
         self._client: ClaudeSDKClient | None = None
+        # Set by interrupt() (the person's Cancel, the wall time): no follow up after it, since
+        # an interrupt that lands between two queries, or a turn that still ends with a clean
+        # result, would otherwise let the next query start a new model turn.
+        self._interrupted = False
 
     async def stream(self, request: BackendRequest) -> AsyncIterator[Any]:
         client = ClaudeSDKClient(options=request.options)
@@ -75,12 +83,22 @@ class SdkBackend:
         ended = False
         try:
             await client.connect()
-            await client.query(request.prompt)
-            # receive_response() ends after the ResultMessage (SDK docs). Never `break` out of
-            # it: the SDK warns that breaking early can leave its tasks half cleaned up.
-            async for message in client.receive_response():
-                ended = ended or isinstance(message, ResultMessage)
-                yield message
+            prompt: str | None = request.prompt
+            while prompt is not None:
+                await client.query(prompt)
+                ended = False
+                # receive_response() ends after the ResultMessage (SDK docs). Never `break` out
+                # of it: the SDK warns that breaking early can leave its tasks half cleaned up.
+                async for message in client.receive_response():
+                    ended = ended or isinstance(message, ResultMessage)
+                    yield message
+                # Jobs J27: the same session goes on with a follow up message, when one is due
+                # (the SDK's client takes another query once a response ended).
+                follow_up = request.follow_up
+                due = follow_up is not None and ended and not self._interrupted
+                prompt = await follow_up() if due else None
+                if self._interrupted:  # interrupted while the follow up was being asked for
+                    prompt = None
         finally:
             self._client = None
             try:
@@ -94,6 +112,7 @@ class SdkBackend:
                     await client.disconnect()
 
     async def interrupt(self) -> None:
+        self._interrupted = True
         client = self._client
         if client is not None:
             await client.interrupt()

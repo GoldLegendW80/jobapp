@@ -99,6 +99,7 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       "security_check",
       "nothing_reported",
       "web_search_failed",
+      "plan_unfinished",
       "no_credential",
       "agent_failed",
       "agent_cancelled",

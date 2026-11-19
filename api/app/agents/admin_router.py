@@ -376,12 +376,17 @@ def _versions(db: Session, agent: str) -> list[VersionOut]:
 
 
 def _runs(db: Session, agent: str, admin_id: uuid.UUID) -> list[RunRow]:
-    # Numbers only: the turns of the run's usage event, or of a private run's counts.
+    # Numbers only: the turns of the run's usage events, or of a private run's counts. Each
+    # usage event gives its own query's turns (jobs J27: a follow up is a new query), so the
+    # run's turns are their sum.
+    turns_of_event = AgentEvent.data["num_turns"]
     usage_turns = (
-        sa.select(AgentEvent.data["num_turns"])
-        .where(AgentEvent.run_id == AgentRun.id, AgentEvent.kind == "usage")
-        .order_by(AgentEvent.seq.desc())
-        .limit(1)
+        sa.select(sa.func.sum(turns_of_event.as_integer()))
+        .where(
+            AgentEvent.run_id == AgentRun.id,
+            AgentEvent.kind == "usage",
+            sa.func.jsonb_typeof(turns_of_event) == "number",
+        )
         .scalar_subquery()
     )
     rows = db.execute(
