@@ -1605,8 +1605,8 @@ def _store_finding(
     db: Session, plan: Plan, source_id: str, source: str, finding: Any, delta: Stats,
     now: datetime,
 ) -> None:  # fmt: skip
-    # Jobs J25: the title without gender markers and board boilerplate, the company it names
-    # when none is stated; the title as shown stays in the posting's text.
+    # Jobs J25: the title without gender markers, board boilerplate and (J26) contract markers,
+    # the company it names when none is stated; the title as shown stays in the posting's text.
     cleaned = posting_titles.clean(finding.title, finding.company, finding.location)
     company = finding.company or cleaned.company or UNKNOWN_EMPLOYER
     text = finding.text
@@ -1621,17 +1621,17 @@ def _store_finding(
     key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
     cross = posting_titles.cross_key(company, posting.title, posting.location)
     today = now.astimezone(SWEEP_TZ).date()
+    # Jobs J26: the contract markers the title lost still make the contract type.
+    contract = getattr(finding, "contract", None) or (
+        kind(f"{posting.title} {cleaned.contract}", posting.location, posting.url)
+        if cleaned.contract
+        else None
+    )
     for _ in range(2):
         if plan.known.has(key) or plan.known.cross_job(cross, today) is not None:
             break
         new = _new_job(
-            plan,
-            company,
-            posting,
-            source,
-            now,
-            getattr(finding, "contract", None),
-            getattr(finding, "work_mode", None),
+            plan, company, posting, source, now, contract, getattr(finding, "work_mode", None)
         )
         new.events[1]["data"]["discovery"] = {
             "source_id": source_id,
