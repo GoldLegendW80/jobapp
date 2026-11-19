@@ -209,6 +209,20 @@ function usageView(
     // The step says which kind of credential the run used; older steps do not.
     kindOfUsage(data) ?? kind,
   );
+  // Jobs J27: a follow up is a new query of the same session. Its result gives that query's
+  // tokens but the session's cost so far, so the step says which is which.
+  const followUps = Number(data.follow_ups ?? 0);
+  if (followUps > 0) {
+    return {
+      icon: "measure",
+      title: `Usage of follow up ${followUps}`,
+      body: {
+        kind: "note",
+        text: `This query: ${tokens}. Total so far: ${cost}`,
+      },
+      tone: "muted",
+    };
+  }
   return {
     icon: "measure",
     title: "Usage",

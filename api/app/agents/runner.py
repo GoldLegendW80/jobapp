@@ -985,11 +985,25 @@ class _State:
     web_search_passed: set[str] = field(default_factory=set)
     # Jobs J27: the follow up messages that continued the session (`_follow_up`).
     follow_ups: int = 0
+    # Jobs J27: every result of the run, one per query. Measured in Claude Code 2.1.286: a
+    # result's `usage` and `num_turns` are its own query's, while `total_cost_usd` is the
+    # session's total so far; the run's tokens and turns are the sums, its cost the last one.
+    results: list[ResultMessage] = field(default_factory=list)
+
+    def took(self, message: ResultMessage) -> None:
+        """Keep a result once: the counting reader and the handler both see it."""
+        if not any(seen is message for seen in self.results):
+            self.results.append(message)
+        self.result = message
+
+    @property
+    def turns(self) -> int:
+        return sum(_int(result.num_turns) for result in self.results)
 
     def counts(self) -> dict[str, int]:
         """The run in numbers only: what a private run stores as its output."""
         return {
-            "turns": _int(self.result.num_turns) if self.result is not None else 0,
+            "turns": self.turns,
             "text_blocks": self.text_blocks,
             "text_chars": self.text_chars,
             "tool_calls": self.tool_calls,
@@ -1044,13 +1058,16 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                         answered(bool(block.is_error), block.tool_use_id)
                     await recorder.emit("tool_result", recorder.tool_result(block))
     elif isinstance(message, ResultMessage):
-        state.result = message
+        state.took(message)
         # The kind goes with the amount: the browser words the amount by kind (a cost, or an
         # estimate on a subscription) and has it in the same step, without waiting for the
         # run's detail to be read again (issue #80: the label flickered until then).
-        await recorder.emit(
-            "usage", {**usage_of(message), "credential_kind": state.credential_kind}
-        )
+        usage = {**usage_of(message), "credential_kind": state.credential_kind}
+        if state.follow_ups:
+            # Jobs J27: a follow up's query. Its tokens and turns are that query's own, its
+            # cost the session's total so far (the CLI's); the step log words them so.
+            usage["follow_ups"] = state.follow_ups
+        await recorder.emit("usage", usage)
     elif isinstance(message, SystemMessage):
         if message.subtype == "init":
             data = message.data
@@ -1098,16 +1115,18 @@ def _cost(value: Any) -> Decimal | None:
     return cost.quantize(Decimal("0.000001")) if cost.is_finite() and cost >= 0 else None
 
 
-def _tokens(result: ResultMessage | None) -> tuple[int | None, int | None]:
-    if result is None or not result.usage:
+def _tokens(state: _State) -> tuple[int | None, int | None]:
+    """The run's tokens: the sum over its results, each giving its own query's usage."""
+    used = [usage_of(result) for result in state.results if result.usage]
+    if not used:
         return None, None
-    usage = usage_of(result)
-    total_in = (
+    total_in = sum(
         usage["input_tokens"]
         + usage["cache_creation_input_tokens"]
         + usage["cache_read_input_tokens"]
+        for usage in used
     )
-    return total_in, usage["output_tokens"]
+    return total_in, sum(usage["output_tokens"] for usage in used)
 
 
 def _minutes(seconds: float) -> str:
@@ -1126,7 +1145,7 @@ def outcome_of(
     """How the run ended. `stopped` is what `_run_stream` returned; `model` the one chosen for
     the run's credential (the definition's own when none is given)."""
     result = state.result
-    input_tokens, output_tokens = _tokens(result)
+    input_tokens, output_tokens = _tokens(state)
     usage = {
         "model": state.model or model or definition.model,
         "input_tokens": input_tokens,
@@ -1230,7 +1249,7 @@ async def _drive_counting(messages: Any, budget: Budget, state: _State, recorder
                 elif isinstance(message, ResultMessage):
                     # What the run used in all: kept even when the run is cut while its
                     # events are still being written.
-                    state.result = message
+                    state.took(message)
                 queue.put_nowait(message)
         finally:
             queue.put_nowait(end)
@@ -1762,8 +1781,8 @@ async def _execute(
                 status=RunStatus.failed,
                 error=error_of(exc),
                 model=state.model or model,
-                input_tokens=_tokens(state.result)[0],
-                output_tokens=_tokens(state.result)[1],
+                input_tokens=_tokens(state)[0],
+                output_tokens=_tokens(state)[1],
                 cost_usd=_cost(state.result.total_cost_usd) if state.result else None,
             )
             return RunStatus.failed

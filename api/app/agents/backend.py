@@ -72,6 +72,10 @@ class SdkBackend:
 
     def __init__(self) -> None:
         self._client: ClaudeSDKClient | None = None
+        # Set by interrupt() (the person's Cancel, the wall time): no follow up after it, since
+        # an interrupt that lands between two queries, or a turn that still ends with a clean
+        # result, would otherwise let the next query start a new model turn.
+        self._interrupted = False
 
     async def stream(self, request: BackendRequest) -> AsyncIterator[Any]:
         client = ClaudeSDKClient(options=request.options)
@@ -91,7 +95,10 @@ class SdkBackend:
                 # Jobs J27: the same session goes on with a follow up message, when one is due
                 # (the SDK's client takes another query once a response ended).
                 follow_up = request.follow_up
-                prompt = await follow_up() if follow_up is not None and ended else None
+                due = follow_up is not None and ended and not self._interrupted
+                prompt = await follow_up() if due else None
+                if self._interrupted:  # interrupted while the follow up was being asked for
+                    prompt = None
         finally:
             self._client = None
             try:
@@ -105,6 +112,7 @@ class SdkBackend:
                     await client.disconnect()
 
     async def interrupt(self) -> None:
+        self._interrupted = True
         client = self._client
         if client is not None:
             await client.interrupt()

@@ -29,6 +29,28 @@ describe("a follow up in the step log", () => {
     });
   });
 
+  it("words a follow up's usage as that query's tokens and the cost so far", () => {
+    const usage = {
+      input_tokens: 500,
+      output_tokens: 50,
+      cost_usd: 0.03,
+      credential_kind: "anthropic_api_key",
+    };
+    const first = describeStep(step("usage", usage), null);
+    expect(first?.title).toBe("Usage");
+    const later = describeStep(
+      step("usage", { ...usage, follow_ups: 1 }),
+      null,
+    );
+    expect(later?.title).toBe("Usage of follow up 1");
+    expect(later?.body).toEqual({
+      kind: "note",
+      text: "This query: 500 in, 50 out. Total so far: $0.03",
+    });
+    const body = later?.body && "text" in later.body ? later.body.text : "";
+    expect(`${later?.title} ${body}`).not.toMatch(/[–—]| - /);
+  });
+
   it("writes no dash as a separator", () => {
     for (const kind of ["follow_up", "unfinished"]) {
       const view = describeStep(step(kind, { attempt: 2, of: 2 }), null);

@@ -11,6 +11,7 @@ Every stream here is replayed by the fake Claude Code through the runner, on fak
 import asyncio
 import json
 import uuid
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -69,7 +70,9 @@ INIT = {
 }
 
 
-def result(n: int) -> dict[str, Any]:
+def result(n: int, used: tuple[int, int] = (9000, 120), cost: float = 0.0) -> dict[str, Any]:
+    """A query's result, as the pinned CLI prints it: `usage` and `num_turns` are the query's
+    own, `total_cost_usd` the session's total so far."""
     return {
         "message": {
             "type": "result",
@@ -80,8 +83,8 @@ def result(n: int) -> dict[str, Any]:
             "num_turns": 3,
             "session_id": "{session_id}",
             "uuid": f"00000000-0000-4000-8000-0000000009{n:02d}",
-            "total_cost_usd": 0.0,
-            "usage": {"input_tokens": 9000, "output_tokens": 120},
+            "total_cost_usd": cost,
+            "usage": {"input_tokens": used[0], "output_tokens": used[1]},
             "result": "One posting reported.",
         }
     }
@@ -184,6 +187,31 @@ def test_a_stream_that_reports_one_posting_then_ends_is_continued_until_the_plan
     assert session.web_searches == 1 + len(PLAN)
     assert (session.finished, session.outcome, session.web_left()) == (True, "no_match", "")
     assert interactive.outcome(session) is None  # searched, one posting kept
+
+
+def test_a_continued_run_sums_the_tokens_and_turns_of_each_query_and_keeps_the_last_cost(
+    runtime: Runtime,  # noqa: F811
+    alice,  # noqa: F811
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    # Measured in the pinned CLI (2.1.286): each result's usage and turns are its own query's,
+    # its cost the session's total so far. Summing the cost would count the first query twice.
+    first = [*FOUND_ONE_THEN_ENDED[:-1], result(1, (9000, 120), 0.01)]
+    follow_up = [
+        said(5, *(("WebSearch", {"query": q}) for q in PLAN)),
+        said(6, (APP + "report_no_postings", {"reason": "no_match"})),
+        said(7),
+        result(2, (500, 50), 0.03),
+    ]
+    _, _, events = run_web(runtime, alice, monkeypatch, tmp_path, first + follow_up)
+    [run] = runs_of(runtime.factory, alice)
+    assert (run.input_tokens, run.output_tokens) == (9500, 170)
+    assert run.cost_usd == Decimal("0.03")
+    assert run.output["turns"] == 6  # 3 per query
+    # Each usage event is its own query's: the step log words the later one as such.
+    usage = [data for kind, data in events if kind == "usage"]
+    assert [(u["input_tokens"], u["cost_usd"]) for u in usage] == [(9000, 0.01), (500, 0.03)]
 
 
 def test_every_report_postings_answer_says_what_is_left_and_to_go_on() -> None:
@@ -348,3 +376,83 @@ def test_the_real_backend_continues_the_same_session_with_each_follow_up(monkeyp
     # One client, one session: the follow up is a second query, never a new process.
     assert Fresh.prompts == ["first", "Still to search: the boards.", "<disconnect>"]
     assert told == []
+
+
+@pytest.mark.parametrize("when", ["after the result", "while the follow up is asked for"])
+def test_the_real_backend_sends_no_follow_up_once_interrupted(monkeypatch, when: str) -> None:
+    # The person's Cancel (or the wall time) interrupts the run between two queries: the CLI is
+    # idle then and does nothing, so the backend itself must not start the next query.
+    class Fresh(Client):
+        prompts: list[str] = []  # noqa: RUF012, one list per test
+        interrupts: list[str] = []  # noqa: RUF012
+
+        async def interrupt(self) -> None:
+            self.interrupts.append("<interrupt>")
+
+    monkeypatch.setattr(backend, "ClaudeSDKClient", Fresh)
+    sdk = backend.SdkBackend()
+    asked: list[str] = []
+
+    async def follow_up() -> str | None:
+        asked.append("asked")
+        if when == "while the follow up is asked for":
+            await sdk.interrupt()
+        return "Still to search: the boards."
+
+    request = backend.BackendRequest(
+        prompt="first", options=None, tools=None, gate=None, follow_up=follow_up
+    )  # type: ignore[arg-type]
+
+    async def go() -> list[Any]:
+        seen = []
+        async for message in sdk.stream(request):
+            seen.append(message)
+            if when == "after the result":
+                await sdk.interrupt()
+        return seen
+
+    assert len(asyncio.run(go())) == 1
+    assert Fresh.prompts == ["first", "<disconnect>"]  # no second query
+    assert Fresh.interrupts == ["<interrupt>"]
+    assert asked == ([] if when == "after the result" else ["asked"])
+
+
+def test_the_fake_follow_up_results_are_per_query_with_the_session_cost(
+    monkeypatch, tmp_path: Path
+) -> None:
+    # As the CLI: a follow up's result counts its own query's turns and usage, and its cost is
+    # the session's total so far (here the recorded result's, the made up turn costing nothing).
+    (tmp_path / "j27_cost.json").write_text(
+        json.dumps({"steps": [said(1), result(1, (9000, 120), 0.02)]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(fake_backend, "STREAMS", tmp_path)
+    told = ["Go on.", None]
+
+    async def follow_up() -> str | None:
+        return told.pop(0)
+
+    class Options:
+        env: dict[str, str] = {}  # noqa: RUF012
+        cwd = None
+        model = "claude-test"
+        max_turns = None
+
+    request = backend.BackendRequest(
+        prompt="first",
+        options=Options(),
+        tools=None,
+        gate=None,
+        follow_up=follow_up,
+        script="j27_cost",
+    )  # type: ignore[arg-type]
+    fake = fake_backend.FakeBackend()
+
+    async def go() -> list[Any]:
+        return [m async for m in fake.stream(request) if isinstance(m, ResultMessage)]
+
+    first, follow = asyncio.run(go())
+    assert (first.num_turns, first.total_cost_usd) == (3, 0.02)
+    assert (follow.num_turns, follow.total_cost_usd) == (1, 0.02)
+    assert follow.usage == {"input_tokens": 0, "output_tokens": 0}
+    assert fake.seen_follow_ups == ["Go on."]
