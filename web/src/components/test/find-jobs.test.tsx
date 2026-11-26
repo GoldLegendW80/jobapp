@@ -7,6 +7,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { fakeProfile } from "@/test/profile";
+import { fakeSearches } from "@/test/searches";
 import { emptySweeps, mainSearchOnly, server } from "@/test/server";
 
 import type {
@@ -584,26 +585,29 @@ describe("Find jobs", () => {
     },
   );
 
-  it("follows the sweep already running on a second start (409)", async () => {
-    fakeSweeps({
+  it("puts the main search in the line on a second start (409), with the words of Run now", async () => {
+    const calls = fakeSweeps({
       start: () =>
         HttpResponse.json(
           { detail: "A sweep is already running.", sweep_id: ID },
           { status: 409 },
         ),
-      states: [
-        makeSweep({ boards_done: 1 }),
-        finished({ new: 0, new_jobs: [] }),
-      ],
     });
+    const searches = fakeSearches();
+    searches.running = ID;
     await openJobs();
     await startSearch();
     expect(
-      await screen.findByText("A search is already running: showing it."),
+      await screen.findByText("Main search waits in line: number 1."),
     ).toBeInTheDocument();
+    expect(calls.start).toBe(1);
+    expect(searches.runs).toEqual(["main"]);
+    const list = await screen.findByRole("list", { name: "Your searches" });
+    const main = within(list).getByRole("listitem", { name: "Main search" });
+    await within(main).findByText(/Waits in line: number 1/);
     expect(
-      await screen.findByRole("dialog", { name: "No new posting" }),
-    ).toBeInTheDocument();
+      screen.queryByText("A search is already running: showing it."),
+    ).toBeNull();
   });
 
   it("explains a search without a ticked website (422)", async () => {

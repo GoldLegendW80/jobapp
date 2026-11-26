@@ -45,7 +45,8 @@ beforeEach(() => {
 async function open(
   search: Search = structuredClone(EMPTY.search),
   initial: Partial<Record<Protected, Partial<FakePermission>>> = {},
-  edit = "Main search",
+  /** The search whose Edit opens the form; null for New search. */
+  edit: string | null = "Main search",
 ) {
   const profile = fakeProfile({ search }, 6);
   const permissions = permissionApi(profile, initial);
@@ -72,7 +73,9 @@ async function open(
   await user.click(
     await within(
       await screen.findByRole("dialog", { name: "Find jobs" }),
-    ).findByRole("button", { name: `Edit ${edit}` }),
+    ).findByRole("button", {
+      name: edit === null ? "New search" : `Edit ${edit}`,
+    }),
   );
   const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
   await within(dialog).findByText("Where to search");
@@ -2056,5 +2059,228 @@ describe("A website's permission is the person's, across her searches (jobs J33)
     await screen.findByRole("list", { name: "Your searches" });
     expect(searches.writes).toHaveLength(1);
     expect(writes).toEqual([]);
+  });
+
+  /** The paths of the writes sent from now on, in order. */
+  function writeOrder() {
+    const order: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      if (request.method !== "GET") order.push(new URL(request.url).pathname);
+    });
+    return order;
+  }
+  const refusal = {
+    detail:
+      "Your search settings do not validate. Fix them in your profile first.",
+  };
+  const save = (
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+  ) => user.click(within(dialog).getByRole("button", { name: "Save" }));
+  const sent = (searches: ReturnType<typeof fakeSearches>) =>
+    searches.writes.map(({ method, id, body }) => ({
+      method,
+      id,
+      revision: (body as { revision?: number }).revision,
+    }));
+
+  it("takes Indeed's permission back after the search write when the saved search drops it and no other search lists it", async () => {
+    const searches = fakeSearches({ saved: [remote(indeedOnly)] });
+    const { writes, user, dialog } = await open(
+      structuredClone(EMPTY.search),
+      { indeed: { enabled: true, accepted: true } },
+      "Remote roles",
+    );
+    await toggle(user, dialog, "Indeed");
+    const order = writeOrder();
+    await save(user, dialog);
+    await screen.findByRole("list", { name: "Your searches" });
+    server.events.removeAllListeners();
+    expect(order).toEqual([
+      "/api/jobs/searches/00000000-0000-4000-8000-000000000001",
+      "/api/opportunities/platforms/indeed",
+    ]);
+    expect(sent(searches)).toEqual([
+      {
+        method: "PUT",
+        id: "00000000-0000-4000-8000-000000000001",
+        revision: 1,
+      },
+    ]);
+    expect(writes).toEqual([
+      { kind: "indeed", body: { enabled: false, base_revision: 6 } },
+    ]);
+  });
+
+  it("stops at a failed take back after the search write, says what holds, and a retry changes the search on its new revision", async () => {
+    const both = {
+      interactive_sites: [
+        site("welcome_to_the_jungle", PRESET_URLS.welcome_to_the_jungle),
+        site("indeed", PRESET_URLS.indeed),
+      ],
+    };
+    const searches = fakeSearches({ saved: [remote(both)] });
+    const { writes, states, user, dialog } = await open(
+      structuredClone(EMPTY.search),
+      {
+        welcome_to_the_jungle: { enabled: true, accepted: true },
+        indeed: { enabled: true, accepted: true },
+      },
+      "Remote roles",
+    );
+    await toggle(user, dialog, "Welcome to the Jungle");
+    await toggle(user, dialog, "Indeed");
+    const refused: unknown[] = [];
+    server.use(
+      http.put(
+        permissionPath("welcome_to_the_jungle"),
+        async ({ request }) => {
+          refused.push(await request.json());
+          return HttpResponse.json(refusal, { status: 422 });
+        },
+        { once: true },
+      ),
+    );
+    const order = writeOrder();
+    await save(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Remote roles is saved, but the Welcome to the Jungle and Indeed permissions were not taken back. Your search settings do not validate. Fix them in your profile first. Try Save again.",
+    );
+    server.events.removeAllListeners();
+    // Nothing is taken back after the failed one.
+    expect(order).toEqual([
+      "/api/jobs/searches/00000000-0000-4000-8000-000000000001",
+      "/api/opportunities/platforms/welcome_to_the_jungle",
+    ]);
+    expect(refused).toEqual([{ enabled: false, base_revision: 6 }]);
+    expect(writes).toEqual([]);
+    expect(states.indeed.enabled).toBe(true);
+    expect(sent(searches)).toEqual([
+      {
+        method: "PUT",
+        id: "00000000-0000-4000-8000-000000000001",
+        revision: 1,
+      },
+    ]);
+
+    await save(user, dialog);
+    await screen.findByRole("list", { name: "Your searches" });
+    expect(sent(searches)).toEqual([
+      {
+        method: "PUT",
+        id: "00000000-0000-4000-8000-000000000001",
+        revision: 1,
+      },
+      {
+        method: "PUT",
+        id: "00000000-0000-4000-8000-000000000001",
+        revision: 2,
+      },
+    ]);
+    expect(writes).toEqual([
+      {
+        kind: "welcome_to_the_jungle",
+        body: { enabled: false, base_revision: 6 },
+      },
+      { kind: "indeed", body: { enabled: false, base_revision: 7 } },
+    ]);
+  });
+
+  it("creates a new search once when its take back fails, and a retry changes it", async () => {
+    const searches = fakeSearches();
+    const { writes, user, dialog } = await open(
+      structuredClone(EMPTY.search),
+      { indeed: { enabled: true, accepted: true } },
+      null,
+    );
+    await user.type(within(dialog).getByLabelText("Name"), "Robotics");
+    server.use(
+      http.put(
+        permissionPath("indeed"),
+        () => HttpResponse.json(refusal, { status: 422 }),
+        { once: true },
+      ),
+    );
+    await save(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Robotics is saved, but the Indeed permission was not taken back.",
+    );
+    expect(searches.saved.map((one) => one.name)).toEqual(["Robotics"]);
+    const id = searches.saved[0]!.id;
+
+    await save(user, dialog);
+    await screen.findByRole("list", { name: "Your searches" });
+    expect(sent(searches)).toEqual([
+      { method: "POST", id: "", revision: undefined },
+      { method: "PUT", id, revision: 1 },
+    ]);
+    expect(searches.saved.map((one) => one.name)).toEqual(["Robotics"]);
+    // The only permission write is the take back: nothing is given for a website not ticked.
+    expect(writes).toEqual([
+      { kind: "indeed", body: { enabled: false, base_revision: 6 } },
+    ]);
+  });
+
+  it("opens a new search it wrote after Load current settings, so the retry changes it", async () => {
+    const searches = fakeSearches();
+    const { writes, user, dialog } = await open(
+      structuredClone(EMPTY.search),
+      { indeed: { enabled: true, accepted: true } },
+      null,
+    );
+    await user.type(within(dialog).getByLabelText("Name"), "Robotics");
+    server.use(
+      http.put(permissionPath("indeed"), () => HttpResponse.error(), {
+        once: true,
+      }),
+    );
+    await save(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Robotics is saved, but taking back the Indeed permission was not confirmed.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(
+      within(dialog).getByRole("button", { name: "Load current settings" }),
+    );
+    const again = await screen.findByRole("dialog", { name: "Find jobs" });
+    expect(await within(again).findByLabelText("Name")).toHaveValue("Robotics");
+    await save(user, again);
+    await screen.findByRole("list", { name: "Your searches" });
+    const id = searches.saved[0]!.id;
+    expect(sent(searches)).toEqual([
+      { method: "POST", id: "", revision: undefined },
+      { method: "PUT", id, revision: 1 },
+    ]);
+    expect(writes).toEqual([
+      { kind: "indeed", body: { enabled: false, base_revision: 6 } },
+    ]);
+  });
+
+  it("says the permission it gave when the search write is then refused", async () => {
+    const searches = fakeSearches({
+      saved: [remote()],
+      permitted: () => false,
+    });
+    const { writes, states, user, dialog } = await open(
+      structuredClone(EMPTY.search),
+      {},
+      "Remote roles",
+    );
+    await toggle(user, dialog, "Indeed");
+    await within(dialog).findByText("Current indeed risk sentence, version 4.");
+    await save(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "The Indeed permission is given, but Remote roles was not saved. Give your permission to search www.indeed.com in Find jobs first.",
+    );
+    expect(writes).toEqual([
+      {
+        kind: "indeed",
+        body: { enabled: true, accept_version: 4, base_revision: 6 },
+      },
+    ]);
+    expect(states.indeed.enabled).toBe(true);
+    await within(dialog).findByText("Permission given.");
+    expect(searches.saved[0]!.revision).toBe(1);
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
   });
 });

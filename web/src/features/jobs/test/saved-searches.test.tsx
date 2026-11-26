@@ -8,8 +8,10 @@ import type { Sweep } from "@/features/jobs/api/sweeps-api";
 import {
   copyName,
   criteriaLine,
+  halfSavedWords,
   lastRunOf,
   nameProblem,
+  runWords,
 } from "@/features/jobs/helpers/saved-searches";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
@@ -150,6 +152,9 @@ describe("Your searches (jobs J33)", () => {
     );
     const row = rowOf(list, "Remote roles");
     await within(row).findByText(/Waits in line: number 1/);
+    expect(
+      await screen.findByText("Remote roles waits in line: number 1."),
+    ).toBeInTheDocument();
     expect(row).toHaveTextContent("Starts when the running search ends.");
     expect(
       within(row).getByRole("button", { name: "Run Remote roles now" }),
@@ -289,5 +294,97 @@ describe("The words of a saved search", () => {
     expect(criteriaLine({})).toBe("Any title; Anywhere; on the web");
     expect(lastRunOf("main", [sweep("old", undefined)])?.id).toBe("old");
     expect(lastRunOf(REMOTE, [sweep("old", undefined)])).toBeUndefined();
+  });
+
+  it("says a run waits in line only when the api kept it in the line", () => {
+    const request = {
+      id: "request-1",
+      search_id: REMOTE,
+      place: 2,
+      trigger: "manual",
+      requested_at: "2026-11-26T09:00:00Z",
+    };
+    expect(runWords("Lyon", { outcome: "queued", request })).toBe(
+      "Lyon waits in line: number 2.",
+    );
+    expect(runWords("Lyon", { outcome: "queued", request: null })).toBe(
+      "Lyon waits in line.",
+    );
+    expect(runWords("Lyon", { outcome: "started", request: null })).toBe(
+      "Lyon started.",
+    );
+    for (const outcome of [
+      "no_websites",
+      "search_invalid",
+      "queue_down",
+      "running",
+      "not_found",
+      "unknown",
+    ]) {
+      const words = runWords("Lyon", { outcome, request: null });
+      expect(words).toMatch(/^Lyon did not start\. /);
+      expect(words).not.toMatch(/line/);
+    }
+  });
+
+  it("says what a save that stopped halfway left: the search, each permission given and not taken back", () => {
+    const base = { name: "Lyon", untried: [], conflict: false };
+    expect(
+      halfSavedWords({
+        ...base,
+        given: [],
+        written: true,
+        failed: { platform: "welcome_to_the_jungle", refused: true },
+        untried: ["indeed"],
+        reason: "Unavailable.",
+      }),
+    ).toBe(
+      "Lyon is saved, but the Welcome to the Jungle and Indeed permissions were not taken back. Unavailable. Try Save again.",
+    );
+    expect(
+      halfSavedWords({
+        ...base,
+        given: ["linkedin"],
+        written: true,
+        failed: { platform: "indeed", refused: false },
+        untried: ["freework"],
+        reason: "The app cannot reach the server.",
+        conflict: true,
+      }),
+    ).toBe(
+      "Lyon is saved and the LinkedIn permission is given, but taking back the Indeed permission was not confirmed, and the Free-Work permission was not taken back. The app cannot reach the server. Load current settings, then save again.",
+    );
+    expect(
+      halfSavedWords({
+        ...base,
+        given: ["indeed", "freework"],
+        written: false,
+        reason: "Too many titles.",
+      }),
+    ).toBe(
+      "The Indeed and Free-Work permissions are given, but Lyon was not saved. Too many titles.",
+    );
+    expect(
+      halfSavedWords({
+        ...base,
+        given: ["indeed"],
+        written: null,
+        reason: "The server is slow to answer. Try again.",
+        conflict: true,
+      }),
+    ).toBe(
+      "The Indeed permission is given, but Lyon may not be saved. The server is slow to answer. Try again. Load current settings, then save again.",
+    );
+    expect(
+      halfSavedWords({
+        ...base,
+        given: ["indeed"],
+        written: false,
+        failed: { platform: "linkedin", refused: true },
+        reason: "Type the words to search.",
+      }),
+    ).toBe(
+      "The Indeed permission is given, but Lyon was not saved: the LinkedIn permission was not given. Type the words to search.",
+    );
   });
 });
