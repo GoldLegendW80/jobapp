@@ -25,6 +25,7 @@ from app.apply import guardrails, service
 from app.apply.models import Application, Mode, State
 from app.config import Settings
 from app.jobs import service as jobs_service
+from app.jobs.models import Job
 from app.main import create_app
 from app.profile import service as profile_service
 from tests.conftest import make_settings
@@ -703,6 +704,29 @@ DEFAULTS = {
     "APPLY_STEP_SHOTS_KEEP_DAYS": "30",
     "APPLY_STUB_BASE_URL": "",
 }
+
+
+@pytest.mark.parametrize("body", [{}, {"mode": "review"}, {"mode": "manual"}])
+def test_a_posting_seen_only_in_a_list_answers_409_posting_listed(
+    api: Api, factory: sessionmaker[Session], a: uuid.UUID, body: dict[str, str]
+) -> None:
+    """Jobs J31 (owner, 2026-11-26): its text is needed first; once its page was read (the
+    mention gone) the same click starts the application."""
+    token = api.login_token(USER_A)
+    with factory() as db:
+        job = posting(db, a)
+        listed = {"list_url": "https://aggregator.example.test/emplois?q=data"}
+        db.execute(sa.update(Job).where(Job.id == job).values(**listed))
+        db.commit()
+    path = f"/api/postings/{job}/applications"
+    answer = api.post(path, token=token, json=body)
+    assert answer.status_code == 409
+    assert answer.json()["code"] == "posting_listed"
+    assert answer.json()["detail"] == guardrails.SENTENCES["posting_listed"]
+    with factory() as db:
+        db.execute(sa.update(Job).where(Job.id == job).values(list_url=None))
+        db.commit()
+    assert api.post(path, token=token, json=body).status_code == 201
 
 
 def test_env_example_names_every_setting_with_its_default() -> None:
