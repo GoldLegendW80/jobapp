@@ -130,7 +130,8 @@ class ChatOut(BaseModel):
     who: Literal["assistant", "person"]
     kind: str
     text: str
-    end: str | None = None  # an ask's end: answer, browser, person_late, run_ended, interrupted
+    # An ask's end: answer, browser, person_late, run_ended, interrupted or cancelled.
+    end: str | None = None
 
 
 class QuestionIn(BaseModel):
@@ -349,7 +350,7 @@ def _question(db: Session, application: Application) -> QuestionOut | None:
             label="",
             host=str(value.get("host") or ""),
             kind=ask.kind.removeprefix("ask:"),
-            after_send=application.state in (State.submitting, State.submit_unknown),
+            after_send=applier.ask_after_send(db, application),
             said_by="assistant",
             until=value.get("until"),
             live=applier.waiting(application),

@@ -282,10 +282,13 @@ def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
         )
         .order_by(ApplicationAnswer.field_key)
     ).scalars()
+    from app.apply import applier
+
     return [
         row
         for row in rows
         if row.field_key != "agent:filled"  # A20: the list of confirm.py, shown on its own
+        and not row.field_key.startswith(applier.ASK_KEY)  # A25: the chat, no field of the form
         and (row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label))
     ]
 
@@ -666,8 +669,15 @@ def cancel(
     (`_cancel_runs`), so it stops at once and its lease is released; a submit lease under way
     sees the state changed under its lock and does not click. An e-mail application being sent
     keeps its own end (the mail gate's)."""
+    from app.apply import applier
+
     application, _ = lock(db, user_id, application_id)
-    if reject:
+    if reject and application.needs in (applier.WAITS, applier.ASKED):
+        # A25: the apply agent's wait has no form to reject: it ends as a Cancel ends it.
+        if application.state not in REJECTABLE:
+            raise RefusedError("not_cancellable")
+        stopped_by_person(db, application, now)
+    elif reject:
         if application.state not in REJECTABLE:
             raise RefusedError("not_cancellable")
         states.move(application, State.cancelled, now)
@@ -693,8 +703,10 @@ def stopped_by_person(db: Session, application: Application, now: datetime) -> s
     from app.apply import applier, submit
 
     if application.needs in (applier.WAITS, applier.ASKED):
-        application.needs = None  # A25: the agent's wait ends with the Cancel
+        applier.close_asks(db, application, "cancelled", now)  # A25: the wait ends with it
+        application.needs = None
     if _stepped(db, application):
+        applier._unwait(application, now)  # a wait's `needs_person` has no move to submitting
         states.move(application, State.submitting, now, by_agent=True)
     _event(db, application, "cancelled", now, code=CANCELLED_BY_PERSON)
     if application.state is State.submitting:

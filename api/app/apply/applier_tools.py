@@ -90,7 +90,8 @@ DESCRIPTIONS = {
     "chosen as for apply_done. The person checks the list and the app sends it.",
     "apply_ask_person": "Ask the person for what only they can do or know (kind signin, "
     "account, code, captcha, confirmation_link or other), in one or two plain sentences; never "
-    "for an ordinary field. Waits up to 15 minutes: answers with their words, or that they used "
+    "for an ordinary field. Waits up to ask_waits_minutes of your first message: answers with "
+    "their words, or that they used "
     "the browser (read the page again before any act), or that nobody came (stop then).",
 }
 
