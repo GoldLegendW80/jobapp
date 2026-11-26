@@ -20,6 +20,8 @@ from app.jobs import sweep_router
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
 from tests.browser.test_b20_agent import RESULTS, Site, report, run, selected, text_of, tool
 from tests.browser.test_b29_browserd import call, guard, started
+from tests.browser.test_j22_linkedin_page import PageTools, reunion
+from tests.browser.test_j22_linkedin_page import run as j22_run
 
 MEMORY_SAID = (
     "The tab was closed because the browser ran short of memory, and it was opened again blank: "
@@ -199,3 +201,33 @@ def test_the_answers_shape_is_browserds() -> None:
     assert set(answer) == {"ok", "error", "message", "url", "tab_closed"}
     assert set(answer["tab_closed"]) == {"id", "reason", "used_mib", "media_blocked"}
     assert finder.CLOSE_ID.fullmatch(answer["tab_closed"]["id"])
+
+
+# --- LinkedIn's public page reader (jobs J22), a discovery lease too ----------------------------
+
+
+class ClosingPageTools(PageTools):
+    """J22's fixture pages, the tab closed once (as browserd answers then) at the given call."""
+
+    def __init__(self, now: list[float], at: str) -> None:
+        super().__init__(now)
+        self.at, self.closed = at, closed_answer()
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name == self.at:
+            self.at = ""
+            self.calls.append(name)
+            if name == "browser_navigate":
+                self.navigations.append((args["url"], self.now[0]))
+            return self.closed
+        return await super().call(name, args)
+
+
+@pytest.mark.parametrize("at", ["browser_navigate", "browser_evaluate"])
+def test_linkedins_page_reader_reads_a_page_again_after_its_tab_closed(at: str) -> None:
+    entries, tools, _, _ = j22_run(reunion(), tools=ClosingPageTools([0.0], at))
+    [entry] = entries
+    assert tools.paths() == ["search", "search", "search", "4200000101", "4200000102"]
+    # Read again once, never ended page_failed (no commits in this run, as in J22's tests).
+    assert entry["error"] == "finding_persistence_pending"
+    assert entry["found"] == 2

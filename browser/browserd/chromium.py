@@ -415,8 +415,9 @@ class Chromium:
         self.persisted_by: str | None = lease_id
         self._homes: dict[str, Any] = {}
         self._extras: dict[str, list[Any]] = {}
-        # Each lease's (purpose, slot), so the memory guard names whose tab it closed (B29).
-        self._leases: dict[str, tuple[str, int]] = {lease_id: (request.purpose, request.slot)}
+        # The (purpose, slot) of each lease that joined, so the memory guard names whose tab it
+        # closed (B29); the lease that started this Chromium is `request`'s.
+        self._leases: dict[str, tuple[str, int]] = {}
 
     @property
     def lease_dir(self) -> str:
@@ -515,13 +516,15 @@ class Chromium:
     def owner(self, context: Any) -> tuple[str, int] | None:
         """The (purpose, slot) of the lease whose tabs live in `context`; None when no lease
         holds it. With one browser, the one lease of this Chromium."""
-        if not self.shared:
-            return self._leases.get(self.lease_id)
-        owners = [(lease_id, [home]) for lease_id, home in self._homes.items()]
-        owners += list(self._extras.items())
-        if self.persisted_by is not None:
-            owners.append((self.persisted_by, [self.browser.contexts[0]]))
-        found = next((lid for lid, held in owners if any(c is context for c in held)), None)
+        found: str | None = self.lease_id
+        if self.shared:
+            owners = [(lease_id, [home]) for lease_id, home in self._homes.items()]
+            owners += list(self._extras.items())
+            if self.persisted_by is not None:
+                owners.append((self.persisted_by, [self.browser.contexts[0]]))
+            found = next((lid for lid, held in owners if any(c is context for c in held)), None)
+        if found == self.lease_id:
+            return self.request.purpose, self.request.slot
         return self._leases.get(found) if found is not None else None
 
     async def home(self, lease_id: str, slot: int) -> Any:

@@ -47,6 +47,10 @@ class Page:
     def __init__(self, url: str = actions.ABOUT_BLANK) -> None:
         self.url, self.closed = url, False
         self.context: Any = None
+        self.listeners: dict[str, list[Any]] = {}
+
+    def on(self, event: str, listener: Any) -> None:  # B29: Tab._watch notes a crash
+        self.listeners.setdefault(event, []).append(listener)
 
     async def close(self) -> None:
         self.closed = True

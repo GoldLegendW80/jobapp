@@ -279,9 +279,21 @@ class _Reader:
         self.host = urlsplit(start).hostname or linkedin.HOST
         self.marker = {"_discovery": "native_get", "_discovery_scope": {"start": start}}
         self.opened = 0
+        self.closed = False  # browser B29: browserd's last answer said the tab was closed
 
     async def read(self, url: str, script: str) -> dict[str, Any] | None:
-        """The page at `url` read by `script`; None for a page gone (404)."""
+        """The page at `url` read by `script`; None for a page gone (404). A tab closed under
+        it (browserd's `tab_closed`, browser B29: opened again blank) has the page read again,
+        once."""
+        self.closed = False
+        try:
+            return await self._read(url, script)
+        except (SourceError, guest.StopError):
+            if not self.closed:
+                raise
+        return await self._read(url, script)
+
+    async def _read(self, url: str, script: str) -> dict[str, Any] | None:
         from app.browser import platform_policy
 
         if sweep.abandoned(self.plan):
@@ -293,6 +305,7 @@ class _Reader:
         async def go() -> dict[str, Any]:
             nonlocal result
             result = await self.pages.tools.call("browser_navigate", {"url": url, **self.marker})
+            self.closed = result.get("error") == finder.TAB_CLOSED
             return result
 
         self.opened += 1
@@ -316,6 +329,7 @@ class _Reader:
         except BrowserError as exc:
             raise SourceError("lease_ended" if exc.code == "ended" else "page_failed") from None
         if not done.get("ok"):
+            self.closed = done.get("error") == finder.TAB_CLOSED
             raise guest.StopError("page_failed")
         value = _loads(done)
         if not _read_anything(value):

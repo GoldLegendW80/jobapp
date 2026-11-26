@@ -15,6 +15,7 @@ removes when they close, as Playwright's do). Invented hosts only.
 
 import asyncio
 import logging
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -410,6 +411,8 @@ def test_the_memory_guard_names_the_lease_whose_tab_it_closed(caplog) -> None:
     ]
     [line] = [r.getMessage() for r in caplog.records if "memory guard" in r.getMessage()]
     assert "rule=tab_closed_memory purpose=sweep slot=1 used_mib=1850 pct=90" in line
+    # ops/jetson-ops.sh logs-browser counts `rule=[a-z_]{1,40}`: this line as one close.
+    assert re.findall(r"rule=[a-z_]{1,40}", line) == ["rule=tab_closed_memory"]
     asyncio.run(shared.end_slot("second-lease"))
     assert shared.owner(search) is None
 
