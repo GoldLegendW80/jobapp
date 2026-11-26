@@ -64,6 +64,7 @@ import {
   MAIN_SEARCH,
   changeSearch,
   createSearch,
+  searchesKey,
   type Criteria,
   type SavedSearch,
   type SavedSchedule,
@@ -555,6 +556,7 @@ export function useSources(
       if (isMounted()) setOpened(draftTicked);
       return saved;
     } finally {
+      void client.invalidateQueries({ queryKey: searchesKey });
       if (isMounted()) setSaving(false);
     }
   };
