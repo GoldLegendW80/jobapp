@@ -97,6 +97,11 @@ def test_the_summary_answer_names_the_counter() -> None:
         "error",
         # Browser B25: the app's refusals of a website search's actions, per rule.
         "refusals",
+        # Browser B29: the closes of a website search's tab, by reason, and the media left out.
+        "tab_closed",
+        "tab_closed_reasons",
+        "tab_closed_mib",
+        "media_blocked",
         # Jobs J9: the frozen source identity and progress.
         "source_id",
         "mode",
@@ -158,6 +163,11 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "error": "store_failed",
         # Browser B25: no refusal counted in an older stats row.
         "refusals": {},
+        # Browser B29: no close of its tab in an older stats row.
+        "tab_closed": 0,
+        "tab_closed_reasons": {},
+        "tab_closed_mib": [],
+        "media_blocked": False,
         # Jobs J9: the frozen source identity and progress, absent from an older stats row.
         "source_id": None,
         "mode": None,

@@ -89,6 +89,8 @@ def queue_of(request: Request) -> queues.Queue:
 
 # A refusal rule of a website's source as the api shows it (browser B25, finder.RULE).
 RULE_WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
+# Why a website's tab closed, as the stats name it (browser B29, finder.TAB_CLOSED_REASONS).
+TAB_CLOSED_REASONS = frozenset({"memory", "crash", "other"})
 
 
 def sweep_out(row: Sweep) -> SweepOut:
@@ -142,6 +144,29 @@ def sweep_out(row: Sweep) -> SweepOut:
             and number > 0
         }
 
+    def closes(item: dict[str, Any]) -> dict[str, Any]:
+        """The closes of a website's tab (browser B29), read defensively: a known reason and a
+        count each, the working sets as whole MiB, at most 20."""
+        reasons = item.get("tab_closed_reasons")
+        mib = item.get("tab_closed_mib")
+        return {
+            "tab_closed": max(0, count(item, "tab_closed")),
+            "tab_closed_reasons": {
+                reason: number
+                for reason, number in (reasons.items() if isinstance(reasons, dict) else ())
+                if reason in TAB_CLOSED_REASONS
+                and isinstance(number, int)
+                and not isinstance(number, bool)
+                and number > 0
+            },
+            "tab_closed_mib": [
+                one
+                for one in (mib[:20] if isinstance(mib, list) else ())
+                if isinstance(one, int) and not isinstance(one, bool) and one > 0
+            ],
+            "media_blocked": item.get("media_blocked") is True,
+        }
+
     sources = [
         SourceOut(
             kind=str(item.get("kind", "")),
@@ -156,6 +181,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             searches=max(0, count(item, "searches")),
             searched=searched(item.get("searched")),
             refusals=refusals(item.get("refusals")),
+            **closes(item),
             planned=max(0, count(item, "planned")),
             titles_left_out=max(0, count(item, "titles_left_out")),
             places_left_out=max(0, count(item, "places_left_out")),

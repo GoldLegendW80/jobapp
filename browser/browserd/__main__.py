@@ -33,6 +33,15 @@ def check() -> int:
         return 1
 
 
+def route_event(manager: Manager, browser: object, lease_id: str, item: dict) -> None:
+    """A browser's event: the running browser's goes to each slot it serves, another's to its
+    lease; one that names a slot (the memory guard's, B29) to that slot's lease alone."""
+    serves = manager.held() if manager.browser is browser else [manager.get(lease_id)]
+    for lease in serves:
+        if lease is not None and item.get("slot", lease.request.slot) == lease.request.slot:
+            lease.events.append(item)
+
+
 def beat() -> None:
     os.close(os.open(HEARTBEAT, os.O_WRONLY | os.O_CREAT, 0o600))
     os.utime(HEARTBEAT)
@@ -74,11 +83,7 @@ async def main() -> None:
                 await manager.release(lease_id, reason)
 
         def event(item: dict) -> None:
-            # The running browser's event goes to each slot it serves; another's to its lease.
-            serves = manager.held() if manager.browser is browser else [manager.get(lease_id)]
-            for lease in serves:
-                if lease is not None:
-                    lease.events.append(item)
+            route_event(manager, browser, lease_id, item)
             log.info("lease event %s", item)
 
         browser.on_crash, browser.on_end, browser.on_event = crashed, ended, event

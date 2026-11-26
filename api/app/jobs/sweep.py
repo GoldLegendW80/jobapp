@@ -1208,6 +1208,7 @@ RETRIED = frozenset(
         # The browser, its pages and the website's agent.
         "agent_failed",
         "browser_busy",
+        "browser_memory",
         "browser_unavailable",
         "page_failed",
         "layout_changed",

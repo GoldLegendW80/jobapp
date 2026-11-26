@@ -201,7 +201,7 @@ class Page:
 def navigated(found: actions.Tab, url: str, answer: dict, monkeypatch) -> dict:
     page = Page()
 
-    async def front() -> Page:
+    async def front(**_: Any) -> Page:  # B29: navigate's `blank_ok`
         return page
 
     async def settle(result: dict) -> dict:

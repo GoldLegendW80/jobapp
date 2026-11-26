@@ -258,6 +258,10 @@ export const SOURCE_PROBLEMS: Record<string, string> = {
   // address off it (its `guard_failed`), so the website ends there (round 2 of PR 720).
   guard_failed:
     "The browser could not take back a page outside this website, so the search of it stopped. Postings saved before are kept.",
+  // The browser's memory guard closed the website's tab three times in one run (browser B29,
+  // finder.MEMORY_CLOSES_MAX), so the website ends there and gets the sweep's one retry.
+  browser_memory:
+    "The browser ran short of memory again and again on this website, so its search stopped. Postings saved before are kept.",
   unsupported_criteria:
     "Your search uses settings this website search does not take yet, so it was not opened.",
   // How a website's agent ended with no posting: what it saw, said in its own words
@@ -393,6 +397,42 @@ export function guestSentence(source: {
   );
   if (left.length) parts.push(`Not searched this time: ${left.join("; ")}.`);
   return parts.join(" ");
+}
+
+/** Browser B29: the times the website's tab was closed and opened again, each by the reason the
+ * app knew (the browser's memory guard, a crash of the page, else none it saw), and whether the
+ * search then left out images, videos and fonts. Empty when none or the api is older. */
+export function tabClosedSentence(source: {
+  tab_closed?: number;
+  tab_closed_reasons?: Record<string, number>;
+  tab_closed_mib?: number[];
+  media_blocked?: boolean;
+}): string {
+  const total = source.tab_closed ?? 0;
+  if (total <= 0) return "";
+  const times = (n: number) =>
+    n === 1 ? "once" : n === 2 ? "twice" : `${n.toLocaleString("en-GB")} times`;
+  const mib = (source.tab_closed_mib ?? []).map(
+    (n) => `${n.toLocaleString("en-GB")} MiB`,
+  );
+  const phrases: Record<string, string> = {
+    memory: `as the browser's memory ran short${mib.length ? `, at ${mib.join(" and ")}` : ""}`,
+    crash: "as the page crashed",
+    other: "for a reason the app did not see",
+  };
+  const listed = Object.entries(source.tab_closed_reasons ?? {}).filter(
+    ([reason, n]) => n > 0 && Object.hasOwn(phrases, reason),
+  );
+  const only = listed.length === 1 && listed[0]?.[1] === total;
+  const why = only
+    ? ` ${phrases[listed[0]?.[0] ?? ""] ?? ""}`
+    : listed.length
+      ? ` (${listed.map(([reason, n]) => `${times(n)} ${phrases[reason] ?? ""}`).join("; ")})`
+      : "";
+  const media = source.media_blocked
+    ? ", and the search then loaded no images, videos or fonts"
+    : "";
+  return `The website's tab was closed and opened again ${times(total)}${why}${media}.`;
 }
 
 export function sourceName(source: {
