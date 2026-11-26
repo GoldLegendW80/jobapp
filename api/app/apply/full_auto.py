@@ -87,6 +87,9 @@ SENTENCES = {
     "outside_criteria": (
         "This posting is outside the criteria of your search, so it waits for you."
     ),
+    "listed": (
+        "This posting was seen only in a list and its page was not read, so it waits for you."
+    ),
     "unsupported_source": "Full auto does not apply on this site yet, so it waits for you.",
     "company_site_unverified": (
         "The LinkedIn posting links to a site the app cannot match to its company, so it waits"
@@ -248,6 +251,8 @@ def checks(
         return "below_min_fit"
     if posting.outside_criteria:  # jobs J30: a posting kept with a badge
         return "outside_criteria"
+    if posting.list_url is not None:  # jobs J31: seen only in a list, its text not read
+        return "listed"
     answers = list(
         db.scalars(
             sa.select(ApplicationAnswer).where(

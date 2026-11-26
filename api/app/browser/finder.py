@@ -190,6 +190,8 @@ DATE_SHOWN_MAX = 100
 # may give (B27): the app opens one the agent did not; at most SCRIPT_LINKS_MAX, oldest dropped.
 SCRIPT_LINKS_MAX = 20_000
 SCRIPT_LINK = re.compile(r"https?://[^\s\"'<>\\]{1,2000}|(?<=\")/[^\s\"'<>\\]{0,2000}(?=\")")
+# Jobs J31: a string of a script's result that is one address, absolute or from the root.
+SCRIPT_ADDRESS = re.compile(r"(?:https?://|/)[^\s\"'<>\\]{0,2000}")
 # The postings one report call may have the app open itself (B27), one at a time, each after a
 # pause of APP_OPEN_PAUSE_S (a person's pace), in a tab of its own on the same lease.
 APP_OPENS_MAX = 20
@@ -884,9 +886,15 @@ def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str]]:
         items = (value if isinstance(value, str) else text).split("\n")
     cards: list[tuple[str, str]] = []
     for item in items:
-        strings = _strings(item) if isinstance(item, dict) else [item]
-        links = [m.group(0) for one in strings for m in SCRIPT_LINK.finditer(one)]
-        words = " ".join(" ".join(SCRIPT_LINK.sub(" ", one) for one in strings).split())
+        if isinstance(item, dict):
+            strings = _strings(item)
+            links = [one for one in strings if SCRIPT_ADDRESS.fullmatch(one)]
+            words = " ".join(" ".join(o for o in strings if o not in links).split())
+        elif SCRIPT_ADDRESS.fullmatch(item):
+            links, words = [item], ""
+        else:
+            links = [m.group(0) for m in SCRIPT_LINK.finditer(item)]
+            words = " ".join(SCRIPT_LINK.sub(" ", item).split())
         for given in links:
             link = canonical(urljoin(url, given))
             parts = urlsplit(link)

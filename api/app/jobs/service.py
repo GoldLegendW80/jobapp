@@ -92,6 +92,31 @@ class PayChoice(enum.StrEnum):
     not_stated = "not_stated"
 
 
+class ListingChoice(enum.StrEnum):
+    """The listing filter (jobs J31): every posting, only those seen in a list (their own page
+    not read), or those whose page was read."""
+
+    all = "all"
+    only = "only"
+    without = "without"
+
+
+# Jobs J31: what Write now and Apply answer for a posting seen only in a list.
+LISTED_WAITS = (
+    "This posting was seen only in a list: its text is needed first. Open its page and paste its "
+    "text, or wait for a search to read its page."
+)
+
+
+def listed_refusal(db: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> str | None:
+    """Jobs J31: the sentence of the 409 of Write now and Apply on a posting seen only in a list
+    (its own page not read), else None (another person's posting, or none, too)."""
+    listed = db.execute(
+        sa.select(Job.list_url).where(Job.id == job_id, Job.user_id == user_id)
+    ).scalar_one_or_none()
+    return LISTED_WAITS if listed is not None else None
+
+
 class CriteriaChoice(enum.StrEnum):
     """The criteria filter (jobs J30): every posting, those within the criteria of the search
     that found them (no badge, a row never computed included), or those outside (a badge)."""
@@ -140,6 +165,7 @@ class JobFilters:
     sweep: uuid.UUID | None = None  # the postings this sweep added
     search: uuid.UUID | MainSearch | None = None  # the postings this search's sweeps added
     criteria: CriteriaChoice = CriteriaChoice.all
+    listing: ListingChoice = ListingChoice.all
 
 
 def _like_escape(text: str) -> str:
@@ -284,6 +310,9 @@ def _more_filters(
     if filters.criteria is not CriteriaChoice.all:
         badged = sa.func.coalesce(sa.func.cardinality(Job.outside_criteria), 0) > 0
         query = query.where(badged if filters.criteria is CriteriaChoice.outside else ~badged)
+    if filters.listing is not ListingChoice.all:
+        listed = Job.list_url.is_not(None)
+        query = query.where(listed if filters.listing is ListingChoice.only else ~listed)
     return query
 
 

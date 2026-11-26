@@ -97,7 +97,7 @@ from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, undefer
 
 from app import queue as queues
 from app.agents.runs import WorkflowRef
@@ -440,6 +440,10 @@ class Stats:
     skipped_by_rule: int = 0
     # Jobs J30: the new postings kept with a badge, outside the search's criteria.
     outside: int = 0
+    # Jobs J31: the new postings kept from a card of a list, and those whose page a source read
+    # after (their card's text replaced).
+    listed: int = 0
+    listed_read: int = 0
     invalid: int = 0
     duration: float | None = None
     picked_at: str | None = None
@@ -547,17 +551,21 @@ class Known:
         # Jobs J25: one job across boards (posting_titles.cross_key), the job and the day it
         # was found, read from the stored rows as they are (their titles cleaned to compare).
         self.cross: dict[tuple[str, str, str], tuple[uuid.UUID, date]] = {}
+        # Jobs J31: the jobs seen only in a list, their own page not read (`Job.list_url`).
+        self.listed: set[uuid.UUID] = set()
         rows = db.execute(
             sa.select(
                 Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source,
-                Job.found_on,
+                Job.found_on, Job.list_url,
             )
             .where(Job.user_id == user_id)
             .order_by(Job.created_at)
         )  # fmt: skip
-        for company, title, location, url, slug, job_id, source, found_on in rows:
+        for company, title, location, url, slug, job_id, source, found_on, listed in rows:
             self.add_stored(company, title, location, url, slug, job_id, source)
             self.add_cross(_stored_cross(company, title, location), job_id, found_on)
+            if listed is not None:
+                self.listed.add(job_id)
 
     def add(
         self,
@@ -624,6 +632,7 @@ class Known:
         other.urls, other.identities = set(self.urls), set(self.identities)
         other.slugs, other.jobs = set(self.slugs), dict(self.jobs)
         other.sources, other.cross = dict(self.sources), dict(self.cross)
+        other.listed = set(self.listed)
         return other
 
     def job_of(self, key: slugs.PostingKey) -> uuid.UUID | None:
@@ -735,6 +744,7 @@ def _new_job(
     contract: ContractType | None = None,
     work_mode: str | None = None,
     contract_stated: bool = False,
+    list_url: str | None = None,
 ) -> _NewJob:
     """The row of a new job, already scored and rule-checked, and its events: created, sweep,
     then the ones service.apply_score, set_status and set_notes would have written. A company
@@ -792,6 +802,7 @@ def _new_job(
         "outside_criteria": criteria_badge.codes(facts, plan.criteria),
         "contract_stated": contract_stated,
         "criteria_search_id": plan.criteria_search_id,
+        "list_url": list_url,
         "notes": rule.text if rule is not None else "",
         "legacy": {},
         "created_at": now,
@@ -1579,8 +1590,12 @@ def _summary(stats: Stats) -> dict[str, Any]:
 # so the run's counts and duplicates are those stored.
 
 DRAIN_S = 5.0
-VERIFIED_COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule", "outside")
-SOURCE_COUNTERS = ("found", "postings", "duplicates", "skipped_by_rule", "outside")
+VERIFIED_COUNTERS = (
+    "seen", "matched", "new", "duplicates", "skipped_by_rule", "outside", "listed", "listed_read",
+)  # fmt: skip
+SOURCE_COUNTERS = (
+    "found", "postings", "duplicates", "skipped_by_rule", "outside", "listed", "listed_read",
+)  # fmt: skip
 
 
 class StoreRefusedError(Exception):
@@ -1598,6 +1613,8 @@ def _counted(stats: Stats, source_id: str, delta: Stats, found: int) -> None:
             entry["duplicates"] = entry.get("duplicates", 0) + delta.duplicates
             entry["skipped_by_rule"] = entry.get("skipped_by_rule", 0) + delta.skipped_by_rule
             entry["outside"] = entry.get("outside", 0) + delta.outside
+            entry["listed"] = entry.get("listed", 0) + delta.listed
+            entry["listed_read"] = entry.get("listed_read", 0) + delta.listed_read
 
 
 def commit_verified(
@@ -1693,6 +1710,7 @@ def _store_finding(
         or bool(cleaned.contract)
         or criteria_badge.stated_contract(posting.title, posting.location, posting.url) is not None
     )
+    list_url = getattr(finding, "list_url", None)
     for _ in range(2):
         if plan.known.has(key) or plan.known.cross_job(cross, today) is not None:
             break
@@ -1705,6 +1723,7 @@ def _store_finding(
             contract,
             getattr(finding, "work_mode", None),
             stated,
+            list_url,
         )
         new.events[1]["data"]["discovery"] = {
             "source_id": source_id,
@@ -1723,6 +1742,7 @@ def _store_finding(
             **({"title_shown": finding.title} if cleaned.changed else {}),
             **({"company_from_title": True} if cleaned.company and not finding.company else {}),
             **({"recruiter": True} if posting_titles.is_recruiter(company) else {}),
+            **({"listed": {"list_url": list_url}} if list_url else {}),
         }
         inserted = db.execute(
             pg_insert(Job).values(new.row).on_conflict_do_nothing().returning(Job.id)
@@ -1734,6 +1754,9 @@ def _store_finding(
             delta.new += 1
             delta.skipped_by_rule += new.rule is not None
             delta.outside += bool(new.row["outside_criteria"])
+            if list_url:
+                plan.known.listed.add(new.row["id"])
+                delta.listed += 1
             return
         # Another request stored this address or took this slug meanwhile: learn the person's
         # rows in the way, then decide again (a duplicate, or a free slug).
@@ -1753,8 +1776,67 @@ def _store_finding(
             .where(Job.id == job_id, Job.user_id == plan.user_id)
             .values(source=joined, updated_at=Job.updated_at)
         )
+    if job_id is not None and list_url is None and job_id in plan.known.listed:
+        # Jobs J31: the page of a posting kept from a card was read: its text replaces the card's.
+        _page_read(db, plan, job_id, posting, source, now)
+        plan.known.listed.discard(job_id)
+        delta.listed_read += 1
     if job_id is not None:
         _badge_again(db, plan, job_id)
+
+
+def _page_read(
+    db: Session, plan: Plan, job_id: uuid.UUID, posting: Posting, source: str, now: datetime
+) -> None:
+    """Jobs J31: a posting kept from a card of a list whose own page a source read since: the
+    page's text replaces the card's, the posting is scored again (a fit the person set stays)
+    and read again by the posting reader, its date taken when it had none, and the mention
+    removed, with a `sweep` event naming the list. Its badge follows (`_badge_again`)."""
+    job = db.execute(
+        sa.select(Job)
+        .where(Job.id == job_id, Job.user_id == plan.user_id)
+        .options(undefer(Job.posting_text))
+        .with_for_update()
+    ).scalar_one_or_none()
+    if job is None or job.list_url is None:
+        return
+    text = posting.text[:POSTING_TEXT_MAX]
+    events: list[tuple[JobEventKind, dict[str, Any]]] = [
+        (
+            JobEventKind.sweep,
+            {
+                "sweep_id": str(plan.sweep_id),
+                "board": source,
+                "page_read": {"list_url": job.list_url},
+            },
+        )
+    ]
+    job.list_url = None
+    job.posting_text = text or None
+    job.description = text[:DESCRIPTION_CHARS] or None
+    for name, value in signals.stored(text).items():
+        setattr(job, name, value)
+    job.published_on = job.published_on or published_date(posting.published)
+    job.read_at = None
+    job.read_attempts = 0
+    score = (
+        scoring.score(text, plan.skills, title=job.title, search=plan.search)
+        if plan.skills is not None and text.strip()
+        else None
+    )
+    if score is not None and not job.fit_overridden:
+        if job.fit != score.fit:
+            events.append(
+                (
+                    JobEventKind.fit,
+                    {"from": job.fit, "to": score.fit, "manual": False, "via": "sweep"},
+                )
+            )
+        job.fit, job.competencies, job.gaps = score.fit, list(score.competencies), list(score.gaps)
+    job.updated_at = now
+    for kind_, payload in events:
+        db.add(JobEvent(job_id=job.id, user_id=plan.user_id, at=now, kind=kind_, data=payload))
+    db.flush()
 
 
 def _badge_again(db: Session, plan: Plan, job_id: uuid.UUID) -> None:

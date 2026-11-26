@@ -348,6 +348,8 @@ class _Site:
     media_blocked: bool = False
     # Jobs J30: how many results the agent said it read, its own count (the largest it gave).
     results_read: int | None = None
+    # Jobs J31: the cards report_listing refused, by reason (the evidence rule).
+    cards_refused: Counter[str] = field(default_factory=Counter)
 
     def _sort(self, title: str, location: str, url: str) -> set[str]:
         """Where a posting read goes: unwanted (the person's unwanted titles and places), or kept,
@@ -387,6 +389,7 @@ class _Site:
         self.media_blocked = self.media_blocked or session.media_blocked
         if session.results_read is not None:
             self.results_read = max(self.results_read or 0, session.results_read)
+        self.cards_refused.update(session.cards_refused)
 
     async def verified(self, batch: finder.VerifiedBatch) -> None:
         """A verified batch on its way to the store (module docstring)."""
@@ -437,6 +440,7 @@ class _Site:
                 entry["media_blocked"] = self.media_blocked
             if self.results_read is not None:
                 entry["results_read"] = self.results_read
+            entry["cards_refused"] = dict(self.cards_refused)
         if self.unwanted:
             entry["unwanted"] = len(self.unwanted)
 
