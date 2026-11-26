@@ -77,7 +77,8 @@ async def main() -> None:
             # The running browser's event goes to each slot it serves; another's to its lease.
             serves = manager.held() if manager.browser is browser else [manager.get(lease_id)]
             for lease in serves:
-                if lease is not None:
+                # The memory guard names the slot of the lease whose tab it closed (B29).
+                if lease is not None and item.get("slot", lease.request.slot) == lease.request.slot:
                     lease.events.append(item)
             log.info("lease event %s", item)
 

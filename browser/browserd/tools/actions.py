@@ -26,7 +26,9 @@ bypasses service workers (CDP `Network.setBypassServiceWorker`), so the page's r
 the route while a worker may still register. While the person holds the input (Take over, an
 ask's too: live.Live.person_holds, read for each request), the request floor does not apply: the
 agent's calls wait, and the person signs in or solves a check. browserd's egress proxy keeps
-every request to a public address.
+every request to a public address. A discovery's tab that was closed (the memory guard, a crash,
+anything else) is opened again blank in its own context by its next call, which answers
+`tab_closed` with the reason code knows (B29, `Tab._reopen`).
 
 One click Apply's agent (A19, owner 2026-11-05: "do it exactly like Mac") holds a lease of
 purpose AGENT_PURPOSE: the person's own persisted context, any public http or https address (no
@@ -46,12 +48,13 @@ import base64
 import contextlib
 import logging
 import re
+import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
-from browserd import detect, pages
+from browserd import chromium, detect, pages
 from browserd.config import NAVIGATION_S
 from browserd.tools import ask_person, discovery, fetch, line, pacing, policy, request_signin
 
@@ -180,6 +183,16 @@ class UnsupportedDiscovery(Exception):  # noqa: N818
     """A discovery execution boundary could not be established or was lost."""
 
 
+class TabClosed(Exception):  # noqa: N818  a control-flow signal
+    """B29: the discovery's tab was closed and opened again blank (`Tab._reopen`): `run` answers
+    `tab_closed` with why, until a navigation loads a page in it."""
+
+
+# B29: after a close for memory, a discovery's context loads none of these (`Tab._lean_route`).
+LEAN_KINDS = frozenset({"image", "media", "font"})
+TAB_CLOSED_MESSAGE = "The tab was closed and opened again blank: navigate to a page again."
+
+
 @dataclass
 class State:
     """What the tools keep for one lease (Lease.scratch): the placed documents and the tab."""
@@ -196,6 +209,13 @@ class State:
     signed_in: bool = False  # B17: discovery in the person's own persisted context
     stopped_kind: str = ""  # the resource type of the navigation `blocked` holds, for the log
     route_logged: int = 0  # B20: the discovery's refused requests logged so far
+    # B29: the discovery's page that crashed, the blank page opened in place of a closed one and
+    # the close it answers while that page is current and blank, and whether images, media and
+    # fonts are left out since a close for memory.
+    crashed: Any = None
+    reopened: Any = None
+    closed: dict[str, Any] | None = None
+    lean: bool = False
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
     chooser_id: int = 0
@@ -208,6 +228,8 @@ class State:
         self.stopped_kind, self.route_logged = "", 0
         self.page = self.guarded = self.chooser = None
         self.native_context = self.native_cdp = self.scope = None
+        self.crashed = self.reopened = self.closed = None
+        self.lean = False
 
 
 @dataclass
@@ -234,6 +256,8 @@ class Tab:
     # Two browsers at once (2026-11-06): the lease's slot (chromium.Slot), its own contexts and
     # tabs; None with one browser, where the lease's context is the person's own (contexts[0]).
     slot: Any = None
+    # B29: the close of the discovery's tab this call's answer carries (`run`), else None.
+    told: dict[str, Any] | None = None
 
     async def home(self) -> Any:
         """The context the lease's tabs live in, when it is not a discovery's own."""
@@ -339,10 +363,77 @@ class Tab:
 
     async def _watch(self, page: Any) -> None:
         """Every request of the page reaches the route: its service workers are bypassed (one
-        may still register and run; its own fetches, the site's code, are not seen: declared)."""
+        may still register and run; its own fetches, the site's code, are not seen: declared).
+        A crash of the page is noted, so its next call opens it again (B29)."""
+        page.on("crash", self._crashed)
         client = await page.context.new_cdp_session(page)
         await client.send("Network.enable")
         await client.send("Network.setBypassServiceWorker", {"bypass": True})
+
+    def _crashed(self, page: Any) -> None:
+        self.state.crashed = page
+
+    async def _lean_route(self, route: Any, request: Any) -> None:
+        """B29: after a close for memory, no image, media or font of the context loads; every
+        other request falls back to the route of the line, registered before it. While the
+        person holds the input, the page loads whole for them."""
+        try:
+            lean = self.state.lean and request.resource_type in LEAN_KINDS and not self.held()
+        except Exception:
+            lean = False  # unread: the line's route decides, as for any request
+        if lean:
+            await route.abort("blockedbyclient")
+            return
+        await route.fallback()
+
+    def _why_closed(self, page: Any) -> tuple[str, int | None]:
+        """Why the discovery's tab closed, only as code knows it: the memory guard's own record
+        (chromium.MEMORY_CLOSED), the page's crash event, else `other`."""
+        if page is self.state.crashed:
+            self.state.crashed = None
+            return "crash", None
+        try:
+            used = chromium.MEMORY_CLOSED.get(page)
+        except TypeError:  # a page that cannot be a weak key was never recorded
+            used = None
+        return ("memory", used) if used is not None else ("other", None)
+
+    async def _reopen(self, closed: Any) -> Any:
+        """B29: the discovery's tab was closed (the memory guard, a crash, anything else). A
+        blank page of the lease's own context takes its place, as a person opens a new tab: the
+        context's route of the line, its redirect and page listeners hold it as they held the
+        first page, and `_watch` bypasses its service workers. After a close for memory the
+        context loads no image, media or font (`_lean_route`). A step that fails ends the
+        discovery, as a failed start does."""
+        reason, used_mib = self._why_closed(closed)
+        context = self.state.native_context
+        if not closed.is_closed():  # a crashed page goes before another opens
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(closed.close(), ACTION_S)
+        try:
+            async with asyncio.timeout(ACTION_S):
+                if reason == "memory" and not self.state.lean:
+                    await context.route("**/*", self._lean_route)
+                    self.state.lean = True
+                blank = [p for p in context.pages if p.url == ABOUT_BLANK and not p.is_closed()]
+                page = blank[0] if blank else await context.new_page()
+                await self._watch(page)
+        except Exception as exc:
+            await self.close_discovery()
+            raise UnsupportedDiscovery from exc
+        self.state.page = self.state.reopened = page
+        self.state.closed = {
+            "id": secrets.token_hex(4),
+            "reason": reason,
+            **({"used_mib": used_mib} if used_mib is not None else {}),
+            "media_blocked": self.state.lean,
+        }
+        log.warning(
+            "lease %s: the tab was closed and opened again blank: reason=%s",
+            self.lease_tag,
+            reason,
+        )
+        return page
 
     async def _line_route(self, route: Any, request: Any) -> None:
         """The request floor of the line (line.request_refused): a refused document of the
@@ -493,11 +584,25 @@ class Tab:
         self.state.chooser = chooser
         self.state.chooser_id += 1
 
-    async def page(self) -> Any:
+    async def page(self, blank_ok: bool = False) -> Any:
+        """The page the call acts on. A discovery's tab that was closed is opened again blank
+        (B29, `_reopen`) and the call answers `tab_closed`; so does every later call while that
+        blank page is current, but a navigation and the tab tools (`blank_ok`)."""
         context = await self.guard()
         current = self.state.page
-        if self.state.discovery and (current is None or current.is_closed()):
-            raise UnsupportedDiscovery
+        if self.state.discovery:
+            if current is None:
+                raise UnsupportedDiscovery
+            fresh = current.is_closed() or current is self.state.crashed
+            if fresh:
+                current = await self._reopen(current)
+            reopened = self.state.reopened
+            if reopened is not None and (reopened.is_closed() or reopened.url != ABOUT_BLANK):
+                self.state.reopened = self.state.closed = None
+            if self.state.closed is not None and current is self.state.reopened:
+                self.told = self.state.closed
+                if fresh or not blank_ok:
+                    raise TabClosed
         if current is None or current.is_closed() or current not in context.pages:
             current = context.pages[0] if context.pages else await context.new_page()
             self.state.page = current
@@ -689,6 +794,12 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
                 "Refused: this native discovery flow is unsupported.",
                 "boundary",
             )
+        except TabClosed:
+            return {
+                **failure("tab_closed", TAB_CLOSED_MESSAGE),
+                "url": ABOUT_BLANK,
+                "tab_closed": dict(tab.told or {}),
+            }
         except OffList:
             log.warning("lease %s: %s refused: host_not_allowed", tab.lease_tag, name)
             return await tab.settle(refused("host_not_allowed"))
@@ -699,7 +810,9 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
         if tab.step_submit:
             # Failed or not: the act may have reached the page before the failure.
             result = {**result, "step_submit": True}
-        return await tab.settle(result) if result.get("ok") else result
+        answer = await tab.settle(result) if result.get("ok") else result
+        # B29: a navigation or a tab tool on the blank page opened again still names the close.
+        return {**answer, "tab_closed": dict(tab.told)} if tab.told else answer
     except RefusalRecoveryError as exc:
         # The original still propagates; its note tells routes.call_tool to answer guard_failed,
         # never the catch all's page_error (round 2 of PR 720).
@@ -792,7 +905,7 @@ async def navigate(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
             host_of(url),
         )
         return refused("line")
-    page = await tab.page()
+    page = await tab.page(blank_ok=True)
     await tab.pacer.dwell()
     # Apply myself may open its form during PERSON_TIME. Automated navigation must still own
     # input after both pacing and the helper's awaited focus, immediately before goto.
@@ -1230,7 +1343,7 @@ async def box(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 
 async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     action = args.get("action", "list")
-    await tab.page()
+    await tab.page(blank_ok=True)
     settled = await tab.settle({"ok": True})  # tabs off the list are closed before any is listed
     if not settled.get("ok"):
         return settled

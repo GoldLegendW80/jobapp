@@ -19,6 +19,7 @@ import stat
 import sys
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from typing import Any
 
@@ -414,6 +415,8 @@ class Chromium:
         self.persisted_by: str | None = lease_id
         self._homes: dict[str, Any] = {}
         self._extras: dict[str, list[Any]] = {}
+        # Each lease's (purpose, slot), so the memory guard names whose tab it closed (B29).
+        self._leases: dict[str, tuple[str, int]] = {lease_id: (request.purpose, request.slot)}
 
     @property
     def lease_dir(self) -> str:
@@ -504,7 +507,22 @@ class Chromium:
 
     def slot_of(self, lease: Any) -> "Slot | None":
         """The tools' view of that lease's slot; None with one browser (the code of one lease)."""
-        return Slot(self, lease.lease_id, lease.request.slot) if self.shared else None
+        if not self.shared:
+            return None
+        self._leases[lease.lease_id] = (lease.request.purpose, lease.request.slot)
+        return Slot(self, lease.lease_id, lease.request.slot)
+
+    def owner(self, context: Any) -> tuple[str, int] | None:
+        """The (purpose, slot) of the lease whose tabs live in `context`; None when no lease
+        holds it. With one browser, the one lease of this Chromium."""
+        if not self.shared:
+            return self._leases.get(self.lease_id)
+        owners = [(lease_id, [home]) for lease_id, home in self._homes.items()]
+        owners += list(self._extras.items())
+        if self.persisted_by is not None:
+            owners.append((self.persisted_by, [self.browser.contexts[0]]))
+        found = next((lid for lid, held in owners if any(c is context for c in held)), None)
+        return self._leases.get(found) if found is not None else None
 
     async def home(self, lease_id: str, slot: int) -> Any:
         """The context a lease's tabs live in. The lease that started this Chromium: the
@@ -592,6 +610,7 @@ class Chromium:
         that started the Chromium loses its tabs and is not given to another lease."""
         home = self._homes.pop(lease_id, None)
         contexts = [*self._extras.pop(lease_id, ())]
+        self._leases.pop(lease_id, None)
         if home is not None:
             with contextlib.suppress(Exception):
                 cookies = await asyncio.wait_for(home.cookies(), c.CLOSE_S)
@@ -640,7 +659,7 @@ class Chromium:
     async def _watch(self) -> None:
         """Every 2 s: a CDP answer within CDP_ANSWER_S, else the lease ends `browser_crashed`;
         the container's memory against BROWSER_MEM_GUARD_PCT of its limit, past it the newest
-        tab is closed (the session goes on)."""
+        tab is closed (the lease goes on: a discovery's next call opens its tab again, B29)."""
         while not self.stopping:
             await asyncio.sleep(2)
             try:
@@ -651,7 +670,9 @@ class Chromium:
                     await self.on_crash()
                 return
             with contextlib.suppress(Exception):
-                await guard_memory(self.browser, self.cfg.mem_guard_pct, self._event)
+                await guard_memory(
+                    self.browser, self.cfg.mem_guard_pct, self._event, owner=self.owner
+                )
 
     async def stop(self) -> None:
         """Browser.close over CDP (profile flushed, B1: 0.32 s), the process group killed if it
@@ -887,9 +908,18 @@ def past_guard(figures: tuple[int, int], pct: int) -> bool:
     return figures[0] * 100 >= figures[1] * pct
 
 
-async def guard_memory(browser: Any, pct: int, event: Any, reader: Any = memory) -> bool:
+# The tabs the memory guard closed, each with the working set in MiB at its close: a discovery
+# that finds its tab closed reads its reason here (tools/actions.py, B29), never a guess.
+MEMORY_CLOSED: "weakref.WeakKeyDictionary[Any, int]" = weakref.WeakKeyDictionary()
+
+
+async def guard_memory(
+    browser: Any, pct: int, event: Any, reader: Any = memory, owner: Any = None
+) -> bool:
     """Closes the newest tab when the container is past `pct` % of its limit (a blank tab is
-    opened first when it was the only one). True when a tab was closed."""
+    opened first when it was the only one). True when a tab was closed. `owner(context)` names
+    the (purpose, slot) of the lease whose tab it is: its event names that lease alone, and
+    the warning line counts it for `ops/remote.sh logs-browser` (`rule=tab_closed_memory`)."""
     figures, sample = _observed_memory(reader, "guard")
     if figures is None or not past_guard(figures, pct):
         return False
@@ -897,12 +927,26 @@ async def guard_memory(browser: Any, pct: int, event: Any, reader: Any = memory)
     if not pages:
         return False
     context, victim = pages[-1]
+    whose = None
+    with contextlib.suppress(Exception):
+        whose = owner(context) if owner is not None else None
     if len(pages) == 1:
         await context.new_page()
+    used_mib = figures[0] >> 20
+    with contextlib.suppress(TypeError):  # a page that cannot be a weak key reads "other"
+        MEMORY_CLOSED[victim] = used_mib
     await victim.close()
-    event(event="tab_closed", reason="memory", used_mib=figures[0] >> 20)
+    named = {"purpose": whose[0], "slot": whose[1]} if whose else {}
+    event(event="tab_closed", reason="memory", used_mib=used_mib, **named)
+    log.warning(
+        "memory guard: a tab closed rule=tab_closed_memory purpose=%s slot=%s used_mib=%d pct=%d",
+        whose[0] if whose else "unknown",
+        whose[1] if whose else "unknown",
+        used_mib,
+        pct,
+    )
     if sample:
-        _memory_log({**sample, "phase": "guard_close", "pct": pct}, logging.WARNING)
+        _memory_log({**sample, "phase": "guard_close", "pct": pct, **named}, logging.WARNING)
     return True
 
 
