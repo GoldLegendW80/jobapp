@@ -7,7 +7,7 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { fakeProfile } from "@/test/profile";
-import { emptySweeps, server } from "@/test/server";
+import { emptySweeps, mainSearchOnly, server } from "@/test/server";
 
 import type {
   ScheduleState,
@@ -178,9 +178,14 @@ async function openPastSearches(user = userEvent.setup()) {
 
 async function startSearch(user = userEvent.setup()) {
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Edit Main search" }),
+  );
   const setup = await screen.findByRole("dialog", { name: "Find jobs" });
   await user.click(
-    within(setup).getByRole("button", { name: "Save and start search" }),
+    await within(setup).findByRole("button", {
+      name: "Save and start search",
+    }),
   );
 }
 
@@ -241,7 +246,8 @@ describe("Find jobs", () => {
     expect(
       within(progress).getByRole("progressbar", { name: "Websites searched" }),
     ).toHaveAttribute("aria-valuemax", "3");
-    expect(screen.getByRole("button", { name: "Finding jobs" })).toBeDisabled();
+    // It stays usable while a search runs, so another one can wait in the line (jobs J33).
+    expect(screen.getByRole("button", { name: "Finding jobs" })).toBeEnabled();
 
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
@@ -280,6 +286,7 @@ describe("Find jobs", () => {
   it("opens a new posting from the summary", async () => {
     fakeSweeps({ states: [finished()] });
     server.use(
+      http.get("*/api/jobs/searches", () => HttpResponse.json(mainSearchOnly)),
       http.get("*/api/jobs/:id", () =>
         HttpResponse.json({ detail: "Job not found." }, { status: 404 }),
       ),
@@ -820,10 +827,9 @@ describe("Find jobs on an empty list", () => {
       name: "Find jobs",
     });
     await user.click(find);
-    const setup = await screen.findByRole("dialog", { name: "Find jobs" });
-    await user.click(
-      await within(setup).findByRole("button", { name: "Cancel" }),
-    );
+    // It opens on Your searches.
+    await screen.findByRole("list", { name: "Your searches" });
+    await user.keyboard("{Escape}");
     await waitFor(() => {
       expect(find).toHaveFocus();
     });
@@ -839,8 +845,9 @@ describe("Find jobs on an empty list", () => {
     await waitFor(() => {
       expect(location()).toBe("/jobs");
     });
-    // The setup is built again once the profile is read: ask the page for the dialog it holds.
-    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    // It opens on the main search's form, to add websites.
+    await screen.findByText("Where to search");
+    await user.keyboard("{Escape}");
     // Opened by the address, it gives the focus to the Find jobs on the page.
     await waitFor(() => {
       expect(

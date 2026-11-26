@@ -43,6 +43,7 @@ beforeEach(() => {
 async function open(
   search: Search = structuredClone(EMPTY.search),
   initial: Partial<Record<Protected, Partial<FakePermission>>> = {},
+  edit = "Main search",
 ) {
   const profile = fakeProfile({ search }, 6);
   const permissions = permissionApi(profile, initial);
@@ -65,7 +66,14 @@ async function open(
   await screen.findByRole("list", { name: "Postings" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
+  // Find jobs opens on Your searches (jobs J33): the form is one click away.
+  await user.click(
+    await within(
+      await screen.findByRole("dialog", { name: "Find jobs" }),
+    ).findByRole("button", { name: `Edit ${edit}` }),
+  );
   const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
+  await within(dialog).findByText("Where to search");
   return {
     profile,
     starts,
@@ -315,7 +323,10 @@ it("opens setup before any save or start and closes without saving", async () =>
   );
   await toggle(user, dialog, "Indeed");
   expect(inList(dialog, "Indeed")).toBe(true);
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  // Back leads to Your searches and saves nothing; Escape closes Find jobs.
+  await user.click(within(dialog).getByRole("button", { name: "Back" }));
+  await screen.findByRole("list", { name: "Your searches" });
+  await user.keyboard("{Escape}");
   expect(profile.saves).toEqual([]);
   expect(starts).toEqual([]);
   expect(screen.getByRole("button", { name: "Find jobs" })).toHaveFocus();
@@ -467,6 +478,9 @@ it("does not save or start while loading the profile fails", async () => {
   renderApp("/jobs");
   await screen.findByRole("list", { name: "Postings" });
   await userEvent.click(screen.getByRole("button", { name: "Find jobs" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Edit Main search" }),
+  );
   const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
   expect(await within(dialog).findByRole("alert")).toHaveTextContent(
     "could not",
@@ -1697,7 +1711,9 @@ it("opens as a drawer from the bottom on a phone, its footer in view too, and cl
   expect(
     scroller(within(dialog).getByLabelText("Website address")),
   ).not.toBeNull();
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+  await user.click(within(dialog).getByRole("button", { name: "Back" }));
+  await screen.findByRole("list", { name: "Your searches" });
+  await user.keyboard("{Escape}");
   expect(profile.saves).toEqual([]);
   expect(starts).toEqual([]);
   expect(screen.getByRole("button", { name: "Find jobs" })).toHaveFocus();

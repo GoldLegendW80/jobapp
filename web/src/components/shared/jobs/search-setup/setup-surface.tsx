@@ -53,8 +53,11 @@ export function SetupSurface({
   onClose,
   onReturnFocus,
   dismissible = true,
+  description = INTRO,
   children,
 }: {
+  /** What the screen is for, under the title. */
+  description?: string;
   /** Asked to close (Escape, the close button, a click outside, a drag down). */
   onClose: () => void;
   onReturnFocus: () => void;
@@ -94,7 +97,7 @@ export function SetupSurface({
               Find jobs
             </DrawerTitle>
             <DrawerDescription className="col-start-2">
-              {INTRO}
+              {description}
             </DrawerDescription>
           </DrawerHeader>
           {/* Dragged by its top only: below, a drag scrolls the fields or works a live browser. */}
@@ -115,7 +118,9 @@ export function SetupSurface({
         >
           <TitleGlyph />
           <DialogTitle className="leading-tight">Find jobs</DialogTitle>
-          <DialogDescription className="col-start-2">{INTRO}</DialogDescription>
+          <DialogDescription className="col-start-2">
+            {description}
+          </DialogDescription>
         </DialogHeader>
         {children}
       </DialogContent>
