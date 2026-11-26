@@ -13,6 +13,7 @@ import { useTitle } from "@/hooks/use-title";
 
 import { ApplicationBrowsers } from "../components/application-browsers";
 import { ApproveAll } from "../components/approve-all";
+import { CancelAll } from "../components/cancel-all";
 import { serverOffset } from "../helpers/full-auto-state";
 import { FullAutoSummary } from "../components/full-auto-summary";
 import { FollowUps } from "../components/follow-ups";
@@ -121,6 +122,7 @@ export function QueuePage() {
                   onLeave={leave}
                   offset={offset}
                 >
+                  <CancelAll items={underWay} />
                   <ApplicationBrowsers items={underWay} />
                 </QueueSection>
                 {items.length >= QUEUE_MAX ? (

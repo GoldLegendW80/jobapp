@@ -98,5 +98,7 @@ export const SWIPE_TEXT = {
   gone: "This posting is no longer there.",
   undone: "Undone.",
   tooLate: "Too late to undo: the application is already being sent.",
+  stoppedAfterSend:
+    "Stopped, but too late to undo: it may already have been sent. Check the site or your mail.",
   passOffered: "You can pass this posting instead.",
 } as const;

@@ -5,8 +5,10 @@
  * and a reason without one gets a label here.
  * No dashes as separators.
  */
-import type { Approval } from "../api/apply-api";
+import type { Approval, CancelResult } from "../api/apply-api";
+import { cancelKindOf } from "./apply-section-rules";
 import { blockingFields, documentLine } from "./apply-state";
+import { DECISIONS, type Confirmation } from "./decisions";
 import type {
   DocumentCheck,
   Queue,
@@ -120,12 +122,51 @@ export const OTHER_LEFT_OUT = "It was not approved: open it to see why.";
 /** Reject is the api's for a filled form not yet approved. */
 export const canReject = isReviewable;
 
-/** Cancel stops an item under way before any click (a held one has the countdown's Cancel). */
-export const canCancel = (item: QueueItem) =>
-  item.mode !== "manual" &&
-  (["queued", "filling", "approved", "held"].includes(item.state) ||
-    isDeciding(item)) &&
-  !isHeld(item);
+/** Cancel stops an item at any moment before an end (a held one has the countdown's Cancel). */
+export const canCancel = (item: QueueItem) => {
+  const kind = cancelKindOf(item);
+  return (kind === "cancel" || kind === "cancelAfterSend") && !isHeld(item);
+};
+
+/** "It was not sent": the person's own word ends an item the app could not confirm. */
+export const canSayNotSent = (item: QueueItem) =>
+  cancelKindOf(item) === "notSent";
+
+const CANCEL: Confirmation = {
+  title: "Cancel this application?",
+  sentence: "Nothing is sent, and it leaves the queue.",
+  confirm: "Cancel the application",
+};
+
+/** What the card's Cancel asks: once the assistant acted on a send button, that it may be sent. */
+export const cancelAsk = (item: QueueItem): Confirmation =>
+  cancelKindOf(item) === "cancelAfterSend" ? DECISIONS.cancelAfterSend : CANCEL;
+
+/** Cancel all on the Under way section (A24): each item there that its own Cancel stops. */
+export const cancelAllOf = (items: readonly QueueItem[]) =>
+  items.filter((item) => {
+    const kind = cancelKindOf(item);
+    return kind === "cancel" || kind === "cancelAfterSend";
+  });
+
+/** At least this many: one item has its own Cancel. */
+export const CANCEL_ALL_FROM = 2;
+
+/** "Example Robotics, Data engineer: cancelled, nothing was sent." for one result of Cancel all. */
+export function cancelResultLine(
+  item: { company: string; title: string },
+  result: CancelResult,
+): string {
+  const who = `${item.company}, ${item.title}`;
+  if (!result.stopped)
+    return `${who}: not cancelled. ${result.detail ?? OTHER_NOT_CANCELLED}`;
+  return result.state === "submit_unknown"
+    ? `${who}: stopped, but it may have been sent. Check the site or your mail.`
+    : `${who}: cancelled, nothing was sent.`;
+}
+
+/** A refusal of Cancel all the api sent without a sentence. */
+export const OTHER_NOT_CANCELLED = "Open it to see where it stands.";
 
 /**
  * What the posting's page shows and the card does not: the live view, the run report and the

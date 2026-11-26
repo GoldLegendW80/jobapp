@@ -42,6 +42,8 @@ export interface FakeDeck {
   passAnswers: Map<string, { status: number; body: JsonBodyType }>;
   /** The state GET /api/applications/{id} answers before a cancel. */
   applicationState: string;
+  /** The state the cancel ends it in: `submit_unknown` once it reached a send button (A24). */
+  cancelState: string;
   /** While set, the Like waits for this promise before it answers. */
   likeGate: Promise<void> | null;
 }
@@ -59,6 +61,7 @@ export function fakeDeck(
     likeAnswers: new Map(),
     passAnswers: new Map(),
     applicationState: "queued",
+    cancelState: "cancelled",
     likeGate: null,
   };
   const passed = new Set<string>();
@@ -119,7 +122,7 @@ export function fakeDeck(
     }),
     http.post("*/api/applications/:id/cancel", ({ params }) => {
       state.calls.push(`POST cancel ${String(params.id)}`);
-      return HttpResponse.json(fakeApplication("cancelled"));
+      return HttpResponse.json(fakeApplication(state.cancelState));
     }),
   );
   return state;
