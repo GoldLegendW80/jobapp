@@ -168,7 +168,10 @@ def test_upgrade_creates_the_jobs_schema(at_head: sa.Engine) -> None:
         ("job_events", "user_id"),
         ("job_files", "job_id"),
         ("sweeps", "user_id"),
+        ("sweeps", "saved_search_id"),
     }
+    # A sweep keeps its row and its name when its saved search is deleted (jobs J32, 0050).
+    assert fks.pop(("sweeps", "saved_search_id"))["options"]["ondelete"] == "SET NULL"
     assert all(fk["options"]["ondelete"] == "CASCADE" for fk in fks.values())
 
     indexes = {ix["name"]: ix for ix in inspector.get_indexes("jobs")}

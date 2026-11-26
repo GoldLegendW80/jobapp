@@ -187,6 +187,7 @@ def _filters(
     pay_period: PayPeriod | None = None,
     application: Annotated[list[ApplicationChoice] | None, Query()] = None,
     sweep: uuid.UUID | None = None,
+    search: uuid.UUID | service.MainSearch | None = None,
 ) -> JobFilters:
     """The list filters of the query, shared by GET /api/jobs, /places and /facets."""
     if fit_min is not None and fit_max is not None and fit_min > fit_max:
@@ -224,6 +225,7 @@ def _filters(
         pay_period=pay_period,
         applications=tuple(dict.fromkeys(application or ())),
         sweep=sweep,
+        search=search,
     )
 
 

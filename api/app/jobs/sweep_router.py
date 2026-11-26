@@ -16,6 +16,9 @@
   automatic schedule (`search.sweep_schedule`, off by default) with its next run. The schedule
   itself is changed through PUT /api/profile/search.
 - GET /api/jobs/sweeps/{id}: one sweep, its progress and the jobs it added (best fit first).
+- Every sweep says the search it ran (`search`, jobs J32): `main`, or a saved search's id and the
+  name frozen at its start. POST /api/jobs/sweeps runs the main search and keeps its 409; a run
+  that waits in the line is POST /api/jobs/searches/{id}/run (app/jobs/searches_router.py).
 - GET /api/jobs/sweeps/{id}/events: the same as server-sent events (app/sse.py): a `progress`
   event each time it changes, then one `done` event with the final state and the jobs added,
   and the stream ends. Polling GET /api/jobs/sweeps/{id} gives the same information.
@@ -39,7 +42,7 @@ from app import sse
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs import schedule, service, sweep
+from app.jobs import schedule, searches, service, sweep
 from app.jobs.models import Sweep, SweepStatus
 from app.jobs.schemas import (
     SEARCHES_LISTED,
@@ -53,6 +56,7 @@ from app.jobs.schemas import (
     SweepJobOut,
     SweepList,
     SweepOut,
+    SweepSearchOut,
     SweepStartIn,
 )
 
@@ -230,7 +234,19 @@ def sweep_out(row: Sweep) -> SweepOut:
         duration=float(duration) if isinstance(duration, int | float) else None,
         sources=sources,
         search_scope=summary,
+        search=search_ran(row),
     )
+
+
+def search_ran(row: Sweep) -> SweepSearchOut:
+    """The search a sweep ran (jobs J32): the saved search's frozen name, its id while it exists;
+    every other sweep, those before saved searches included, ran the main search."""
+    scope = (row.stats or {}).get("search_scope")
+    frozen = scope.get("saved_search") if isinstance(scope, dict) else None
+    if isinstance(frozen, dict) and isinstance(frozen.get("name"), str):
+        found = row.saved_search_id
+        return SweepSearchOut(id=str(found) if found else None, name=frozen["name"][:60])
+    return SweepSearchOut(id=searches.MAIN, name=searches.MAIN_NAME)
 
 
 def sweep_detail(db: Session, user_id: uuid.UUID, row: Sweep) -> SweepDetail:
