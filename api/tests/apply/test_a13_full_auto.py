@@ -260,6 +260,11 @@ def _fit(db: Session, person: Person, fit: int | None) -> None:
     db.execute(sa.update(Job).where(Job.id == person.posting_id).values(fit=fit))
 
 
+def _outside(db: Session, person: Person, app_id: uuid.UUID) -> None:
+    # Jobs J30: a posting kept with a badge, outside the criteria of the search that found it.
+    db.execute(sa.update(Job).where(Job.id == person.posting_id).values(outside_criteria=["older"]))
+
+
 def _left(db: Session, person: Person, app_id: uuid.UUID) -> None:
     db.execute(
         sa.update(ApplicationAnswer)
@@ -331,6 +336,7 @@ def _text_rule(db: Session, person: Person, app_id: uuid.UUID) -> None:
 CHECKS = [
     ("below_min_fit", lambda db, p, a: _fit(db, p, 69)),
     ("below_min_fit", lambda db, p, a: _fit(db, p, None)),
+    ("outside_criteria", _outside),
     ("fields_left", _left),
     ("model_check_not_run", _agent_text),
     ("agent_designated", _designated),

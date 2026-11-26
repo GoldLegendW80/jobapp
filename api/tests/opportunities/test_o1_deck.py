@@ -152,6 +152,18 @@ def test_statuses_and_applications_that_keep_a_posting_out(
     assert set(deck_ids(api, person_a)) == {str(p) for p in kept}
 
 
+def test_a_posting_kept_with_a_badge_never_shows(
+    api: Api, person_a: Person, factory: sessionmaker[Session]
+) -> None:
+    """Jobs J30 (owner, 2026-11-26: "Garder avec un badge"): what is outside the criteria of the
+    search that found it is the Jobs list's only; a row no badge pass reached yet shows."""
+    within = add_posting(factory, person_a, outside_criteria=[])
+    never_computed = add_posting(factory, person_a, outside_criteria=None)
+    for badge in (["contract"], ["work_mode"], ["older"], ["contract", "work_mode", "older"]):
+        add_posting(factory, person_a, outside_criteria=badge)
+    assert set(deck_ids(api, person_a)) == {str(within), str(never_computed)}
+
+
 def test_a_cancelled_application_beside_a_live_one_keeps_the_posting_out(
     api: Api, person_a: Person, factory: sessionmaker[Session]
 ) -> None:
