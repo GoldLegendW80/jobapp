@@ -14,8 +14,10 @@ Sweeps queue (app.queue.SWEEPS):
   (user, slot) due in the window before the tick (sweep.scheduled_due, app/jobs/schedule.py:
   only users who enabled `search.sweep_schedule`, the default is off) and queues it under the
   job id schedule:<user>:<slot>. A slot fires once (advisory lock and the slot recorded in the
-  sweep); a user already sweeping is skipped and the slot retried by the next ticks of the
-  window.
+  sweep); a user already sweeping gets the slot as a request in the line (jobs J32,
+  app/jobs/searches.py). The saved searches' schedules fire the same way, each slot key holding
+  its search. The tick then starts the line's next run for everyone with none running.
+- run_sweep starts the next run of the person's line when its sweep ends (start_the_line).
 - reap_sweeps: cron every minute, and once at start: fails running sweeps with no heartbeat for
   sweep.STALE_AFTER (worker crash, lost queue message).
 - cron:browser_removals: every minute, the profile directories queued for removal are removed
@@ -154,7 +156,8 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import reader, rescore, service, sweep
+from app.jobs import reader, rescore, searches, service, sweep
+from app.jobs.models import Sweep
 from app.logging_config import configure_logging
 
 logger = logging.getLogger("app.worker")
@@ -292,6 +295,57 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
         browser=websites,
         reader=reader.SweepReader(lambda: agent_context(ctx)),
     )
+    if "redis" in ctx:
+        await start_the_line(ctx, owner_of(sessions_of(ctx), uuid.UUID(sweep_id)))
+
+
+def owner_of(sessions: sessionmaker[Session], sweep_id: uuid.UUID) -> list[uuid.UUID]:
+    with sessions() as db:
+        row = db.get(Sweep, sweep_id)
+        return [row.user_id] if row is not None else []
+
+
+def _start_next(
+    sessions: sessionmaker[Session], users: list[uuid.UUID], now: datetime
+) -> list[uuid.UUID]:
+    """The next request in the line of each of `users` started (jobs J32, sweep.start_next)."""
+    started = []
+    for user_id in users:
+        with sessions() as db:
+            try:
+                row = sweep.start_next(db, user_id, now)
+                db.commit()
+            except service.SweepRunningError:
+                db.rollback()
+                continue
+            if row is not None:
+                started.append(row.id)
+    return started
+
+
+async def start_the_line(ctx: dict[str, Any], users: list[uuid.UUID]) -> int:
+    """Start and queue the next run waiting in the line of each of `users`: after a sweep ends,
+    and at each schedule tick for everyone (a sweep the reaper ended has no end of its own)."""
+    sessions, clock = sessions_of(ctx), clock_of(ctx)
+    started = await asyncio.to_thread(_start_next, sessions, users, clock())
+    redis: ArqRedis = ctx["redis"]
+    for sweep_id in started:
+        try:
+            await redis.enqueue_job(
+                "run_sweep",
+                str(sweep_id),
+                _job_id=queue.sweep_job_id(sweep_id),
+                _queue_name=queue.SWEEPS,
+            )
+        except Exception:
+            logger.exception("sweep of the line not queued", extra={"sweep_id": str(sweep_id)})
+            await asyncio.to_thread(sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
+    return len(started)
+
+
+def _waiting(sessions: sessionmaker[Session]) -> list[uuid.UUID]:
+    with sessions() as db:
+        return searches.users_waiting(db)
 
 
 def split_websites(
@@ -400,7 +454,8 @@ async def scheduled_sweeps(ctx: dict[str, Any]) -> int:
             await asyncio.to_thread(sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
     if started:
         logger.info("scheduled sweeps queued", extra={"count": len(started)})
-    return len(started)
+    lined = await start_the_line(ctx, await asyncio.to_thread(_waiting, sessions))
+    return len(started) + lined
 
 
 # --- agents queue -----------------------------------------------------------------------------
