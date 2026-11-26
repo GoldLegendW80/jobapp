@@ -56,26 +56,42 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     ),
     "apply_done": _object(
         {
-            "outcome": {"type": "string", "enum": ["submitted", "failed"]},
+            "outcome": {"type": "string", "enum": ["submitted", "failed", "posting_closed"]},
             "summary": {"type": "string", "maxLength": applier.SUMMARY_MAX},
             "confirmation_url": {"type": "string", "maxLength": 2000},
             "chosen": CHOSEN,
+            # A25: with failed or posting_closed, whether a control that sends it was clicked.
+            "sent": {"type": "string", "enum": list(applier.SENT_WORDS)},
         },
         ("outcome", "summary"),
     ),
     # A20: Review first names the control that sends the form; the gate clicks it on Confirm.
     "apply_ready": _object({"submit_ref": REF, "chosen": CHOSEN}, ("submit_ref",)),
+    # A25: what only the person can do or know; the run waits for them.
+    "apply_ask_person": _object(
+        {
+            "kind": {"type": "string", "enum": list(applier.ASK_KINDS)},
+            "sentence": {"type": "string", "maxLength": applier.SENTENCE_MAX},
+        },
+        ("kind", "sentence"),
+    ),
 }
 DESCRIPTIONS = {
     "browser_file_upload": "Upload documents placed on this browser (cv.pdf, letter.pdf) to the "
     "file input or the attach button of the last snapshot's ref.",
     "apply_done": "End the application once: submitted after the site showed its confirmation "
-    "(confirmation_url: that page's address, read with browser_snapshot), or failed; summary: "
-    "what you filled and sent, or why it failed; chosen: each answer you chose for a required "
-    "field the profile does not answer (field label, value, one line why).",
+    "(confirmation_url: that page's address, read with browser_snapshot), posting_closed when "
+    "the site says the posting is no longer online, or failed; with failed or posting_closed, "
+    "sent: whether a control that sends the application was clicked (yes, no, unsure); "
+    "summary: what you filled and sent, or why it failed; chosen: each answer you chose for a "
+    "required field the profile does not answer (field label, value, one line why).",
     "apply_ready": "Review first only: on the last step, every field filled, name the control "
     "that sends the application by its ref in your last snapshot instead of clicking it, with "
     "chosen as for apply_done. The person checks the list and the app sends it.",
+    "apply_ask_person": "Ask the person for what only they can do or know (kind signin, "
+    "account, code, captcha, confirmation_link or other), in one or two plain sentences; never "
+    "for an ordinary field. Waits up to 15 minutes: answers with their words, or that they used "
+    "the browser (read the page again before any act), or that nobody came (stop then).",
 }
 
 
@@ -91,12 +107,15 @@ def _factory(name: str) -> app_tools.Factory:
                 text, error = await session.upload(args)
             elif name == "apply_ready":
                 text, error = session.ready_at(args.get("submit_ref"), args.get("chosen"))
+            elif name == "apply_ask_person":
+                text, error = await session.ask_person(args.get("kind"), args.get("sentence"))
             else:
                 text, error = session.finish(
                     args.get("outcome"),
                     args.get("summary"),
                     args.get("confirmation_url"),
                     args.get("chosen"),
+                    args.get("sent"),
                 )
             return app_tools.text_result(text, error=error)
 

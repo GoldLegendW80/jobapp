@@ -155,6 +155,7 @@ class Settings(BaseSettings):
     # pause in Redis is the other one); how long a person's approval is valid; Full auto's hold
     # before each submit, never under 15 minutes (owner, docs/decisions.md).
     apply_submit_enabled: bool = True
+    apply_agent_wait_s: int = Field(default=900, ge=60, le=1800)
     apply_approval_ttl_s: int = Field(default=86_400, ge=300, le=7 * 86_400)
     apply_hold_s: int = Field(default=900, ge=900, le=86_400)
     # Full auto's guarded defaults (owner decisions 1 and 2): the runaway backstop of

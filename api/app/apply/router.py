@@ -15,7 +15,11 @@
 - GET /api/applications (`posting_id`, `limit`) lists the person's applications, newest first.
 - GET /api/applications/{id} is one, with its timeline (ids, codes and counts only), the end of
   the hold of a `held` Full auto item (`hold_until`) and the server's time (`now`), so the
-  page's countdown never reads the page's clock.
+  page's countdown never reads the page's clock. A25: `question` is the apply agent's ask
+  (`said_by` assistant, its kind, its sentence, `until`, `live` while the run waits) and `chat`
+  the asks and the person's answers in order, each with who said it.
+- POST /api/applications/{id}/question `{answer}` answers the ask the run waits on (A25; never a
+  code: 409 with the sentence to type it in the browser), or an A19 question left from before.
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 posting or application answers 404, as a missing one. Every answer is `Cache-Control: no-store`.
@@ -112,6 +116,21 @@ class QuestionOut(BaseModel):
     host: str
     kind: str
     after_send: bool = False
+    # A25: the apply agent's ask: its own words (`said_by` assistant), the deadline of the wait,
+    # and whether the run waits now (`live`: the answer box goes to it).
+    said_by: Literal["app", "assistant"] = "app"
+    until: datetime | None = None
+    live: bool = False
+
+
+class ChatOut(BaseModel):
+    """A25: one line of the conversation with the apply agent, with who said it."""
+
+    at: datetime | None
+    who: Literal["assistant", "person"]
+    kind: str
+    text: str
+    end: str | None = None  # an ask's end: answer, browser, person_late, run_ended, interrupted
 
 
 class QuestionIn(BaseModel):
@@ -156,6 +175,7 @@ class ChosenOut(BaseModel):
 class ApplicationDetail(ApplicationOut):
     events: list[EventOut]
     question: QuestionOut | None = None
+    chat: list[ChatOut] = []
     # One click Apply's agent may have sent it (A19): Try again runs the agent once more.
     agent: bool = False
     hold_until: datetime | None
@@ -277,6 +297,7 @@ def read_application(
         **_out(application),
         events=[EventOut.model_validate(e) for e in timeline],
         question=_question(db, application),
+        chat=[ChatOut.model_validate(line) for line in _chat(db, application)],
         agent=_agent(db, application),
         hold_until=full_auto.hold_until(db, application) if held else None,
         now=deps.clock(request),
@@ -311,9 +332,28 @@ def _filled(db: Session, application: Application, now: datetime) -> dict[str, A
     return out
 
 
+def _chat(db: Session, application: Application) -> list[dict[str, Any]]:
+    from app.apply import applier
+
+    return applier.chat(db, application)
+
+
 def _question(db: Session, application: Application) -> QuestionOut | None:
     from app.apply import applier
 
+    ask = applier.open_ask(db, application)
+    if ask is not None:
+        value = ask.value if isinstance(ask.value, dict) else {}
+        return QuestionOut(
+            sentence=ask.label,
+            label="",
+            host=str(value.get("host") or ""),
+            kind=ask.kind.removeprefix("ask:"),
+            after_send=application.state in (State.submitting, State.submit_unknown),
+            said_by="assistant",
+            until=value.get("until"),
+            live=applier.waiting(application),
+        )
     row = applier.open_question(db, application)
     if row is None:
         return None
