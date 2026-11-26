@@ -197,7 +197,6 @@ export function useSearchSetup({
   // A search started, or put in the line behind the running one, as its Run now does.
   const startOrWait = async (id: string, label: string) => {
     const ran = await run.mutateAsync(id);
-    if (!mounted.current) return;
     if (ran.sweep) {
       runner.follow(ran.sweep);
       onClose();
