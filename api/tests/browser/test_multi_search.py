@@ -411,16 +411,17 @@ def test_a_stored_address_stays_stored_once_whatever_a_later_reading_says(
     assert (stored, len(site.unwanted), site.found) == (saved, unwanted, set())
 
 
-def test_one_contract_is_the_website_filter_and_several_are_checked_after_reading():
+def test_one_contract_is_the_website_filter_and_another_contract_read_is_kept():
+    """Jobs J30: a posting of another contract than the saved ones is kept, for its badge."""
     one = searches_for(selected(contract_types=["CDI"]))
     assert dict(one.scope.filters)["contract"] == "CDI"
-    assert one.contracts == frozenset()
 
     site = SearchSite(results={"robot": ["Robot Engineer", "Robot Intern", "Robot Alternance"]})
     several = selected(contract_types=["Stage", "Alternance"])
     assert "contract" not in dict(searches_for(several).scope.filters)
     entry, _, _ = run(several, site, ScriptedFinder(searching(site)))
-    assert (entry["found"], entry["other_contract"]) == (2, 1)
+    assert entry["found"] == 3
+    assert "other_contract" not in entry
 
 
 def test_unwanted_titles_and_places_are_context_and_dropped_after_reading():

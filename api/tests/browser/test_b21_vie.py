@@ -4,8 +4,9 @@ pages as Playwright's snapshotForAI reads them): an offers list with a "Voir plu
 button, offer pages with several headings, a title in an h2 or in a div, "(H/F)" in titles and
 an offer number. The agent reports a posting whose title is no saved title and it is stored;
 a VIE posting is stored with the saved contract types CDI and CDD (the website's contract by
-nature, `interactive.nature_contract`); unwanted titles still drop a posting after reading, and
-elsewhere the contract rule is unchanged. Invented hosts and offers only."""
+nature, `nature.nature_contract`); unwanted titles still drop a posting after reading, and
+since jobs J30 a posting of another contract is kept everywhere, for its badge. Invented hosts
+and offers only."""
 
 import asyncio
 import random
@@ -16,6 +17,7 @@ from typing import Any
 import pytest
 
 from app.browser import finder, sources
+from app.browser.nature import nature_contract
 from app.browser.sources import interactive
 from app.jobs import never_apply, sweep
 from app.profile.schemas import SearchSection
@@ -218,7 +220,7 @@ def test_a_posting_whose_title_is_no_saved_title_is_stored_on_the_vie_website():
     assert "assist the GenAI Solution Architect" in commits.stored[0].text
     assert "Python, LLM." in commits.stored[1].text
     # The VIE website's contract by nature, with the saved CDI and CDD: nothing dropped.
-    assert entry["other_contract"] == 0
+    assert "other_contract" not in entry
     assert entry["error"] is None
     assert entry["searched"] == [{"title": "genai", "place": None}]
 
@@ -281,29 +283,29 @@ def test_a_shortened_title_still_meets_the_persons_never_apply_rule():
     assert never_apply.matching_rule([owners], finding.company or "", finding.title) is owners
 
 
-def test_elsewhere_a_posting_of_another_contract_is_still_dropped():
-    """The contract rule stays on every other website: a VIE offer read on a website that is
-    not VIE by nature, with the saved CDI and CDD, is of another contract and never stored."""
+def test_elsewhere_a_posting_of_another_contract_is_kept_for_its_badge():
+    """Jobs J30 (owner, 2026-11-26: "Garder avec un badge"): a VIE offer read on a website that is
+    not VIE by nature, with the saved CDI and CDD, is stored; the store gives it its badge
+    (tests/jobs/test_j30_criteria_badge.py). So is a freelance one read on the VIE website."""
     other = "https://jobs.example.test/"
     planned = interactive.searches_for(saved(other), other)
-    assert planned.nature is None
     site = interactive._Site(planned, commits=Commits(), source_id="s", host="jobs.example.test")
     finding = finder.VerifiedFinding(
         "AI Engineer Consultant VIE", "Sydney", other + "jobs/1", "x", None, None, {}, ""
     )
     asyncio.run(site.verified(finder.VerifiedBatch((finding,))))
-    assert (site.commits.stored, site.other_contract) == ([], {other + "jobs/1"})
+    assert [f.url for f in site.commits.stored] == [other + "jobs/1"]
     on_vie = interactive._Site(
         interactive.searches_for(saved(), VIE), commits=Commits(), source_id="s", host="v"
     )
-    asyncio.run(on_vie.verified(finder.VerifiedBatch((finding,))))
-    assert len(on_vie.commits.stored) == 1
-    # A posting of another contract than VIE read during the VIE website's search keeps the rule.
     freelance = finder.VerifiedFinding(
         "Freelance GenAI Engineer", "Paris", other + "jobs/2", "x", None, None, {}, ""
     )
-    asyncio.run(on_vie.verified(finder.VerifiedBatch((freelance,))))
-    assert on_vie.other_contract == {other + "jobs/2"}
+    asyncio.run(on_vie.verified(finder.VerifiedBatch((finding, freelance))))
+    assert [f.url for f in on_vie.commits.stored] == [other + "jobs/1", other + "jobs/2"]
+    entry: dict[str, object] = {}
+    on_vie.write(entry)
+    assert "other_contract" not in entry
 
 
 @pytest.mark.parametrize(
@@ -333,4 +335,4 @@ def test_elsewhere_a_posting_of_another_contract_is_still_dropped():
     ],
 )
 def test_the_contract_by_nature_is_read_from_the_start_s_host_only(start, nature):
-    assert interactive.nature_contract(start) == nature
+    assert nature_contract(start) == nature

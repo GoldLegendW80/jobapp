@@ -203,3 +203,21 @@ def test_a_card_titled_outside_the_saved_terms_is_read_and_stored_and_another_pl
     assert "4100000033" not in fake.paths()  # never fetched
     locations = [r.url.params["location"] for r in fake.requests if "location" in r.url.params]
     assert locations == ["French Polynesia", "Reunion"]
+
+
+def test_an_internship_read_where_linkedin_could_not_filter_is_kept_with_its_badge(
+    factory: sessionmaker[Session],  # noqa: F811
+    alice: uuid.UUID,  # noqa: F811
+) -> None:
+    """Jobs J30 (owner, 2026-11-26: "Garder avec un badge"): Alternance has no LinkedIn code, so
+    the search sends no f_JT and reads internships; they are stored, outside the saved contract
+    types, and counted so."""
+    entry, _ = run_sweep(factory, alice, contract_types=["CDI", "Alternance"])
+    assert (entry["postings"], entry["outside"], "other_contract" in entry) == (2, 2, False)
+    with factory() as database:
+        rows = database.execute(
+            sa.select(Job.contract_type, Job.contract_stated, Job.outside_criteria).where(
+                Job.user_id == alice
+            )
+        ).all()
+    assert sorted(map(tuple, rows)) == [(ContractType.Stage, True, ["contract"])] * 2

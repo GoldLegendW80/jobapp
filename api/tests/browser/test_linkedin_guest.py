@@ -796,10 +796,12 @@ def test_a_security_role_is_left_out_only_by_the_persons_own_rule(
     assert (entry.get("found", 0), entry.get("unwanted", 0)) == ((1, 0) if fetched else (0, 1))
 
 
-def test_a_posting_of_another_contract_is_dropped_only_when_linkedin_could_not_filter() -> None:
+def test_a_posting_of_another_contract_is_kept_when_linkedin_could_not_filter() -> None:
+    """Jobs J30: the three postings are internships, read in a search LinkedIn could not filter
+    (Alternance has no code); they are kept, and the store gives them their badge."""
     entries, _, _, _ = execute(section(contract_types=["CDI", "Alternance"]))
-    assert entries[0]["other_contract"] == 3  # the three postings are internships
-    assert entries[0]["found"] == 0
+    assert "other_contract" not in entries[0]
+    assert entries[0]["found"] == 3
     entries, _, _, _ = execute(section(contract_types=["CDI"]))  # f_JT=F filtered natively
     assert "other_contract" not in entries[0]
     assert entries[0]["found"] == 3
