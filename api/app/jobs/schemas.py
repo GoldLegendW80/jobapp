@@ -807,6 +807,13 @@ class SourceOut(BaseModel):
     searched: list[SearchRanOut] = Field(default_factory=list)
     # browserd's refusals of the website's agent by rule (browser B25): rule name, count.
     refusals: dict[str, int] = Field(default_factory=dict)
+    # Browser B29: how many times its tab was closed and opened again, by reason (memory, crash,
+    # other), the working set in MiB at each close for memory, and whether images, media and
+    # fonts stopped loading after one.
+    tab_closed: int = Field(default=0, ge=0)
+    tab_closed_reasons: dict[str, int] = Field(default_factory=dict)
+    tab_closed_mib: list[int] = Field(default_factory=list)
+    media_blocked: bool = False
     # LinkedIn's public job search: the searches it built from the saved titles and places, of
     # which `searches` ran before its caps (0 from an older sweep or another source).
     planned: int = Field(default=0, ge=0)

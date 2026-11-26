@@ -155,3 +155,29 @@ it("says what the app refused of a website's agent, by rule", () => {
   );
   expect(item.textContent).not.toMatch(/[–—]| - /);
 });
+
+// browser B29: a website's tab closed and opened again is said in its line, never a refusal.
+it("says that a website's tab was closed and opened again, and why", () => {
+  render(
+    <SweepSources
+      sources={[
+        source({
+          mode: "llm_browser",
+          phase: "done",
+          outcome: "searched",
+          found: 2,
+          new: 2,
+          tab_closed: 1,
+          tab_closed_reasons: { memory: 1 },
+          tab_closed_mib: [1850],
+          media_blocked: true,
+        }),
+      ]}
+    />,
+  );
+  const item = screen.getByRole("listitem");
+  expect(item).toHaveTextContent(
+    "The website's tab was closed and opened again once as the browser's memory ran short, at 1,850 MiB, and the search then loaded no images, videos or fonts.",
+  );
+  expect(item).not.toHaveTextContent("The app refused");
+});

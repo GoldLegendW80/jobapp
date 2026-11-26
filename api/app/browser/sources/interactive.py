@@ -351,6 +351,11 @@ class _Site:
     # in page, by reason (FinderSession.web_searches, fetch_blocked).
     web_searches: int = 0
     fetch_blocked: Counter[str] = field(default_factory=Counter)
+    # B29: the closes of its tab browserd opened again, by reason, the working set in MiB at
+    # each close for memory, and whether images, media and fonts stopped loading after one.
+    tab_closed: Counter[str] = field(default_factory=Counter)
+    tab_closed_mib: list[int] = field(default_factory=list)
+    media_blocked: bool = False
 
     def _sort(self, title: str, location: str, url: str) -> set[str]:
         """Where a posting read goes: unwanted, of another contract, or kept. A posting of the
@@ -390,6 +395,11 @@ class _Site:
         self.opened_by_app += session.opened_by_app
         self.web_searches += session.web_searches
         self.fetch_blocked.update(session.fetch_blocked)
+        self.tab_closed.update(session.tab_closed)
+        self.tab_closed_mib = [*self.tab_closed_mib, *session.tab_closed_mib][
+            : finder.TAB_CLOSED_MIB_MAX
+        ]
+        self.media_blocked = self.media_blocked or session.media_blocked
 
     async def verified(self, batch: finder.VerifiedBatch) -> None:
         """A verified batch on its way to the store (module docstring)."""
@@ -433,6 +443,11 @@ class _Site:
             entry["fetch_blocked"] = dict(self.fetch_blocked)
             if self.refusals:  # browserd's refusals by rule (browser B25)
                 entry["refusals"] = dict(self.refusals)
+            if self.tab_closed:  # B29: its tab closed and opened again
+                entry["tab_closed"] = sum(self.tab_closed.values())
+                entry["tab_closed_reasons"] = dict(self.tab_closed)
+                entry["tab_closed_mib"] = self.tab_closed_mib
+                entry["media_blocked"] = self.media_blocked
         if self.planned.contracts:
             entry["other_contract"] = len(self.other_contract)
         if self.unwanted:
