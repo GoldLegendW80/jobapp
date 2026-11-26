@@ -401,6 +401,7 @@ def test_every_code_a_source_ends_with_is_retried_or_not_never_both() -> None:
             "agent_cancelled",
             "finding_persistence_pending",
             "guard_failed",
+            "browser_memory",
             sources.NOT_STARTED,
             linkedin_guest.RATE_LIMITED,
             "linkedin_searched_once",

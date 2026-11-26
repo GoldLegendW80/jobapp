@@ -368,6 +368,10 @@ TAB_CLOSED_NEXT = ", and it was opened again blank: open the page again with bro
 MEDIA_LEFT_OUT = " Images, videos and fonts no longer load in this search, so the page fits."
 CLOSE_ID = re.compile(r"[0-9a-f]{8}")
 TAB_CLOSED_MIB_MAX = 20  # the working sets kept, one per close for memory
+# Planner default (review of PR 839): the guard closes the newest tab, which a page opened again
+# always is, so past this many closes for memory in one run the website ends with its own code.
+MEMORY_CLOSES_MAX = 3
+BROWSER_MEMORY = "browser_memory"
 ACTION_FAILED = (
     "The page did not let this action finish: something may cover the element, such as a "
     "cookie banner, or the page changed. Read the page again with browser_snapshot, close a "
@@ -1634,9 +1638,11 @@ class FinderSession:
 
     def _closed(self, result: dict[str, Any], agent: bool = True) -> str:
         """B29: the close of the website's tab a browserd answer names (`tab_closed`), counted
-        once by its id. On an answer to the agent's own call (`agent`), the kept snapshots go
-        (their refs are gone) and the sentence it is told is returned, which the read tools
-        answer until a page is read again; "" when the answer names no close."""
+        once by its id; the MEMORY_CLOSES_MAX-th close for memory stops the website
+        (`browser_memory`). On an answer to the agent's own call (`agent`), the kept snapshots
+        go (their refs are gone, the tabs' indexes moved) and the sentence it is told is
+        returned, which the read tools answer until a page is read again; "" when the answer
+        names no close. The pages read (`pages_read`) stay: a posting read before is verified."""
         close = result.get("tab_closed")
         if not isinstance(close, dict):
             if result.get("error") != TAB_CLOSED:
@@ -1652,9 +1658,13 @@ class FinderSession:
             memory = reason == "memory" and len(self.tab_closed_mib) < TAB_CLOSED_MIB_MAX
             if memory and type(used) is int and 0 < used < 1 << 24:
                 self.tab_closed_mib.append(used)
+            if self.tab_closed["memory"] >= MEMORY_CLOSES_MAX:
+                self.stopped = self.stopped or BROWSER_MEMORY
         self.media_blocked = self.media_blocked or close.get("media_blocked") is True
         if not agent:
             return ""
+        if self.stopped:
+            return self._stop(self.stopped)[0]
         self.kept.clear()
         media = MEDIA_LEFT_OUT if reason == "memory" and self.media_blocked else ""
         self._closed_said = TAB_CLOSED_WORDS[reason] + TAB_CLOSED_NEXT + media
@@ -1701,7 +1711,8 @@ class FinderSession:
             if exc.code == "page_failed":
                 return "The page did not load.", True
             return self._stop(exc.code)
-        self._closed(result)  # B29: a navigation of the tab opened again, counted
+        if self._closed(result) and self.stopped:  # B29: a navigation of the tab opened again
+            return self._stop(self.stopped)
         opened = canonical(self.pages.last_url)
         if not opened:
             return "The page did not load.", True  # no address from browserd: fail closed
@@ -1974,7 +1985,8 @@ class FinderSession:
                 answer = {"error": code, "message": message if isinstance(message, str) else ""}
                 return json.dumps(answer)[:2000], True
             return self._stop(exc.code)
-        self._closed(result)  # B29: a tab tool's answer that names a close, counted
+        if self._closed(result) and self.stopped:  # B29: a tab tool's answer naming a close
+            return self._stop(self.stopped)
         url = canonical(self.pages.last_url)
         if not self.on_site(url):
             return "Refused: the page went to another site.", True

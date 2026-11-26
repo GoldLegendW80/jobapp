@@ -92,6 +92,7 @@ describe("sourceName of a job website searched in the browser (jobs J15)", () =>
       "unsupported_interaction",
       "unsupported_criteria",
       "guard_failed",
+      "browser_memory",
       "no_job_list",
       "cookie_wall",
       "signin_wall",
@@ -338,6 +339,21 @@ describe("tabClosedSentence", () => {
     expect(
       tabClosedSentence({ tab_closed: 1, tab_closed_reasons: { other: 1 } }),
     ).not.toMatch(/memory|crash/);
+  });
+
+  it("reads a reason the app does not know as none, a key of every object included", () => {
+    for (const reason of [
+      "constructor",
+      "toString",
+      "__proto__",
+      "hasOwnProperty",
+    ]) {
+      const said = tabClosedSentence({
+        tab_closed: 1,
+        tab_closed_reasons: JSON.parse(`{"${reason}": 1}`),
+      });
+      expect(said).toBe("The website's tab was closed and opened again once.");
+    }
   });
 
   it("says nothing for an older api or a tab never closed", () => {

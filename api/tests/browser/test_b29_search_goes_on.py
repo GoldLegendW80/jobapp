@@ -16,9 +16,18 @@ from typing import Any
 import pytest
 
 from app.browser import finder
-from app.jobs import sweep_router
+from app.jobs import sweep, sweep_router
 from app.jobs.models import Sweep, SweepStatus, SweepTrigger
-from tests.browser.test_b20_agent import RESULTS, Site, report, run, selected, text_of, tool
+from tests.browser.test_b20_agent import (
+    POSTING,
+    RESULTS,
+    Site,
+    report,
+    run,
+    selected,
+    text_of,
+    tool,
+)
 from tests.browser.test_b29_browserd import call, guard, started
 from tests.browser.test_j22_linkedin_page import PageTools, reunion
 from tests.browser.test_j22_linkedin_page import run as j22_run
@@ -123,6 +132,84 @@ def test_a_close_with_no_known_reason_says_none() -> None:
     assert entry["tab_closed_reasons"] == {"other": 1}
     assert entry["tab_closed_mib"] == []
     assert entry["media_blocked"] is False
+
+
+class GuardLoopSite(ClosingSite):
+    """The memory guard closes each page opened again while an older tab keeps the memory past
+    it (seen on Chromium by the review of PR 839): every click answers a new close."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.closes = 0
+
+    async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        if name != "browser_click":
+            return await super().call(name, args)
+        self.closes += 1
+        return {
+            **self.closed,
+            "tab_closed": {**self.closed["tab_closed"], "id": f"0b29{self.closes:04x}"},
+        }
+
+
+def test_the_third_close_for_memory_ends_the_website_with_its_own_code() -> None:
+    site = GuardLoopSite()
+    said: list[str] = []
+
+    async def script(session: finder.FinderSession):
+        await tool(session, "browser_navigate", url=RESULTS)
+        for _ in range(finder.MEMORY_CLOSES_MAX + 1):
+            said.append(text_of(await tool(session, "browser_click", ref="e1")))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    stopped = "Stopped: browser_memory. Report what you found, then stop."
+    assert said == [MEMORY_SAID] * (finder.MEMORY_CLOSES_MAX - 1) + [stopped, stopped]
+    assert site.closes == finder.MEMORY_CLOSES_MAX  # nothing reaches the browser after the cap
+    assert entry["error"] == "browser_memory"
+    assert entry["tab_closed_reasons"] == {"memory": finder.MEMORY_CLOSES_MAX}
+    assert "browser_memory" in sweep.RETRIED  # B24's one retry, as any failure
+
+
+def test_closes_for_another_reason_never_end_the_website() -> None:
+    site = GuardLoopSite()
+    site.closed = {**site.closed, "tab_closed": {"id": "0b290b29", "reason": "crash"}}
+
+    async def script(session: finder.FinderSession):
+        await tool(session, "browser_navigate", url=RESULTS)
+        for _ in range(finder.MEMORY_CLOSES_MAX + 1):
+            await tool(session, "browser_click", ref="e1")
+        await report(session)
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    assert entry["error"] != "browser_memory"
+    assert entry["found"] == 1
+    assert entry["tab_closed_reasons"] == {"crash": finder.MEMORY_CLOSES_MAX + 1}
+
+
+def test_a_posting_read_before_the_close_is_still_reported_and_verified_after_it() -> None:
+    """A close clears the tabs' kept snapshots (their indexes moved), never the pages the session
+    read: report_postings verifies against those (review of PR 839, follow up 5)."""
+    site = ClosingSite()
+    seen: dict[str, Any] = {}
+
+    async def script(session: finder.FinderSession):
+        _, error = await session.navigate(POSTING)
+        assert not error
+        site.blank = True
+        seen["click"] = await tool(session, "browser_click", ref="e1")
+        seen["navigate"] = await tool(session, "browser_navigate", url=RESULTS)
+        assert session.kept[session.tab].url == RESULTS
+        seen["report"] = await session.report_verified(
+            [{"title": "Robot Engineer", "url": POSTING, "text": "Build robots."}]
+        )
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    assert text_of(seen["click"]) == MEMORY_SAID
+    assert seen["report"][1] is False
+    assert entry["found"] == 1
 
 
 def test_a_site_whose_tab_never_closed_writes_no_close() -> None:
