@@ -53,7 +53,7 @@ export const Cancellable: Story = {
   args: { phase: "filling", cancelKind: "cancel" },
 };
 
-/** After the assistant clicked a send button, Cancel application asks with what it may have sent. */
+/** After a send button was clicked, Cancel application asks with what it may have sent. */
 export const CancelAfterASend: Story = {
   name: "Cancel after a send button",
   args: { phase: "submitting", cancelKind: "cancelAfterSend" },

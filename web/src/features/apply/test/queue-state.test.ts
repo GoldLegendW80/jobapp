@@ -213,12 +213,12 @@ describe("the actions of each state", () => {
     }
   });
 
-  it("asks whether it may have been sent once the assistant clicked a send button", () => {
+  it("asks whether it may have been sent once a send button was clicked", () => {
     expect(cancelAsk(queueItem(1, "filling")).sentence).toBe(
       "Nothing is sent, and it leaves the queue.",
     );
     const sending = cancelAsk(queueItem(1, "submitting"));
-    expect(sending.sentence).toMatch(/already clicked a send button/);
+    expect(sending.sentence).toMatch(/send button was already clicked/);
     expect(sending.sentence).not.toMatch(SEPARATOR);
   });
 });

@@ -47,7 +47,7 @@ export const CancelDuringTheHold: Story = {
     ask: {
       title: "Cancel this application?",
       sentence:
-        "The hold stops and nothing is sent. If the app already started submitting, it is too late and the page says so.",
+        "The hold stops and nothing is sent. If the app already started submitting, your Cancel stops it, but the site may already have the application.",
       confirm: "Cancel the application",
     },
   },

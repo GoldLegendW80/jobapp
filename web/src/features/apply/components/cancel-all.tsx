@@ -163,7 +163,7 @@ export function CancelAll({ items }: { items: readonly QueueItem[] }) {
                   }
                 >
                   {one.maybeSent
-                    ? "May already have been sent: the assistant clicked a send button."
+                    ? "May already have been sent: a send button was clicked."
                     : "Not sent yet."}
                 </span>
               </li>

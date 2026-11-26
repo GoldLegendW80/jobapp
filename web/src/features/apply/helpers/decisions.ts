@@ -36,7 +36,7 @@ export const DECISIONS = {
   cancelAfterSend: {
     title: "Cancel this application?",
     sentence:
-      "The assistant already clicked a send button, so the site may have it. Nothing more is sent. Check the site or your mail afterwards.",
+      "A send button was already clicked, so the site may have it. Nothing more is sent. Check the site or your mail afterwards.",
     confirm: "Cancel the application",
     call: cancelApplication,
   },

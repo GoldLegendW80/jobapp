@@ -294,7 +294,7 @@ export function useDeck(filters: DeckFilters) {
             if (stopped.state === "submit_unknown") {
               // A24: it reached a send button meanwhile; stopped, but no undo of what may be sent.
               markLast(null);
-              toast.error(SWIPE_TEXT.tooLate, clear());
+              toast.error(SWIPE_TEXT.stoppedAfterSend, clear());
               void queryClient.invalidateQueries({ queryKey: queueKey });
               return;
             }

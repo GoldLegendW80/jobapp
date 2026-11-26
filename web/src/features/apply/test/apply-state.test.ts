@@ -185,7 +185,7 @@ describe("the person's Cancel at any moment (A24)", () => {
     [
       "submit_unknown",
       "cancelled_by_person",
-      "You stopped it after the assistant had clicked a send button. Check the site or your mail.",
+      "You stopped it after a send button had been clicked. Check the site or your mail.",
     ],
     [
       "cancelled",
@@ -201,6 +201,11 @@ describe("the person's Cancel at any moment (A24)", () => {
       "cancelled",
       "rejected",
       "The last application was cancelled. Nothing was sent.",
+    ],
+    [
+      "submitted",
+      "sent_before_cancel",
+      "Applied: your Cancel came after the site had already confirmed it.",
     ],
   ])("%s with %s says what is true", (state, code, line) => {
     for (const mode of ["review", "full_auto", "direct"]) {

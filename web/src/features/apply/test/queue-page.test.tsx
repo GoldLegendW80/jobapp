@@ -500,7 +500,7 @@ describe("the review queue page", () => {
     );
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(
-      "The assistant already clicked a send button, so the site may have it.",
+      "A send button was already clicked, so the site may have it.",
     );
     await user.click(
       within(dialog).getByRole("button", { name: "Cancel the application" }),
@@ -519,7 +519,7 @@ describe("the review queue page", () => {
       name: /Robotics Engineer 1/,
     });
     expect(unknown).toHaveTextContent(
-      "You stopped it after the assistant had clicked a send button. Check the site or your mail.",
+      "You stopped it after a send button had been clicked. Check the site or your mail.",
     );
     await user.click(
       within(unknown).getByRole("button", { name: "It was not sent" }),
@@ -565,7 +565,7 @@ describe("the review queue page", () => {
     const rows = within(named).getAllByRole("listitem");
     expect(rows.map((row) => row.textContent)).toEqual([
       "Example Robotics, Field EngineerNot sent yet.",
-      "Example Robotics, Data EngineerMay already have been sent: the assistant clicked a send button.",
+      "Example Robotics, Data EngineerMay already have been sent: a send button was clicked.",
       "Example Robotics, Platform EngineerNot sent yet.",
     ]);
     expect(dialog.textContent).not.toMatch(SEPARATOR);

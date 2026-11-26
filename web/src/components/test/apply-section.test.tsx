@@ -1293,7 +1293,7 @@ describe("the submit lease on the job page", () => {
     );
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(
-      "The assistant already clicked a send button, so the site may have it.",
+      "A send button was already clicked, so the site may have it.",
     );
     expect(dialog.textContent).not.toMatch(SEPARATOR);
     await confirm(user, "Cancel the application");
@@ -1302,7 +1302,7 @@ describe("the submit lease on the job page", () => {
     });
     expect(
       await within(section).findByText(
-        "You stopped it after the assistant had clicked a send button. Check the site or your mail.",
+        "You stopped it after a send button had been clicked. Check the site or your mail.",
       ),
     ).toBeInTheDocument();
     for (const name of ["It was submitted", "It was not sent", "Try again"]) {

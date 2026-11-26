@@ -278,14 +278,16 @@ describe("a Like", () => {
     );
   });
 
-  it("reaching a send button before the cancel is too late to undo, and stays stopped", async () => {
+  it("reaching a send button before the cancel is too late to undo, and says it stopped it", async () => {
     const { deck } = await open();
     deck.applicationState = "filling";
     deck.cancelState = "submit_unknown";
     await userEvent.click(likeButton());
     await onTop("Example Role 2");
     await userEvent.click(undoButton());
-    await toastSays(SWIPE_TEXT.tooLate);
+    await toastSays(
+      "Stopped, but too late to undo: it may already have been sent. Check the site or your mail.",
+    );
     expect(deck.calls).toContain(
       "POST cancel 00000000-0000-4000-9000-0000000000a1",
     );
