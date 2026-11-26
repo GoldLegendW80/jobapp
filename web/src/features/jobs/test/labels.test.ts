@@ -7,6 +7,7 @@ import {
   searchesSentence,
   sourceLabel,
   sourceName,
+  tabClosedSentence,
 } from "../helpers/labels";
 
 describe("sourceLabel", () => {
@@ -299,5 +300,48 @@ describe("guestSentence", () => {
   it("says nothing for an older api or another source", () => {
     expect(guestSentence({})).toBe("");
     expect(guestSentence({ fallback: null, not_searched: [] })).toBe("");
+  });
+});
+
+// browser B29: a website's tab closed and opened again, by the reason the app knew.
+describe("tabClosedSentence", () => {
+  it("says each close by its reason, the MiB in use and the media left out, in one sentence", () => {
+    const said = tabClosedSentence({
+      tab_closed: 3,
+      tab_closed_reasons: { memory: 2, other: 1 },
+      tab_closed_mib: [1850, 1902],
+      media_blocked: true,
+    });
+    expect(said).toBe(
+      "The website's tab was closed and opened again 3 times (twice as the browser's memory ran short, at 1,850 MiB and 1,902 MiB; once for a reason the app did not see), and the search then loaded no images, videos or fonts.",
+    );
+    expect(said).not.toMatch(/[–—]| - /);
+    expect(said.split(". ")).toHaveLength(1);
+  });
+
+  it("names a crash, and no cause the app did not see", () => {
+    expect(
+      tabClosedSentence({ tab_closed: 1, tab_closed_reasons: { crash: 1 } }),
+    ).toBe(
+      "The website's tab was closed and opened again once as the page crashed.",
+    );
+    expect(
+      tabClosedSentence({
+        tab_closed: 1,
+        tab_closed_reasons: { memory: 1 },
+        tab_closed_mib: [1850],
+        media_blocked: true,
+      }),
+    ).toBe(
+      "The website's tab was closed and opened again once as the browser's memory ran short, at 1,850 MiB, and the search then loaded no images, videos or fonts.",
+    );
+    expect(
+      tabClosedSentence({ tab_closed: 1, tab_closed_reasons: { other: 1 } }),
+    ).not.toMatch(/memory|crash/);
+  });
+
+  it("says nothing for an older api or a tab never closed", () => {
+    expect(tabClosedSentence({})).toBe("");
+    expect(tabClosedSentence({ tab_closed: 0, media_blocked: false })).toBe("");
   });
 });

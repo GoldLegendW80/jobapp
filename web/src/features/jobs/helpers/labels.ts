@@ -346,6 +346,42 @@ export function guestSentence(source: {
   return parts.join(" ");
 }
 
+/** Browser B29: the times the website's tab was closed and opened again, each by the reason the
+ * app knew (the browser's memory guard, a crash of the page, else none it saw), and whether the
+ * search then left out images, videos and fonts. Empty when none or the api is older. */
+export function tabClosedSentence(source: {
+  tab_closed?: number;
+  tab_closed_reasons?: Record<string, number>;
+  tab_closed_mib?: number[];
+  media_blocked?: boolean;
+}): string {
+  const total = source.tab_closed ?? 0;
+  if (total <= 0) return "";
+  const times = (n: number) =>
+    n === 1 ? "once" : n === 2 ? "twice" : `${n.toLocaleString("en-GB")} times`;
+  const mib = (source.tab_closed_mib ?? []).map(
+    (n) => `${n.toLocaleString("en-GB")} MiB`,
+  );
+  const phrases: Record<string, string> = {
+    memory: `as the browser's memory ran short${mib.length ? `, at ${mib.join(" and ")}` : ""}`,
+    crash: "as the page crashed",
+    other: "for a reason the app did not see",
+  };
+  const listed = Object.entries(source.tab_closed_reasons ?? {}).filter(
+    ([reason, n]) => n > 0 && reason in phrases,
+  );
+  const only = listed.length === 1 && listed[0]?.[1] === total;
+  const why = only
+    ? ` ${phrases[listed[0]?.[0] ?? ""] ?? ""}`
+    : listed.length
+      ? ` (${listed.map(([reason, n]) => `${times(n)} ${phrases[reason] ?? ""}`).join("; ")})`
+      : "";
+  const media = source.media_blocked
+    ? ", and the search then loaded no images, videos or fonts"
+    : "";
+  return `The website's tab was closed and opened again ${times(total)}${why}${media}.`;
+}
+
 export function sourceName(source: {
   kind: string;
   query: string;

@@ -65,6 +65,15 @@ export const sweepSourceSchema = z.object({
   places_left_out: z.number().int().nonnegative().optional(),
   // browser B25: the app's refusals of the website's agent by rule; absent from an older api.
   refusals: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  // browser B29: how many times the website's tab was closed and opened again, by reason
+  // (memory, crash, other), the MiB in use at each close for memory, and whether images, videos
+  // and fonts were left out after one; absent from an older api.
+  tab_closed: z.number().int().nonnegative().optional(),
+  tab_closed_reasons: z
+    .record(z.string(), z.number().int().nonnegative())
+    .optional(),
+  tab_closed_mib: z.array(z.number().int().nonnegative()).optional(),
+  media_blocked: z.boolean().optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;

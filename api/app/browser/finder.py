@@ -354,6 +354,20 @@ RECOVERABLE = frozenset({"page_error", "element_covered", "stale_ref"})
 # off it (routes.call_tool's `guard_failed`): never told as recoverable, it ends the website
 # with that code (labels.ts says it to the person).
 GUARD_FAILED = "guard_failed"
+# B29: browserd opened the website's tab again blank after it was closed (its `tab_closed`, with
+# the reason only code knows: browserd's memory guard, a crash of the page, else `other`). Told
+# to the agent and counted in the source's stats, never a refusal.
+TAB_CLOSED = "tab_closed"
+TAB_CLOSED_REASONS = frozenset({"memory", "crash", "other"})
+TAB_CLOSED_WORDS = {
+    "memory": "The tab was closed because the browser ran short of memory",
+    "crash": "The tab crashed",
+    "other": "The tab was closed",
+}
+TAB_CLOSED_NEXT = ", and it was opened again blank: open the page again with browser_navigate."
+MEDIA_LEFT_OUT = " Images, videos and fonts no longer load in this search, so the page fits."
+CLOSE_ID = re.compile(r"[0-9a-f]{8}")
+TAB_CLOSED_MIB_MAX = 20  # the working sets kept, one per close for memory
 ACTION_FAILED = (
     "The page did not let this action finish: something may cover the element, such as a "
     "cookie banner, or the page changed. Read the page again with browser_snapshot, close a "
@@ -1530,6 +1544,14 @@ class FinderSession:
     # answer order, and those the agent opened (web_fetch or browser_navigate) or reported.
     niche_links: dict[str, str] = field(default_factory=dict)
     niche_done: set[str] = field(default_factory=set)
+    # B29: the closes of the website's tab browserd opened again, by reason, the working set in
+    # MiB at each close for memory, whether images, media and fonts stopped loading after one,
+    # browserd's id of each close counted, and what the read tools answer until a page is kept.
+    tab_closed: Counter[str] = field(default_factory=Counter)
+    tab_closed_mib: list[int] = field(default_factory=list)
+    media_blocked: bool = False
+    _closes: set[str] = field(default_factory=set, repr=False)
+    _closed_said: str = field(default="", repr=False)
     # The start page's parse (`parsed_off_loop` of where it landed), made in a thread by the
     # caller before the session (#797): a session is built in the event loop.
     parsed: InitVar[tuple[list[str], Detail] | None] = None
@@ -1582,6 +1604,7 @@ class FinderSession:
 
     def _hold(self, url: str, text: str, title: str, cut: bool) -> Kept | None:
         """Keep the tab's snapshot whole, up to PAGE_MAX (B26); the one it replaces."""
+        self._closed_said = ""  # a page read again: the close is behind
         previous = self.kept.get(self.tab)
         whole = _head(text, PAGE_MAX)
         self.kept[self.tab] = Kept(url, title[:TITLE_MAX], whole, cut or len(whole) < len(text))
@@ -1608,6 +1631,34 @@ class FinderSession:
     def _stop(self, code: str) -> tuple[str, bool]:
         self.stopped = self.stopped or code
         return f"Stopped: {code}. Report what you found, then stop.", True
+
+    def _closed(self, result: dict[str, Any], agent: bool = True) -> str:
+        """B29: the close of the website's tab a browserd answer names (`tab_closed`), counted
+        once by its id. On an answer to the agent's own call (`agent`), the kept snapshots go
+        (their refs are gone) and the sentence it is told is returned, which the read tools
+        answer until a page is read again; "" when the answer names no close."""
+        close = result.get("tab_closed")
+        if not isinstance(close, dict):
+            if result.get("error") != TAB_CLOSED:
+                return ""
+            close = {}  # told all the same, counted by no id
+        reason = close.get("reason")
+        reason = reason if reason in TAB_CLOSED_REASONS else "other"
+        key = close.get("id")
+        if isinstance(key, str) and CLOSE_ID.fullmatch(key) and key not in self._closes:
+            self._closes.add(key)
+            self.tab_closed[reason] += 1
+            used = close.get("used_mib")
+            memory = reason == "memory" and len(self.tab_closed_mib) < TAB_CLOSED_MIB_MAX
+            if memory and type(used) is int and 0 < used < 1 << 24:
+                self.tab_closed_mib.append(used)
+        self.media_blocked = self.media_blocked or close.get("media_blocked") is True
+        if not agent:
+            return ""
+        self.kept.clear()
+        media = MEDIA_LEFT_OUT if reason == "memory" and self.media_blocked else ""
+        self._closed_said = TAB_CLOSED_WORDS[reason] + TAB_CLOSED_NEXT + media
+        return self._closed_said
 
     async def navigate(self, raw: str) -> tuple[str, bool]:
         if self.stopped:
@@ -1638,6 +1689,9 @@ class FinderSession:
         except SourceError as exc:
             if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
                 return self._stop(GUARD_FAILED)  # as in `interact`: no page to recover on
+            if exc.code == "page_failed" and result.get("error") == TAB_CLOSED:
+                return self._closed(result), True  # B29: opened again blank, never a refusal
+            self._closed(result, agent=False)
             if exc.code == "page_failed" and result.get("error") in APP_REFUSED:
                 self.refused["unsupported_interaction"] += 1
                 rule = refusal_rule(result)
@@ -1647,6 +1701,7 @@ class FinderSession:
             if exc.code == "page_failed":
                 return "The page did not load.", True
             return self._stop(exc.code)
+        self._closed(result)  # B29: a navigation of the tab opened again, counted
         opened = canonical(self.pages.last_url)
         if not opened:
             return "The page did not load.", True  # no address from browserd: fail closed
@@ -1901,6 +1956,10 @@ class FinderSession:
         except SourceError as exc:
             if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
                 return self._stop(GUARD_FAILED)  # no page to recover on (round 2 of PR 720)
+            # B29: the tab was opened again blank, never a refusal (a tab tool's answer on that
+            # blank page names the close too, and the page read after it did not answer).
+            if exc.code == "page_failed" and (said := self._closed(result)):
+                return said, True
             if exc.code == "page_failed" and result.get("error") in RECOVERABLE:
                 return ACTION_FAILED, True  # the page's, not a refusal (2026-10-28)
             if exc.code == "page_failed":
@@ -1915,6 +1974,7 @@ class FinderSession:
                 answer = {"error": code, "message": message if isinstance(message, str) else ""}
                 return json.dumps(answer)[:2000], True
             return self._stop(exc.code)
+        self._closed(result)  # B29: a tab tool's answer that names a close, counted
         url = canonical(self.pages.last_url)
         if not self.on_site(url):
             return "Refused: the page went to another site.", True
@@ -1973,6 +2033,8 @@ class FinderSession:
             return self._stop("lease_ended" if exc.code == "ended" else "page_failed")
         except SourceError as exc:  # the website's permission, checked before every call
             return self._stop(exc.code)
+        if said := self._closed(shot):
+            return said, True  # B29: the tab was opened again blank
         data = shot.get("data")
         if not shot.get("ok") or not isinstance(data, str):
             return "The screenshot could not be taken.", True
@@ -2025,7 +2087,7 @@ class FinderSession:
                     return answer, error
             kept = self.kept.get(self.tab)
             if kept is None:
-                return NO_PAGE, True
+                return self._closed_said or NO_PAGE, True  # B29: closed since it was read
         offset, length = max(offset, 0), min(max(length, 1), WINDOW_MAX)
         size = len(kept.text)
         if offset and offset >= size:
@@ -2069,6 +2131,8 @@ class FinderSession:
             return self._stop("lease_ended" if exc.code == "ended" else "page_failed")
         except SourceError as exc:
             return self._stop(exc.code)
+        if said := self._closed(shot):
+            return said, True  # B29: the tab was opened again blank
         text = shot.get("snapshot")
         if not shot.get("ok") or not isinstance(text, str):
             return "The page could not be read.", True
@@ -2107,7 +2171,8 @@ class FinderSession:
             return 'Refused: source is "page", "script" or "fetch".', True
         kept = {"script": self.script, "fetch": self.fetched}.get(source, self.kept.get(self.tab))
         if kept is None:
-            return {"script": NO_SCRIPT, "fetch": NO_FETCH}.get(source, NO_PAGE), True
+            page = self._closed_said or NO_PAGE  # B29: the tab closed since the page was read
+            return {"script": NO_SCRIPT, "fetch": NO_FETCH}.get(source, page), True
         matcher = _matcher(pattern)
         if isinstance(matcher, str):
             return matcher, True
@@ -2170,6 +2235,8 @@ class FinderSession:
             return self._stop("lease_ended" if exc.code == "ended" else "page_failed")
         except SourceError as exc:
             return self._stop(exc.code)
+        if said := self._closed(done):
+            return said, True  # B29: the tab was opened again blank
         if not done.get("ok"):
             return "The text did not appear.", True
         return await self._reread(compact=True)  # B26: as every action, the page it left
@@ -2505,6 +2572,7 @@ class FinderSession:
         except SourceError as exc:  # a permission withdrawn (GuardedTools): as `navigate`
             self.stopped = self.stopped or exc.code
             return ""
+        self._closed(made, agent=False)  # B29: the agent's tab, opened again: told by its call
         if not made.get("ok"):
             return ""
         index = next(
@@ -2572,6 +2640,8 @@ class FinderSession:
             back = await tools.call(
                 "browser_tabs", {"action": "select", "index": self.tab, **scope}
             )
+            for answer in (closed, back):  # B29: a tab opened again on the way, counted
+                self._closed(answer, agent=False)
             restored = closed.get("ok") is True and back.get("ok") is True
         except (BrowserError, SourceError):
             restored = False

@@ -18,6 +18,7 @@ import {
   leftOutSentence,
   searchesSentence,
   sourceName,
+  tabClosedSentence,
 } from "@/features/jobs/helpers/labels";
 import { plural } from "@/features/jobs/helpers/selection";
 import type { SweepSource } from "@/features/jobs/api/sweeps-api";
@@ -105,6 +106,7 @@ function sourceStatus(source: SweepSource): string {
     guestSentence(source),
     found,
     refusalsSentence(source),
+    tabClosedSentence(source),
   ]
     .filter((part) => part !== "")
     .join(" ");

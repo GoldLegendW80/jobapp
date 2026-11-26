@@ -584,10 +584,11 @@ class Tab:
         self.state.chooser = chooser
         self.state.chooser_id += 1
 
-    async def page(self, blank_ok: bool = False) -> Any:
+    async def page(self, blank_ok: bool = False, tabs: bool = False) -> Any:
         """The page the call acts on. A discovery's tab that was closed is opened again blank
         (B29, `_reopen`) and the call answers `tab_closed`; so does every later call while that
-        blank page is current, but a navigation and the tab tools (`blank_ok`)."""
+        blank page is current, but a navigation (`blank_ok`). The tab tools (`tabs`) act all the
+        same, so the app can give the agent its tab back; their answer names the close too."""
         context = await self.guard()
         current = self.state.page
         if self.state.discovery:
@@ -601,7 +602,7 @@ class Tab:
                 self.state.reopened = self.state.closed = None
             if self.state.closed is not None and current is self.state.reopened:
                 self.told = self.state.closed
-                if fresh or not blank_ok:
+                if not tabs and (fresh or not blank_ok):
                     raise TabClosed
         if current is None or current.is_closed() or current not in context.pages:
             current = context.pages[0] if context.pages else await context.new_page()
@@ -1343,7 +1344,7 @@ async def box(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
 
 async def tabs(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     action = args.get("action", "list")
-    await tab.page(blank_ok=True)
+    await tab.page(tabs=True)
     settled = await tab.settle({"ok": True})  # tabs off the list are closed before any is listed
     if not settled.get("ok"):
         return settled
