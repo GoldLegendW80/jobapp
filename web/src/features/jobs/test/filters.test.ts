@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { activeFilterChips } from "../helpers/filter-chips";
 import {
+  activeFilterCount,
   EMPTY_FILTERS,
+  foundToday,
   hasFilters,
+  hideSkippedAndClosed,
+  localIsoDate,
   isIsoDate,
   parseTypedDate,
   parseFilters,
@@ -34,11 +39,24 @@ describe("job filters in the URL", () => {
       fitMax: 100,
       foundFrom: "2026-09-01",
       foundTo: "2026-10-09",
+      places: ["La Réunion", "Paris"],
+      workModes: ["remote", "not_stated"],
+      sources: ["linkedin", "web"],
+      publishedWithin: 7,
+      publishedFrom: "2026-11-01",
+      publishedUndated: true,
+      pay: "stated",
+      payMin: 50000,
+      payPeriod: "year",
+      applications: ["none", "failed"],
+      sweep: "0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa",
       sort: "fit",
     };
     expect(roundTrip(filters)).toEqual(filters);
     expect(toSearchParams(filters).toString()).toBe(
-      "q=forward+deployed&status=shortlisted&status=cv_ready&type=CDI&type=VIE&company=Mistral&fit_min=70&fit_max=100&found_from=2026-09-01&found_to=2026-10-09&sort=fit",
+      "q=forward+deployed&status=shortlisted&status=cv_ready&type=CDI&type=VIE&company=Mistral&fit_min=70&fit_max=100&found_from=2026-09-01&found_to=2026-10-09" +
+        "&place=La+R%C3%A9union&place=Paris&work_mode=remote&work_mode=not_stated&source=linkedin&source=web&published_within=7&published_from=2026-11-01&published_undated=true" +
+        "&pay=stated&pay_min=50000&pay_period=year&application=none&application=failed&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa&sort=fit",
     );
   });
 
@@ -54,6 +72,23 @@ describe("job filters in the URL", () => {
     ["sort=company", { sort: "company" }],
     ["sort=updated", { sort: "updated" }],
     ["sort=status", { sort: "status" }],
+    ["sort=published", { sort: "published" }],
+    ["sort=pay", { sort: "pay" }],
+    ["place=Saint-Denis", { places: ["Saint-Denis"] }],
+    ["work_mode=hybrid", { workModes: ["hybrid"] }],
+    [
+      "source=www.welcometothejungle.com",
+      { sources: ["www.welcometothejungle.com"] },
+    ],
+    ["published_within=0", { publishedWithin: 0 }],
+    ["published_from=2026-11-20", { publishedFrom: "2026-11-20" }],
+    ["pay=not_stated", { pay: "not_stated" }],
+    ["pay_min=600&pay_period=day", { payMin: 600, payPeriod: "day" }],
+    ["application=waiting", { applications: ["waiting"] }],
+    [
+      "sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa",
+      { sweep: "0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa" },
+    ],
   ])("round trips %s alone", (query, expected) => {
     const filters = parse(query);
     expect(filters).toEqual({ ...EMPTY_FILTERS, ...expected });
@@ -180,5 +215,116 @@ describe("parseTypedDate", () => {
     ["yesterday", false],
   ])("%j reads %j", (value, expected) => {
     expect(parseTypedDate(value)).toBe(expected);
+  });
+});
+
+describe("the filters of jobs J29 in the URL", () => {
+  it.each<[string, string, Partial<JobFilters>]>([
+    [
+      "a place without a letter",
+      "place=%2C%2C&place=Paris",
+      { places: ["Paris"] },
+    ],
+    ["a place too long", `place=${"x".repeat(101)}`, {}],
+    ["a place twice", "place=Paris&place=Paris", { places: ["Paris"] }],
+    [
+      "more than 20 places",
+      Array.from({ length: 25 }, (_, i) => `place=p${String(i)}`).join("&"),
+      { places: Array.from({ length: 20 }, (_, i) => `p${String(i)}`) },
+    ],
+    [
+      "an unknown work mode",
+      "work_mode=anywhere&work_mode=office",
+      { workModes: ["office"] },
+    ],
+    ["a blank source", "source=%20", {}],
+    ["days out of range", "published_within=3651", {}],
+    ["negative days", "published_within=-1", {}],
+    ["a false date", "published_from=2026-02-31", {}],
+    [
+      "keep undated alone",
+      "published_undated=true",
+      { publishedUndated: true },
+    ],
+    ["a pay minimum alone", "pay_min=50000", {}],
+    ["a period alone", "pay_period=year", {}],
+    ["a minimum of 0", "pay_min=0&pay_period=year", {}],
+    [
+      "not stated with a minimum",
+      "pay=not_stated&pay_min=5&pay_period=year",
+      { pay: "not_stated" },
+    ],
+    [
+      "an unknown application",
+      "application=maybe&application=sent",
+      { applications: ["sent"] },
+    ],
+    ["a sweep that is no id", "sweep=abc", {}],
+  ])("drops %s", (_, query, expected) => {
+    expect(parse(query)).toEqual({ ...EMPTY_FILTERS, ...expected });
+  });
+
+  it("sends keep undated only with a published bound", () => {
+    expect(toSearchParams(parse("published_undated=true")).toString()).toBe("");
+    expect(hasFilters(parse("published_undated=true"))).toBe(false);
+  });
+
+  it("counts one per value and one per range, as the chips", () => {
+    const filters = parse(
+      "place=Paris&place=Lyon&work_mode=remote&source=web&published_within=7&pay=stated&application=sent&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa",
+    );
+    expect(activeFilterCount(filters)).toBe(8);
+    expect(activeFilterChips(filters)).toHaveLength(8);
+  });
+
+  it("names each chip and removes only its own filter", () => {
+    const filters = parse(
+      "q=ml&place=Saint-Denis&work_mode=not_stated&type=CDI&source=web&published_within=7&published_undated=true&pay_min=50000&pay_period=year&fit_min=60&application=waiting&status=found&found_from=2026-11-26&found_to=2026-11-26&company=Acme&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa",
+    );
+    const chips = activeFilterChips(filters);
+    expect(chips.map((chip) => chip.text)).toEqual([
+      "Search: ml",
+      "Place: Saint-Denis",
+      "Work mode: Not stated",
+      "Contract: CDI",
+      "Website: Anywhere on the web",
+      "Published in the last 7 days, or no date",
+      "Pay: at least 50,000 a year",
+      "Fit: 60 to 100",
+      "Application: Waiting for you",
+      "Status: Found",
+      "Found on 26 Nov 2026",
+      "Company: Acme",
+      "Added by one search",
+    ]);
+    const published = chips.find((chip) => chip.key === "published")!;
+    expect(published.without).toEqual({
+      ...filters,
+      publishedWithin: null,
+      publishedFrom: null,
+      publishedUndated: false,
+    });
+    const place = chips.find((chip) => chip.key === "places-Saint-Denis")!;
+    expect(place.without.places).toEqual([]);
+    expect(place.without.sweep).toBe(filters.sweep);
+  });
+
+  it("applies the presets over the other filters", () => {
+    const filters = parse("place=Paris&status=skipped");
+    expect(foundToday(filters, "2026-11-26")).toEqual({
+      ...filters,
+      foundFrom: "2026-11-26",
+      foundTo: "2026-11-26",
+    });
+    expect(hideSkippedAndClosed(filters).statuses).toEqual([
+      "found",
+      "shortlisted",
+      "cv_ready",
+      "staged",
+      "applied",
+      "interview",
+      "rejected",
+    ]);
+    expect(localIsoDate(new Date(2026, 0, 5, 23, 59))).toBe("2026-01-05");
   });
 });

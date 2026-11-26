@@ -129,6 +129,33 @@ export function listJobs(
   });
 }
 
+const facetSchema = z.object({
+  value: z.string(),
+  count: z.number().int().nonnegative(),
+});
+export type Facet = z.infer<typeof facetSchema>;
+export const facetsSchema = z.object({
+  places: z.array(facetSchema),
+  sources: z.array(facetSchema),
+});
+export type Facets = z.infer<typeof facetsSchema>;
+
+export const jobFacetsKey = (query: string) =>
+  [...jobsKey, "facets", query] as const;
+
+/** GET /api/jobs/facets: the places and the websites of the postings under `query`, each over
+ * every filter but its own, most postings first. */
+export function listFacets(
+  query: string,
+  signal?: AbortSignal,
+): Promise<Facets> {
+  return request(`/jobs/facets?${query}`, {
+    signal,
+    timeoutMs: 15_000,
+    validate: (data) => facetsSchema.parse(data),
+  });
+}
+
 /** How many postings the person has, all statuses: one row asked for, only the total read. */
 export const jobCountKey = [...jobsKey, "count"] as const;
 export async function countJobs(signal?: AbortSignal): Promise<number> {
