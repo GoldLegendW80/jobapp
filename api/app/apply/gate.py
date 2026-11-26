@@ -719,7 +719,7 @@ def _stepped(db: Session, application: Application) -> bool:
 
 def _cancel_runs(db: Session, application: Application, now: datetime) -> None:
     """The application's apply agent run, queued or running, cancelled as Activity's Cancel does
-    (`runs.request_cancel`: the runner interrupts it within a second, records its cost, and the
+    (`runs.request_cancel`: the runner interrupts it at its next poll, records its cost, and the
     applier releases the lease). The adapters' fills read the state and stop as before."""
     from app.agents import runs
     from app.agents.models import AgentRun, RunStatus

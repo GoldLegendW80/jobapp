@@ -25,7 +25,10 @@ Kept (the orchestrator, said in the reply; the owner gave no preference):
   `submit_unknown`, never sent again by the app itself; one Apply click gives one run (no
   retry, `run.interrupt`); a later run of the same application is refused (`already_run`)
   unless the person's Try again came after the last act that may have sent it (`retry`);
-- the person's Cancel: read before every tool call, so the agent stops at its next one;
+- the person's Cancel (A24, `gate.cancel`): the run is cancelled through the runs' own cancel,
+  whose runner interrupts it at its next poll (0.5 s), and the state is read before every tool
+  call; a run's Cancel in Activity ends the application the same way (`finish`,
+  `gate.stopped_by_person`);
 - hard rule 3: an application by e-mail never reaches this module (`service.start` makes it
   Review first, `worker.apply_fill` sends it to `email.prepare`).
 
