@@ -72,7 +72,9 @@ export function CancelAll({ items }: { items: readonly QueueItem[] }) {
       setNamed(null);
     },
     onError: (error) => {
-      setLines([`Nothing was cancelled. ${describeError(error)}`]);
+      setLines([
+        `Cancel all could not finish. ${describeError(error)} Open each application to see where it stands.`,
+      ]);
       setNamed(null);
     },
   });
