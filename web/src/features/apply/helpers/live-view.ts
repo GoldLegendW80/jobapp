@@ -71,10 +71,6 @@ const WAITS = new Map([
     "retry",
     "The last attempt did not finish. The assistant tries again by itself.",
   ],
-  [
-    "documents:credential",
-    "The browser starts once your CV and letter are written. Add a model credential in your account first.",
-  ],
 ]);
 const DOCUMENTS = "The browser starts once your CV and letter are ready.";
 

@@ -4,6 +4,12 @@ import { ApplicationLiveViews } from "@/components/shared/apply/apply-section/ap
 import { APP_ID } from "@/test/apply";
 import { applicationIn } from "@/design-system/fixtures/shared-apply";
 import { withApp } from "@/design-system/with-app";
+import {
+  browserHolds,
+  fakeLiveScreens,
+  lease,
+  liveRoutes,
+} from "@/design-system/fixtures/live-browser";
 
 const meta = {
   title: "Shared/Apply/Apply section/Application live views",
@@ -21,7 +27,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The live view of the person's browser in Your application while the app works: the fill, the wait before it, and the submit once approved or held. Each says what it waits for until the browser shows the assistant at work.",
+          "The live view of the person's browser in Your application while the app works: the wait before the fill, then the lease the api names for the application, whatever its state (a fill with Use the browser myself, the submit lease watch only). Without that lease it says what the application waits for, from its own needs.",
       },
     },
   },
@@ -109,6 +115,34 @@ export const SendingOneClick: Story = {
     application: applicationIn("approved", { mode: "direct" }),
     phase: "submitting",
     direct: true,
+    submitLease: { application: APP_ID },
+  },
+};
+
+/** One click Apply's agent past its first send button: its own lease, with Use the browser myself. */
+export const SendingOneClickAgent: Story = {
+  name: "Sending, One click Apply's agent",
+  args: {
+    application: applicationIn("submitting", { mode: "direct" }),
+    phase: "submitting",
+    direct: true,
+    submitLease: { application: APP_ID },
+  },
+  beforeEach: () => {
+    liveRoutes();
+    browserHolds(
+      lease({ purpose: "apply_agent", application_id: APP_ID, max_s: 3600 }),
+    );
+    return fakeLiveScreens({ pages: ["form"] });
+  },
+};
+
+/** An approved form waits for its turn: the app spaces out submissions to the same site. */
+export const WaitingForItsTurn: Story = {
+  name: "Waiting for its turn on the site",
+  args: {
+    application: applicationIn("approved", { needs: "host_pace" }),
+    phase: "submitting",
     submitLease: { application: APP_ID },
   },
 };
