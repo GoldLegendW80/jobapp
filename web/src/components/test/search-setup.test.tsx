@@ -1985,6 +1985,27 @@ describe("A website's permission is the person's, across her searches (jobs J33)
     ]);
   });
 
+  it("changes no permission when the other searches cannot be read at the save", async () => {
+    fakeSearches({ saved: [remote()] });
+    const { starts, writes, profile, user, dialog } = await open(
+      { ...EMPTY.search, ...indeedOnly },
+      { indeed: { enabled: true, accepted: true } },
+    );
+    await toggle(user, dialog, "Indeed");
+    server.use(
+      http.get("*/api/jobs/searches", () =>
+        HttpResponse.json({ detail: "Unavailable" }, { status: 503 }),
+      ),
+    );
+    await saveAndStart(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Your other searches could not be read, so no permission was changed.",
+    );
+    expect(writes).toEqual([]);
+    expect(profile.saves).toEqual([]);
+    expect(starts).toEqual([]);
+  });
+
   it("gives Indeed's permission with its sentence before a saved search that ticks it is written", async () => {
     const order: string[] = [];
     const searches = fakeSearches({ saved: [remote()] });
