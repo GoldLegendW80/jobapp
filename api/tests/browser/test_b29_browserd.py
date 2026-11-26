@@ -298,13 +298,28 @@ def test_a_tab_the_memory_guard_closed_opens_again_and_the_search_goes_on(name: 
         assert after["url"] == POSTING
 
 
+def watch_opens(context: Context, page: Page) -> list[bool]:
+    """Whether `page` was already closed at each new_page of `context`."""
+    opened: list[bool] = []
+    real = context.new_page
+
+    async def new_page() -> Page:
+        opened.append(page.closed)
+        return await real()
+
+    context.new_page = new_page  # type: ignore[method-assign]
+    return opened
+
+
 def test_a_crashed_tab_opens_again_with_its_reason_and_loads_its_media() -> None:
     tab, made, _ = started()
     call(tab, "browser_navigate", {"url": START})
     crashed = tab.state.page
+    opened = watch_opens(made, crashed)
     for listener in crashed.listeners["crash"]:
         listener(crashed)  # Playwright's "crash" event
     told = call(tab, "browser_click", {"ref": "e7"})
+    assert opened == [True]  # not the browser's last page: closed before another opens
     assert told["error"] == "tab_closed"
     assert told["tab_closed"]["reason"] == "crash"
     assert "used_mib" not in told["tab_closed"]
@@ -414,9 +429,11 @@ def test_a_signed_in_search_whose_only_tab_crashed_goes_on_and_chromium_stays_up
     assert call(tab, "browser_navigate", {"url": START}, SIGNED_IN)["ok"]
     crashed = tab.state.page
     assert [p for c in browser.browser.contexts for p in c.pages] == [crashed]
+    opened = watch_opens(person, crashed)
     for listener in crashed.listeners["crash"]:
         listener(crashed)
     told = call(tab, "browser_snapshot", {})
+    assert opened == [False]  # the blank page opened while the crashed one was still open
     assert (told["error"], told["tab_closed"]["reason"]) == ("tab_closed", "crash")
     assert "rule" not in told
     assert not browser.browser.gone
