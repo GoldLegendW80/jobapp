@@ -35,7 +35,8 @@ const REMOTE_STANCE_WORDS: Record<(typeof REMOTE_STANCES)[number], string> = {
 };
 
 /** Under More options: the remote preference, the contract types and how recent a posting. A
- * posting outside them is kept with a badge (jobs J30), and each says so. */
+ * posting outside them that a search assistant finds is kept with a badge (jobs J30; the feeds,
+ * the company boards and LinkedIn's age filter still leave some out), and each says so. */
 export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
   const id = useId();
   return (
@@ -57,7 +58,8 @@ export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
               </NativeSelect>
             </FormControl>
             <FormDescription>
-              A posting of another work mode is still kept, with a badge.
+              The search assistants keep a posting of another work mode too,
+              with a badge.
             </FormDescription>
             <FormMessage />
           </FormItem>
@@ -106,7 +108,8 @@ export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
               ))}
             </FieldGroup>
             <FieldDescription>
-              A posting of another contract is still kept, with a badge.
+              The search assistants keep a posting of another contract too, with
+              a badge.
             </FieldDescription>
           </FieldSet>
         )}
@@ -127,7 +130,7 @@ export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
               />
             </FormControl>
             <FormDescription>
-              An older posting is still kept, with a badge.
+              The search assistants keep an older posting too, with a badge.
             </FormDescription>
             <FormMessage />
           </FormItem>

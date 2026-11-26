@@ -130,7 +130,7 @@ function SearchForms({
           </SettingsSection>
           <SettingsSection
             title="Where and how"
-            description="How far from home you work, and on which contracts. A posting of another work mode or contract is still kept, with a badge in Jobs."
+            description="How far from home you work, and on which contracts. The search assistants keep a posting of another work mode or contract too, with a badge in Jobs."
           >
             <FormField
               control={control}
@@ -201,7 +201,7 @@ function SearchForms({
               inputMode="numeric"
               autoComplete="off"
               className="max-w-48"
-              description="A posting published earlier is still kept, with a badge in Jobs."
+              description="The search assistants keep a posting published earlier too, with a badge in Jobs."
             />
           </SettingsSection>
           {/* Owner, 2026-10-28: searches run the job websites ticked in Find jobs alone. The

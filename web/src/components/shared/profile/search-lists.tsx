@@ -26,7 +26,7 @@ const LISTS = [
     name: "title_include",
     label: WORDING.jobTitles,
     description:
-      "Where the search starts: it searches these titles, and also keeps other roles that fit your profile.",
+      "Where the search starts: it searches these titles, and its assistants also keep other roles that fit your profile.",
   },
   {
     name: "title_exclude",

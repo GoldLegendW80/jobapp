@@ -131,7 +131,7 @@ export const LongTerms: Story = {
     label: "Job titles",
     regexSwitch: false,
     description:
-      "Where the search starts: it searches these titles, and also keeps other roles that fit your profile.",
+      "Where the search starts: it searches these titles, and its assistants also keep other roles that fit your profile.",
     terms: [
       "senior data platform engineer for real time logistics and freight analytics",
       "analytics engineer",
