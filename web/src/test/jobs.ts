@@ -96,7 +96,8 @@ function histogram(rows: JobListItem[]) {
 
 /**
  * A fake GET /api/jobs over `rows`: status, type, q (substring of company or title), company,
- * fit range and found dates filter; the cursor is the offset. Every request's query is recorded.
+ * fit range, found dates and criteria (within: no badge, outside: a badge) filter; the cursor is
+ * the offset. Every request's query is recorded.
  */
 export function fakeJobsApi(
   rows: JobListItem[],
@@ -124,8 +125,11 @@ export function fakeJobsApi(
       const from = params.get("found_from");
       const to = params.get("found_to");
       const places = params.getAll("place").map((p) => p.toLowerCase());
+      const criteria = params.get("criteria");
       const base = state.rows.filter(
         (row) =>
+          (criteria !== "within" || !row.outside_criteria.length) &&
+          (criteria !== "outside" || row.outside_criteria.length > 0) &&
           (!places.length ||
             places.some((p) => row.location.toLowerCase().includes(p))) &&
           (!types.length || types.includes(row.contract_type)) &&
