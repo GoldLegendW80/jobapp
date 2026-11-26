@@ -770,13 +770,16 @@ def test_one_persons_error_never_stops_the_tick_for_the_others(
     set_profile(factory, first.id, search(sweep_schedule=off))
     set_profile(factory, other.id, search(sweep_schedule={**DAILY, "timezone": "Europe/Paris"}))
     saved = create(api, first, schedule=DAILY).json()["id"]
-    read = searches.get
+    read, raced = searches.get, []
 
     def deleted_after_its_read(db: Session, user_id: uuid.UUID, *args: Any, **kw: Any) -> Any:
         row = read(db, user_id, *args, **kw)
-        with factory() as elsewhere:
-            searches.delete(elsewhere, user_id, uuid.UUID(saved))
-            elsewhere.commit()
+        if not raced:
+            # searches.delete reads through this function too: it races once.
+            raced.append(True)
+            with factory() as elsewhere:
+                assert searches.delete(elsewhere, user_id, uuid.UUID(saved))
+                elsewhere.commit()
         return row
 
     monkeypatch.setattr(searches, "get", deleted_after_its_read)
@@ -885,7 +888,11 @@ def test_the_jobs_list_filters_by_search(
     # A sweep from before saved searches, with no scope: the main search's.
     with factory() as db:
         legacy = Sweep(
-            user_id=alice.id, trigger=SweepTrigger.manual, status=SweepStatus.done, stats={}
+            user_id=alice.id,
+            trigger=SweepTrigger.manual,
+            status=SweepStatus.done,
+            finished_at=now(),
+            stats={},
         )
         db.add(legacy)
         db.commit()
