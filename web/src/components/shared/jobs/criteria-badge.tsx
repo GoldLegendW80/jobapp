@@ -19,7 +19,9 @@ export function CriteriaBadge({
   job: CriteriaFacts;
   className?: string;
 }) {
-  const windowDays = useCriteriaWindow();
+  const windowDays = useCriteriaWindow(
+    job.outside_criteria?.includes("older") ?? false,
+  );
   const words = outsideCriteriaWords(job, windowDays);
   if (!words) return null;
   return (
