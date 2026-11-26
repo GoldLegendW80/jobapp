@@ -14,7 +14,7 @@ const STATUS = {
   fill: "The assistant is filling the form.",
   agentFills:
     "The assistant is filling the form. It sends it by itself once it is filled.",
-  // `submitting` starts at the agent's first act on a send or step button (api applier.arm).
+  // `submitting` starts at the agent's first act on a submit element (api applier.arm).
   agentSends:
     "The assistant is sending the form. It may still fill a step or two first.",
   reviewFills:
