@@ -19,8 +19,9 @@
 # 'apt-get update -qq && apt-cache policy chromium'
 FROM debian:trixie-slim
 
-# The Jetson's build of 2026-11-05 installed this one from trixie-security (its dpkg-query line).
-ARG CHROMIUM_VERSION=156.0.8078.79-1~deb13u1
+# trixie-security's Candidate on 2026-11-26: its update failed the pin 156.0.8078.79-1~deb13u1
+# (chromium-common not installable) in deploy run 45842936320, which left production without a browser.
+ARG CHROMIUM_VERSION=156.0.8078.108-1~deb13u1
 ARG PLAYWRIGHT_VERSION=1.55.0
 # web_fetch's HTTP client (browserd/tools/fetch.py, B28): the api's own pin (api/pyproject.toml).
 ARG HTTPX_VERSION=0.28.1
