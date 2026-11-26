@@ -14,6 +14,7 @@ removes when they close, as Playwright's do). Invented hosts only.
 """
 
 import asyncio
+import importlib
 import logging
 import re
 import sys
@@ -545,3 +546,41 @@ def test_the_memory_guard_names_the_lease_whose_tab_it_closed(caplog) -> None:
     alone = chromium.Chromium(request, "one-lease", None, Config(secret=b"s"))
     alone.browser = SimpleNamespace(contexts=[Context()])
     assert alone.owner(alone.browser.contexts[0]) == ("apply_agent", 0)
+
+
+class Held:
+    def __init__(self, slot: int) -> None:
+        self.request = SimpleNamespace(slot=slot)
+        self.events: list[dict[str, Any]] = []
+
+
+class Leases:
+    """Manager's view the routing reads: the running browser, the leases it serves, by id."""
+
+    def __init__(self, browser: Any, held: dict[str, Held]) -> None:
+        self.browser, self.by_id = browser, held
+
+    def held(self) -> list[Held]:
+        return list(self.by_id.values())
+
+    def get(self, lease_id: str) -> Held | None:
+        return self.by_id.get(lease_id)
+
+
+def test_an_event_that_names_a_slot_goes_to_that_slots_lease_alone() -> None:
+    main = importlib.import_module("browserd.__main__")
+    running, other = object(), object()
+    first, second = Held(0), Held(1)
+    manager = Leases(running, {"first-lease": first, "second-lease": second})
+    closed = {"event": "tab_closed", "reason": "memory", "used_mib": 1850, "slot": 1}
+    main.route_event(manager, running, "first-lease", closed)
+    assert (first.events, second.events) == ([], [closed])
+    unnamed = {"event": "tab_closed", "reason": "tabs_max"}
+    main.route_event(manager, running, "first-lease", unnamed)
+    assert (first.events, second.events) == ([unnamed], [closed, unnamed])
+    # Another browser's event (one a lease kept from before) goes to its own lease only.
+    main.route_event(manager, other, "first-lease", {**closed, "slot": 0})
+    assert len(first.events) == 2
+    assert len(second.events) == 2
+    main.route_event(manager, other, "gone-lease", unnamed)
+    assert len(first.events) + len(second.events) == 4
