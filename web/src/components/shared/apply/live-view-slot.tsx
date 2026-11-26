@@ -1,6 +1,7 @@
 import { Empty, EmptyDescription, EmptyMedia } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { askText } from "@/features/agents/helpers/run-browser";
+import { SUBMIT_PURPOSE } from "@/features/apply/helpers/live-view";
 import {
   leasesOf,
   personOwnsInput,
@@ -24,8 +25,8 @@ const FILL_PURPOSES = new Set([
   "apply_agent",
   "apply_review",
 ]);
-/** The purpose of the submit lease (api submit.PURPOSE). */
-const SUBMIT_PURPOSES = new Set(["apply_submit"]);
+/** Every lease of an application: its fill, or its submit lease. */
+const APPLY_PURPOSES = new Set([...FILL_PURPOSES, SUBMIT_PURPOSE]);
 
 /**
  * Which of the person's leases is this application's: the one the api names for `application`
@@ -35,12 +36,13 @@ export type LeaseOf = "none" | { application: string };
 
 /**
  * The lease of this application among the person's (one per window of their browser), the one
- * the live view shows; null otherwise.
+ * the live view shows; null otherwise. `namedOnly`: never a fill lease that names no application.
  */
 function applicationLease(
   browser: Browser | undefined,
   of: LeaseOf,
   purposes: ReadonlySet<string>,
+  namedOnly: boolean,
 ) {
   if (of === "none") return null;
   const leases = leasesOf(browser).filter(
@@ -50,9 +52,11 @@ function applicationLease(
       purposes.has(lease.purpose),
   );
   const own = leases.find((lease) => lease.application_id === of.application);
-  if (own || purposes === SUBMIT_PURPOSES) return own ?? null;
+  if (own || namedOnly) return own ?? null;
   // A fill lease taken back after Redis lost it names no application: it is this one's only if it is the person's one fill.
-  const [only, ...others] = leases;
+  const [only, ...others] = leases.filter((lease) =>
+    FILL_PURPOSES.has(lease.purpose),
+  );
   return only && others.length === 0 && !only.application_id ? only : null;
 }
 
@@ -61,46 +65,52 @@ const signingIn = (lease: ReturnType<typeof applicationLease>) =>
 
 function useApplicationLease(
   leaseOf: LeaseOf,
-  purposes: ReadonlySet<string> = FILL_PURPOSES,
+  purposes: ReadonlySet<string>,
+  namedOnly = false,
 ) {
   const query = useBrowser({
     refetchInterval: LEASE_POLL_MS,
     enabled: leaseOf !== "none",
   });
-  return applicationLease(query.data, leaseOf, purposes);
+  return applicationLease(query.data, leaseOf, purposes, namedOnly);
 }
 
 /**
- * Where the live view of the browser goes while the assistant fills this application's form, or
- * waits for the person (browser B4's LiveBrowser, apply A10a). Without this application's lease
- * it shows `idle` in words; the "before" screenshot appears below when the fill ends. `status` is
- * the sentence of the live view's status line. `stopped`: nothing runs, so no spinner. `submit`:
- * the submit lease's slot instead, watch only. `label` (and `detail`): the view of a grid of
- * views (LiveViews, the Applications page), named and with its state; a sign in hand off then
- * stays on the application's card (FillHandoff).
+ * Where the live view of the browser goes while the assistant works on this application, or waits
+ * for the person (browser B4's LiveBrowser, apply A10a, A23). What it shows follows the lease the
+ * api names for the application, whatever the application's state: a fill's with Use the browser
+ * myself, the submit lease's watch only. Without that lease it shows `idle` in words; the "before"
+ * screenshot appears below when the fill ends. `status` is the sentence of the live view's status
+ * line, or the function that gives it for the lease's purpose. `watchOnly`: whether a fill lease
+ * of that purpose is watch only too in the application's state (liveWatchOnly: Review first's
+ * agent after the Confirm). `stopped`: nothing runs, so no spinner. `namedOnly`: the application
+ * fills nothing now, so a fill lease that names no application is not its own. `label` (and
+ * `detail`): the view of a grid of views (LiveViews, the Applications page), named and with its
+ * state; a sign in hand off then stays on the application's card (FillHandoff).
  */
 export function LiveViewSlot({
   idle,
   leaseOf,
   status = "The assistant is filling the form.",
+  watchOnly = () => false,
   stopped = false,
-  submit = false,
+  namedOnly = false,
   label,
   detail,
 }: {
   idle: string;
   leaseOf: LeaseOf;
-  status?: string;
+  status?: string | ((purpose: string) => string);
+  watchOnly?: (purpose: string) => boolean;
   stopped?: boolean;
-  submit?: boolean;
+  namedOnly?: boolean;
   label?: string;
   detail?: string;
 }) {
-  const lease = useApplicationLease(
-    leaseOf,
-    submit ? SUBMIT_PURPOSES : FILL_PURPOSES,
-  );
-  if (lease && submit) {
+  const lease = useApplicationLease(leaseOf, APPLY_PURPOSES, namedOnly);
+  const statusOf = (purpose: string) =>
+    typeof status === "function" ? status(purpose) : status;
+  if (lease && (lease.purpose === SUBMIT_PURPOSE || watchOnly(lease.purpose))) {
     return (
       <div data-testid="live-view-slot">
         <LiveBrowser
@@ -109,7 +119,7 @@ export function LiveViewSlot({
           label={label}
           detail={detail}
           watchOnly
-          status={status}
+          status={statusOf(lease.purpose)}
         />
       </div>
     );
@@ -142,7 +152,7 @@ export function LiveViewSlot({
           status={
             person
               ? "You have the keyboard and the mouse. Complete this step in the live view."
-              : (ask ?? status)
+              : (ask ?? statusOf(lease.purpose))
           }
         />
       </div>
@@ -182,7 +192,10 @@ export function LiveViewSlot({
  * for the person to sign in. Nothing otherwise.
  */
 export function FillHandoff({ applicationId }: { applicationId: string }) {
-  const lease = useApplicationLease({ application: applicationId });
+  const lease = useApplicationLease(
+    { application: applicationId },
+    FILL_PURPOSES,
+  );
   return lease && signingIn(lease) ? (
     <HandoffBanner leaseId={lease.id} />
   ) : null;
