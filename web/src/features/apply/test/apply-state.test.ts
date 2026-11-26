@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { fakeAnswer, fakeApplication, leftAnswer } from "@/test/apply";
 
+import { cancelKindOf } from "../helpers/apply-section-rules";
 import {
   blockingFields,
   editorKind,
@@ -175,5 +176,77 @@ describe("an application the old document check stopped (A22)", () => {
     const said = eventLine({ at: "2026-11-10T09:00:00Z", kind, data: {} });
     expect(said).toContain(line);
     expect(said).not.toMatch(SEPARATOR);
+  });
+});
+
+describe("the person's Cancel at any moment (A24)", () => {
+  it.each([
+    ["cancelled", "cancelled_by_person", "Cancelled by you. Nothing was sent."],
+    [
+      "submit_unknown",
+      "cancelled_by_person",
+      "You stopped it after a send button had been clicked. Check the site or your mail.",
+    ],
+    [
+      "cancelled",
+      "not_sent",
+      "You said it was not sent, so it ended. The app does not send it again by itself: apply again if you want to.",
+    ],
+    [
+      "submit_unknown",
+      "no_confirmation",
+      "We could not confirm this application. Look for a confirmation mail or on the site.",
+    ],
+    [
+      "cancelled",
+      "rejected",
+      "The last application was cancelled. Nothing was sent.",
+    ],
+    [
+      "submitted",
+      "sent_before_cancel",
+      "Applied: your Cancel came after the site had already confirmed it.",
+    ],
+  ])("%s with %s says what is true", (state, code, line) => {
+    for (const mode of ["review", "full_auto", "direct"]) {
+      const said = statusLine(
+        fakeApplication(state, { mode, error_code: code }),
+      );
+      expect(said).toBe(line);
+      expect(said).not.toMatch(SEPARATOR);
+    }
+  });
+
+  it.each([
+    ["queued", "cancel"],
+    ["filling", "cancel"],
+    ["needs_person", "cancel"],
+    ["ready", "cancel"],
+    ["approved", "cancel"],
+    ["held", "cancel"],
+    ["refused_by_site", "cancel"],
+    ["submitting", "cancelAfterSend"],
+    ["submit_unknown", "notSent"],
+    ["submitted", null],
+    ["cancelled", null],
+    ["failed", null],
+    ["blocked", null],
+    ["posting_closed", null],
+    ["rehearsed", null],
+    ["a_state_from_later", null],
+  ])("offers in %s: %s, in every mode but Apply myself", (state, kind) => {
+    for (const mode of ["review", "full_auto", "direct"]) {
+      expect(cancelKindOf(fakeApplication(state, { mode }))).toBe(kind);
+    }
+    expect(cancelKindOf(fakeApplication(state, { mode: "manual" }))).toBe(null);
+  });
+
+  it("leaves an e-mail application being sent to the mail's own end", () => {
+    for (const state of ["submitting", "submit_unknown"]) {
+      expect(cancelKindOf(fakeApplication(state, { ats: "email" }))).toBeNull();
+    }
+    expect(cancelKindOf(fakeApplication("ready", { ats: "email" }))).toBe(
+      "cancel",
+    );
   });
 });

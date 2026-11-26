@@ -9,7 +9,7 @@ import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { useApplication } from "@/features/apply/api/use-application";
 import { useApplicationActions } from "@/features/apply/api/use-application-actions";
 import {
-  canCancelApplication,
+  cancelKindOf,
   retryKindOf,
 } from "@/features/apply/helpers/apply-section-rules";
 import { hasForm } from "@/features/apply/helpers/apply-state";
@@ -183,10 +183,14 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     busy={act.busy}
                     questionAfterSend={read.afterSend !== null}
                     retryKind={retryKindOf(detail.data)}
-                    cancellable={
-                      canCancelApplication(application) &&
-                      !manual &&
-                      !read.holdUntil
+                    cancelKind={
+                      // A held item's countdown and the assistant's list have their own Cancel.
+                      read.holdUntil ||
+                      (detail.data?.review_agent &&
+                        application?.state === "ready" &&
+                        detail.data.filled?.fields_hash)
+                        ? null
+                        : cancelKindOf(application)
                     }
                     onAsk={act.setAsking}
                   />

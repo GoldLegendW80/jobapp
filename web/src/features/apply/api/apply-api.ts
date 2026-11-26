@@ -264,6 +264,38 @@ export const cancelApplication = (applicationId: string) =>
 /** "It was submitted": the person confirms what the app could not. */
 export const confirmSubmitted = (applicationId: string) =>
   decide(applicationId, "submitted");
+/** "It was not sent": the person's own word ends it, and they may apply again (A24). */
+export const notSentApplication = (applicationId: string) =>
+  decide(applicationId, "not-sent");
+
+const cancelResultSchema = z.object({
+  application_id: z.string(),
+  stopped: z.boolean(),
+  state: z.string().nullable(),
+  code: z.string().nullable(),
+  detail: z.string().nullable(),
+});
+export type CancelResult = z.infer<typeof cancelResultSchema>;
+const cancelledAllSchema = z.object({
+  results: z.array(cancelResultSchema),
+  stopped: z.number().int(),
+  left_out: z.number().int(),
+});
+export type CancelledAll = z.infer<typeof cancelledAllSchema>;
+
+/**
+ * Cancel all (A24): exactly the applications the confirmation named, each through the same
+ * cancel as its own button, one at a time; the api answers per item.
+ */
+export const cancelAll = (
+  applicationIds: readonly string[],
+): Promise<CancelledAll> =>
+  request("/apply/queue/cancel", {
+    method: "POST",
+    body: { application_ids: applicationIds },
+    timeoutMs: TIMEOUT_MS + applicationIds.length * 1_000,
+    validate: (body) => cancelledAllSchema.parse(body),
+  });
 /** Confirm and send (A20): the list of filled fields the hash covers, exactly as shown. */
 export const confirmApplication = (applicationId: string, fieldsHash: string) =>
   decide(applicationId, "confirm", { fields_hash: fieldsHash });

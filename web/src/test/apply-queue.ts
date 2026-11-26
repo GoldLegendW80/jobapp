@@ -59,8 +59,13 @@ export function fakeQueue(
     remembers: [] as { id: string; field_key: string; value: unknown }[],
     rejects: [] as { id: string; skip_posting: boolean }[],
     cancels: [] as string[],
-    /** "It was submitted" and "Try again", in order. */
-    decisions: [] as { id: string; action: "submitted" | "retry" }[],
+    /** "It was submitted", "It was not sent" and "Try again", in order. */
+    decisions: [] as {
+      id: string;
+      action: "submitted" | "not-sent" | "retry";
+    }[],
+    /** Each Cancel all, with the ids it named. */
+    cancelAlls: [] as string[][],
     next: null as Refusal | null,
     /** The next approve answers 409 stale with these answers. */
     stale: null as Answer[] | null,
@@ -110,6 +115,30 @@ export function fakeQueue(
     const item = state.items.find((one) => one.id === id)!;
     state.items = state.items.filter((one) => one.id !== id);
     return item;
+  };
+  // As the api's Cancel (A24): after a send button the item stays, `submit_unknown`.
+  const stop = (id: string) => {
+    const item = state.items.find((one) => one.id === id);
+    if (item?.state === "submitting") {
+      state.items = state.items.map((one) =>
+        one.id === id
+          ? {
+              ...one,
+              state: "submit_unknown",
+              error_code: "cancelled_by_person",
+            }
+          : one,
+      );
+      return fakeApplication("submit_unknown", {
+        id,
+        error_code: "cancelled_by_person",
+      });
+    }
+    take(id);
+    return fakeApplication("cancelled", {
+      id,
+      error_code: "cancelled_by_person",
+    });
   };
   server.use(
     http.get("*/api/apply/queue", () =>
@@ -303,6 +332,42 @@ export function fakeQueue(
     http.post("*/api/applications/:id/cancel", ({ params }) => {
       const id = String(params.id);
       state.cancels.push(id);
+      const refusal = refused();
+      if (refusal) return refusal;
+      return HttpResponse.json(stop(id));
+    }),
+    http.post("*/api/apply/queue/cancel", async ({ request }) => {
+      const body = (await request.json()) as { application_ids: string[] };
+      state.cancelAlls.push(body.application_ids);
+      const results = body.application_ids.map((id) => {
+        if (!state.items.some((one) => one.id === id)) {
+          return {
+            application_id: id,
+            stopped: false,
+            state: null,
+            code: "not_cancellable",
+            detail: "This application can no longer be stopped or rejected.",
+          };
+        }
+        const stopped = stop(id);
+        return {
+          application_id: id,
+          stopped: true,
+          state: stopped.state,
+          code: null,
+          detail: null,
+        };
+      });
+      const count = results.filter((one) => one.stopped).length;
+      return HttpResponse.json({
+        results,
+        stopped: count,
+        left_out: results.length - count,
+      });
+    }),
+    http.post("*/api/applications/:id/not-sent", ({ params }) => {
+      const id = String(params.id);
+      state.decisions.push({ id, action: "not-sent" });
       const refusal = refused();
       if (refusal) return refusal;
       take(id);

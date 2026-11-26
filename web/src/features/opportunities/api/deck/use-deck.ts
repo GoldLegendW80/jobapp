@@ -44,8 +44,8 @@ export const PREFETCH_AT = 2;
 /** How long the toast of a swipe, with its Undo, stays (the spec's 10 seconds). */
 export const UNDO_TOAST_MS = 10_000;
 /**
- * The states apply's cancel accepts (api/app/apply/gate.py, CANCELLABLE; use-deck.test.ts reads
- * that file and fails when the two differ). Past them the application is being sent or was
+ * The states where apply's cancel sends nothing (api/app/apply/gate.py, UNSENT; use-deck.test.ts
+ * reads that file and fails when the two differ). Past them the application is being sent or was
  * sent: the undo says it is too late and sends nothing.
  */
 export const CANCELLABLE: ReadonlySet<string> = new Set([
@@ -290,7 +290,14 @@ export function useDeck(filters: DeckFilters) {
               toast.error(SWIPE_TEXT.tooLate, clear());
               return;
             }
-            await cancelApplication(swiped.applicationId);
+            const stopped = await cancelApplication(swiped.applicationId);
+            if (stopped.state === "submit_unknown") {
+              // A24: it reached a send button meanwhile; stopped, but no undo of what may be sent.
+              markLast(null);
+              toast.error(SWIPE_TEXT.stoppedAfterSend, clear());
+              void queryClient.invalidateQueries({ queryKey: queueKey });
+              return;
+            }
           }
           void queryClient.invalidateQueries({ queryKey: queueKey });
           void queryClient.invalidateQueries({

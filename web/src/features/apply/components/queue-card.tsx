@@ -20,6 +20,7 @@ import { useQueueCardAnswers } from "../api/use-queue-card-answers";
 import { statusLine } from "../helpers/apply-state";
 import { DECISIONS } from "../helpers/decisions";
 import {
+  cancelAsk,
   isHeld,
   isReviewable,
   leftLine,
@@ -35,12 +36,6 @@ import { QueueCardDocuments } from "./queue-card/queue-card-documents";
 import { RejectDialog } from "./queue-card/reject-dialog";
 import { RehearsalQuestion } from "./rehearsal-question";
 import { ShotView } from "@/components/shared/apply/shot-view";
-
-const CANCEL = {
-  title: "Cancel this application?",
-  sentence: "Nothing is sent, and it leaves the queue.",
-  confirm: "Cancel the application",
-};
 
 /**
  * One application of the review queue (SPEC-apply.md, "Frontend", `/applications`): the posting,
@@ -266,7 +261,7 @@ export function QueueCard({
           }}
         />
         <ConfirmDialog
-          ask={act.cancelling ? CANCEL : null}
+          ask={act.cancelling ? cancelAsk(item) : null}
           pending={act.cancel.isPending}
           onCancel={() => {
             act.setCancelling(false);

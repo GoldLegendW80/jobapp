@@ -1,5 +1,4 @@
 import type { Application, ApplicationDetail } from "../api/apply-api";
-import { decidedByApp } from "./apply-state";
 import type { DecisionKind } from "./decisions";
 
 /** Where the person settles what the documents of an application wait for. */
@@ -15,16 +14,35 @@ export function documentsWaitLink(
   return DOCUMENTS_WAIT_LINKS.get(application.needs) ?? null;
 }
 
+/** Every state but an end, where the api takes a Cancel (api/app/apply/gate.py, CANCELLABLE). */
+const CANCELLABLE: ReadonlySet<string> = new Set([
+  "queued",
+  "filling",
+  "needs_person",
+  "ready",
+  "approved",
+  "held",
+  "refused_by_site",
+  "submitting",
+]);
+
+export type CancelKind = "cancel" | "cancelAfterSend" | "notSent";
+
 /**
- * Cancel is offered where the api accepts it and no click happened yet, a Full auto or one click
- * Apply item the app still decides on included (a `ready` one in Review first has Reject instead).
+ * The Cancel an application offers at any moment (owner, 2026-11-26), in every mode but Apply
+ * myself, which keeps its Close: Cancel before any act on a send button, the same Cancel saying
+ * the site may have it once the assistant acted on one (`submitting`), and "It was not sent" on
+ * an application the app could not confirm. An e-mail application being sent keeps the mail's.
  */
-export function canCancelApplication(application: Application | null): boolean {
-  if (!application) return false;
-  if (application.state === "ready") return decidedByApp(application);
-  return ["queued", "filling", "needs_person", "approved", "held"].includes(
-    application.state,
-  );
+export function cancelKindOf(
+  application: Application | null | undefined,
+): CancelKind | null {
+  if (!application || application.mode === "manual") return null;
+  const email = application.ats === "email";
+  if (application.state === "submit_unknown") return email ? null : "notSent";
+  if (application.state === "submitting")
+    return email ? null : "cancelAfterSend";
+  return CANCELLABLE.has(application.state) ? "cancel" : null;
 }
 
 /**

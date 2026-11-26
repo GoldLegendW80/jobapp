@@ -19,9 +19,13 @@
   or 10000 for an adapter-owned document-letter box; true or false for a checkbox or a yes or no
   question); 409 `not_editable` once the app clicked or after an end, `signin_first` while it
   waits for a sign in.
-- POST /api/applications/{id}/reject, /cancel: `cancelled` (reject: the form as filled, before
-  an approval; cancel: anything before the click).
+- POST /api/applications/{id}/reject, /cancel: reject: the form as filled, before an approval,
+  `cancelled`; cancel: at any moment before an end (A24, `gate.cancel`), `cancelled`, or
+  `submit_unknown` after an act on a submit element.
+- POST /api/apply/queue/cancel `{application_ids}`: Cancel all, exactly the applications the
+  confirmation named, each through `gate.cancel` in its own transaction, a result per item.
 - POST /api/applications/{id}/submitted: "It was submitted" on `submit_unknown`.
+- POST /api/applications/{id}/not-sent: "It was not sent" on `submit_unknown` (A24): `cancelled`.
 - POST /api/applications/{id}/retry: "Try again" after `submit_unknown` or `refused_by_site`:
   back to `ready`, where a new approval is needed.
 
@@ -738,7 +742,8 @@ def reject(
 def cancel(
     application_id: str, request: Request, user: CurrentUser, db: Db
 ) -> ApplicationOut | JSONResponse:
-    """Stop an application before the click."""
+    """Stop an application at any moment before an end: `cancelled`, or `submit_unknown` once
+    the form may have been sent."""
     return _person(
         request,
         user,
@@ -746,6 +751,68 @@ def cancel(
         application_id,
         lambda db, uid, aid, now: gate.cancel(db, uid, aid, now, reject=False),
     )
+
+
+class CancelAllIn(BaseModel):
+    """The applications the confirmation named, and nothing else."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    application_ids: list[uuid.UUID] = Field(min_length=1, max_length=queue_router.QUEUE_MAX)
+
+    @field_validator("application_ids")
+    @classmethod
+    def _once_each(cls, ids: list[uuid.UUID]) -> list[uuid.UUID]:
+        if len(set(ids)) != len(ids):
+            raise ValueError("Name each application once.")
+        return ids
+
+
+class CancelResultOut(BaseModel):
+    application_id: uuid.UUID
+    stopped: bool
+    state: str | None = None  # `cancelled`, or `submit_unknown`: it may have been sent
+    code: str | None = None  # why it was not stopped: `not_cancellable`, `not_found`, `busy`
+    detail: str | None = None
+
+
+class CancelAllOut(BaseModel):
+    results: list[CancelResultOut]
+    stopped: int
+    left_out: int
+
+
+@router.post("/api/apply/queue/cancel", response_model=CancelAllOut)
+def cancel_all(body: CancelAllIn, request: Request, user: CurrentUser, db: Db) -> CancelAllOut:
+    """Cancel all (A24): the person's one click for exactly the applications the confirmation
+    named, each through the cancel route's own path (`gate.cancel`), one transaction per item,
+    in the order given. One that ended or is gone since is left out with its sentence; the
+    others go on."""
+    results: list[CancelResultOut] = []
+    for application_id in body.application_ids:
+        try:
+            application = gate.cancel(
+                db, user.id, application_id, deps.clock(request), reject=False
+            )
+            db.commit()
+            results.append(
+                CancelResultOut(
+                    application_id=application_id, stopped=True, state=application.state.value
+                )
+            )
+            continue
+        except gate.NotFoundError:
+            code, detail = "not_found", NO_APPLICATION
+        except gate.RefusedError as exc:
+            code, detail = exc.code, gate.SENTENCES.get(exc.code, exc.code)
+        except jobs_service.JobBusyError:
+            code, detail = "busy", gate.SENTENCES["busy"]
+        db.rollback()
+        results.append(
+            CancelResultOut(application_id=application_id, stopped=False, code=code, detail=detail)
+        )
+    stopped = sum(one.stopped for one in results)
+    return CancelAllOut(results=results, stopped=stopped, left_out=len(results) - stopped)
 
 
 @router.post(
@@ -758,6 +825,18 @@ def submitted(
 ) -> ApplicationOut | JSONResponse:
     """It was submitted: the person confirms an application the app could not confirm."""
     return _person(request, user, db, application_id, gate.confirm_submitted)
+
+
+@router.post(
+    "/api/applications/{application_id}/not-sent",
+    response_model=ApplicationOut,
+    responses={**_404, **_409},
+)
+def not_sent(
+    application_id: str, request: Request, user: CurrentUser, db: Db
+) -> ApplicationOut | JSONResponse:
+    """It was not sent: the person's word ends an application the app could not confirm."""
+    return _person(request, user, db, application_id, gate.not_sent)
 
 
 @router.post(
