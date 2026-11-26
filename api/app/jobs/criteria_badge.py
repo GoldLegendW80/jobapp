@@ -9,8 +9,9 @@ The badge is computed by code from the posting's own fields, never taken from an
   counts only when it was stated (`jobs.contract_stated`: a word of the title, location or
   address, a source, the posting reader or the person). The contract every posting of a website
   has by nature (B21, the VIE website's) is the person's choice of it when that website found it.
-- `work_mode`: a work mode the posting states other than the saved remote stance ("any" or none
-  saved: any mode). Within only when they are the same (WORK_MODES; a planner default).
+- `work_mode`: a work mode the posting states that the saved remote stance does not hold ("any"
+  or none saved: any mode). WORK_MODES, a planner default: on site holds on site and hybrid (a
+  hybrid job has days on site), remote holds remote only, hybrid holds hybrid only.
 - `older`: a published date more than the search's days before the day the posting was found.
 An unstated field gives no code.
 
@@ -44,7 +45,7 @@ CONTRACT, WORK_MODE, OLDER = "contract", "work_mode", "older"
 CODES = (CONTRACT, WORK_MODE, OLDER)
 OPEN = (JobStatus.found, JobStatus.shortlisted)
 # The posting's work modes within each saved remote stance; "any" and none hold every mode.
-WORK_MODES = {"remote": {"remote"}, "hybrid": {"hybrid"}, "office": {"office"}}
+WORK_MODES = {"remote": {"remote"}, "hybrid": {"hybrid"}, "office": {"office", "hybrid"}}
 _CDI = re.compile(r"\bCDI\b", re.IGNORECASE)
 
 

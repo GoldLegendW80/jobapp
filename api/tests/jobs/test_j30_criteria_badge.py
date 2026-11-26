@@ -9,7 +9,7 @@ postings of a search when its criteria are saved. The tables below are built fro
 
 import uuid
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 import sqlalchemy as sa
@@ -19,7 +19,7 @@ from app.jobs import criteria_badge, searches, service, sweep
 from app.jobs.criteria_badge import CONTRACT, OLDER, WORK_MODE, Criteria, Facts, codes
 from app.jobs.models import ContractType, Job, JobStatus, SweepTrigger, WorkMode
 from app.profile import service as profile_service
-from app.profile.schemas import validate_section
+from app.profile.schemas import RemoteStance, validate_section
 from tests.jobs import test_reader as reading
 from tests.jobs.sweep_helpers import (
     SKILLS,
@@ -85,18 +85,41 @@ def test_the_contract_a_website_has_by_nature_is_the_persons_choice() -> None:
     assert criteria_badge.nature_of("") is None
 
 
-STANCES = (None, "any", "remote", "hybrid", "office")
-MODES = (None, "remote", "hybrid", "office")
-
-
-@pytest.mark.parametrize("stance", STANCES)
-@pytest.mark.parametrize("mode", MODES)
-def test_every_pair_of_remote_stance_and_work_mode(stance: str | None, mode: str | None) -> None:
-    """Within only when the posting's mode is the saved stance; any stance, none saved or a mode
-    the posting does not state give no code."""
-    outside = stance not in (None, "any") and mode is not None and mode != stance
+@pytest.mark.parametrize(
+    ("stance", "mode", "outside"),
+    [
+        (None, None, False),  # none saved: any mode
+        (None, "remote", False),
+        (None, "hybrid", False),
+        (None, "office", False),
+        ("any", None, False),
+        ("any", "remote", False),
+        ("any", "hybrid", False),
+        ("any", "office", False),
+        ("remote", None, False),  # a mode the posting does not state
+        ("remote", "remote", False),
+        ("remote", "hybrid", True),
+        ("remote", "office", True),
+        ("hybrid", None, False),
+        ("hybrid", "remote", True),
+        ("hybrid", "hybrid", False),
+        ("hybrid", "office", True),
+        ("office", None, False),
+        ("office", "remote", True),
+        ("office", "hybrid", False),  # a hybrid job has days on site (planner default)
+        ("office", "office", False),
+    ],
+)
+def test_every_pair_of_remote_stance_and_work_mode(
+    stance: str | None, mode: str | None, outside: bool
+) -> None:
     found = codes(facts(mode=mode), Criteria(frozenset(), stance, None))
     assert found == ([WORK_MODE] if outside else [])
+
+
+def test_the_pair_table_covers_every_saved_stance_and_work_mode() -> None:
+    assert set(criteria_badge.WORK_MODES) | {"any"} == set(get_args(RemoteStance))
+    assert set().union(*criteria_badge.WORK_MODES.values()) == {mode.value for mode in WorkMode}
 
 
 @pytest.mark.parametrize(
