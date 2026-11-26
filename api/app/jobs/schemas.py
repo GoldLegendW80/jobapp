@@ -356,6 +356,18 @@ class LivenessOut(BaseModel):
     moved: bool = False
 
 
+class FacetOut(BaseModel):
+    value: str
+    count: int
+
+
+class FacetsOut(BaseModel):
+    """GET /api/jobs/facets: what the Filters panel's pickers offer, most postings first."""
+
+    places: list[FacetOut]
+    sources: list[FacetOut]
+
+
 class JobListItem(BaseModel):
     """One row of the list: everything but the posting text, the legacy columns and the files."""
 

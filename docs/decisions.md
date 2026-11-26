@@ -572,3 +572,11 @@ The owner's answers during the product audit, in the session that built them.
   About you. Skill categories and requirements already stored as regular expressions keep
   scoring as stored and the Skills fields keep them on every save; About you says how many stay.
   No screen of the app edits them any more; a profile file imported with some keeps them.
+- 2026-11-26, the Jobs list's filters (owner: "je veux pouvoir mieux filtrer les annonces", I
+  want to be able to filter the postings better; issue #828, jobs J29): the list and the map
+  filter on the place, the work mode, the website, the published date, the pay, the state of the
+  application and the search that added the postings, beside the filters of before, with two
+  sorts more (published date, pay) and two presets (Found today, Hide skipped and closed). The
+  toast of a finished search and its summary lead to that search's postings. The minimum fit
+  ("Show postings from") is Discover's only: the Jobs list shows every posting, and the
+  Applications settings say so.

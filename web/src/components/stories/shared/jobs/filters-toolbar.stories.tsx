@@ -3,10 +3,12 @@ import { userEvent, within } from "storybook/test";
 
 import { FiltersToolbar } from "@/components/shared/jobs/filters/filters-toolbar";
 import {
+  fakeFacets,
   FILTERS_SUMMARY,
   SOME_FILTERS,
 } from "@/design-system/fixtures/job-filters";
 import { WithFilters } from "@/design-system/fixtures/job-harnesses";
+import { withApp } from "@/design-system/with-app";
 import {
   EMPTY_FILTERS,
   type JobFilters,
@@ -15,6 +17,10 @@ import {
 const meta = {
   title: "Shared/Jobs/Filters toolbar",
   tags: ["autodocs"],
+  decorators: [withApp],
+  beforeEach: () => {
+    fakeFacets();
+  },
   parameters: {
     docs: {
       description: {
@@ -62,7 +68,9 @@ export const FiltersSet: Story = {
   render: () => <Toolbar initial={SOME_FILTERS} />,
 };
 
-/** Filters opens its panel: every change applies at once, its last button closes it. */
+/** Filters opens its panel, in the order a person narrows a list: two presets, place, work
+ * mode, contract, website, published, pay, fit, application, status, found, company, then the
+ * sort. Every change applies at once, its last button closes it. */
 export const OpenTheFilters: Story = {
   name: "Open the filters",
   render: () => (

@@ -2221,19 +2221,10 @@ def sweeps_of(db: Session, user_id: uuid.UUID, limit: int) -> Sequence[Sweep]:
 
 def new_jobs(db: Session, user_id: uuid.UUID, sweep_id: uuid.UUID, limit: int) -> list[Job]:
     """The jobs a sweep added (by their `sweep` event), best fit first."""
-    ids = (
-        sa.select(JobEvent.job_id)
-        .where(
-            JobEvent.user_id == user_id,
-            JobEvent.kind == JobEventKind.sweep,
-            JobEvent.data["sweep_id"].astext == str(sweep_id),
-        )
-        .scalar_subquery()
-    )
     return list(
         db.execute(
             service.jobs_of(user_id)
-            .where(Job.id.in_(ids))
+            .where(Job.id.in_(service.added_by(user_id, sweep_id)))
             .order_by(sa.func.coalesce(Job.fit, -1).desc(), Job.company, Job.title)
             .limit(limit)
         ).scalars()

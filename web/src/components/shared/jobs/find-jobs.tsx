@@ -304,8 +304,8 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
             </ul>
             {sweep.new > sweep.new_jobs.length ? (
               <p className="text-xs text-muted-foreground">
-                The first {sweep.new_jobs.length} by fit. Every one is in the
-                list with the status Found.
+                The first {sweep.new_jobs.length} by fit. See them all in the
+                list.
               </p>
             ) : null}
           </section>
@@ -333,6 +333,18 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
           </section>
         ) : null}
         <DialogFooter>
+          {sweep.new ? (
+            <Button variant="outline" asChild>
+              <Link
+                to={`/jobs?sweep=${encodeURIComponent(sweep.id)}`}
+                onClick={() => {
+                  runner.showSummary(null);
+                }}
+              >
+                See them all in the list
+              </Link>
+            </Button>
+          ) : null}
           <Button
             onClick={() => {
               runner.showSummary(null);
