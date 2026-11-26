@@ -435,3 +435,19 @@ def test_the_persons_edit_of_the_contract_or_the_mode_badges_it_again(
         db.commit()
     job = row_of(factory, job_id)
     assert (job.contract_stated, job.outside_criteria) == (True, [CONTRACT, WORK_MODE])
+
+
+def test_criteria_that_cannot_be_read_keep_the_badge(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    set_profile(factory, alice, {"days": "thirty"})  # a stored section that no longer validates
+    job_id = seed(factory, alice, outside_criteria=[CONTRACT])
+    with factory() as db:
+        assert criteria_badge.criteria_for(db, alice, None) is None
+        assert criteria_badge.refresh(db, alice, None, None) == 0
+        db.commit()
+    read = reading.add_posting(factory, alice, url=reading.OTHER_URL)
+    reading.save(factory, alice, read)  # read, its badge not computed
+    assert row_of(factory, job_id).outside_criteria == [CONTRACT]
+    assert row_of(factory, read).read_at is not None
+    assert row_of(factory, read).outside_criteria is None
