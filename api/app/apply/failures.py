@@ -116,13 +116,20 @@ def retry_waiting(now: datetime | None, delays: Sequence[int]) -> sa.ColumnEleme
 
 
 def needs_count(db: Session, user_id: uuid.UUID) -> int:
-    """How many of the person's applications wait in `needs_person` (the app shell's dot)."""
+    """How many of the person's applications wait in `needs_person` (the app shell's dot), and
+    the apply agent's waits after an act on a submit element (A25, `submitting`)."""
     return int(
         db.execute(
             sa.select(sa.func.count()).where(
                 Application.user_id == user_id,
                 Application.mode != Mode.manual,
-                Application.state == State.needs_person,
+                sa.or_(
+                    Application.state == State.needs_person,
+                    sa.and_(
+                        Application.state == State.submitting,
+                        Application.needs == "agent_waits",
+                    ),
+                ),
             )
         ).scalar_one()
     )
