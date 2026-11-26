@@ -282,10 +282,13 @@ def rows_of(db: Session, application: Application) -> list[ApplicationAnswer]:
         )
         .order_by(ApplicationAnswer.field_key)
     ).scalars()
+    from app.apply import applier
+
     return [
         row
         for row in rows
         if row.field_key != "agent:filled"  # A20: the list of confirm.py, shown on its own
+        and not row.field_key.startswith(applier.ASK_KEY)  # A25: the chat, no field of the form
         and (row.field_key.startswith("skipped:") or not ats_base.typed_secret(row.kind, row.label))
     ]
 
@@ -666,8 +669,15 @@ def cancel(
     (`_cancel_runs`), so it stops at once and its lease is released; a submit lease under way
     sees the state changed under its lock and does not click. An e-mail application being sent
     keeps its own end (the mail gate's)."""
+    from app.apply import applier
+
     application, _ = lock(db, user_id, application_id)
-    if reject:
+    if reject and application.needs in (applier.WAITS, applier.ASKED):
+        # A25: the apply agent's wait has no form to reject: it ends as a Cancel ends it.
+        if application.state not in REJECTABLE:
+            raise RefusedError("not_cancellable")
+        stopped_by_person(db, application, now)
+    elif reject:
         if application.state not in REJECTABLE:
             raise RefusedError("not_cancellable")
         states.move(application, State.cancelled, now)
@@ -690,9 +700,13 @@ def stopped_by_person(db: Session, application: Application, now: datetime) -> s
     or a step act browserd traced in Review first's agent run), the sent versions frozen and
     never sent again by the app (A19); `cancelled` otherwise, nothing sent. The caller holds the
     locks and commits."""
-    from app.apply import submit
+    from app.apply import applier, submit
 
+    if application.needs in (applier.WAITS, applier.ASKED):
+        applier.close_asks(db, application, "cancelled", now)  # A25: the wait ends with it
+        application.needs = None
     if _stepped(db, application):
+        applier._unwait(application, now)  # a wait's `needs_person` has no move to submitting
         states.move(application, State.submitting, now, by_agent=True)
     _event(db, application, "cancelled", now, code=CANCELLED_BY_PERSON)
     if application.state is State.submitting:
@@ -712,7 +726,7 @@ def _stepped(db: Session, application: Application) -> bool:
 
     return (
         application.mode is Mode.review
-        and application.state in (State.filling, State.ready, State.approved)
+        and application.state in (State.filling, State.ready, State.approved, State.needs_person)
         and applier.stepped(db, application)
     )
 
@@ -983,18 +997,20 @@ def retry(db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datet
 
         lock_send(db, user_id)
     application, _ = lock(db, user_id, application_id)
+    from app.apply import applier
+
+    if application.state is State.needs_person and application.needs == applier.ASKED:
+        applier.retry_asked(db, application, now)  # A25: nobody came in time
+        return application
     if application.state not in (State.submit_unknown, State.refused_by_site):
         raise RefusedError("not_retryable")
     previous = application.state.value
-    if application.state is State.submit_unknown:
-        from app.apply import applier
-
-        if applier.ran_agent(db, application):
-            # The apply agent's run (One click Apply, A19; Review first's, A20): one more run of
-            # the agent, which looks on the site for the earlier send first; never an empty
-            # Review first item, nor the old list with a Confirm no held session waits for.
-            applier.retry(db, application, now)
-            return application
+    if application.state is State.submit_unknown and applier.ran_agent(db, application):
+        # The apply agent's run (One click Apply, A19; Review first's, A20): one more run of
+        # the agent, which looks on the site for the earlier send first; never an empty
+        # Review first item, nor the old list with a Confirm no held session waits for.
+        applier.retry(db, application, now)
+        return application
     if application.ats == "email" and application.mail_send_id is not None:
         from app.mail.draft_models import MailDraft, MailSend
 

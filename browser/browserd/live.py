@@ -68,7 +68,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from browserd import config as c
-from browserd.leases import MANUAL_PURPOSE, LeaseError, Manager
+from browserd.leases import ASK_PURPOSES, MANUAL_PURPOSE, LeaseError, Manager
 
 log = logging.getLogger("browserd.live")
 
@@ -450,7 +450,9 @@ class Live:
                 raise LeaseError(409, "takeover_expired")
             deadline = min(deadline, lease.wait_deadline)
         lease.scratch["input_epoch"] = lease.scratch.get("input_epoch", 0) + 1
-        if lease.state == "active":
+        # A25: the apply agent's ask becomes a takeover, so the api sees the person holds it.
+        apply_ask = lease.wait_reason == "ask_person" and lease.request.purpose in ASK_PURPOSES
+        if lease.state == "active" or apply_ask:
             lease.wait_person(now, "takeover", "", TAKEOVER_S)
         self.input_lease, self.input_viewer = lease_id, viewer
         self.input_until = deadline
@@ -518,6 +520,7 @@ class Live:
             if (  # B20: an ask nobody took over ends at its deadline, and the agent goes on
                 lease.state == "waiting_person"
                 and lease.wait_reason == "ask_person"
+                and lease.request.purpose not in ASK_PURPOSES  # A25: the api ends those
                 and self.input_lease != lease.lease_id
                 and lease.wait_deadline is not None
                 and now >= lease.wait_deadline

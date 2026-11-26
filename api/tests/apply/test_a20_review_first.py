@@ -376,6 +376,7 @@ def wall_agent() -> Any:
                 "jobs.example.org asks you to sign in. Sign in once in the live view, then Try "
                 "again.",
                 "",
+                sent="no",  # A25: a failed end says whether a send was clicked
             )
             return applier.Ran(10, 2)
         await session.interact("browser_click", {"ref": "g1"})

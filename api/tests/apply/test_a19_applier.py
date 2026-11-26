@@ -639,29 +639,34 @@ def test_a_label_that_reads_as_a_password_a_code_or_a_payment_is_an_action(
     assert applier.secret_label(label) is secret
 
 
-def test_the_agent_has_no_ask_tool_and_an_ask_that_reaches_the_session_is_refused(
+def test_the_agent_asks_with_its_own_tool_only_and_a_bad_ask_is_refused(
     db: Session, factory: sessionmaker[Session], person_a: Person
 ) -> None:
+    """A25 replaces A20's "never asks": `apply_ask_person` with a kind, never browserd's
+    `browser_ask_person`; an ask with no known kind or no sentence asks nobody."""
     from app.agents import definitions
 
     assert "browser_ask_person" not in applier.TOOLS
-    assert "browser_ask_person" not in definitions.get(applier.NAME, "test").tools
+    assert "apply_ask_person" in definitions.get(applier.NAME, "test").tools
     app_id = started(db, person_a, Mode.direct)
 
     async def go(session: applier.ApplySession, message: str) -> applier.Ran:
         brief = json.loads(message)
         await session.navigate(brief["posting"]["url"])
-        go.asked = await session.ask_person("I need it.", "Apply", "fact")  # type: ignore[attr-defined]
+        go.asked = [  # type: ignore[attr-defined]
+            await session.ask_person("fact", "What is your notice period?"),
+            await session.ask_person("code", "   "),
+        ]
         return applier.Ran(1, 1)
 
     site = Site()
     assert apply(svc(factory, site, go), app_id) == "failed"
-    text, error = go.asked  # type: ignore[attr-defined]
-    assert error
-    assert text.startswith("Refused: nobody answers questions")
+    for text, error in go.asked:  # type: ignore[attr-defined]
+        assert error
+        assert text.startswith("Refused: kind is one of signin, account, code")
     assert all(name != "browser_ask_person" for name, _ in site.calls)
-    assert applier._questions(db, application(db, app_id)) == []
-    assert "needs_person" not in kinds(db, app_id)
+    assert applier._asks(db, application(db, app_id)) == []
+    assert "agent_asked" not in kinds(db, app_id)
 
 
 def test_busy_runs_queue_the_application_again_until_the_retries_run_out(
