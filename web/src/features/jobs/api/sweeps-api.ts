@@ -96,6 +96,12 @@ export const sweepSchema = z.object({
     .object({ websites_only: z.boolean().default(false) })
     .nullable()
     .optional(),
+  // The search it ran (jobs J32): "main", or a saved search's id (null once deleted), with the
+  // name frozen at its start. Absent from an older api.
+  search: z
+    .object({ id: z.string().nullable(), name: z.string() })
+    .nullable()
+    .optional(),
 });
 export type Sweep = z.infer<typeof sweepSchema>;
 
