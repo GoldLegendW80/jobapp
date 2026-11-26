@@ -166,7 +166,7 @@ describe("the Undo of a toast", () => {
 });
 
 describe("CANCELLABLE", () => {
-  it("is the set apply's cancel accepts (api/app/apply/gate.py)", () => {
+  it("is the set apply's cancel stops before any send (api/app/apply/gate.py)", () => {
     const gate = readFileSync(
       path.resolve(
         path.dirname(fileURLToPath(import.meta.url)),
@@ -174,7 +174,8 @@ describe("CANCELLABLE", () => {
       ),
       "utf8",
     );
-    const block = /^CANCELLABLE = frozenset\(\s*\{([^}]*)\}/m.exec(gate);
+    // A24: the states before any act on a submit element, where a Cancel sends nothing.
+    const block = /^UNSENT = frozenset\(\s*\{([^}]*)\}/m.exec(gate);
     expect(block).not.toBeNull();
     const states = [...(block?.[1] ?? "").matchAll(/State\.(\w+)/g)].map(
       (m) => m[1],

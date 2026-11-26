@@ -487,6 +487,120 @@ describe("the review queue page", () => {
     expect(api.cancels).toEqual([item.id]);
   });
 
+  it("cancels after a send button with the sentence that it may have been sent", async () => {
+    const item = queueItem(1, "submitting", { mode: "direct" });
+    const api = fakeQueue([item]);
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const sending = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    await user.click(
+      within(sending).getByRole("button", { name: "Cancel application" }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(
+      "A send button was already clicked, so the site may have it.",
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Cancel the application" }),
+    );
+    expect(
+      await screen.findByText(
+        "Stopped Robotics Engineer 1 at Example Robotics. It may have been sent: check the site or your mail.",
+      ),
+    ).toBeInTheDocument();
+    expect(api.cancels).toEqual([item.id]);
+    // It waits for the person's word now, with "It was not sent" among its decisions.
+    const waiting = await screen.findByRole("region", {
+      name: "Waiting for you (1)",
+    });
+    const unknown = within(waiting).getByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    expect(unknown).toHaveTextContent(
+      "You stopped it after a send button had been clicked. Check the site or your mail.",
+    );
+    await user.click(
+      within(unknown).getByRole("button", { name: "It was not sent" }),
+    );
+    const ask = await screen.findByRole("alertdialog");
+    expect(ask).toHaveTextContent(
+      "Only do this if you checked the site or your mail and found nothing.",
+    );
+    await user.click(
+      within(ask).getByRole("button", { name: "It was not sent" }),
+    );
+    await screen.findByText(/Your queue is empty/);
+    expect(api.decisions).toEqual([{ id: item.id, action: "not-sent" }]);
+    expect(document.body.textContent).not.toMatch(SEPARATOR);
+  });
+
+  it("cancels all under way after one confirmation naming each and what may have been sent", async () => {
+    const queued = queueItem(1, "queued", { title: "Field Engineer" });
+    const sending = queueItem(2, "submitting", {
+      mode: "direct",
+      title: "Data Engineer",
+    });
+    const held = queueItem(3, "held", {
+      mode: "full_auto",
+      title: "Platform Engineer",
+      hold_until: "2099-01-01T00:00:00Z",
+    });
+    const ready = queueItem(4, "ready", { title: "Agents Engineer" });
+    const api = fakeQueue([queued, sending, held, ready]);
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const underWay = await screen.findByRole("region", {
+      name: /Under way \(3\)/,
+    });
+    await user.click(
+      within(underWay).getByRole("button", { name: "Cancel all (3)" }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("Cancel 3 applications?");
+    const named = within(dialog).getByRole("list", {
+      name: "Applications to cancel",
+    });
+    const rows = within(named).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Example Robotics, Field EngineerNot sent yet.",
+      "Example Robotics, Data EngineerMay already have been sent: a send button was clicked.",
+      "Example Robotics, Platform EngineerNot sent yet.",
+    ]);
+    expect(dialog.textContent).not.toMatch(SEPARATOR);
+    // An item that ends meanwhile is left out by the api, with its sentence.
+    api.items = api.items.filter((one) => one.id !== held.id);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Cancel all 3" }),
+    );
+    const said = await screen.findByRole("list", { name: "Cancel all" });
+    expect(
+      within(said)
+        .getAllByRole("listitem")
+        .map((line) => line.textContent),
+    ).toEqual([
+      "Example Robotics, Field Engineer: cancelled, nothing was sent.",
+      "Example Robotics, Data Engineer: stopped, but it may have been sent. Check the site or your mail.",
+      "Example Robotics, Platform Engineer: not cancelled. This application can no longer be stopped or rejected.",
+    ]);
+    expect(api.cancelAlls).toEqual([[queued.id, sending.id, held.id]]);
+    expect(api.cancels).toEqual([]);
+    expect(api.items.map((one) => one.id)).toEqual([sending.id, ready.id]);
+  });
+
+  it("offers no Cancel all for one item under way: its own Cancel stops it", async () => {
+    fakeQueue([queueItem(1, "filling"), queueItem(2, "ready")]);
+    renderApp(PATH);
+    const underWay = await screen.findByRole("region", {
+      name: /Under way \(1\)/,
+    });
+    await within(underWay).findByRole("button", { name: "Cancel application" });
+    expect(
+      within(underWay).queryByRole("button", { name: /Cancel all/ }),
+    ).toBeNull();
+  });
+
   it("says what the page is for, and promises no review that one click Apply does not make", async () => {
     fakeQueue([queueItem(1, "ready")]);
     renderApp(PATH);

@@ -7,6 +7,11 @@ import {
   asksDocumentLook,
   canCancel,
   canReject,
+  canSayNotSent,
+  cancelAllOf,
+  cancelAsk,
+  cancelResultLine,
+  OTHER_NOT_CANCELLED,
   checkLine,
   isWaiting,
   leftLine,
@@ -160,23 +165,105 @@ describe("why an item came back", () => {
 });
 
 describe("the actions of each state", () => {
+  // A24 (owner, 2026-11-26): Cancel at any moment before an end; "It was not sent" after a
+  // send the app could not confirm.
   it.each([
-    ["ready", true, true, false, false],
-    ["needs_person", true, true, false, true],
-    ["refused_by_site", true, false, false, true],
-    ["submit_unknown", true, false, false, true],
-    ["queued", false, false, true, false],
-    ["filling", false, false, true, false],
-    ["approved", false, false, true, false],
-    ["held", false, false, true, false],
-    ["submitting", false, false, false, false],
-    ["a_state_from_later", false, false, false, false],
-  ] as const)("%s", (state, waiting, reject, cancel, page) => {
+    ["ready", true, true, true, false, false],
+    ["needs_person", true, true, true, false, true],
+    ["refused_by_site", true, false, true, false, true],
+    ["submit_unknown", true, false, false, true, true],
+    ["queued", false, false, true, false, false],
+    ["filling", false, false, true, false, false],
+    ["approved", false, false, true, false, false],
+    ["held", false, false, true, false, false],
+    ["submitting", false, false, true, false, false],
+    ["submitted", false, false, false, false, false],
+    ["cancelled", false, false, false, false, false],
+    ["a_state_from_later", false, false, false, false, false],
+  ] as const)("%s", (state, waiting, reject, cancel, notSent, page) => {
     const item = queueItem(1, state);
     expect(isWaiting(item)).toBe(waiting);
     expect(canReject(item)).toBe(reject);
     expect(canCancel(item)).toBe(cancel);
+    expect(canSayNotSent(item)).toBe(notSent);
     expect(needsPostingPage(item)).toBe(page);
+  });
+
+  it.each(["full_auto", "direct", "review"])(
+    "offers Cancel in every state under way in mode %s, and never in Apply myself",
+    (mode) => {
+      for (const state of ["queued", "filling", "approved", "submitting"]) {
+        expect(canCancel(queueItem(1, state, { mode }))).toBe(true);
+        expect(canCancel(queueItem(1, state, { mode: "manual" }))).toBe(false);
+      }
+    },
+  );
+
+  it("leaves a held item's Cancel to its countdown", () => {
+    const held = queueItem(1, "held", { hold_until: "2026-10-14T09:15:00Z" });
+    expect(canCancel(held)).toBe(false);
+    expect(cancelAllOf([held])).toEqual([held]);
+  });
+
+  it("keeps an e-mail application being sent to the mail's own end", () => {
+    for (const state of ["submitting", "submit_unknown"]) {
+      const item = queueItem(1, state, { ats: "email" });
+      expect(canCancel(item)).toBe(false);
+      expect(canSayNotSent(item)).toBe(false);
+    }
+  });
+
+  it("asks whether it may have been sent once a send button was clicked", () => {
+    expect(cancelAsk(queueItem(1, "filling")).sentence).toBe(
+      "Nothing is sent, and it leaves the queue.",
+    );
+    const sending = cancelAsk(queueItem(1, "submitting"));
+    expect(sending.sentence).toMatch(/send button was already clicked/);
+    expect(sending.sentence).not.toMatch(SEPARATOR);
+  });
+});
+
+describe("Cancel all", () => {
+  it("names every item under way that its own Cancel stops", () => {
+    const items = [
+      queueItem(1, "queued"),
+      queueItem(2, "submitting"),
+      queueItem(3, "ready"),
+      queueItem(4, "submit_unknown"),
+      queueItem(5, "filling", { mode: "manual" }),
+    ];
+    expect(cancelAllOf(items).map((item) => item.title)).toEqual([
+      "Robotics Engineer 1",
+      "Robotics Engineer 2",
+      "Robotics Engineer 3",
+    ]);
+  });
+
+  it.each([
+    [
+      { stopped: true, state: "cancelled", detail: null },
+      "Example Robotics, Robotics Engineer 1: cancelled, nothing was sent.",
+    ],
+    [
+      { stopped: true, state: "submit_unknown", detail: null },
+      "Example Robotics, Robotics Engineer 1: stopped, but it may have been sent. Check the site or your mail.",
+    ],
+    [
+      { stopped: false, state: null, detail: "It already ended." },
+      "Example Robotics, Robotics Engineer 1: not cancelled. It already ended.",
+    ],
+    [
+      { stopped: false, state: null, detail: null },
+      `Example Robotics, Robotics Engineer 1: not cancelled. ${OTHER_NOT_CANCELLED}`,
+    ],
+  ])("says what each result is: %o", (result, line) => {
+    const said = cancelResultLine(queueItem(1, "queued"), {
+      application_id: "a",
+      code: null,
+      ...result,
+    });
+    expect(said).toBe(line);
+    expect(said).not.toMatch(SEPARATOR);
   });
 });
 

@@ -11,13 +11,15 @@ import {
   canConfirmSubmitted,
   canReject,
   canRetry,
+  canSayNotSent,
   needsPostingPage,
 } from "@/features/apply/helpers/queue-state";
 
 /**
  * The buttons at the foot of a queue card, each where the item's state offers it: Approve and
  * submit (waiting on unsaved or required answers), the agent's list on the job page, Reject,
- * Cancel, "It was submitted", Try again and Open the posting.
+ * Cancel (at any moment before an end, A24), "It was submitted", "It was not sent", Try again
+ * and Open the posting.
  */
 export function QueueCardActions({
   item,
@@ -111,6 +113,18 @@ export function QueueCardActions({
           }}
         >
           It was submitted
+        </Button>
+      ) : null}
+      {canSayNotSent(item) ? (
+        <Button
+          variant="outline"
+          className="w-full sm:w-fit"
+          disabled={busy}
+          onClick={() => {
+            onAsk("notSent");
+          }}
+        >
+          It was not sent
         </Button>
       ) : null}
       {canRetry(item) ? (

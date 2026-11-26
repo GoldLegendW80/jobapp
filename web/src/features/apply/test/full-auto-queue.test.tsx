@@ -1,6 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fakeAnswer } from "@/test/apply";
@@ -162,7 +163,44 @@ describe("Full auto in the review queue", () => {
     await screen.findByText(/Your queue is empty/);
   });
 
-  it("shows the server's word when a Cancel comes too late", async () => {
+  it("says it may have been sent when the submit started before the Cancel", async () => {
+    const item = queueItem(1, "held", {
+      mode: "full_auto",
+      hold_until: SERVER_NOW,
+    });
+    const api = fakeQueue([item]);
+    api.now = SERVER_NOW;
+    const said = vi.spyOn(toast, "success");
+    const user = userEvent.setup();
+    renderApp(PATH);
+    const card = await screen.findByRole("article", {
+      name: /Robotics Engineer 1/,
+    });
+    await user.click(
+      within(card).getByRole("button", { name: "Cancel application" }),
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent(
+      "If the app already started submitting, your Cancel stops it, but the site may already have the application.",
+    );
+    // The submit lease armed before the page's next read: the api answers `submit_unknown`.
+    api.items = api.items.map((one) =>
+      one.id === item.id ? { ...one, state: "submitting" } : one,
+    );
+    await user.click(
+      within(dialog).getByRole("button", { name: "Cancel the application" }),
+    );
+    await screen.findByText(
+      "Stopped. It may have been sent: check the site or your mail.",
+    );
+    expect(api.cancels).toEqual([item.id]);
+    expect(said).not.toHaveBeenCalledWith(
+      "Cancelled during the hold. Nothing was sent.",
+    );
+    said.mockRestore();
+  });
+
+  it("shows the server's word when the application already ended", async () => {
     const item = queueItem(1, "held", {
       mode: "full_auto",
       hold_until: SERVER_NOW,

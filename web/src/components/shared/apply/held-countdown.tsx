@@ -20,14 +20,15 @@ const TICK_MS = 1000;
 const ASK = {
   title: "Cancel this application?",
   sentence:
-    "The hold stops and nothing is sent. If the app already started submitting, it is too late and the page says so.",
+    "The hold stops and nothing is sent. If the app already started submitting, your Cancel stops it, but the site may already have the application.",
   confirm: "Cancel the application",
 };
 
 /**
  * The hold of a Full auto item (SPEC-apply.md, "Frontend"): the time left before the app checks
  * everything once more and submits, read on the server's clock (`offset`, server minus page), and
- * Cancel. The server has the last word: a Cancel that comes too late shows its sentence.
+ * Cancel. The server has the last word: a Cancel after the submit started says it may have been
+ * sent (`submit_unknown`), and a refusal shows its sentence.
  */
 export function HeldCountdown({
   applicationId,
@@ -58,9 +59,13 @@ export function HeldCountdown({
     onMutate: () => {
       setNotice(null);
     },
-    onSuccess: () => {
+    onSuccess: (stopped) => {
       setAsking(false);
-      toast.success("Cancelled during the hold. Nothing was sent.");
+      toast.success(
+        stopped.state === "submit_unknown"
+          ? "Stopped. It may have been sent: check the site or your mail."
+          : "Cancelled during the hold. Nothing was sent.",
+      );
     },
     onError: (error) => {
       setAsking(false);

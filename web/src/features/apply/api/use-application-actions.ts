@@ -13,6 +13,7 @@ import {
   applicationsKey,
   approvalKey,
   approveApplication,
+  cancelAll,
   cancelApplication,
   confirmApplication,
   refusalOf,
@@ -21,6 +22,7 @@ import {
   type Answer,
   type Application,
   type Approval,
+  type CancelledAll,
 } from "./apply-api";
 import { currentFormOf, emailToOf } from "../helpers/approval-form";
 import { DECISIONS, type DecisionKind } from "../helpers/decisions";
@@ -175,6 +177,26 @@ type Handlers<Variables> = Pick<
   UseMutationOptions<Application, Error, Variables>,
   "onMutate" | "onSuccess" | "onError"
 >;
+
+/**
+ * Cancel all (A24), for exactly the applications the confirmation named; whatever the answer,
+ * every read of the apply module is done again.
+ */
+export function useCancelAll<Item extends { id: string }>(
+  handlers: Pick<
+    UseMutationOptions<CancelledAll, Error, Item[]>,
+    "onSuccess" | "onError"
+  >,
+) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (items: Item[]) => cancelAll(items.map((one) => one.id)),
+    ...handlers,
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["apply"] });
+    },
+  });
+}
 
 /** Cancel during a Full auto hold; whatever the answer, Apply is read again. */
 export function useCancelHold(applicationId: string, handlers: Handlers<void>) {

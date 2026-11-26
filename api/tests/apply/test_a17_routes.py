@@ -49,6 +49,7 @@ CASES = (
     Case("POST", "/api/applications/{application_id}/reject"),
     Case("POST", "/api/applications/{application_id}/cancel"),
     Case("POST", "/api/applications/{application_id}/submitted"),
+    Case("POST", "/api/applications/{application_id}/not-sent"),
     Case("POST", "/api/applications/{application_id}/retry"),
     Case("POST", "/api/applications/{application_id}/question", {"answer": "Example"}),
     Case("POST", "/api/applications/{application_id}/confirm", {"fields_hash": "0" * 64}),
@@ -81,6 +82,13 @@ CASES = (
         {"items": [{"application_id": str(uuid.UUID(int=1)), "answers_hash": "a" * 64}]},
         200,
         "owner-checked per item: another person's reads as not found (test_approve_all_ready)",
+    ),
+    Case(
+        "POST",
+        "/api/apply/queue/cancel",
+        {"application_ids": [str(uuid.UUID(int=1))]},
+        200,
+        "owner-checked per item: another person's reads as not found (test_a24_cancel)",
     ),
     Case(
         "POST",

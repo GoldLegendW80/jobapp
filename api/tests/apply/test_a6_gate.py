@@ -770,27 +770,28 @@ def test_it_was_submitted_records_the_application(
 
 
 @pytest.mark.parametrize(
-    ("state", "reject", "allowed"),
+    ("state", "reject", "end"),
     [
-        (State.ready, True, True),
-        (State.needs_person, True, True),
-        (State.approved, True, False),
-        (State.approved, False, True),
-        (State.queued, False, True),
-        (State.refused_by_site, False, True),
-        (State.submitting, False, False),
-        (State.submit_unknown, False, False),
-        (State.submitted, False, False),
-        (State.rehearsed, False, False),
+        (State.ready, True, State.cancelled),
+        (State.needs_person, True, State.cancelled),
+        (State.approved, True, None),
+        (State.approved, False, State.cancelled),
+        (State.queued, False, State.cancelled),
+        (State.refused_by_site, False, State.cancelled),
+        # A24 (owner, 2026-11-26): a Cancel after the click says it may have been sent.
+        (State.submitting, False, State.submit_unknown),
+        (State.submit_unknown, False, None),
+        (State.submitted, False, None),
+        (State.rehearsed, False, None),
     ],
 )
-def test_reject_and_cancel_only_before_the_click(
+def test_reject_before_an_approval_and_cancel_before_an_end(
     db: Session,
     factory: sessionmaker[Session],
     person_a: Person,
     state: State,
     reject: bool,
-    allowed: bool,
+    end: State | None,
 ) -> None:
     app_id = started(db, person_a)
     db.execute(
@@ -800,10 +801,8 @@ def test_reject_and_cancel_only_before_the_click(
     )
     db.commit()
     with factory() as s:
-        if allowed:
-            assert gate.cancel(s, person_a.user_id, app_id, AT, reject=reject).state is (
-                State.cancelled
-            )
+        if end is not None:
+            assert gate.cancel(s, person_a.user_id, app_id, AT, reject=reject).state is end
         else:
             with pytest.raises(gate.RefusedError, match="not_cancellable"):
                 gate.cancel(s, person_a.user_id, app_id, AT, reject=reject)

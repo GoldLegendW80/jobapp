@@ -167,6 +167,11 @@ const DIRECT_LINES: Record<string, string> = {
   submitted: "Sent. Below is what the assistant sent.",
 };
 
+/** The code of the person's own Cancel (api/app/apply/gate.py, A24). */
+const CANCELLED_BY_YOU = "cancelled_by_person";
+/** A24: the Cancel reached the run after the assistant read the site's confirmation (applier.py). */
+const SENT_BEFORE_CANCEL = "sent_before_cancel";
+
 /**
  * The status line under the section's title. `reviewAgent`: Review first filled by the apply
  * agent, whose one approval is Confirm and send (A20), so its line says confirm, not approve.
@@ -184,6 +189,11 @@ export function statusLine(
     return "Your browser closed before the app saw the site's confirmation. Nothing is recorded as sent yet.";
   if (application.mode === "manual" && application.state in MANUAL_LINES)
     return MANUAL_LINES[application.state];
+  if (
+    application.state === "submitted" &&
+    application.error_code === SENT_BEFORE_CANCEL
+  )
+    return "Applied: your Cancel came after the site had already confirmed it.";
   if (application.mode === "direct" && application.state in DIRECT_LINES)
     return DIRECT_LINES[application.state];
   switch (application.state) {
@@ -211,10 +221,16 @@ export function statusLine(
     case "submitted":
       return "Applied. The form was submitted.";
     case "submit_unknown":
-      return "We could not confirm this application. Look for a confirmation mail or on the site.";
+      return application.error_code === CANCELLED_BY_YOU
+        ? "You stopped it after a send button had been clicked. Check the site or your mail."
+        : "We could not confirm this application. Look for a confirmation mail or on the site.";
     case "refused_by_site":
       return "The site showed errors after the click, so it did not accept the application. Check the screenshot, then try again.";
     case "cancelled":
+      if (application.error_code === CANCELLED_BY_YOU)
+        return "Cancelled by you. Nothing was sent.";
+      if (application.error_code === "not_sent")
+        return "You said it was not sent, so it ended. The app does not send it again by itself: apply again if you want to.";
       return "The last application was cancelled. Nothing was sent.";
     case "failed": {
       const why = FAILURES[application.error_code ?? ""];
