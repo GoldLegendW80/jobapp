@@ -179,6 +179,8 @@ test.afterAll(async () => {
 test("A adds websites to the list beside their risk sentences, sets criteria and starts Find jobs", async () => {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
+  // Find jobs opens on Your searches (jobs J33): the main search's form is one click away.
+  await page.getByRole("button", { name: "Edit Main search" }).click();
   const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
 
@@ -527,6 +529,7 @@ test("reopened by keyboard at 375 px in the dark, the setup holds her choices", 
   const open = page.getByRole("button", { name: "Find jobs" });
   await open.focus();
   await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Edit Main search" }).click();
   const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
   for (const name of WEBSITES)

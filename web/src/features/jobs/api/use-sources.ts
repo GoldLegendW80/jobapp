@@ -5,7 +5,9 @@
  * Saving keeps the rule of jobs J17 (owner, 2026-10-27): a known job website in the list is the
  * person's permission to search it, recorded through its own consent route at the version of the
  * risk sentence shown beside it and on the reviewed profile revision; taking it out of the list
- * and saving takes the permission back. The profile save never carries a permission.
+ * and saving takes the permission back. The profile save never carries a permission. With several
+ * searches (jobs J33) a permission is the person's: ticking a website in any search gives it, and
+ * unticking it takes it back only while no other search of the person ticks it, read afresh.
  */
 import {
   useQueries,
@@ -37,6 +39,7 @@ import {
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import { formatDateTime } from "../helpers/format";
+import { halfSavedWords, keptElsewhere } from "../helpers/saved-searches";
 import {
   PROTECTED,
   permissionPlan,
@@ -57,6 +60,16 @@ import {
   putPermission,
   type Permission,
 } from "./permissions-api";
+import {
+  MAIN_SEARCH,
+  changeSearch,
+  createSearch,
+  searchesKey,
+  type Criteria,
+  type SavedSearch,
+  type SavedSchedule,
+} from "./searches-api";
+import { useReadSearches, useSavedSearches } from "./use-saved-searches";
 
 /** A save that stopped; `conflict` when current settings must be loaded first. */
 export class SourcesFailure extends Error {
@@ -65,6 +78,46 @@ export class SourcesFailure extends Error {
     super(message);
     this.conflict = conflict;
   }
+}
+
+/** A consent write that stopped: `refused` when its route said no, so nothing changed; `reason`
+ * is why, without what to do next. */
+class ConsentFailure extends SourcesFailure {
+  readonly refused: boolean;
+  readonly reason: string;
+  constructor(
+    message: string,
+    conflict: boolean,
+    { refused, reason }: { refused: boolean; reason: string },
+  ) {
+    super(message, conflict);
+    this.refused = refused;
+    this.reason = reason;
+  }
+}
+
+/** Why the write of a saved search failed, and whether it was written: null when unknown. */
+function writeFailure(failure: unknown): {
+  reason: string;
+  conflict: boolean;
+  written: false | null;
+} {
+  if (
+    !isApiError(failure) ||
+    failure.kind !== "http" ||
+    (failure.status ?? 500) >= 500
+  )
+    return { reason: describeError(failure), conflict: true, written: null };
+  if (
+    failure.status === 409 &&
+    (failure.body as { revision?: unknown } | null)?.revision !== undefined
+  )
+    return {
+      reason: "This search changed in another tab.",
+      conflict: true,
+      written: false,
+    };
+  return { reason: describeError(failure), conflict: false, written: false };
 }
 
 /** The search as reviewed, without what a consent write of `except` changes. */
@@ -135,6 +188,30 @@ export interface SaveArgs {
   onAdopt?: (current: Profile) => void;
 }
 
+/** A saved search to write (jobs J33): its id and revision when it exists. */
+export interface SaveSavedArgs {
+  base: Profile;
+  id: string | null;
+  revision: number;
+  name: string;
+  criteria: Criteria;
+  schedule: SavedSchedule;
+  titles: readonly string[];
+  instructions: string;
+  onAdopt?: (current: Profile) => void;
+  /** Called as soon as the search write answers, before its take backs. */
+  onWritten?: (saved: SavedSearch) => void;
+}
+
+/** What a draft of the list holds, kept when the form is left and opened again. */
+export interface SourcesSnapshot {
+  draft: SourcesDraft;
+  /** How LinkedIn is searched. */
+  mode: LinkedInSearch;
+  opened: Set<Protected>;
+  pending: string;
+}
+
 export interface Sources {
   draft: SourcesDraft;
   setDraft: Dispatch<SetStateAction<SourcesDraft>>;
@@ -149,7 +226,11 @@ export interface Sources {
   /** The known job websites whose permission saving takes back, against the search as reviewed. */
   withdrawn: (reviewed: Search) => Protected[];
   save: (args: SaveArgs) => Promise<Profile | null>;
+  saveSaved: (args: SaveSavedArgs) => Promise<SavedSearch | null>;
   saving: boolean;
+  /** false in a saved search: the LinkedIn mode is the person's, set in the main search. */
+  ownsPersonal: boolean;
+  snapshot: () => SourcesSnapshot;
 }
 
 /** Reads each known job website's permission again: "Load current settings" after a conflict. */
@@ -161,19 +242,30 @@ export function useRefreshPermissions() {
   };
 }
 
-export function useSources(search: Search): Sources {
+export function useSources(
+  search: Search,
+  {
+    searchId = MAIN_SEARCH,
+    initial,
+  }: { searchId?: string; initial?: SourcesSnapshot } = {},
+): Sources {
   const client = useQueryClient();
-  const [draft, setDraft] = useState<SourcesDraft>(() => draftOfSearch(search));
+  const [draft, setDraft] = useState<SourcesDraft>(
+    () => initial?.draft ?? draftOfSearch(search),
+  );
   // How a LinkedIn in the list is searched (owner, 2026-10-30): its public job search by default.
   const [linkedinMode, setLinkedinMode] = useState<LinkedInSearch>(
-    search.linkedin_search ?? "api",
+    initial?.mode ?? search.linkedin_search ?? "api",
   );
   // The platforms in the list when it was opened (or last saved): taking one out takes back its
   // permission.
-  const [opened, setOpened] = useState(() =>
-    tickedOf(search.interactive_sites ?? []),
+  const [opened, setOpened] = useState(
+    () => initial?.opened ?? tickedOf(search.interactive_sites ?? []),
   );
-  const [pending, setPending] = useState("");
+  const [pending, setPending] = useState(initial?.pending ?? "");
+  const others = useSavedSearches();
+  const readSearches = useReadSearches();
+  const kept = keptElsewhere(others.data?.items ?? [], searchId);
   const [saving, setSaving] = useState(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -211,10 +303,13 @@ export function useSources(search: Search): Sources {
         ? "Permission given."
         : "Saving with this website in your list gives this permission.";
     }
+    if (kept.has(platform) && on)
+      return "Another of your searches has this website, so its permission stays on.";
     if (
       withdraws(platform, {
         ticked,
         opened,
+        kept,
         websitesOnly: websitesOnlyRows(reviewed),
         states: { [platform]: state },
       })
@@ -231,6 +326,7 @@ export function useSources(search: Search): Sources {
         withdraws(platform, {
           ticked,
           opened,
+          kept,
           websitesOnly: websitesOnlyRows(reviewed),
           states: { [platform]: state },
         })
@@ -262,22 +358,30 @@ export function useSources(search: Search): Sources {
     } catch (failure) {
       void client.invalidateQueries({ queryKey: key });
       if (isApiError(failure) && failure.status === 409)
-        throw new SourcesFailure(
+        throw new ConsentFailure(
           `The ${label} permission or its risk sentence changed in another tab. Your list is still here. Load current settings and review them before saving.`,
           true,
+          {
+            refused: true,
+            reason: `Your settings or the ${label} risk sentence changed in another tab.`,
+          },
         );
       if (
         isApiError(failure) &&
         failure.kind === "http" &&
         (failure.status ?? 500) < 500
-      )
-        throw new SourcesFailure(
-          `The ${label} permission was not saved. ${errorDetail(failure) ?? describeError(failure)}`,
+      ) {
+        const detail = errorDetail(failure) ?? describeError(failure);
+        throw new ConsentFailure(
+          `The ${label} permission was not saved. ${detail}`,
           false,
+          { refused: true, reason: detail },
         );
-      throw new SourcesFailure(
+      }
+      throw new ConsentFailure(
         `The ${label} permission was not confirmed. Your list is still here. Load current settings and review them before saving. ${describeError(failure)}`,
         true,
+        { refused: false, reason: describeError(failure) },
       );
     }
     client.setQueryData(key, answer);
@@ -288,9 +392,10 @@ export function useSources(search: Search): Sources {
     try {
       current = await getProfile();
     } catch (failure) {
-      throw new SourcesFailure(
+      throw new ConsentFailure(
         `The ${label} permission was not confirmed. Your list is still here. Load current settings and review them before saving. ${describeError(failure)}`,
         true,
+        { refused: false, reason: describeError(failure) },
       );
     }
     if (!isMounted()) return null;
@@ -300,13 +405,108 @@ export function useSources(search: Search): Sources {
         stable(ordinarySearch(base.sections.search, change.platform))
     ) {
       if (isCurrent(current, base)) client.setQueryData(profileKey, current);
-      throw new SourcesFailure(
+      throw new ConsentFailure(
         "Your search settings changed in another tab while a website permission was saved. Your list is still here. Load current settings and review them before saving.",
         true,
+        {
+          refused: false,
+          reason: "Your search settings changed in another tab.",
+        },
       );
     }
     adopt(current);
     return current;
+  };
+
+  const checked = (instructions: string) => {
+    if (pending.trim())
+      throw new SourcesFailure(
+        "Add the address you typed, or clear it, before saving.",
+        false,
+      );
+    const settings = interactiveSettingsSchema.safeParse({
+      interactive_sites: draft.sites,
+      interactive_instructions: instructions,
+    });
+    if (!settings.success)
+      throw new SourcesFailure(
+        settings.error.issues[0]?.message ??
+          "Check your websites and instructions.",
+        false,
+      );
+    return settings.data;
+  };
+
+  // The consent writes of a save: decided on each platform's state read afresh, and, when one
+  // would be taken back, on the person's other searches read afresh too.
+  const planned = async (
+    reviewed: Search,
+    draftTicked: Set<Protected>,
+    titles: readonly string[],
+  ): Promise<PermissionChange[] | null> => {
+    // Decide on the server's current state, against the sentence shown beside each website.
+    const shown = Object.fromEntries(
+      PROTECTED.map((platform) => [
+        platform,
+        permissionOf(platform).data?.text_version,
+      ]),
+    );
+    const read = await Promise.all(
+      PROTECTED.map((platform) =>
+        draftTicked.has(platform) ||
+        opened.has(platform) ||
+        permissionOf(platform).data?.enabled
+          ? client
+              .query({
+                queryKey: permissionKey(platform),
+                queryFn: ({ signal }) => getPermission(platform, signal),
+                staleTime: 0,
+                retry: false,
+              })
+              .catch(() => undefined)
+          : Promise.resolve(permissionOf(platform).data),
+      ),
+    );
+    if (!isMounted()) return null;
+    const input = {
+      ticked: draftTicked,
+      opened,
+      websitesOnly: websitesOnlyRows(reviewed),
+      states: Object.fromEntries(
+        PROTECTED.map((platform, index) => [platform, read[index]]),
+      ),
+      shown,
+      words: readerWords(titles),
+    };
+    let plan = permissionPlan(input);
+    if (
+      "changes" in plan &&
+      plan.changes.some((change) => change.body.enabled === false)
+    ) {
+      let fresh: SavedSearch[];
+      try {
+        fresh = (await readSearches()).items;
+      } catch (failure) {
+        throw new SourcesFailure(
+          `Your other searches could not be read, so no permission was changed. Try again. ${describeError(failure)}`,
+          false,
+        );
+      }
+      if (!isMounted()) return null;
+      plan = permissionPlan({ ...input, kept: keptElsewhere(fresh, searchId) });
+    }
+    if ("refused" in plan) {
+      const label = PLATFORM_NAMES[plan.refused];
+      throw new SourcesFailure(
+        plan.reason === "unloaded"
+          ? `The ${label} risk sentence could not be loaded, so its permission cannot be given. Remove ${label} from your list or try again later.`
+          : plan.reason === "unread"
+            ? `The ${label} risk sentence in your list is new. Read it, then save again.`
+            : `${label} needs words to search: add a job title you want, then save again.`,
+        false,
+      );
+    }
+    return plan.changes;
   };
 
   const save = async ({
@@ -316,71 +516,15 @@ export function useSources(search: Search): Sources {
     instructions,
     onAdopt,
   }: SaveArgs): Promise<Profile | null> => {
-    if (pending.trim())
-      throw new SourcesFailure(
-        "Add the address you typed, or clear it, before saving.",
-        false,
-      );
-    const settings = interactiveSettingsSchema.safeParse({
-      interactive_sites: draft.sites,
-      interactive_instructions:
-        instructions ?? base.sections.search.interactive_instructions ?? "",
-    });
-    if (!settings.success)
-      throw new SourcesFailure(
-        settings.error.issues[0]?.message ??
-          "Check your websites and instructions.",
-        false,
-      );
+    const settings = checked(
+      instructions ?? base.sections.search.interactive_instructions ?? "",
+    );
     setSaving(true);
     try {
       const reviewed = base.sections.search;
-      const draftTicked = tickedOf(settings.data.interactive_sites);
-      // Decide on the server's current state, against the sentence shown beside each website.
-      const shown = Object.fromEntries(
-        PROTECTED.map((platform) => [
-          platform,
-          permissionOf(platform).data?.text_version,
-        ]),
-      );
-      const read = await Promise.all(
-        PROTECTED.map((platform) =>
-          draftTicked.has(platform) ||
-          opened.has(platform) ||
-          permissionOf(platform).data?.enabled
-            ? client
-                .query({
-                  queryKey: permissionKey(platform),
-                  queryFn: ({ signal }) => getPermission(platform, signal),
-                  staleTime: 0,
-                  retry: false,
-                })
-                .catch(() => undefined)
-            : Promise.resolve(permissionOf(platform).data),
-        ),
-      );
-      if (!isMounted()) return null;
-      const plan = permissionPlan({
-        ticked: draftTicked,
-        opened,
-        websitesOnly: websitesOnlyRows(reviewed),
-        states: Object.fromEntries(
-          PROTECTED.map((platform, index) => [platform, read[index]]),
-        ),
-        shown,
-        words: readerWords(titles),
-      });
-      if ("refused" in plan) {
-        const label = PLATFORM_NAMES[plan.refused];
-        throw new SourcesFailure(
-          plan.reason === "unloaded"
-            ? `The ${label} risk sentence could not be loaded, so its permission cannot be given. Remove ${label} from your list or try again later.`
-            : plan.reason === "unread"
-              ? `The ${label} risk sentence in your list is new. Read it, then save again.`
-              : `${label} needs words to search: add a job title you want, then save again.`,
-          false,
-        );
-      }
+      const draftTicked = tickedOf(settings.interactive_sites);
+      const changes = await planned(reviewed, draftTicked, titles);
+      if (!changes) return null;
       const adopt = (current: Profile) => {
         client.setQueryData(profileKey, current);
         onAdopt?.(current);
@@ -390,7 +534,7 @@ export function useSources(search: Search): Sources {
       // KEPT_WHEN_OMITTED), alert_emails included, which this list no longer shows.
       const saved = await saveSection("search", base.revision, {
         ...body,
-        ...settings.data,
+        ...settings,
         ...(reviewed.linkedin_search !== undefined || linkedinMode !== "api"
           ? { linkedin_search: linkedinMode }
           : {}),
@@ -406,7 +550,7 @@ export function useSources(search: Search): Sources {
         throw new Error("A newer profile was loaded. Review current settings.");
       adopt(saved);
       let current = saved;
-      for (const change of plan.changes) {
+      for (const change of changes) {
         const next = await record(change, current, adopt);
         if (!next) return null;
         current = next;
@@ -414,6 +558,117 @@ export function useSources(search: Search): Sources {
       if (isMounted()) setOpened(draftTicked);
       return current;
     } finally {
+      if (isMounted()) setSaving(false);
+    }
+  };
+
+  // A saved search: its grants first (the api refuses a ticked website without its permission),
+  // then the search, then its take backs, so a failed write never leaves a stored search with a
+  // website whose permission it took back. Once anything is written, a failure says what holds.
+  const saveSaved = async (
+    args: SaveSavedArgs,
+  ): Promise<SavedSearch | null> => {
+    const settings = checked(args.instructions);
+    setSaving(true);
+    try {
+      const draftTicked = tickedOf(settings.interactive_sites);
+      const changes = await planned(
+        args.base.sections.search,
+        draftTicked,
+        args.titles,
+      );
+      if (!changes) return null;
+      const adopt = (current: Profile) => {
+        client.setQueryData(profileKey, current);
+        args.onAdopt?.(current);
+      };
+      const name = args.name.trim();
+      let current = args.base;
+      const grants = changes.filter((change) => change.body.enabled === true);
+      const takeBacks = changes.filter((one) => !grants.includes(one));
+      const given: Protected[] = [];
+      for (const change of grants) {
+        let next: Profile | null;
+        try {
+          next = await record(change, current, adopt);
+        } catch (failure) {
+          if (!given.length || !(failure instanceof ConsentFailure))
+            throw failure;
+          throw new SourcesFailure(
+            halfSavedWords({
+              name,
+              given,
+              written: false,
+              failed: { platform: change.platform, refused: failure.refused },
+              untried: [],
+              reason: failure.reason,
+              conflict: failure.conflict,
+            }),
+            failure.conflict,
+          );
+        }
+        if (!next) return null;
+        current = next;
+        given.push(change.platform);
+      }
+      const body = {
+        name,
+        criteria: {
+          ...args.criteria,
+          ...settings,
+          job_feeds: draft.feeds,
+          company_boards: draft.boards ?? [],
+          web_search: draft.web,
+        },
+        schedule: args.schedule,
+      };
+      let saved: SavedSearch;
+      try {
+        saved = args.id
+          ? await changeSearch(args.id, args.revision, body)
+          : await createSearch(body);
+      } catch (failure) {
+        if (!given.length) throw failure;
+        const { reason, conflict, written } = writeFailure(failure);
+        throw new SourcesFailure(
+          halfSavedWords({
+            name,
+            given,
+            written,
+            untried: [],
+            reason,
+            conflict,
+          }),
+          conflict,
+        );
+      }
+      args.onWritten?.(saved);
+      for (const [index, change] of takeBacks.entries()) {
+        let next: Profile | null;
+        try {
+          next = await record(change, current, adopt);
+        } catch (failure) {
+          if (!(failure instanceof ConsentFailure)) throw failure;
+          throw new SourcesFailure(
+            halfSavedWords({
+              name,
+              given,
+              written: true,
+              failed: { platform: change.platform, refused: failure.refused },
+              untried: takeBacks.slice(index + 1).map((one) => one.platform),
+              reason: failure.reason,
+              conflict: failure.conflict,
+            }),
+            failure.conflict,
+          );
+        }
+        if (!next) return null;
+        current = next;
+      }
+      if (isMounted()) setOpened(draftTicked);
+      return saved;
+    } finally {
+      void client.invalidateQueries({ queryKey: searchesKey });
       if (isMounted()) setSaving(false);
     }
   };
@@ -429,6 +684,9 @@ export function useSources(search: Search): Sources {
     noteOf,
     withdrawn,
     save,
+    saveSaved,
     saving,
+    ownsPersonal: searchId === MAIN_SEARCH,
+    snapshot: () => ({ draft, mode: linkedinMode, opened, pending }),
   };
 }

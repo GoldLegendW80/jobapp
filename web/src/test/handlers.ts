@@ -57,6 +57,22 @@ export const emptySweeps = {
   },
 };
 
+/** The main search alone, as GET /api/jobs/searches answers a new account (jobs J32). */
+export const mainSearchOnly = {
+  items: [
+    {
+      id: "main",
+      name: "Main search",
+      main: true,
+      revision: 1,
+      criteria: {},
+      schedule: emptySweeps.schedule,
+      request: null,
+    },
+  ],
+  running_sweep_id: null,
+};
+
 export const noFeedKeys = {
   feeds: [
     { name: "arbeitnow", needs_key: false, key_stored: false, key_last4: null },
@@ -134,6 +150,7 @@ export const handlers = [
   ),
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
+  http.get("*/api/jobs/searches", () => HttpResponse.json(mainSearchOnly)),
   http.get("*/api/jobs/facets", () =>
     HttpResponse.json({ places: [], sources: [] }),
   ),

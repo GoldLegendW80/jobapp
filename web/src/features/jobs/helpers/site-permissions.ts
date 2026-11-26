@@ -79,6 +79,8 @@ export interface PermissionInput {
   opened: ReadonlySet<Protected>;
   /** LinkedIn and Free-Work rows whose permission serves the websites' search only. */
   websitesOnly: ReadonlySet<Protected>;
+  /** The platforms ticked in the person's other searches (jobs J33): their permission stays. */
+  kept?: ReadonlySet<Protected>;
   /** Each platform's state as just read from the server, missing when it could not be. */
   states: Partial<Record<Protected, Permission>>;
   /** The version of each platform's risk sentence shown beside its box. */
@@ -90,12 +92,13 @@ export interface PermissionInput {
 /** Whether saving takes back the permission of a platform whose box is unticked: Indeed's and
  * Welcome to the Jungle's always (they serve this search only), LinkedIn's and Free-Work's when
  * it was given for the websites or the box was ticked when the setup opened. A permission given
- * for an existing reader (and LinkedIn's Easy Apply) stays when its box was never ticked here. */
+ * for an existing reader (and LinkedIn's Easy Apply) stays when its box was never ticked here,
+ * and so does one that another of the person's searches still ticks. */
 export function withdraws(
   platform: Protected,
   input: Omit<PermissionInput, "shown" | "words">,
 ): boolean {
-  if (input.ticked.has(platform)) return false;
+  if (input.ticked.has(platform) || input.kept?.has(platform)) return false;
   const state = input.states[platform];
   if (!state) return input.opened.has(platform);
   return (

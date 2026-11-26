@@ -7,7 +7,8 @@ import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeDetail, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
 import { fakeProfile } from "@/test/profile";
-import { emptySweeps, server } from "@/test/server";
+import { fakeSearches } from "@/test/searches";
+import { emptySweeps, mainSearchOnly, server } from "@/test/server";
 
 import type {
   ScheduleState,
@@ -178,9 +179,14 @@ async function openPastSearches(user = userEvent.setup()) {
 
 async function startSearch(user = userEvent.setup()) {
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Edit Main search" }),
+  );
   const setup = await screen.findByRole("dialog", { name: "Find jobs" });
   await user.click(
-    within(setup).getByRole("button", { name: "Save and start search" }),
+    await within(setup).findByRole("button", {
+      name: "Save and start search",
+    }),
   );
 }
 
@@ -241,7 +247,8 @@ describe("Find jobs", () => {
     expect(
       within(progress).getByRole("progressbar", { name: "Websites searched" }),
     ).toHaveAttribute("aria-valuemax", "3");
-    expect(screen.getByRole("button", { name: "Finding jobs" })).toBeDisabled();
+    // It stays usable while a search runs, so another one can wait in the line (jobs J33).
+    expect(screen.getByRole("button", { name: "Finding jobs" })).toBeEnabled();
 
     const dialog = await screen.findByRole("dialog", {
       name: "2 new postings found",
@@ -280,6 +287,7 @@ describe("Find jobs", () => {
   it("opens a new posting from the summary", async () => {
     fakeSweeps({ states: [finished()] });
     server.use(
+      http.get("*/api/jobs/searches", () => HttpResponse.json(mainSearchOnly)),
       http.get("*/api/jobs/:id", () =>
         HttpResponse.json({ detail: "Job not found." }, { status: 404 }),
       ),
@@ -577,26 +585,29 @@ describe("Find jobs", () => {
     },
   );
 
-  it("follows the sweep already running on a second start (409)", async () => {
-    fakeSweeps({
+  it("puts the main search in the line on a second start (409), with the words of Run now", async () => {
+    const calls = fakeSweeps({
       start: () =>
         HttpResponse.json(
           { detail: "A sweep is already running.", sweep_id: ID },
           { status: 409 },
         ),
-      states: [
-        makeSweep({ boards_done: 1 }),
-        finished({ new: 0, new_jobs: [] }),
-      ],
     });
+    const searches = fakeSearches();
+    searches.running = ID;
     await openJobs();
     await startSearch();
     expect(
-      await screen.findByText("A search is already running: showing it."),
+      await screen.findByText("Main search waits in line: number 1."),
     ).toBeInTheDocument();
+    expect(calls.start).toBe(1);
+    expect(searches.runs).toEqual(["main"]);
+    const list = await screen.findByRole("list", { name: "Your searches" });
+    const main = within(list).getByRole("listitem", { name: "Main search" });
+    await within(main).findByText(/Waits in line: number 1/);
     expect(
-      await screen.findByRole("dialog", { name: "No new posting" }),
-    ).toBeInTheDocument();
+      screen.queryByText("A search is already running: showing it."),
+    ).toBeNull();
   });
 
   it("explains a search without a ticked website (422)", async () => {
@@ -787,9 +798,11 @@ describe("Past searches", () => {
       within(dialog).getByRole("list", { name: "Last searches" }),
     ).getAllByRole("button");
     expect(items).toHaveLength(2);
-    expect(items[0]).toHaveTextContent(/Automatic, Done/);
+    expect(items[0]).toHaveTextContent(/Main search, automatic, Done/);
     expect(items[0]).toHaveTextContent("3 new");
-    expect(items[1]).toHaveTextContent(/By hand, Failed, 1 board failed/);
+    expect(items[1]).toHaveTextContent(
+      /Main search, by hand, Failed, 1 board failed/,
+    );
     await user.click(items[0]!);
     expect(
       await screen.findByRole("dialog", { name: "2 new postings found" }),
@@ -820,10 +833,9 @@ describe("Find jobs on an empty list", () => {
       name: "Find jobs",
     });
     await user.click(find);
-    const setup = await screen.findByRole("dialog", { name: "Find jobs" });
-    await user.click(
-      await within(setup).findByRole("button", { name: "Cancel" }),
-    );
+    // It opens on Your searches.
+    await screen.findByRole("list", { name: "Your searches" });
+    await user.keyboard("{Escape}");
     await waitFor(() => {
       expect(find).toHaveFocus();
     });
@@ -839,8 +851,9 @@ describe("Find jobs on an empty list", () => {
     await waitFor(() => {
       expect(location()).toBe("/jobs");
     });
-    // The setup is built again once the profile is read: ask the page for the dialog it holds.
-    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    // It opens on the main search's form, to add websites.
+    await screen.findByText("Where to search");
+    await user.keyboard("{Escape}");
     // Opened by the address, it gives the focus to the Find jobs on the page.
     await waitFor(() => {
       expect(
@@ -895,7 +908,7 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
     const [item] = within(
       within(history).getByRole("list", { name: "Last searches" }),
     ).getAllByRole("button");
-    expect(item).toHaveTextContent(/By hand, Done/);
+    expect(item).toHaveTextContent(/by hand, Done/);
     expect(item).not.toHaveTextContent(/websites only/i);
     await user.click(item!);
     const summary = await screen.findByRole("dialog", {

@@ -11,6 +11,11 @@ import {
 import { POSTINGS } from "@/design-system/fixtures/postings";
 import { member, fakeSession } from "@/test/auth";
 import { fakeJobsApi } from "@/test/jobs";
+import { fakeSearches } from "@/test/searches";
+import {
+  REMOTE_SEARCH,
+  WAITING_SEARCH,
+} from "@/design-system/fixtures/saved-searches";
 
 const meta = {
   title: "Pages/Jobs/Jobs",
@@ -111,6 +116,19 @@ export const CheckTheAutomaticSearch: Story = {
     await userEvent.click(
       await page.findByRole("button", { name: "More actions" }),
     );
+  },
+};
+
+/** As a job seeker, I want to keep several searches and run the one I need in two clicks, so that each kind of role I look for has its own websites, titles and places. */
+export const RunOneOfMySearches: Story = {
+  beforeEach: () => {
+    postings();
+    fakeSearches({ saved: [REMOTE_SEARCH, WAITING_SEARCH] });
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await page.findByRole("list", { name: "Postings" });
+    await userEvent.click(page.getByRole("button", { name: "Find jobs" }));
   },
 };
 
