@@ -415,6 +415,18 @@ def test_the_address_is_built_by_code_from_the_saved_pair() -> None:
     assert LINKEDIN["url"].startswith("https://www.linkedin.com")
 
 
+def test_the_address_sends_no_contract_filter_whatever_is_saved() -> None:
+    """Jobs J30 (owner, 2026-11-26: "Garder avec un badge"): every contract is asked for, the age
+    filter stays; with VIE saved the plain search runs beside "<title> VIE"."""
+    saved = section(location={"terms": ["Tahiti"]}, days=7, contract_types=["CDI", "Stage", "VIE"])
+    assert [page.page_url(guest.BASE_URL, query, 7, 0) for query in guest.every_query(saved)] == [
+        "https://www.linkedin.com/jobs/search?keywords=GenAI%20Engineer"
+        "&location=French%20Polynesia&f_TPR=r604800",
+        "https://www.linkedin.com/jobs/search?keywords=GenAI%20Engineer%20VIE"
+        "&location=French%20Polynesia&f_TPR=r604800",
+    ]
+
+
 def test_activity_says_failed_after_a_failure_of_the_public_api() -> None:
     for reason in ("page_failed", "layout_changed"):
         note = activity_steps._source_note(

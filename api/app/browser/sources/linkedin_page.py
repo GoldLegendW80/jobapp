@@ -17,7 +17,8 @@ normal browser on the owner's Mac listed every card (14 searches, 256 cards).
 - How: one `sweep` lease of the person's browser and a discovery on it (browser B20) whose scope
   never says `signed_in`, so browserd opens a fresh anonymous context: never the person's
   LinkedIn login. Code builds every address (`page_url`, the place as LinkedIn names it,
-  linkedin_places) and reads every page with one script (CARDS_SCRIPT, POSTING_SCRIPT, run by
+  linkedin_places, the age filter `f_TPR` and no contract filter `f_JT`, as the guest search
+  since jobs J30) and reads every page with one script (CARDS_SCRIPT, POSTING_SCRIPT, run by
   browser_evaluate): no model, no token. A search reads `start=0`, then 25 and 50 while a page
   lists a full page of cards and some are new, in rounds, breadth first as the guest search (the
   first page of every search, then the posting pages of that round's new cards taken in turn from
@@ -135,13 +136,11 @@ POSTING_SCRIPT = r"""() => {
 
 def page_url(base: str, query: guest.Query, days: int, start: int) -> str:
     """The public search page of `query` (the guest search's keywords, place as LinkedIn names
-    it, its geoId and contract filter), `start` its first card."""
+    it, its geoId and age filter, no contract filter), `start` its first card."""
     params: dict[str, str] = {"keywords": query.keywords, "location": query.location}
     if query.geo_id:
         params["geoId"] = query.geo_id
     params["f_TPR"] = f"r{days * 86400}"
-    if query.job_types:
-        params["f_JT"] = query.job_types
     if start:
         params["start"] = str(start)
     return f"{base}/jobs/search?{urlencode(params, quote_via=quote)}"

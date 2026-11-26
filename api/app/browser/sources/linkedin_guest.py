@@ -15,14 +15,12 @@ gives its one permission (linkedin_guard), which this source checks too.
   `location=Worldwide&geoId=92000000`; any other place is sent as LinkedIn names it
   (linkedin_places: "Tahiti" as "French Polynesia", jobs J20), else as written, without a
   geoId; two saved places LinkedIn names the same are one search.
-  `f_TPR=r<days * 86400>` limits the age to the saved days. Contract types: `f_JT` with CDI as F
-  (full time), CDD as T (temporary), Freelance as C (contract), Stage as I (internship), all the
-  saved ones in one filter; Alternance has no code, so with it saved no `f_JT` is sent. CDD saved
-  without CDI sends no `f_JT` either: LinkedIn lists most fixed term contracts as full time, so
-  `f_JT=T` alone would miss them. VIE has no code either: with VIE saved each title is also
-  searched as "<title> VIE", without `f_JT`; with VIE alone saved, only those searches run. A
-  posting of another contract read in a search without `f_JT` is kept (jobs J30, owner
-  2026-11-26: "Garder avec un badge"): the store marks it outside the saved contract types.
+  `f_TPR=r<days * 86400>` limits the age to the saved days: kept, as this search has few
+  requests and an old posting is mostly closed. No contract filter (`f_JT`) is sent since jobs
+  J30 (owner 2026-11-26: "Je veux vraiment qu'on remonte un max de job", "Garder avec un
+  badge"): a posting of any contract is read and kept, and the store marks one outside the
+  saved contract types. With VIE saved, each title is also searched as "<title> VIE" (LinkedIn
+  has no VIE code), beside its plain search.
   Pages: `start=0, 10, 20`, at most PAGES_PER_SEARCH a search, in rounds, breadth first: the first
   page of every search, then the details of that round, then the second page of the searches that go
   on, and so on; a search ends at a short or a stale page. The entry counts the searches that ran
@@ -163,9 +161,6 @@ HEADERS = {
     # steps should LinkedIn compress anyway).
     "Accept-Encoding": "identity",
 }
-# LinkedIn's f_JT codes of the saved contract types (module docstring); Alternance and VIE have
-# none.
-JOB_TYPES = {"CDI": "F", "CDD": "T", "Freelance": "C", "Stage": "I"}
 # The contract type LinkedIn's "Employment type" criterion states, when the title states none.
 EMPLOYMENT = {
     "internship": ContractType.Stage,
@@ -199,16 +194,13 @@ class StopError(Exception):
 
 @dataclass(frozen=True)
 class Query:
-    """One search: the keywords, the saved place it stands for (None with no place saved), what
-    LinkedIn's `location` and `geoId` get, the `f_JT` filter, and whether LinkedIn could not
-    filter the saved contract types itself (a posting of another is kept with a badge)."""
+    """One search: the keywords, the saved place it stands for (None with no place saved), and
+    what LinkedIn's `location` and `geoId` get."""
 
     keywords: str
     place: str | None
     location: str
     geo_id: str | None = None
-    job_types: str | None = None
-    check_contract: bool = False
     title: str = ""  # the saved title it searches (the summary names it)
 
 
@@ -238,30 +230,13 @@ def every_query(search: SearchSection) -> list[Query]:
         if location.casefold() not in named:
             named.add(location.casefold())
             spots.append((place, location, None))
-    saved = set(search.contract_types)
-    others = saved - {"VIE"}
-    # CDD without CDI sends no filter: LinkedIn lists most fixed term contracts as full time,
-    # so "temporary" alone would miss them; the postings are checked instead.
-    cdd_alone = "CDD" in others and "CDI" not in others
-    native = bool(others) and others <= set(JOB_TYPES) and not cdd_alone
-    job_types = ",".join(sorted({JOB_TYPES[c] for c in others})) if native else None
+    vie = "VIE" in search.contract_types
     found: list[Query] = []
     for title in titles:
         for place, location, geo_id in spots:
-            if others or not saved:
-                found.append(
-                    Query(
-                        title,
-                        place,
-                        location,
-                        geo_id,
-                        job_types,
-                        bool(others) and not native,
-                        title,
-                    )
-                )
-            if "VIE" in saved:
-                found.append(Query(f"{title} VIE", place, location, geo_id, None, True, title))
+            found.append(Query(title, place, location, geo_id, title))
+            if vie:
+                found.append(Query(f"{title} VIE", place, location, geo_id, title))
     return found
 
 
@@ -270,8 +245,6 @@ def search_url(base: str, query: Query, days: int, start: int) -> str:
     if query.geo_id:
         params["geoId"] = query.geo_id
     params["f_TPR"] = f"r{days * 86400}"
-    if query.job_types:
-        params["f_JT"] = query.job_types
     params["start"] = str(start)
     return f"{base}{API_PATH}/seeMoreJobPostings/search?{urlencode(params)}"
 

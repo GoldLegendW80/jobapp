@@ -205,14 +205,17 @@ def test_a_card_titled_outside_the_saved_terms_is_read_and_stored_and_another_pl
     assert locations == ["French Polynesia", "Reunion"]
 
 
-def test_an_internship_read_where_linkedin_could_not_filter_is_kept_with_its_badge(
+def test_an_internship_is_read_with_no_contract_filter_and_kept_with_its_badge(
     factory: sessionmaker[Session],  # noqa: F811
     alice: uuid.UUID,  # noqa: F811
 ) -> None:
-    """Jobs J30 (owner, 2026-11-26: "Garder avec un badge"): Alternance has no LinkedIn code, so
-    the search sends no f_JT and reads internships; they are stored, outside the saved contract
+    """Jobs J30 (owner, 2026-11-26: "Garder avec un badge"): with CDI saved, the search sends no
+    f_JT, so LinkedIn returns internships too; they are stored, outside the saved contract
     types, and counted so."""
-    entry, _ = run_sweep(factory, alice, contract_types=["CDI", "Alternance"])
+    entry, fake = run_sweep(factory, alice, contract_types=["CDI"])
+    assert [r for r in fake.requests if "f_JT" in r.url.params] == []
+    ages = [r.url.params.get("f_TPR") for r in fake.requests if "start" in r.url.params]
+    assert ages == ["r2592000"]  # the one search page keeps its age filter
     assert (entry["postings"], entry["outside"], "other_contract" in entry) == (2, 2, False)
     with factory() as database:
         rows = database.execute(
