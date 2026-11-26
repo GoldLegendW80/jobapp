@@ -61,6 +61,7 @@ def upgrade() -> None:
             server_default=sa.text("gen_random_uuid()"),
             nullable=False,
         ),
+        sa.Column("position", sa.BigInteger(), sa.Identity(always=True), nullable=False),
         sa.Column("user_id", pg.UUID(as_uuid=True), nullable=False),
         sa.Column("saved_search_id", pg.UUID(as_uuid=True), nullable=True),
         sa.Column("trigger", TRIGGER, nullable=False),
@@ -94,9 +95,7 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("saved_search_id IS NOT NULL"),
     )
-    op.create_index(
-        "ix_sweep_requests_user_id_requested_at", "sweep_requests", ["user_id", "requested_at"]
-    )
+    op.create_index("ix_sweep_requests_user_id_position", "sweep_requests", ["user_id", "position"])
     op.add_column("sweeps", sa.Column("saved_search_id", pg.UUID(as_uuid=True), nullable=True))
     op.create_foreign_key(
         "fk_sweeps_saved_search_id_saved_searches",

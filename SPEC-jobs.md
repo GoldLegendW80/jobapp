@@ -38,7 +38,12 @@ job_feed_keys(user_id fk users cascade, feed text in ('adzuna'), secret_encrypte
 job_rescores(user_id pk fk users cascade, wanted_revision, wanted_at, done_revision, running_revision, running_since,
              finished_at, outcome jsonb)
 sweeps(id uuid, user_id, started_at, finished_at, trigger enum(manual, schedule), status enum(running, done, failed),
-       stats jsonb, error text)
+       stats jsonb, error text, saved_search_id fk saved_searches set null)
+saved_searches(id uuid, user_id fk users cascade, name text 1..60 unique per user case aside, criteria jsonb,
+               schedule jsonb, revision int, created_at, updated_at)
+sweep_requests(id uuid, position bigint identity, user_id fk users cascade, saved_search_id null
+               (fk (saved_search_id, user_id) cascade), trigger, schedule_slot text null, requested_at,
+               one per (user, search))
 ```
 
 Slug rule and duplicate detection reuse the engine's (`<company>-<role>`, lowercase, hyphenated; same URL or same company and title is the same posting). Status changes to `applied` fill `applied_on` once.
@@ -85,6 +90,18 @@ A sweep reads the ticked alert e-mails ([SPEC-mail, "Job alert e-mails: a narrow
 - `never_apply` rules from the profile mark matching rows `skipped` with the rule as the note. They are the person's own rules only: the app adds no rule of its own about a kind of role (owner, 2026-11-05). Sweeps and apply share `jobs/never_apply.py`: accents, case, compatibility forms, hidden characters and lookalike letters are folded, and a term at the start or end of a glued word also matches. The original title, company and rule note stay unchanged.
 
 **Sweep status (browser B25, #789).** A sweep whose every selected source ended `failed` or `not_attempted` ends `failed` with the error "No website of this search worked. Each one says why below." (`sweep.any_source_worked`); `partial`, `complete` and `no_matches` count as working; a sweep without selected sources (older) is not judged. Activity's sweep step and workflow run show Failed, the summary shows each website's reason.
+
+## Saved searches (owner, 2026-11-26)
+
+Owner, 2026-11-26 (issue [#831](https://github.com/GoldLegendW80/jobapp/issues/831), jobs J32): "je veux aussi pouvoir enregistrer plusieurs recherche à lancer à la volée ou schedule" (I also want to save several searches, to launch on the fly or on a schedule). Planner defaults the owner may change: the search of today stays where it is and is the main search; others are added beside it; every search feeds the one Jobs list; a search asked while another runs waits in line.
+
+- **The main search** is the profile's search section, unchanged: nothing moves and nothing is copied. The api lists it first with the id `main` and the name "Main search"; it changes in Settings (`PUT /api/profile/search`), never through `/api/jobs/searches`.
+- **A saved search** (`saved_searches`, migration 0050, `app/jobs/searches.py`): a name (1 to 60 characters, unique among the person's case aside, never "Main search"), at most 20 a person, a revision a change must name, the keys of one search and its own schedule. Its keys (`CRITERIA`): wanted and unwanted titles and places, the remote stance, the contract types, the age window (`days`), the websites, the company boards, the job feeds, the web source (`web_search`), the instructions; they are checked by the profile's own search schema, so a saved search never holds a key or a value the main search could not, and any other key is refused. Its schedule has the shape of `search.sweep_schedule` without the time zone.
+- **What stays the person's**, read from the profile for every search (`PERSON`): the never apply rules, the minimum fit, seniority, industries and company types, the pay, the documents settings, the permission of each website, the way LinkedIn is searched, the alert e-mails and the time zone (the main schedule's). A saved search lists only ticked websites whose permission the person gave in Find jobs (422 otherwise; a paused platform keeps its permission, a website of the person's own needs none); one that loses it later ends `permission_unavailable` as today, permissions being read live.
+- **Its sweep.** The scope is the saved search's criteria over the person's settings, frozen at the start (`sweep.freeze_scope`), with `saved_search` `{id, name, revision}`; everything after the freeze reads the scope as before (the badge of J30 then follows the criteria of the search that found the posting). `sweeps.saved_search_id` names the search while it exists (null for the main search and once it is deleted); `SweepOut.search` is `{id, name}`: `main` and "Main search", or the saved search's id (null once deleted) and the name frozen at the start, so the history keeps it after a rename or a delete. A delete while its sweep runs leaves the sweep running.
+- **The line.** One sweep runs per person, as before. A run asked while one runs is kept as a request (`sweep_requests`): one per search (asking again answers the same request), of a saved search or of the main search, answered 202 with its place in the line (1 starts next). It starts when the sweep before it ends (the worker's `run_sweep`, `start_the_line`) or at the next 5 minute tick, oldest first (`sweep.start_next`, under the profile lock); a search that lost its websites or no longer validates still starts and its claim fails it with the reason, so the line goes on. A request can be taken back. Run all asks each search in order, the main one first. `POST /api/jobs/sweeps` still runs the main search and still answers 409 with the running sweep's id.
+- **Schedules.** Each saved search has its own schedule, in the person's time zone. The tick fires each due slot of each search once: a saved search's slot key is the main slot's key and the search's id (`schedule.of_search`), so its advisory lock, its `ix_sweeps_user_id_schedule_slot` entry and its queue job id are its own, and two searches due at the same minute both fire, one after the other. A slot that meets a running sweep becomes a request in the line holding its slot, for the main search too, instead of being lost after its 15 minute window; a slot that finds its search already waiting joins that request, which then starts as the slot's scheduled sweep.
+- **Not in the api half:** the Jobs list filtered by search, with J29's `sweep` filter (J33), and every screen (J33, #832).
 
 ## Posting reader (owner, 2026-11-09, #764)
 
@@ -216,6 +233,7 @@ All require a session and act on the caller's rows only (404 otherwise).
 | GET /api/jobs/{id}/files/{file_id} | download with the stored mime |
 | POST /api/jobs/{id}/check | "Check now": the posting's own address asked now ([Liveness](#liveness-owner-2026-11-07)); the job as the check left it |
 | POST /api/jobs/sweeps, GET /api/jobs/sweeps, GET /api/jobs/sweeps/{id}, GET /api/jobs/sweeps/{id}/events | start (409 when one runs), list (with the user's schedule and its next run), progress and the jobs added, progress as server-sent events |
+| GET, POST /api/jobs/searches, GET, PUT, DELETE /api/jobs/searches/{id}, POST /api/jobs/searches/{id}/run, DELETE /api/jobs/searches/{id}/request, POST /api/jobs/searches/run | the main search (`main`) and the saved ones; create (201), read, change with the revision (409 when it moved), delete; run now or wait in the line (202 with its place); take back the waiting run; Run all ([Saved searches](#saved-searches-owner-2026-11-26)) |
 | GET /api/jobs/boards/starter, POST /api/jobs/boards/detect, GET /api/jobs/boards/suggestions | the starter list of company job boards, the ATS and id of a pasted board address, boards the caller's postings point to |
 | GET /api/jobs/places | coordinates for the map, from `engine/places.json` ported as a bundled gazetteer |
 | POST /api/jobs/import | the import document used by the deploy command |

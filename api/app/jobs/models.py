@@ -418,10 +418,12 @@ class SweepRequest(Base):
             unique=True,
             postgresql_where=sa.text("saved_search_id IS NOT NULL"),
         ),
-        sa.Index("ix_sweep_requests_user_id_requested_at", "user_id", "requested_at"),
+        sa.Index("ix_sweep_requests_user_id_position", "user_id", "position"),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
+    # The order of arrival, whatever the clock says: the line starts the smallest first.
+    position: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(always=True), nullable=False)
     user_id: Mapped[uuid.UUID] = _user_fk()
     saved_search_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
     trigger: Mapped[SweepTrigger] = mapped_column(SWEEP_TRIGGER_ENUM, nullable=False)

@@ -227,7 +227,7 @@ def _create(
     with sessions() as db:
         _refuse_unpermitted(db, user_id, body, now)
         try:
-            row = searches.create(db, user_id, body.name, body.criteria, body.schedule, now)
+            row = searches.create(db, user_id, body.name, body.criteria, body.schedule)
         except searches.LimitError:
             raise HTTPException(status_code=422, detail=TOO_MANY) from None
         except searches.NameTakenError:
@@ -260,7 +260,7 @@ def _change(
         _refuse_unpermitted(db, user_id, body, now)
         try:
             row = searches.change(
-                db, user_id, search_id, body.revision, body.name, body.criteria, body.schedule, now
+                db, user_id, search_id, body.revision, body.name, body.criteria, body.schedule
             )
         except searches.RevisionError as exc:
             conflict = SearchConflictOut(detail=MOVED, revision=exc.revision)

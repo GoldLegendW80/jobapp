@@ -2071,7 +2071,7 @@ def start_next(db: Session, user_id: uuid.UUID, now: datetime) -> Sweep | None:
     request = db.execute(
         sa.select(SweepRequest)
         .where(SweepRequest.user_id == user_id)
-        .order_by(SweepRequest.requested_at, SweepRequest.id)
+        .order_by(SweepRequest.position)
         .limit(1)
         .with_for_update(skip_locked=True)
     ).scalar_one_or_none()

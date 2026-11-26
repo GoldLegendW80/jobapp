@@ -239,7 +239,6 @@ def create(
     name: str,
     criteria: Mapping[str, Any],
     schedule: SavedSchedule,
-    now: datetime,
 ) -> SavedSearch:
     """A new saved search; the caller commits. Raises LimitError or NameTakenError."""
     _lock_person(db, user_id)
@@ -256,9 +255,8 @@ def create(
         criteria=criteria_of(criteria),
         schedule=schedule.model_dump(mode="json"),
         revision=1,
-        created_at=now,
-        updated_at=now,
     )
+    # Stamped by the database (server defaults): the list's order is the order of creation.
     return _flushed(db, row)
 
 
@@ -270,7 +268,6 @@ def change(
     name: str,
     criteria: Mapping[str, Any],
     schedule: SavedSchedule,
-    now: datetime,
 ) -> SavedSearch | None:
     """The saved search replaced, its revision one more; None when it is not the person's. Raises
     RevisionError (with the stored revision) when `revision` is not the stored one, and
@@ -284,14 +281,14 @@ def change(
         raise NameTakenError()
     row.name, row.criteria = name, criteria_of(criteria)
     row.schedule = schedule.model_dump(mode="json")
-    row.revision, row.updated_at = row.revision + 1, max(now, row.updated_at)
+    row.revision, row.updated_at = row.revision + 1, sa.func.now()
     return _flushed(db, row)
 
 
 def delete(db: Session, user_id: uuid.UUID, search_id: uuid.UUID) -> bool:
     """Delete it, and its waiting request (cascade); its sweeps keep their name (frozen in their
-    scope) and lose the reference (set null). The profile row is locked first, as the line's
-    start locks it (sweep.start_next), so the two never wait on each other. The caller commits."""
+    scope) and lose the reference (set null). The profile row is locked first, the order in
+    which the line's start (sweep.start_next) takes its locks. The caller commits."""
     db.execute(sa.select(Profile.user_id).where(Profile.user_id == user_id).with_for_update())
     row = get(db, user_id, search_id, lock=True)
     if row is None:
@@ -310,7 +307,7 @@ def waiting(db: Session, user_id: uuid.UUID) -> list[SweepRequest]:
         db.execute(
             sa.select(SweepRequest)
             .where(SweepRequest.user_id == user_id)
-            .order_by(SweepRequest.requested_at, SweepRequest.id)
+            .order_by(SweepRequest.position)
         ).scalars()
     )
 
