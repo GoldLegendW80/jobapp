@@ -122,8 +122,11 @@ export function fakeJobsApi(
       const fitMax = params.get("fit_max");
       const from = params.get("found_from");
       const to = params.get("found_to");
+      const places = params.getAll("place").map((p) => p.toLowerCase());
       const base = state.rows.filter(
         (row) =>
+          (!places.length ||
+            places.some((p) => row.location.toLowerCase().includes(p))) &&
           (!types.length || types.includes(row.contract_type)) &&
           (!q || `${row.company} ${row.title}`.toLowerCase().includes(q)) &&
           (!company || row.company.toLowerCase().includes(company)) &&

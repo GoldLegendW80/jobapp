@@ -46,9 +46,11 @@ from pydantic import (
     model_validator,
 )
 
+from app.jobs import searches
 from app.jobs import slug as slugs
 from app.jobs.models import (
     PAY_MAX,
+    SAVED_SEARCH_NAME_MAX,
     SLUG_PATTERN,
     ContractType,
     FileOrigin,
@@ -57,7 +59,7 @@ from app.jobs.models import (
     PayPeriod,
     WorkMode,
 )
-from app.profile.schemas import CURRENCIES
+from app.profile.schemas import CURRENCIES, Text
 
 IMPORT_FORMAT = "jobapp-jobs"
 IMPORT_VERSION = 1
@@ -352,6 +354,18 @@ class LivenessOut(BaseModel):
     checked_at: datetime
     # This check moved the posting to closed (a check stored before the field: False).
     moved: bool = False
+
+
+class FacetOut(BaseModel):
+    value: str
+    count: int
+
+
+class FacetsOut(BaseModel):
+    """GET /api/jobs/facets: what the Filters panel's pickers offer, most postings first."""
+
+    places: list[FacetOut]
+    sources: list[FacetOut]
 
 
 class JobListItem(BaseModel):
@@ -839,6 +853,14 @@ class SearchScopeOut(BaseModel):
     websites_only: bool = False
 
 
+class SweepSearchOut(BaseModel):
+    """The search a sweep ran (jobs J32): `main`, or the saved search's id while it exists (null
+    once deleted), with the name frozen at its start."""
+
+    id: str | None
+    name: str
+
+
 class SweepOut(BaseModel):
     """A sweep and its progress: while it runs the counters grow website by website. The
     `boards_*` fields are those of a row written before the boards were deleted (2026-10-28),
@@ -863,6 +885,7 @@ class SweepOut(BaseModel):
     duration: float | None = None
     sources: list[SourceOut] = Field(default_factory=list)
     search_scope: SearchScopeOut | None = None
+    search: SweepSearchOut | None = None
 
 
 class SweepJobOut(BaseModel):
@@ -899,3 +922,89 @@ class SweepList(BaseModel):
 class SweepConflictOut(BaseModel):
     detail: str
     sweep_id: uuid.UUID
+
+
+# --- saved searches (jobs J32, app/jobs/searches.py) --------------------------------------------
+
+
+class SavedSearchIn(BaseModel):
+    """A new saved search: its name (1 to 60 characters, unique among the person's, case aside),
+    the keys of one search (searches.CRITERIA, checked by the profile's search schema) and its
+    schedule (the time zone is the person's)."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    name: Text(SAVED_SEARCH_NAME_MAX)
+    criteria: dict[str, Any] = Field(default_factory=dict)
+    schedule: searches.SavedSchedule = Field(default_factory=searches.SavedSchedule)
+
+    @field_validator("criteria")
+    @classmethod
+    def _one_search(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return searches.criteria_of(value)
+
+
+class SavedSearchChangeIn(SavedSearchIn):
+    """The whole saved search again, with the revision it was read at (409 when it moved)."""
+
+    revision: Annotated[int, Field(ge=1, le=2_147_483_647)]
+
+
+class SearchScheduleOut(BaseModel):
+    enabled: bool
+    days: list[str]
+    times: list[str]
+    timezone: str
+    active: bool
+    next_run: datetime | None
+
+
+class SearchRequestOut(BaseModel):
+    """A run of this search waiting for the person's running sweep: 1 starts next."""
+
+    id: uuid.UUID
+    search_id: str
+    place: int
+    trigger: str
+    requested_at: datetime
+
+
+class SavedSearchOut(BaseModel):
+    """One of the person's searches. The main one (`id` "main", `main` true) is the profile's
+    search section: its revision is the profile's, and it changes in Settings."""
+
+    id: str
+    name: str
+    main: bool
+    revision: int
+    criteria: dict[str, Any]
+    schedule: SearchScheduleOut
+    request: SearchRequestOut | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class SavedSearchList(BaseModel):
+    items: list[SavedSearchOut]
+    running_sweep_id: uuid.UUID | None = None
+
+
+class SearchRunOut(BaseModel):
+    """What a Run did: `started` with the sweep, or `queued` with the request in the line
+    (behind `running_sweep_id`); Run all also says `no_websites` and `search_invalid` per
+    search, and `queue_down`."""
+
+    search_id: str
+    outcome: str
+    sweep: SweepOut | None = None
+    request: SearchRequestOut | None = None
+    running_sweep_id: uuid.UUID | None = None
+
+
+class SearchRunAllOut(BaseModel):
+    items: list[SearchRunOut]
+
+
+class SearchConflictOut(BaseModel):
+    detail: str
+    revision: int

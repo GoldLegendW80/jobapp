@@ -287,7 +287,7 @@ describe("filters and the URL", () => {
       within(sheet).getByRole("button", { name: "Status: Shortlisted" }),
     ).toBeInTheDocument();
     expect(
-      within(sheet).getByRole("button", { name: "Type: CDI" }),
+      within(sheet).getByRole("button", { name: "Contract: CDI" }),
     ).toBeInTheDocument();
   });
 
@@ -367,7 +367,7 @@ describe("filters and the URL", () => {
       expect(location()).toBe("/jobs?status=found&status=staged");
     });
     await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Type: All" }));
+    await user.click(screen.getByRole("button", { name: "Contract: All" }));
     await user.click(screen.getByRole("menuitemcheckbox", { name: "VIE" }));
     await waitFor(() => {
       expect(location()).toBe("/jobs?status=found&status=staged&type=VIE");
@@ -1100,7 +1100,9 @@ describe("on a phone", () => {
     expect(
       await within(sheet).findByRole("region", { name: "Fit distribution" }),
     ).toBeInTheDocument();
-    await user.click(within(sheet).getByRole("button", { name: "Type: CDI" }));
+    await user.click(
+      within(sheet).getByRole("button", { name: "Contract: CDI" }),
+    );
     await user.click(screen.getByRole("menuitemcheckbox", { name: "CDI" }));
     await waitFor(() => {
       expect(location()).toBe("/jobs?q=Engineer&status=found");

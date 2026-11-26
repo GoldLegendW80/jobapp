@@ -16,8 +16,24 @@ GET /api/jobs, query parameters (all optional, any combination):
 - fit_min, fit_max: 0 to 100, inclusive; either one leaves out unscored rows. fit_min above
   fit_max is a 422.
 - found_from, found_to: ISO dates, inclusive; from after to is a 422.
+- place (repeated, at most 20, each with a letter or a digit, 100 characters at most): the
+  location holds one of them as whole words, case and accents aside ("reunion" finds "Saint-Denis,
+  La Réunion", "Paris" does not find "Parisot").
+- work_mode (repeated): remote, hybrid, office, not_stated (no stated work mode).
+- source (repeated, at most 20): one of the names the posting's source holds, or the part of one
+  before ":" ("linkedin" finds "linkedin:data/Paris"); a posting found on two websites has both.
+- published_within (days, 0 to 3650, from the app's today) and published_from (ISO date): the
+  posting's published date is on or after the later of the two; published_undated=true keeps
+  the postings without a date as well.
+- pay: stated or not_stated; pay_min with pay_period (year, month, day, hour), together or not
+  at all: the pay stated per that period whose top reaches pay_min (the currency is not compared).
+- application (repeated): none, under_way, waiting (for the person), sent, failed, as the
+  posting's newest application reads (app/apply/list_filter.py).
+- sweep: a sweep's id, the postings it added.
 - sort: found_on (default: newest found first), fit (best first, unscored last), company (A to
-  Z), status (pipeline order), updated (last changed first). Ties are broken by fit, then id.
+  Z), status (pipeline order), updated (last changed first), published (newest published first,
+  undated last), pay (yearly, monthly, daily then hourly pays, highest first, unstated last).
+  Ties are broken by fit or the found date, then id.
 - limit: 1 to 200 (default 50); cursor: the next_cursor of the previous page, with the same
   sort (a cursor of another sort, or a damaged one, is a 422).
 The answer holds the page, next_cursor, total (rows matching every filter), counts_by_status
@@ -25,6 +41,10 @@ The answer holds the page, next_cursor, total (rows matching every filter), coun
 
 GET /api/jobs/places: the same filters (not sort, limit, cursor); the filtered rows grouped by
 the places their location names, for the map, with the locations no place matches (places.py).
+
+GET /api/jobs/facets: the same filters; the places (the parts of the locations between commas and
+brackets) and the websites (the source names before ":") of the filtered rows, each over every
+filter but its own, with their counts, most first, FACETS_MAX of each.
 
 GET /api/jobs/{id}/files/{file_id}: the bytes with their stored type, `inline` for a PDF (the
 browser shows it) and `attachment` for anything else, `X-Content-Type-Options: nosniff`,
@@ -46,7 +66,7 @@ import re
 import secrets
 import time
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -64,7 +84,7 @@ from app.jobs import liveness_check, notices, places, service
 from app.jobs import rescore as auto_rescore
 from app.jobs import undo as undo_tokens
 from app.jobs.importer import kind
-from app.jobs.models import ContractType, Job, JobFile, JobStatus
+from app.jobs.models import PAY_MAX, ContractType, Job, JobFile, JobStatus, PayPeriod
 from app.jobs.schemas import (
     IMPORT_HTTP_MAX_BYTES,
     BulkIn,
@@ -73,6 +93,8 @@ from app.jobs.schemas import (
     DocumentError,
     DuplicateOut,
     EventOut,
+    FacetOut,
+    FacetsOut,
     FileOut,
     FitBucket,
     FitHistogram,
@@ -93,13 +115,22 @@ from app.jobs.schemas import (
     UndoOut,
     parse_document,
 )
-from app.jobs.service import InvalidCursorError, JobFilters, JobSort
+from app.jobs.service import (
+    ApplicationChoice,
+    InvalidCursorError,
+    JobFilters,
+    JobSort,
+    PayChoice,
+    WorkModeChoice,
+)
 
 NO_STORE = {"Cache-Control": "no-store"}
 FILE_CACHE = "private, no-cache"
 LIST_LIMIT_MAX = 200
 EVENTS_IN_DETAIL = 50
 Q_MAX = 200
+VALUES_MAX = 20  # values of a repeated place or source
+PUBLISHED_WITHIN_MAX = 3650
 NOT_FOUND = "Job not found."
 FILE_NOT_FOUND = "File not found."
 TOO_LARGE = (
@@ -136,6 +167,7 @@ def _item(job: Job, file_count: int) -> JobListItem:
 
 
 def _filters(
+    request: Request,
     status_: Annotated[list[JobStatus] | None, Query(alias="status")] = None,
     type_: Annotated[list[ContractType] | None, Query(alias="type")] = None,
     company: Annotated[str | None, Query(max_length=Q_MAX)] = None,
@@ -144,12 +176,36 @@ def _filters(
     fit_max: Annotated[int | None, Query(ge=0, le=100)] = None,
     found_from: date | None = None,
     found_to: date | None = None,
+    place: Annotated[list[str] | None, Query(max_length=VALUES_MAX)] = None,
+    work_mode: Annotated[list[WorkModeChoice] | None, Query()] = None,
+    source: Annotated[list[str] | None, Query(max_length=VALUES_MAX)] = None,
+    published_within: Annotated[int | None, Query(ge=0, le=PUBLISHED_WITHIN_MAX)] = None,
+    published_from: date | None = None,
+    published_undated: bool = False,
+    pay: PayChoice | None = None,
+    pay_min: Annotated[int | None, Query(ge=1, le=PAY_MAX)] = None,
+    pay_period: PayPeriod | None = None,
+    application: Annotated[list[ApplicationChoice] | None, Query()] = None,
+    sweep: uuid.UUID | None = None,
+    search: uuid.UUID | service.MainSearch | None = None,
 ) -> JobFilters:
-    """The list filters of the query, shared by GET /api/jobs and GET /api/jobs/places."""
+    """The list filters of the query, shared by GET /api/jobs, /places and /facets."""
     if fit_min is not None and fit_max is not None and fit_min > fit_max:
         raise _invalid("fit_min", "fit_min must not be above fit_max")
     if found_from is not None and found_to is not None and found_from > found_to:
         raise _invalid("found_from", "found_from must not be after found_to")
+    for value in place or ():
+        if len(value) > service.PLACE_CHARS or not any(c.isalnum() for c in value):
+            raise _invalid("place", "a place needs a letter or a digit, 100 characters at most")
+    if any(len(value) > Q_MAX or not value.strip() for value in source or ()):
+        raise _invalid("source", "a source is 1 to 200 characters")
+    if (pay_min is None) != (pay_period is None):
+        raise _invalid("pay_min", "pay_min and pay_period go together")
+    if pay is PayChoice.not_stated and pay_min is not None:
+        raise _invalid("pay", "pay=not_stated cannot have a pay_min")
+    bounds = [b for b in (published_from,) if b is not None]
+    if published_within is not None:
+        bounds.append(_today(request) - timedelta(days=published_within))
     return JobFilters(
         statuses=tuple(dict.fromkeys(status_ or ())),
         contract_types=tuple(dict.fromkeys(type_ or ())),
@@ -159,6 +215,17 @@ def _filters(
         fit_max=fit_max,
         found_from=found_from,
         found_to=found_to,
+        places=tuple(dict.fromkeys(place or ())),
+        work_modes=tuple(dict.fromkeys(work_mode or ())),
+        sources=tuple(dict.fromkeys(source or ())),
+        published_from=max(bounds) if bounds else None,
+        published_undated=published_undated,
+        pay=pay,
+        pay_min=pay_min,
+        pay_period=pay_period,
+        applications=tuple(dict.fromkeys(application or ())),
+        sweep=sweep,
+        search=search,
     )
 
 
@@ -209,6 +276,22 @@ def list_jobs(
 def jobs_places(user: CurrentUser, db: Db, filters: Filters) -> places.PlacesOut:
     """The caller's jobs under the list filters, grouped by place for the map (see places.py)."""
     return places.places_map(db, user.id, filters)
+
+
+@router.get(
+    "/facets",
+    response_model=FacetsOut,
+    responses={**_401, **_422},
+    dependencies=[Depends(_no_store)],
+)
+def jobs_facets(user: CurrentUser, db: Db, filters: Filters) -> FacetsOut:
+    """The places and the websites of the caller's filtered jobs, for the Filters panel."""
+    read_snapshot(db)
+    found_places, websites = service.facets(db, user.id, filters)
+    return FacetsOut(
+        places=[FacetOut(value=f.value, count=f.count) for f in found_places],
+        sources=[FacetOut(value=f.value, count=f.count) for f in websites],
+    )
 
 
 async def _import_body(request: Request) -> bytes:

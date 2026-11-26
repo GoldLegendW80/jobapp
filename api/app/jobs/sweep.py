@@ -69,9 +69,11 @@ failed by `reap_stale`: the worker runs it every minute and at start, the api be
 new sweep for the user. A worker crash therefore blocks a user's next sweep for about two
 minutes at most, and a sweep waiting behind other users' sweeps is not failed for waiting.
 Schedules (app/jobs/schedule.py): automatic sweeps are off unless the user enables
-`search.sweep_schedule`. `scheduled_due` lists the (user, slot) pairs a worker tick must start,
-`start_scheduled` starts one under an advisory lock, recording the slot in the sweep's stats, so
-each slot fires once.
+`search.sweep_schedule`, or a saved search's own schedule (jobs J32). `scheduled_due` lists the
+(user, slot) pairs a worker tick must start, `start_scheduled` starts one under an advisory lock,
+recording the slot in the sweep's stats, so each slot fires once; a slot that meets the person's
+running sweep waits in the line (app/jobs/searches.py), which `start_next` starts when that
+sweep ends.
 
 Nothing here logs posting texts.
 """
@@ -100,7 +102,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.agents.runs import WorkflowRef
 from app.identity.models import User
-from app.jobs import posting_titles, schedule, scoring, service, signals
+from app.jobs import posting_titles, schedule, scoring, searches, service, signals
 from app.jobs import slug as slugs
 from app.jobs.boards import catalog as boards
 from app.jobs.importer import kind
@@ -110,7 +112,9 @@ from app.jobs.models import (
     JobEvent,
     JobEventKind,
     JobStatus,
+    SavedSearch,
     Sweep,
+    SweepRequest,
     SweepStatus,
     SweepTrigger,
 )
@@ -204,13 +208,18 @@ class InvalidSearchError(ValueError):
     """The stored search section does not pass the profile's checks any more."""
 
 
-def load_search(db: Session, user_id: uuid.UUID) -> SearchSection | None:
-    """The user's search section, None when there is none. Raises InvalidSearchError when the
-    stored one no longer validates (never with its contents)."""
+def load_search(
+    db: Session, user_id: uuid.UUID, saved: SavedSearch | None = None
+) -> SearchSection | None:
+    """The user's search section, None when there is none; with `saved`, that saved search's
+    criteria over the person's settings (jobs J32). Raises InvalidSearchError when the stored one
+    no longer validates (never with its contents)."""
     sections = db.execute(
         sa.select(Profile.sections).where(Profile.user_id == user_id)
     ).scalar_one_or_none()
     raw = (sections or {}).get("search")
+    if saved is not None:
+        raw = searches.merged(raw if isinstance(raw, dict) else None, saved.criteria)
     if not isinstance(raw, dict):
         return None
     try:
@@ -291,16 +300,25 @@ def _source_id(mode: str, *key: str) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()[:24]
 
 
-def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) -> dict[str, Any]:
+def freeze_scope(
+    profile: Profile | None,
+    trigger: SweepTrigger,
+    now: datetime,
+    saved: SavedSearch | None = None,
+) -> dict[str, Any]:
     """Private v1 intent, captured under the profile lock before the queue can see the run.
 
     Permissions are not frozen authority. Browser guards still read current server state.
     Old rows without search_scope retain the explicit claim-time legacy path below.
     `websites_only` is always true: the release before the deletion of the boards (owner,
     2026-10-28) reads it, and a row it claims after a rollback then reads no board either.
+    With `saved` (jobs J32), its criteria over the person's settings, and its id and name, so
+    the history keeps the name after a rename or a delete (`saved_search`).
     """
     sections = copy.deepcopy(profile.sections or {}) if profile else {}
     raw = sections.get("search")
+    if saved is not None:
+        raw = searches.merged(raw if isinstance(raw, dict) else None, saved.criteria)
     sources: list[dict[str, Any]] = []
     try:
         search = SearchSection.model_validate(raw) if isinstance(raw, dict) else None
@@ -367,7 +385,7 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
             }
             for board in boards.enabled_boards(search)
         )
-    return {
+    scope = {
         "version": 1,
         "profile_revision": profile.revision if profile else 0,
         "created_at": now.isoformat(),
@@ -377,6 +395,13 @@ def freeze_scope(profile: Profile | None, trigger: SweepTrigger, now: datetime) 
         "skills": sections.get("skills"),
         "sources": sources,
     }
+    if saved is not None:
+        scope["saved_search"] = {
+            "id": str(saved.id),
+            "name": saved.name,
+            "revision": saved.revision,
+        }
+    return scope
 
 
 def initial_sources(scope: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -1869,22 +1894,63 @@ def _log_due(user_id: uuid.UUID, now: datetime) -> bool:
 class DueSweep:
     user_id: uuid.UUID
     slot: schedule.Slot
+    # The saved search the slot is of (jobs J32), None for the main search; its slot key holds it.
+    saved_search_id: uuid.UUID | None = None
 
 
 def slot_taken(db: Session, user_id: uuid.UUID, key: str) -> bool:
-    """Whether the user already has a sweep for this schedule slot (whatever its status)."""
-    return bool(
-        db.execute(
-            sa.select(sa.literal(True))
-            .select_from(Sweep)
-            .where(
-                Sweep.user_id == user_id,
-                Sweep.trigger == SweepTrigger.schedule,
-                Sweep.stats["schedule_slot"].astext == key,
-            )
-            .limit(1)
-        ).scalar()
+    """Whether the user already has a sweep for this schedule slot (whatever its status), or a
+    request in the line that holds it, waiting or taken back (jobs J32)."""
+    swept = (
+        sa.select(sa.literal(True))
+        .select_from(Sweep)
+        .where(
+            Sweep.user_id == user_id,
+            Sweep.trigger == SweepTrigger.schedule,
+            Sweep.stats["schedule_slot"].astext == key,
+        )
     )
+    waiting = sa.select(sa.literal(True)).where(
+        SweepRequest.user_id == user_id, SweepRequest.schedule_slot == key
+    )
+    return bool(db.execute(swept.union_all(waiting).limit(1)).scalar())
+
+
+def _saved_scheduled(db: Session) -> dict[uuid.UUID, list[SavedSearch]]:
+    """The saved searches whose schedule is on, per person."""
+    rows = db.execute(
+        sa.select(SavedSearch)
+        .where(SavedSearch.schedule["enabled"].as_boolean().is_(True))
+        .order_by(SavedSearch.created_at, SavedSearch.id)
+    ).scalars()
+    found: dict[uuid.UUID, list[SavedSearch]] = {}
+    for row in rows:
+        found.setdefault(row.user_id, []).append(row)
+    return found
+
+
+def _saved_due(
+    person: dict[str, Any] | None,
+    rows: Sequence[SavedSearch],
+    timezone: str,
+    now: datetime,
+    window: timedelta,
+) -> list[tuple[schedule.Slot, uuid.UUID]]:
+    """The due slots of the person's scheduled saved searches that have something to read, in
+    the person's time zone, each keyed by its search (`schedule.of_search`)."""
+    found = []
+    for row in rows:
+        try:
+            merged = SearchSection.model_validate(searches.merged(person, row.criteria))
+        except ValueError:
+            continue
+        if not has_sources(merged):
+            continue
+        plan = searches.schedule_of(row).of(timezone)
+        found.extend(
+            (schedule.of_search(slot, row.id), row.id) for slot in schedule.due(plan, now, window)
+        )
+    return found
 
 
 def scheduled_due(
@@ -1892,26 +1958,27 @@ def scheduled_due(
 ) -> list[DueSweep]:
     """Every (user, slot) the tick at `now` must start (module docstring), oldest slot first:
     active users whose schedule is enabled, with a ticked website, for slots in the window
-    that have no sweep yet. A disabled schedule, a section that does not validate, an inactive
-    user or a user without a ticked website never appears; a section that does not validate
-    while its stored schedule is on is logged (the user id, never the contents) at most once
-    per user per INVALID_LOG_EVERY in this process, since the user expects sweeps that cannot
-    run until the Search tab is saved again."""
+    that have no sweep yet, and the same for each of their scheduled saved searches (jobs J32),
+    in the person's time zone. A disabled schedule, a section that does not validate, an
+    inactive user or a user without a ticked website never appears; a section that does not
+    validate while its stored schedule is on is logged (the user id, never the contents) at most
+    once per user per INVALID_LOG_EVERY in this process, since the user expects sweeps that
+    cannot run until the Search tab is saved again."""
     rows = db.execute(
         sa.select(Profile.user_id, Profile.sections)
         .join(User, User.id == Profile.user_id)
         .where(User.is_active.is_(True))
         .order_by(Profile.user_id)
     ).all()
+    saved = _saved_scheduled(db)
     found = []
     for user_id, sections in rows:
         raw = (sections or {}).get("search")
-        if not isinstance(raw, dict):
-            continue
+        person = raw if isinstance(raw, dict) else None
         try:
-            search = SearchSection.model_validate(raw)
+            search = SearchSection.model_validate(raw) if person is not None else None
         except ValueError:
-            stored = raw.get("sweep_schedule")
+            stored = person.get("sweep_schedule") if person else None
             if (
                 isinstance(stored, dict)
                 and stored.get("enabled") is True
@@ -1923,24 +1990,42 @@ def scheduled_due(
                     extra={"user_id": str(user_id)},
                 )
             continue
-        if not search.sweep_schedule.enabled or not has_sources(search):
-            continue
-        for slot in schedule.due(search.sweep_schedule, now, window):
-            if not slot_taken(db, user_id, slot.key):
-                found.append(DueSweep(user_id=user_id, slot=slot))
-    return sorted(found, key=lambda item: (item.slot.at, str(item.user_id)))
+        timezone = schedule_of(search).timezone
+        slots: list[tuple[schedule.Slot, uuid.UUID | None]] = []
+        if search is not None and search.sweep_schedule.enabled and has_sources(search):
+            slots.extend((slot, None) for slot in schedule.due(search.sweep_schedule, now, window))
+        slots.extend(_saved_due(person, saved.get(user_id, []), timezone, now, window))
+        found.extend(
+            DueSweep(user_id=user_id, slot=slot, saved_search_id=saved_id)
+            for slot, saved_id in slots
+            if not slot_taken(db, user_id, slot.key)
+        )
+    return sorted(found, key=lambda item: (item.slot.at, str(item.user_id), item.slot.key))
 
 
 def start_scheduled(db: Session, due: DueSweep, now: datetime) -> Sweep | None:
-    """The `schedule` sweep of one slot, or None when the slot already has one. The check and
-    the insert run under a transaction-level advisory lock on (user, slot), so two workers or
-    two ticks can never both start it. Raises service.SweepRunningError when the user has a
-    sweep running (the slot is then left for a later tick of the window); the caller commits."""
+    """The `schedule` sweep of one slot, or None when the slot already has one, when its saved
+    search is gone, or when the person has a sweep running: the slot then waits in the line as a
+    request (jobs J32), never lost. The check and the insert run under a transaction-level
+    advisory lock on (user, slot), the slot key holding the search, so two workers or two ticks
+    can never both start it, and two searches due at the same minute both fire. The caller
+    commits."""
     key = f"sweep-slot:{due.user_id}:{due.slot.key}"
     db.execute(sa.select(sa.func.pg_advisory_xact_lock(sa.func.hashtextextended(key, 0))))
     if slot_taken(db, due.user_id, due.slot.key):
         return None
-    row = start(db, due.user_id, SweepTrigger.schedule, now)
+    saved = None
+    if due.saved_search_id is not None:
+        saved = searches.get(db, due.user_id, due.saved_search_id)
+        if saved is None:
+            return None
+    try:
+        row = start(db, due.user_id, SweepTrigger.schedule, now, saved=saved)
+    except service.SweepRunningError:
+        searches.add_request(
+            db, due.user_id, due.saved_search_id, SweepTrigger.schedule, now, due.slot.key
+        )
+        return None
     row.stats = {**row.stats, "schedule_slot": due.slot.key}
     db.flush()
     return row
@@ -1956,25 +2041,65 @@ def start(
     trigger: SweepTrigger,
     now: datetime,
     started_by: str | None = None,
+    saved: SavedSearch | None = None,
 ) -> Sweep:
-    """A new running sweep for the user, after failing a stale one of theirs. Raises
-    service.SweepRunningError when one is running; the caller commits."""
+    """A new running sweep for the user, of `saved` or of the main search, after failing a stale
+    one of theirs. Raises service.SweepRunningError when one is running; the caller commits."""
     profile = db.execute(
         sa.select(Profile).where(Profile.user_id == user_id).with_for_update()
     ).scalar_one_or_none()
     reap_stale(db, now, user_id)
     row = service.start_sweep(db, user_id, trigger, now)
-    scope = freeze_scope(profile, trigger, now)
+    scope = freeze_scope(profile, trigger, now, saved)
     if started_by:
         scope["started_by"] = started_by
     row.stats = {**row.stats, "search_scope": scope, "sources": initial_sources(scope)}
+    row.saved_search_id = saved.id if saved is not None else None
     db.flush()
+    return row
+
+
+def start_next(db: Session, user_id: uuid.UUID, now: datetime) -> Sweep | None:
+    """The person's oldest request in the line started (jobs J32), or None when a sweep runs,
+    none waits or the account is disabled. A request that holds a schedule slot starts as that
+    slot's sweep. A search that lost its websites or no longer validates still starts, and its
+    claim fails it with the reason, so the history says why and the line goes on. The caller
+    commits."""
+    db.execute(sa.select(Profile.user_id).where(Profile.user_id == user_id).with_for_update())
+    if not db.execute(sa.select(User.is_active).where(User.id == user_id)).scalar():
+        return None
+    reap_stale(db, now, user_id)
+    if service.running_sweep(db, user_id) is not None:
+        return None
+    request = db.execute(
+        sa.select(SweepRequest)
+        .where(SweepRequest.user_id == user_id, searches.WAITS)
+        .order_by(SweepRequest.position)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    ).scalar_one_or_none()
+    if request is None:
+        return None
+    saved = None
+    if request.saved_search_id is not None:
+        saved = searches.get(db, user_id, request.saved_search_id)
+    trigger, slot = request.trigger, request.schedule_slot
+    db.delete(request)
+    db.flush()
+    if request.saved_search_id is not None and saved is None:
+        return None  # its search is gone (a delete cascades to it): the next end or tick goes on
+    row = start(db, user_id, trigger, now, saved=saved)
+    if slot is not None:
+        row.stats = {**row.stats, "schedule_slot": slot}
+        db.flush()
     return row
 
 
 BeginOutcome = Literal[
     "started",
     "running",
+    "queued",
+    "not_found",
     "no_websites",
     "search_invalid",
     "queue_down",
@@ -1985,12 +2110,14 @@ BeginOutcome = Literal[
 @dataclass(frozen=True)
 class Begun[T]:
     """What `begin` did. `sweep_id` is the new sweep (started) or the one already running
-    (running), None otherwise; `view` is the caller's view of the new sweep, read before its
-    commit."""
+    (running, queued), None otherwise; `view` is the caller's view of the new sweep, read before
+    its commit; `request_id` and `place` the request in the line (queued)."""
 
     outcome: BeginOutcome
     sweep_id: uuid.UUID | None = None
     view: T | None = None
+    request_id: uuid.UUID | None = None
+    place: int | None = None
 
 
 def _insert[T](
@@ -2000,6 +2127,8 @@ def _insert[T](
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
     started_by: str | None = None,
+    saved_search_id: uuid.UUID | None = None,
+    line: bool = False,
 ) -> Begun[T]:
     with sessions() as db:
         profile = db.execute(
@@ -2009,21 +2138,40 @@ def _insert[T](
             profile.revision if profile else 0
         ):
             return Begun("revision_conflict")
+        saved = None
+        if saved_search_id is not None:
+            saved = searches.get(db, user_id, saved_search_id)
+            if saved is None:
+                return Begun("not_found")
         try:
-            search = load_search(db, user_id)
+            search = load_search(db, user_id, saved)
         except InvalidSearchError:
             return Begun("search_invalid")
         if not has_sources(search):
             return Begun("no_websites")
         try:
-            row = start(db, user_id, SweepTrigger.manual, now, started_by)
+            row = start(db, user_id, SweepTrigger.manual, now, started_by, saved)
             begun = Begun("started", row.id, view(row))
             db.commit()
         except service.SweepRunningError:
+            if line:
+                # The profile row stays locked: the line's start (start_next) waits for this.
+                running = service.running_sweep(db, user_id)
+                request = searches.add_request(
+                    db, user_id, saved_search_id, SweepTrigger.manual, now
+                )
+                place = searches.place_of(searches.waiting(db, user_id), request.id)
+                begun = Begun(
+                    "queued", running.id if running else None, request_id=request.id, place=place
+                )
+                db.commit()
+                return begun
             db.rollback()
             running = service.running_sweep(db, user_id)
             if running is None:  # finished between the insert and this read
-                return _insert(sessions, user_id, now, view, profile_revision, started_by)
+                return _insert(
+                    sessions, user_id, now, view, profile_revision, started_by, saved_search_id
+                )
             return Begun("running", running.id)
     return begun
 
@@ -2036,14 +2184,17 @@ async def begin[T](
     view: Callable[[Sweep], T],
     profile_revision: int | None = None,
     started_by: str | None = None,
+    saved_search_id: uuid.UUID | None = None,
+    line: bool = False,
 ) -> Begun[T]:
-    """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps
-    and of the first login wizard's Start (opportunities O5). No sweep without an enabled
-    website (`no_websites`), or with a
-    search section that no longer validates; the running one when the user has one; a queue
-    that is down fails the new sweep at once, so it never blocks the next try."""
+    """Start a sweep by hand and queue it for the worker: the one start of POST /api/jobs/sweeps,
+    of the first login wizard's Start (opportunities O5) and of a search's Run (jobs J32, of
+    `saved_search_id` or of the main search). No sweep without an enabled website
+    (`no_websites`), or with a search section that no longer validates; the running one when the
+    user has one, or with `line` a request in the line (`queued`); a queue that is down fails the
+    new sweep at once, so it never blocks the next try."""
     begun = await asyncio.to_thread(
-        _insert, sessions, user_id, now, view, profile_revision, started_by
+        _insert, sessions, user_id, now, view, profile_revision, started_by, saved_search_id, line
     )
     if begun.outcome != "started" or begun.sweep_id is None:
         return begun
@@ -2073,19 +2224,10 @@ def sweeps_of(db: Session, user_id: uuid.UUID, limit: int) -> Sequence[Sweep]:
 
 def new_jobs(db: Session, user_id: uuid.UUID, sweep_id: uuid.UUID, limit: int) -> list[Job]:
     """The jobs a sweep added (by their `sweep` event), best fit first."""
-    ids = (
-        sa.select(JobEvent.job_id)
-        .where(
-            JobEvent.user_id == user_id,
-            JobEvent.kind == JobEventKind.sweep,
-            JobEvent.data["sweep_id"].astext == str(sweep_id),
-        )
-        .scalar_subquery()
-    )
     return list(
         db.execute(
             service.jobs_of(user_id)
-            .where(Job.id.in_(ids))
+            .where(Job.id.in_(service.added_by(user_id, sweep_id)))
             .order_by(sa.func.coalesce(Job.fit, -1).desc(), Job.company, Job.title)
             .limit(limit)
         ).scalars()

@@ -15,6 +15,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 
 import type { FitBucket } from "@/features/jobs/api/jobs-api";
+import { useJobFacets } from "@/features/jobs/api/use-job-facets";
 import {
   activeFilterCount,
   EMPTY_FILTERS,
@@ -26,6 +27,15 @@ import { plural } from "@/features/jobs/helpers/selection";
 import { CompanyField } from "./company-field";
 import { FilterChips } from "./filter-chips";
 import { FitRange } from "./fit-range";
+import {
+  ApplicationMenu,
+  FilterPresets,
+  PayFilter,
+  PlaceFilter,
+  PublishedFilter,
+  WebsiteMenu,
+  WorkModeMenu,
+} from "./more-filters";
 import { SearchField } from "./search-field";
 import { SortField } from "./sort-field";
 import { StatusFilter } from "./status-filter";
@@ -53,9 +63,11 @@ export interface FiltersSummary {
 /**
  * The toolbar of both Jobs views, List and Map: the search box, a Filters button, the status
  * toggles with their counts, then one chip per active filter. The button counts the filters set
- * in its sheet (the search shows itself) and opens them: status, type, company, sort, the fit
- * range with its histogram, and the found dates. Every change applies at once, as the URL
- * changes; the sheet's last button only closes it, naming how many postings the view now holds.
+ * in its sheet (the search shows itself) and opens them, in the order a person narrows a list:
+ * two presets, place, work mode, contract, website, published, pay, the fit range with its
+ * histogram, application, status, the found dates, company, then the sort. Every change applies
+ * at once, as the URL changes; the sheet's last button only closes it, naming how many postings
+ * the view now holds.
  */
 export function FiltersToolbar({
   filters,
@@ -73,6 +85,7 @@ export function FiltersToolbar({
   const [open, setOpen] = useState(false);
   const set = activeFilterCount({ ...filters, q: "" });
   const histogram = summary?.fit_histogram;
+  const facets = useJobFacets(filters, open);
   return (
     <div
       role="search"
@@ -112,10 +125,23 @@ export function FiltersToolbar({
                 </SheetDescription>
               </SheetHeader>
               <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
-                <StatusMenu filters={filters} onChange={onChange} />
+                <FilterPresets filters={filters} onChange={onChange} />
+                <PlaceFilter
+                  filters={filters}
+                  onChange={onChange}
+                  facets={facets.data?.places}
+                  loading={facets.isPending}
+                />
+                <WorkModeMenu filters={filters} onChange={onChange} />
                 <TypeMenu filters={filters} onChange={onChange} />
-                <CompanyField filters={filters} onChange={onChange} labelled />
-                <SortField filters={filters} onChange={onChange} />
+                <WebsiteMenu
+                  filters={filters}
+                  onChange={onChange}
+                  facets={facets.data?.sources}
+                  loading={facets.isPending}
+                />
+                <PublishedFilter filters={filters} onChange={onChange} />
+                <PayFilter filters={filters} onChange={onChange} />
                 <div className="flex flex-col gap-3">
                   <FitRange filters={filters} onChange={onChange} />
                   <Suspense
@@ -133,11 +159,15 @@ export function FiltersToolbar({
                     />
                   </Suspense>
                 </div>
+                <ApplicationMenu filters={filters} onChange={onChange} />
+                <StatusMenu filters={filters} onChange={onChange} />
                 <Suspense
                   fallback={<Skeleton className="h-16 w-80 rounded-lg" />}
                 >
                   <DateRange filters={filters} onChange={onChange} />
                 </Suspense>
+                <CompanyField filters={filters} onChange={onChange} labelled />
+                <SortField filters={filters} onChange={onChange} />
               </div>
               <SheetFooter className="flex-row justify-end border-t">
                 {hasFilters(filters) ? (

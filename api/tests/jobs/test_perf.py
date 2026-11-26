@@ -25,7 +25,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.identity.models import User
-from app.jobs import gazetteer, places
+from app.jobs import gazetteer, places, service
 from app.jobs.models import ContractType, Job, JobStatus
 from tests.identity.api_helpers import Api, make_user
 from tests.jobs.conftest import NOW
@@ -142,8 +142,31 @@ def _users(
         {"q": "agent engineer"},
         {"company": "company 1", "fit_min": 50, "type": ["CDI", "VIE"]},
         {"found_from": "2026-09-01", "found_to": "2026-09-30", "fit_max": 80},
+        # Jobs J29: the place folds every location, the website unnests every source, the
+        # application reads each posting's newest application.
+        {"place": ["Paris", "Réunion"]},
+        {"work_mode": ["remote", "not_stated"], "source": ["linkedin", "web"]},
+        {"published_within": 30, "published_undated": "true", "pay": "not_stated"},
+        {"application": ["none", "sent"]},
+        {"sort": "published"},
+        {"sort": "pay"},
     ],
-    ids=["default", "fit-200", "company", "status", "updated", "q", "company-fit-type", "dates"],
+    ids=[
+        "default",
+        "fit-200",
+        "company",
+        "status",
+        "updated",
+        "q",
+        "company-fit-type",
+        "dates",
+        "place",
+        "work-mode-source",
+        "published-pay",
+        "application",
+        "published",
+        "pay",
+    ],
 )
 def test_list_over_5000_rows(
     api: Api, factory: sessionmaker[Session], params: dict[str, Any]
@@ -210,6 +233,21 @@ def test_places_over_5000_rows(api: Api, factory: sessionmaker[Session]) -> None
     assert filtered.status_code == 200
     print(
         f"GET /api/jobs/places: {baseline:.1f} ms over {BASELINE_ROWS} rows, {cost:.1f} ms "
+        f"over {ROWS}, ratio {cost / baseline:.2f}"
+    )
+    assert cost / baseline < PLACES_RATIO, (baseline, cost)
+    assert max(baseline, cost) < CEILING_MS, (baseline, cost)
+
+
+def test_facets_over_5000_rows(api: Api, factory: sessionmaker[Session]) -> None:
+    """Jobs J29: the places and the websites of the Filters panel, grouped by location and
+    source in the database, split in Python over the distinct texts only."""
+    token, small = _users(factory, api, _varied_location)
+    body = api.get("/api/jobs/facets", token=token).json()
+    assert len(body["places"]) == service.FACETS_MAX
+    baseline, cost = _best_ms(api, "/api/jobs/facets", [(small, {}), (token, {})])
+    print(
+        f"GET /api/jobs/facets: {baseline:.1f} ms over {BASELINE_ROWS} rows, {cost:.1f} ms "
         f"over {ROWS}, ratio {cost / baseline:.2f}"
     )
     assert cost / baseline < PLACES_RATIO, (baseline, cost)

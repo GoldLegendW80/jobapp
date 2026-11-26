@@ -432,6 +432,22 @@ def test_filters_alone_and_combined(
     assert get_deck(api, person_a, source="x" * 201).status_code == 422
 
 
+def test_source_filter_reads_each_name_of_a_posting_found_twice(
+    api: Api, person_a: Person, factory: sessionmaker[Session]
+) -> None:
+    both = add_posting(factory, person_a, source="greenhouse:example, web")
+    one = add_posting(factory, person_a, source="web")
+
+    def ids(**params: Any) -> set[str]:
+        return set(deck_ids(api, person_a, **params))
+
+    assert ids(source="web") == {str(both), str(one)}
+    assert ids(source="greenhouse") == {str(both)}
+    assert ids(source="greenhouse:example") == {str(both)}
+    assert ids(source="greenhouse:example, web") == set()
+    assert ids(source="example") == set()
+
+
 # --- the Pass ------------------------------------------------------------------------------------
 
 

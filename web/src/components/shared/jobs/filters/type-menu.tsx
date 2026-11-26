@@ -6,7 +6,7 @@ import { MultiSelectMenu } from "./multi-select-menu";
 export function TypeMenu({ filters, onChange }: FilterProps) {
   return (
     <MultiSelectMenu
-      label="Type"
+      label="Contract"
       options={CONTRACT_TYPES.map((t) => ({ value: t, label: t }))}
       selected={filters.types}
       onChange={(types) => {

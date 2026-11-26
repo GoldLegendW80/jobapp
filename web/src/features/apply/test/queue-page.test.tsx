@@ -1055,8 +1055,161 @@ describe("the live views of the applications under way", () => {
     within(filling).getByRole("button", { name: "Use the browser myself" });
     expect(
       within(views).getByRole("region", { name: live("Robotics Engineer 2") }),
-    ).toHaveTextContent("Waiting for your browser.");
+    ).toHaveTextContent(
+      "Your browser starts soon. Then you can watch the assistant send the form here.",
+    );
   });
+
+  /** Opens Watch the browser under Under way, and answers its list of views. */
+  async function watchTheBrowser() {
+    renderApp(PATH);
+    const under = await screen.findByRole("region", { name: /^Under way/ });
+    await userEvent
+      .setup()
+      .click(within(under).getByRole("button", { name: "Watch the browser" }));
+    return within(under).findByRole("list", {
+      name: "Applications in your browser",
+    });
+  }
+
+  it.each([
+    [
+      "One click Apply's agent, sending",
+      queueItem(1, "submitting", { mode: "direct" }),
+      "apply_agent",
+      "The assistant is sending the form. It may still fill a step or two first.",
+    ],
+    [
+      "One click Apply's agent, filling",
+      queueItem(1, "filling", { mode: "direct" }),
+      "apply_agent",
+      "The assistant is filling the form. It sends it by itself once it is filled.",
+    ],
+    [
+      "Review first's agent, filling",
+      queueItem(1, "filling", { mode: "review" }),
+      "apply_review",
+      "The assistant is filling the form. Then you check what it filled and confirm.",
+    ],
+  ])(
+    "shows %s with Use the browser myself",
+    async (_, item, purpose, sentence) => {
+      const opened = fakeScreens();
+      server.use(
+        http.get("*/api/browser", () =>
+          HttpResponse.json(
+            browserOf({ ...FILL_ACTIVE, purpose, application_id: item.id }),
+          ),
+        ),
+      );
+      fakeQueue([item]);
+      const views = await watchTheBrowser();
+      await connected(opened);
+      const view = within(views).getByRole("region", {
+        name: live("Robotics Engineer 1"),
+      });
+      expect(await within(view).findByRole("status")).toHaveTextContent(
+        sentence,
+      );
+      expect(
+        within(view).getByRole("button", { name: "Use the browser myself" }),
+      ).toBeEnabled();
+      expect(view.textContent).not.toMatch(/Waiting|spaces out/);
+    },
+  );
+
+  it.each(["approved", "submitting"])(
+    "shows Review first's agent watch only once the person confirmed (%s)",
+    async (state) => {
+      const opened = fakeScreens();
+      const item = queueItem(1, state, { mode: "review" });
+      server.use(
+        http.get("*/api/browser", () =>
+          HttpResponse.json(
+            browserOf({
+              ...FILL_ACTIVE,
+              purpose: "apply_review",
+              application_id: item.id,
+            }),
+          ),
+        ),
+      );
+      fakeQueue([item]);
+      const views = await watchTheBrowser();
+      const { screen: drawn } = await connected(opened);
+      const view = within(views).getByRole("region", {
+        name: live("Robotics Engineer 1"),
+      });
+      expect(await within(view).findByRole("status")).toHaveTextContent(
+        "The app sends the form you confirmed. The assistant then reads the site's answer.",
+      );
+      expect(drawn.viewOnly).toBe(true);
+      for (const name of ["Use the browser myself", "Keyboard"]) {
+        expect(within(view).queryByRole("button", { name })).toBeNull();
+      }
+      expect(
+        within(view).queryByLabelText("Type into your browser"),
+      ).toBeNull();
+    },
+  );
+
+  it("shows an approved form's submit lease watch only", async () => {
+    const opened = fakeScreens();
+    const item = queueItem(1, "approved");
+    server.use(
+      http.get("*/api/browser", () =>
+        HttpResponse.json(
+          browserOf({
+            ...FILL_ACTIVE,
+            purpose: "apply_submit",
+            application_id: item.id,
+          }),
+        ),
+      ),
+    );
+    fakeQueue([item]);
+    const views = await watchTheBrowser();
+    const { screen: drawn } = await connected(opened);
+    const view = within(views).getByRole("region", {
+      name: live("Robotics Engineer 1"),
+    });
+    expect(await within(view).findByRole("status")).toHaveTextContent(
+      "The assistant fills the form again with your approved answers, then submits it.",
+    );
+    expect(drawn.viewOnly).toBe(true);
+    expect(
+      within(view).queryByRole("button", { name: "Use the browser myself" }),
+    ).toBeNull();
+  });
+
+  it.each([
+    [
+      "host_pace",
+      "Waiting for its turn. The app spaces out submissions to the same site, so this one waits a little.",
+    ],
+    [
+      "browser_queue",
+      "Waiting for the browser, which is busy with another task. The live view shows here once it is free.",
+    ],
+    [null, "Your browser starts soon."],
+  ])(
+    "says what an approved form without its lease waits for (%s)",
+    async (needs, sentence) => {
+      const opened = fakeScreens();
+      fakeQueue([queueItem(1, "approved", { needs })]);
+      const views = await watchTheBrowser();
+      const view = within(views).getByRole("region", {
+        name: live("Robotics Engineer 1"),
+      });
+      await waitFor(() => {
+        expect(view).toHaveTextContent(sentence);
+      });
+      expect(view.textContent.includes("spaces out")).toBe(
+        needs === "host_pace",
+      );
+      expect(opened).toHaveLength(0);
+    },
+  );
 
   it.each([
     ["Apply myself", queueItem(1, "filling", { mode: "manual" })],

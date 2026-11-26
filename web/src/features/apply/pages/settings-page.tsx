@@ -201,8 +201,8 @@ function ThresholdsSection({ settings }: { settings: ApplySettings }) {
         <Threshold title="Show postings from">
           <Score value={settings.show_postings_from} />
           <p className="text-sm text-muted-foreground">
-            Postings are listed from this fit score. You set it in Settings,
-            Search, as Minimum fit.
+            Discover shows postings from this fit score; the Jobs list shows
+            every posting. You set it in Settings, Search, as Minimum fit.
           </p>
           <ThresholdLink to="/settings/search">
             Open Settings, Search

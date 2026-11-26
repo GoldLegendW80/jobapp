@@ -780,26 +780,32 @@ def sweep_due(factory: sessionmaker[Session], at: datetime = TICK) -> list[sweep
         return sweep.scheduled_due(db, at)
 
 
-def test_a_user_already_sweeping_is_skipped_and_retried_within_the_window(
+def test_a_user_already_sweeping_gets_the_slot_in_the_line_never_lost(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
+    """Jobs J32: a slot that meets the person's running sweep waits in the line (it was left to
+    the later ticks of its window, and lost after it, before), and starts when that sweep ends."""
     set_profile(factory, alice, search(sweep_schedule=DAILY))
     with factory() as db:
         manual = sweep.start(db, alice, SweepTrigger.manual, TICK).id
         db.commit()
     [due] = sweep_due(factory)
-    with factory() as db, pytest.raises(SweepRunningError):
-        sweep.start_scheduled(db, due, TICK)
+    with factory() as db:
+        assert sweep.start_scheduled(db, due, TICK) is None
+        db.commit()
+    assert sweep_due(factory, TICK + timedelta(minutes=5)) == []
     with factory() as db:
         row = db.get(Sweep, manual)
-        row.status, row.finished_at = SweepStatus.done, now()
+        row.status, row.finished_at = SweepStatus.done, TICK
         db.commit()
-    later = TICK + timedelta(minutes=5)
-    [again] = sweep_due(factory, later)
-    assert again.slot.key == SLOT
+    # Past the window, the slot still starts: the next end or tick takes it from the line.
+    later = TICK + timedelta(minutes=30)
+    assert sweep_due(factory, later) == []
     with factory() as db:
-        assert sweep.start_scheduled(db, again, later) is not None
+        started = sweep.start_next(db, alice, later)
         db.commit()
+    assert started is not None
+    assert (started.trigger, started.stats["schedule_slot"]) == (SweepTrigger.schedule, SLOT)
 
 
 def test_concurrent_ticks_start_a_slot_once(

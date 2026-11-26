@@ -1187,7 +1187,10 @@ describe("the submit lease on the job page", () => {
   const REHEARSES =
     "A rehearsal: the assistant fills the form again with your approved answers, then stops without submitting it.";
   const WAITS =
-    "Waiting for your browser. The app spaces out submissions to the same site, so this one may wait its turn.";
+    "Your browser starts soon. Then you can watch the assistant send the form here.";
+  const SENDS = "Sending the form. Its result shows here once the app has it.";
+  const PACED =
+    "Waiting for its turn. The app spaces out submissions to the same site, so this one waits a little.";
   const HOLD_WAITS =
     "After the hold, you can watch the assistant fill the form again here.";
   /** Another application of the person, approved or held too. */
@@ -1310,16 +1313,19 @@ describe("the submit lease on the job page", () => {
     }
   });
 
-  it.each(["approved", "submitting"])(
+  it.each([
+    ["approved", WAITS],
+    ["submitting", SENDS],
+  ])(
     "shows only its own submit lease while %s, never another application's",
-    async (state) => {
+    async (state, waits) => {
       const opened = fakeScreens();
       fakeApply({ application: fakeApplication(state), answers: filled() });
       holding(OTHER_APP);
       const { section, client } = await openSection();
       await read(client);
       expect(within(section).getByTestId("live-view-slot")).toHaveTextContent(
-        WAITS,
+        waits,
       );
       expect(opened).toHaveLength(0);
 
@@ -1350,6 +1356,93 @@ describe("the submit lease on the job page", () => {
       within(section).getByRole("button", { name: "Cancel application" }),
     ).toBeEnabled();
   });
+
+  it.each([
+    ["host_pace", PACED],
+    [
+      "browser_queue",
+      "Waiting for the browser, which is busy with another task. The live view shows here once it is free.",
+    ],
+    [
+      "browser_unavailable",
+      "The browser cannot be reached just now. The app tries again by itself.",
+    ],
+    [null, WAITS],
+  ])(
+    "says what an approved form waits for from its needs (%s)",
+    async (needs, sentence) => {
+      fakeApply({
+        application: fakeApplication("approved", { needs }),
+        answers: filled(),
+      });
+      const { section, client } = await openSection();
+      await read(client);
+      const slot = await within(section).findByTestId("live-view-slot");
+      expect(slot).toHaveTextContent(sentence);
+      expect(slot.textContent.includes("spaces out")).toBe(
+        needs === "host_pace",
+      );
+    },
+  );
+
+  it.each([
+    [
+      "One click Apply's agent after its first send act",
+      fakeApplication("submitting", { mode: "direct" }),
+      "apply_agent",
+      "The assistant is sending the form. It may still fill a step or two first.",
+    ],
+    [
+      "Review first's agent while it fills",
+      fakeApplication("filling", { mode: "review" }),
+      "apply_review",
+      "The assistant is filling the form. Then you check what it filled and confirm.",
+    ],
+  ])(
+    "shows %s with Use the browser myself, never the wait",
+    async (_, application, purpose, sentence) => {
+      const opened = fakeScreens();
+      fakeApply({ application, answers: filled() });
+      holding(APP_ID, purpose);
+      const { section } = await openSection();
+      const view = await connected(opened);
+      const live = await watching(section);
+      expect(within(live).getByRole("status")).toHaveTextContent(sentence);
+      expect(view.screen.viewOnly).toBe(true);
+      expect(
+        within(section).getByRole("button", {
+          name: "Use the browser myself",
+        }),
+      ).toBeEnabled();
+      expect(section.textContent).not.toMatch(/spaces out|Its result shows/);
+      expect(section.textContent).not.toMatch(SEPARATOR);
+    },
+  );
+
+  it.each(["approved", "submitting"])(
+    "shows Review first's agent watch only once the person confirmed (%s)",
+    async (state) => {
+      const opened = fakeScreens();
+      fakeApply({
+        application: fakeApplication(state, { mode: "review" }),
+        answers: filled(),
+      });
+      holding(APP_ID, "apply_review");
+      const { section } = await openSection();
+      const view = await connected(opened);
+      const live = await watching(section);
+      expect(within(live).getByRole("status")).toHaveTextContent(
+        "The app sends the form you confirmed. The assistant then reads the site's answer.",
+      );
+      expect(view.screen.viewOnly).toBe(true);
+      for (const name of ["Use the browser myself", "Keyboard"]) {
+        expect(within(section).queryByRole("button", { name })).toBeNull();
+      }
+      expect(
+        within(section).queryByLabelText("Type into your browser"),
+      ).toBeNull();
+    },
+  );
 
   it("shows a held item's own lease after its hold, never another application's", async () => {
     const opened = fakeScreens();

@@ -5,18 +5,26 @@
  * to the api (which would answer 422).
  *
  * URL parameters mirror the api's: status (repeated), type (repeated), q, company, fit_min,
- * fit_max, found_from, found_to, sort (omitted when it is the default).
+ * fit_max, found_from, found_to, place, work_mode, source and application (repeated),
+ * published_within, published_from, published_undated, pay, pay_min with pay_period, sweep, and
+ * sort (omitted when it is the default).
  */
 import {
+  APPLICATION_CHOICES,
   CONTRACT_TYPES,
   DEFAULT_SORT,
   isContractType,
   isSort,
   isStatus,
+  PAY_PERIODS,
   STATUSES,
+  WORK_MODE_CHOICES,
+  type ApplicationChoice,
   type ContractType,
   type JobSort,
   type JobStatus,
+  type PayPeriodChoice,
+  type WorkModeChoice,
 } from "./labels";
 
 /** The api refuses longer q and company values. */
@@ -24,6 +32,14 @@ export const TEXT_MAX = 200;
 
 /** The pause in typing after which the search box and the company field apply. */
 export const SEARCH_DEBOUNCE_MS = 300;
+
+/** The api's bounds: places and websites per filter, a place's length, the days and the pay. */
+export const VALUES_MAX = 20;
+export const PLACE_MAX = 100;
+const PUBLISHED_WITHIN_MAX = 3650;
+const PAY_MAX = 10_000_000;
+
+export type PayChoice = "stated" | "not_stated";
 
 export interface JobFilters {
   statuses: JobStatus[];
@@ -34,6 +50,20 @@ export interface JobFilters {
   fitMax: number | null;
   foundFrom: string | null;
   foundTo: string | null;
+  places: string[];
+  workModes: WorkModeChoice[];
+  sources: string[];
+  publishedWithin: number | null;
+  publishedFrom: string | null;
+  /** With a published bound, the postings without a date stay. */
+  publishedUndated: boolean;
+  pay: PayChoice | null;
+  /** With payPeriod: the top of a posting's pay in that period reaches it. */
+  payMin: number | null;
+  payPeriod: PayPeriodChoice | null;
+  applications: ApplicationChoice[];
+  /** The postings one search added. */
+  sweep: string | null;
   sort: JobSort;
 }
 
@@ -52,6 +82,17 @@ export const EMPTY_FILTERS: JobFilters = {
   fitMax: null,
   foundFrom: null,
   foundTo: null,
+  places: [],
+  workModes: [],
+  sources: [],
+  publishedWithin: null,
+  publishedFrom: null,
+  publishedUndated: false,
+  pay: null,
+  payMin: null,
+  payPeriod: null,
+  applications: [],
+  sweep: null,
   sort: DEFAULT_SORT,
 };
 
@@ -87,6 +128,83 @@ function pick<T extends string>(
   return all.filter((value) => wanted.has(value));
 }
 
+/** A whole number from `min` to `max`, else none. */
+function parseWhole(raw: string | null, min: number, max: number) {
+  if (raw === null || !/^\d{1,8}$/.test(raw.trim())) return null;
+  const value = Number(raw.trim());
+  return value >= min && value <= max ? value : null;
+}
+
+/** A place the api takes: trimmed, with a letter or a digit, PLACE_MAX characters at most. */
+export function cleanPlace(raw: string): string | null {
+  const place = raw.trim();
+  return place.length <= PLACE_MAX && /[\p{L}\p{N}]/u.test(place)
+    ? place
+    : null;
+}
+
+/** Texts once each, in the order given, VALUES_MAX at most. */
+function texts(values: string[], clean: (value: string) => string | null) {
+  const kept = values.map(clean).filter((v): v is string => v !== null);
+  return [...new Set(kept)].slice(0, VALUES_MAX);
+}
+
+const cleanSource = (raw: string) => {
+  const source = raw.trim();
+  return source && source.length <= TEXT_MAX ? source : null;
+};
+
+const isIn =
+  <T extends string>(all: readonly T[]) =>
+  (value: string): value is T =>
+    (all as readonly string[]).includes(value);
+
+const SWEEP_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The filters of jobs J29, read as parseFilters reads the others. */
+function parseMore(params: URLSearchParams) {
+  const pay = params.get("pay");
+  let payMin = parseWhole(params.get("pay_min"), 1, PAY_MAX);
+  const period = params.get("pay_period") ?? "";
+  let payPeriod = isIn(PAY_PERIODS)(period) ? period : null;
+  if (payMin === null || payPeriod === null || pay === "not_stated") {
+    payMin = null;
+    payPeriod = null;
+  }
+  const from = params.get("published_from");
+  const sweep = params.get("sweep")?.trim() ?? "";
+  return {
+    places: texts(params.getAll("place"), cleanPlace),
+    workModes: pick(
+      params.getAll("work_mode"),
+      WORK_MODE_CHOICES,
+      isIn(WORK_MODE_CHOICES),
+    ),
+    sources: texts(params.getAll("source"), cleanSource),
+    publishedWithin: parseWhole(
+      params.get("published_within"),
+      0,
+      PUBLISHED_WITHIN_MAX,
+    ),
+    publishedFrom: isIsoDate(from) ? from : null,
+    publishedUndated: params.get("published_undated") === "true",
+    pay: pay === "stated" || pay === "not_stated" ? pay : null,
+    payMin,
+    payPeriod,
+    applications: pick(
+      params.getAll("application"),
+      APPLICATION_CHOICES,
+      isIn(APPLICATION_CHOICES),
+    ),
+    sweep: SWEEP_ID.test(sweep) ? sweep.toLowerCase() : null,
+  } satisfies Partial<JobFilters>;
+}
+
+/** Whether a published bound is set, so that keeping the undated postings means something. */
+export const hasPublishedBound = (filters: JobFilters) =>
+  filters.publishedWithin !== null || filters.publishedFrom !== null;
+
 export function parseFilters(params: URLSearchParams): JobFilters {
   let fitMin = parseFit(params.get("fit_min"));
   let fitMax = parseFit(params.get("fit_max"));
@@ -112,6 +230,7 @@ export function parseFilters(params: URLSearchParams): JobFilters {
     fitMax,
     foundFrom,
     foundTo,
+    ...parseMore(params),
     sort: isSort(sort) ? sort : DEFAULT_SORT,
   };
 }
@@ -131,6 +250,23 @@ export function toSearchParams(
   if (filters.fitMax !== null) params.set("fit_max", String(filters.fitMax));
   if (filters.foundFrom) params.set("found_from", filters.foundFrom);
   if (filters.foundTo) params.set("found_to", filters.foundTo);
+  for (const place of filters.places) params.append("place", place);
+  for (const mode of filters.workModes) params.append("work_mode", mode);
+  for (const source of filters.sources) params.append("source", source);
+  if (filters.publishedWithin !== null)
+    params.set("published_within", String(filters.publishedWithin));
+  if (filters.publishedFrom)
+    params.set("published_from", filters.publishedFrom);
+  if (filters.publishedUndated && hasPublishedBound(filters))
+    params.set("published_undated", "true");
+  if (filters.pay) params.set("pay", filters.pay);
+  if (filters.payMin !== null && filters.payPeriod !== null) {
+    params.set("pay_min", String(filters.payMin));
+    params.set("pay_period", filters.payPeriod);
+  }
+  for (const choice of filters.applications)
+    params.append("application", choice);
+  if (filters.sweep) params.set("sweep", filters.sweep);
   if (withSort && filters.sort !== DEFAULT_SORT)
     params.set("sort", filters.sort);
   return params;
@@ -141,18 +277,46 @@ export function hasFilters(filters: JobFilters): boolean {
   return toSearchParams(filters, { withSort: false }).toString() !== "";
 }
 
-/** How many filters narrow the list, counted as the filter bar's chips are: one per status and
- * per type, one for the search, the company, the fit range and the found dates each. */
+/** How many filters narrow the list, counted as the filter bar's chips are: one per status,
+ * type, place, work mode, website and application, one for the search, the company, the fit
+ * range, the found dates, the published dates, the pay and the search that added them each. */
 export function activeFilterCount(filters: JobFilters): number {
   return (
     filters.statuses.length +
     filters.types.length +
+    filters.places.length +
+    filters.workModes.length +
+    filters.sources.length +
+    filters.applications.length +
     (filters.q ? 1 : 0) +
     (filters.company ? 1 : 0) +
     (filters.fitMin !== null || filters.fitMax !== null ? 1 : 0) +
-    (filters.foundFrom || filters.foundTo ? 1 : 0)
+    (filters.foundFrom || filters.foundTo ? 1 : 0) +
+    (hasPublishedBound(filters) ? 1 : 0) +
+    (filters.pay !== null || filters.payMin !== null ? 1 : 0) +
+    (filters.sweep ? 1 : 0)
   );
 }
+
+/** The day of `now` where the person is, as ISO. */
+export function localIsoDate(now: Date): string {
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${String(now.getFullYear())}-${month}-${day}`;
+}
+
+/** Preset: what was found on `today` (an ISO date), the rest kept. */
+export const foundToday = (filters: JobFilters, today: string): JobFilters => ({
+  ...filters,
+  foundFrom: today,
+  foundTo: today,
+});
+
+/** Preset: every status but Skipped and Closed, the rest kept. */
+export const hideSkippedAndClosed = (filters: JobFilters): JobFilters => ({
+  ...filters,
+  statuses: STATUSES.filter((s) => s !== "skipped" && s !== "closed"),
+});
 
 /** A fit typed in the fit range: none when empty, "invalid" unless a whole number to 100. */
 export function parseFitInput(raw: string): number | null | "invalid" {
