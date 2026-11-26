@@ -29,7 +29,7 @@ export const REFUSAL_REASONS: Record<string, string> = {
   unsupported_interaction: "the app refused the assistant's action",
 };
 
-export const OTHER_REFUSAL = "the app's check refused it for another reason";
+export const OTHER_REFUSAL = "the app's check found another problem";
 
 export interface ReportedFigures {
   found?: number;

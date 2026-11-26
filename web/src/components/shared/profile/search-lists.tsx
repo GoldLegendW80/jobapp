@@ -25,7 +25,8 @@ const LISTS = [
   {
     name: "title_include",
     label: WORDING.jobTitles,
-    description: "A posting is kept when its title has one of these.",
+    description:
+      "Where the search starts: it searches these titles, and also keeps other roles that fit your profile.",
   },
   {
     name: "title_exclude",

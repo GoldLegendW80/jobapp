@@ -130,7 +130,8 @@ export const LongTerms: Story = {
   args: {
     label: "Job titles",
     regexSwitch: false,
-    description: "A posting is kept when its title has one of these.",
+    description:
+      "Where the search starts: it searches these titles, and also keeps other roles that fit your profile.",
     terms: [
       "senior data platform engineer for real time logistics and freight analytics",
       "analytics engineer",
