@@ -98,6 +98,29 @@ def test_convert_refusals(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
 # --- import -------------------------------------------------------------------------------------
 
 
+def test_the_cli_registers_the_section_callbacks_a_save_in_the_app_runs() -> None:
+    """An imported skills section asks for its rescore, a search section runs the criteria badge
+    pass (jobs J30): both callbacks are registered once the command line is imported alone."""
+    probe = (
+        "import json, app.profile.cli\n"
+        "from app.profile import service\n"
+        "print(json.dumps([f'{c.__module__}.{c.__name__}' for c in service._section_callbacks]))"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "DATABASE_URL"}
+    done = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=API_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    registered = set(json.loads(done.stdout))
+    assert {"app.jobs.criteria_badge.on_sections", "app.jobs.rescore.on_sections"} <= registered
+
+
 def test_import_from_a_file(
     migrated_url: str, factory: sessionmaker[Session], converted: Path
 ) -> None:

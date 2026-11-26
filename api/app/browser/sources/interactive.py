@@ -27,23 +27,21 @@ and no time cap (B20: "as long as it takes"): no share of the sweep's time, no l
 page pause and no 7 day pause; the run's Cancel stops it and the lease's idle timer ends one
 nobody uses. LinkedIn still runs last (`run_order`).
 Its postings merge into the website's one result, counted once per canonical address, in one
-place only: an unwanted reading wins over another contract, which wins over a kept one
-(`_Site.place`). Several contract types are checked on what was read (the engine's `kind` of
-the title, location and address), as a website's own filter takes one value, but a posting of
-the contract a website has by nature (B21: the VIE website's) is never dropped as of another
-contract (`nature_contract`). Unwanted titles and unwanted places are dropped after reading, and
-the person's never apply rules mark a stored one skipped (sweep.commit_verified).
+place only: an unwanted reading wins over a kept one (`_Site.place`). Unwanted titles and
+unwanted places are dropped after reading, and the person's never apply rules mark a stored one
+skipped (sweep.commit_verified). A posting of another contract, work mode or age is kept (jobs
+J30, owner 2026-11-26: "Garder avec un badge"): the store marks what is outside the search's
+criteria (app/jobs/criteria_badge.py).
 The agent's first message gets the summary of the person's profile (B21,
 app/profile/fit_summary.py, `FinderAgent.profile`): it reports what fits the profile, the saved
 titles being where it starts searching.
-With the run's commits, the verified batches go through the website's `_Site.verified` on their
-way to the store: a posting given before, an unwanted one and one of another contract are
-counted there and never stored, so a website stores a posting once. An address stored stays
-stored and counted once, whatever a later reading of it says. The summary names the searches
-the agent ran and counts them, from its own tool calls (`FinderSession.searches`): what it typed
-into boxes once it submitted them (browser_type with submit, or a click or Enter next), named by
-the texts typed and the options chosen with them, or an address it opened whose query holds a
-saved title.
+With the run's commits, the verified batches go through the website's `_Site.verified` on their way
+to the store: a posting given before and an unwanted one are counted there and never stored, so a
+website stores a posting once. An address stored stays stored and counted once, whatever a later
+reading of it says. The summary names the searches the agent ran and counts them, from its own tool
+calls (`FinderSession.searches`): what it typed into boxes once it submitted them (browser_type with
+submit, or a click or Enter next), named by the texts typed and the options chosen with them, or an
+address it opened whose query holds a saved title.
 
 A website the person signed in to (B17, app/browser/site_logins.py) is read signed in: the
 scope says so and browserd runs it in the person's own persisted context, the lease being that
@@ -70,7 +68,6 @@ from urllib.parse import urlsplit
 from app.browser import finder
 from app.browser.client import BrowserError, held_in
 from app.browser.leases import StoreUnavailableError
-from app.browser.nature import nature_contract
 from app.browser.sources import (
     ERRORS,
     PAGE_BUDGET_S,
@@ -79,7 +76,6 @@ from app.browser.sources import (
     SourceError,
 )
 from app.jobs import sweep
-from app.jobs.importer import kind
 from app.jobs.schemas import SEARCHES_LISTED
 from app.profile import matching
 from app.profile.plain_terms import typed_words
@@ -228,14 +224,11 @@ class Searches:
     """The search of one website, frozen from the sweep's frozen criteria."""
 
     scope: finder.InteractiveScope
-    contracts: frozenset[str] = frozenset()  # checked after reading, empty when native
     unwanted_titles: re.Pattern[str] | None = None
     unwanted_places: re.Pattern[str] | None = None
     # Saved titles and places the scope could not carry (`_carried`), told in the summary.
     titles_left_out: int = 0
     places_left_out: int = 0
-    # The contract every posting of the website has by nature (`nature_contract`, B21).
-    nature: str | None = None
 
 
 def _carried(
@@ -310,12 +303,10 @@ def searches_for(search: SearchSection, start: str = "") -> Searches:
             criteria=json.dumps(search.model_dump(mode="json", include=CRITERIA)),
             instructions=search.interactive_instructions or "",
         ),
-        frozenset(contracts) if len(contracts) > 1 else frozenset(),
         _unwanted(search.title_exclude),
         _unwanted(getattr(search, "location_exclude", None)),
         titles_dropped + len(titles) - len(carried_titles),
         places_dropped + len(places) - len(carried_places),
-        nature_contract(start),
     )
 
 
@@ -330,7 +321,6 @@ class _Site:
     started: bool = False  # the start page opened and the agent ran
     searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
     found: set[str] = field(default_factory=set)
-    other_contract: set[str] = field(default_factory=set)
     unwanted: set[str] = field(default_factory=set)
     refused: Counter[str] = field(default_factory=Counter)
     refusals: Counter[str] = field(default_factory=Counter)  # by browserd's rule (B25)
@@ -356,26 +346,21 @@ class _Site:
     tab_closed: Counter[str] = field(default_factory=Counter)
     tab_closed_mib: list[int] = field(default_factory=list)
     media_blocked: bool = False
+    # Jobs J30: how many results the agent said it read, its own count (the largest it gave).
+    results_read: int | None = None
 
     def _sort(self, title: str, location: str, url: str) -> set[str]:
-        """Where a posting read goes: unwanted, of another contract, or kept. A posting of the
-        contract the website has by nature (B21: the VIE website's) is of the person's choice."""
+        """Where a posting read goes: unwanted (the person's unwanted titles and places), or kept,
+        whatever its contract (jobs J30: the store gives it its badge)."""
         titles, places = self.planned.unwanted_titles, self.planned.unwanted_places
         if (titles and titles.search(title)) or (places and places.search(location)):
             return self.unwanted
-        contract = kind(title, location, url).value if self.planned.contracts else None
-        if (
-            contract is not None
-            and contract not in self.planned.contracts
-            and contract != self.planned.nature
-        ):
-            return self.other_contract
         return self.found
 
     def place(self, url: str, into: set[str]) -> bool:
-        """Put an address in one set only: unwanted wins over another contract, which wins over
-        found (fail closed). False when a stronger reading already holds it."""
-        order = (self.unwanted, self.other_contract, self.found)
+        """Put an address in one set only: unwanted wins over found (fail closed). False when
+        a stronger reading already holds it."""
+        order = (self.unwanted, self.found)
         rank = next(index for index, held in enumerate(order) if held is into)
         if any(url in held for held in order[:rank]):
             return False
@@ -400,6 +385,8 @@ class _Site:
             : finder.TAB_CLOSED_MIB_MAX
         ]
         self.media_blocked = self.media_blocked or session.media_blocked
+        if session.results_read is not None:
+            self.results_read = max(self.results_read or 0, session.results_read)
 
     async def verified(self, batch: finder.VerifiedBatch) -> None:
         """A verified batch on its way to the store (module docstring)."""
@@ -410,7 +397,7 @@ class _Site:
                 continue  # stored already: counted once, by the commits
             place = self._sort(finding.title, finding.location, url)
             if place is self.found:
-                if url not in self.unwanted and url not in self.other_contract:
+                if url not in self.unwanted:
                     kept.append(finding)
             else:
                 self.place(url, place)
@@ -448,8 +435,8 @@ class _Site:
                 entry["tab_closed_reasons"] = dict(self.tab_closed)
                 entry["tab_closed_mib"] = self.tab_closed_mib
                 entry["media_blocked"] = self.media_blocked
-        if self.planned.contracts:
-            entry["other_contract"] = len(self.other_contract)
+            if self.results_read is not None:
+                entry["results_read"] = self.results_read
         if self.unwanted:
             entry["unwanted"] = len(self.unwanted)
 

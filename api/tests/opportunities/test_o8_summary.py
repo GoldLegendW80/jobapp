@@ -102,6 +102,14 @@ def test_the_summary_answer_names_the_counter() -> None:
         "tab_closed_reasons",
         "tab_closed_mib",
         "media_blocked",
+        # Jobs J30: what happened to what the source reported.
+        "duplicates",
+        "outside",
+        "unwanted",
+        "refused",
+        "opened_by_app",
+        "results_read",
+        "other_contract",
         # Jobs J9: the frozen source identity and progress.
         "source_id",
         "mode",
@@ -168,6 +176,14 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "tab_closed_reasons": {},
         "tab_closed_mib": [],
         "media_blocked": False,
+        # Jobs J30: nothing of what happened to what it reported in an older stats row.
+        "duplicates": 0,
+        "outside": 0,
+        "unwanted": 0,
+        "refused": {},
+        "opened_by_app": 0,
+        "results_read": None,
+        "other_contract": 0,
         # Jobs J9: the frozen source identity and progress, absent from an older stats row.
         "source_id": None,
         "mode": None,

@@ -402,6 +402,15 @@ class JobListItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     liveness: LivenessOut | None = None
+    # Jobs J30: what of the posting is outside the criteria of the search that found it, in this
+    # order: `contract` (its contract_type), `work_mode` (its work_mode), `older` (published more
+    # than the search's days before found_on); [] within, or a row no pass reached yet.
+    outside_criteria: list[str] = Field(default_factory=list)
+
+    @field_validator("outside_criteria", mode="before")
+    @classmethod
+    def _never_computed(cls, value: Any) -> Any:
+        return [] if value is None else value
 
     @model_validator(mode="after")
     def pay_order(self) -> "JobListItem":
@@ -814,6 +823,19 @@ class SourceOut(BaseModel):
     tab_closed_reasons: dict[str, int] = Field(default_factory=dict)
     tab_closed_mib: list[int] = Field(default_factory=list)
     media_blocked: bool = False
+    # Jobs J30, what happened to what the source reported, each counted once: `new` were kept,
+    # `duplicates` were already in the list, `outside` of the new ones were kept with a badge
+    # (code's), `unwanted` the person's unwanted titles and places set aside, `skipped_by_rule`
+    # stored as skipped by a never apply rule, `refused` the verification refused (by reason),
+    # `opened_by_app` the app opened itself, `results_read` the assistant's own count of the
+    # results it read (None: it gave none); `other_contract` is a sweep's from before J30.
+    duplicates: int = Field(default=0, ge=0)
+    outside: int = Field(default=0, ge=0)
+    unwanted: int = Field(default=0, ge=0)
+    refused: dict[str, int] = Field(default_factory=dict)
+    opened_by_app: int = Field(default=0, ge=0)
+    results_read: int | None = Field(default=None, ge=0)
+    other_contract: int = Field(default=0, ge=0)
     # LinkedIn's public job search: the searches it built from the saved titles and places, of
     # which `searches` ran before its caps (0 from an older sweep or another source).
     planned: int = Field(default=0, ge=0)
@@ -889,6 +911,7 @@ class SweepOut(BaseModel):
     new: int = 0
     duplicates: int = 0
     skipped_by_rule: int = 0
+    outside: int = 0  # jobs J30: the new postings kept with a badge
     duration: float | None = None
     sources: list[SourceOut] = Field(default_factory=list)
     search_scope: SearchScopeOut | None = None

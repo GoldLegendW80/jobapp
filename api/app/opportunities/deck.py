@@ -1,16 +1,17 @@
 """The swipe deck (opportunities O1; SPEC-opportunities, "The swipe deck").
 
-**What is in it.** The person's postings with status `found` or `shortlisted`; no application of
-the person on the posting in any state but `cancelled` (a live one, a submitted one and an ended
-one all keep the posting out; a cancelled Like puts it back); a fit at or above "Show postings
-from" (`search.min_fit`, 70 by default), or no fit yet on a posting without text (nothing to
-score it from); and not refused by apply's own decision, `apply.guardrails.never_apply`, in the
-person's mode after a Like: a never apply rule folded onto its company or title (and in Full auto
-onto the first FULL_AUTO_TEXT_CHARS of its text), or a sweep that once skipped it for a rule
-(`swept`, whatever the rules say today). So a card the deck shows is never one a Like refuses as
-`never_apply_role`, and a title the sweep's whole word match missed (a soft hyphen inside a word,
-full width letters) never shows. When the stored rules cannot be read, the deck is empty and says
-so (`rules_unreadable`): it fails closed.
+**What is in it.** The person's postings with status `found` or `shortlisted`; no application of the
+person on the posting in any state but `cancelled` (a live one, a submitted one and an ended one all
+keep the posting out; a cancelled Like puts it back); a fit at or above "Show postings from"
+(`search.min_fit`, 70 by default), or no fit yet on a posting without text (nothing to score it
+from); no badge of what is outside the criteria of the search that found it (jobs J30,
+`jobs.outside_criteria`: a posting kept with a badge is the Jobs list's only); and not refused by
+apply's own decision, `apply.guardrails.never_apply`, in the person's mode after a Like: a never
+apply rule folded onto its company or title (and in Full auto onto the first FULL_AUTO_TEXT_CHARS of
+its text), or a sweep that once skipped it for a rule (`swept`, whatever the rules say today). So a
+card the deck shows is never one a Like refuses as `never_apply_role`, and a title the sweep's whole
+word match missed (a soft hyphen inside a word, full width letters) never shows. When the stored
+rules cannot be read, the deck is empty and says so (`rules_unreadable`): it fails closed.
 
 **Order.** A posting whose closing date is within SOON_DAYS (`notices.closes_soon`, from today
 on) first, the soonest first (owner, 2026-11-07, "build all" of the career-ops analysis); then
@@ -212,6 +213,7 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) 
         Job.user_id == user_id,
         Job.status.in_(DECK_STATUSES),
         sa.or_(Job.fit >= min_fit, sa.and_(Job.fit.is_(None), text == "")),
+        sa.func.coalesce(sa.func.cardinality(Job.outside_criteria), 0) == 0,
         ~applied,
     )
     if filters.types:

@@ -17,7 +17,8 @@ normal browser on the owner's Mac listed every card (14 searches, 256 cards).
 - How: one `sweep` lease of the person's browser and a discovery on it (browser B20) whose scope
   never says `signed_in`, so browserd opens a fresh anonymous context: never the person's
   LinkedIn login. Code builds every address (`page_url`, the place as LinkedIn names it,
-  linkedin_places) and reads every page with one script (CARDS_SCRIPT, POSTING_SCRIPT, run by
+  linkedin_places, the age filter `f_TPR` and no contract filter `f_JT`, as the guest search
+  since jobs J30) and reads every page with one script (CARDS_SCRIPT, POSTING_SCRIPT, run by
   browser_evaluate): no model, no token. A search reads `start=0`, then 25 and 50 while a page
   lists a full page of cards and some are new, in rounds, breadth first as the guest search (the
   first page of every search, then the posting pages of that round's new cards taken in turn from
@@ -27,7 +28,8 @@ normal browser on the owner's Mac listed every card (14 searches, 256 cards).
   a search page gone (404) leaves its pair not searched. Each new card that passes J20's rules
   (the unwanted titles and places, the never apply rules, the saved places, the person's
   postings) has its `/jobs/view/<id>` page read for its text, then is stored through the run's
-  commits as the guest search stores it.
+  commits as the guest search stores it, whatever its contract (jobs J30: the store marks one
+  outside the saved contract types).
 - Pace and stops: LinkedIn's page pace (sources/linkedin.py PAUSE_S, 10 to 30 s after the
   previous page of LinkedIn's host ended, whoever opened it, the shared pacer), the permission
   checks before every call (platform_policy), at most PAGES_MAX pages. A sign in wall, a
@@ -134,13 +136,11 @@ POSTING_SCRIPT = r"""() => {
 
 def page_url(base: str, query: guest.Query, days: int, start: int) -> str:
     """The public search page of `query` (the guest search's keywords, place as LinkedIn names
-    it, its geoId and contract filter), `start` its first card."""
+    it, its geoId and age filter, no contract filter), `start` its first card."""
     params: dict[str, str] = {"keywords": query.keywords, "location": query.location}
     if query.geo_id:
         params["geoId"] = query.geo_id
     params["f_TPR"] = f"r{days * 86400}"
-    if query.job_types:
-        params["f_JT"] = query.job_types
     if start:
         params["start"] = str(start)
     return f"{base}/jobs/search?{urlencode(params, quote_via=quote)}"
@@ -584,11 +584,10 @@ async def _details(
 ) -> None:
     """Each pending card's posting page, stored in batches (`guest._details`'s rules)."""
     batch: list[guest.GuestFinding] = []
-    saved = set(search.contract_types)
     where = guest.wanted_places(search)
     try:
         while pending:
-            card, query = pending.popleft()
+            card, _ = pending.popleft()
             value = await reader.read(posting_page(base, card.job_id), POSTING_SCRIPT)
             detail = posting_of(value) if value is not None else None
             if detail is None:
@@ -600,9 +599,6 @@ async def _details(
                 done.other_place += 1
                 continue
             contract = guest.contract_of(card.title, location, url, detail.criteria)
-            if query.check_contract and saved and contract.value not in saved:
-                done.other_contract += 1
-                continue
             found = guest._finding(card, detail, url, location, contract)
             evidence = {**found.evidence, "read_through": READ_THROUGH}
             batch.append(dataclasses.replace(found, evidence=evidence))
@@ -629,7 +625,7 @@ def _write(entry: dict[str, Any], done: _PageRun, plan: Any, before: int) -> Non
     entry["searches"] = int(entry.get("searches") or 0) + len(done.searches)
     left = [pair for pair in done.pairs if pair not in done.searches]
     entry["not_searched"] = [{"title": t, "place": p} for t, p in left[:SEARCHES_LISTED]]
-    for name in ("unwanted", "other_contract", "other_place"):
+    for name in ("unwanted", "other_place"):
         count = getattr(done, name)
         if count:
             entry[name] = int(entry.get(name) or 0) + count

@@ -180,34 +180,39 @@ def test_the_saved_days_limit_the_age(days: int, seconds: str) -> None:
     assert params(query, days, 20)["start"] == ["20"]
 
 
+PLAIN, WITH_VIE = ["GenAI Engineer"], ["GenAI Engineer", "GenAI Engineer VIE"]
+
+
 @pytest.mark.parametrize(
-    ("contracts", "expected"),
+    ("contracts", "keywords"),
     [
-        ([], [("GenAI Engineer", None, False)]),
-        (["CDI"], [("GenAI Engineer", "F", False)]),
-        # CDD without CDI: LinkedIn lists most fixed term contracts as full time, so no filter,
-        # the postings read are checked.
-        (["CDD"], [("GenAI Engineer", None, True)]),
-        (["CDD", "Freelance"], [("GenAI Engineer", None, True)]),
-        (["CDI", "CDD"], [("GenAI Engineer", "F,T", False)]),
-        (["Freelance"], [("GenAI Engineer", "C", False)]),
-        (["Stage"], [("GenAI Engineer", "I", False)]),
-        (["CDI", "CDD", "Freelance", "Stage"], [("GenAI Engineer", "C,F,I,T", False)]),
-        # Alternance has no code: no filter, the postings read are checked.
-        (["CDI", "Alternance"], [("GenAI Engineer", None, True)]),
-        # VIE has no code: an extra keyword search, checked.
-        (["CDI", "VIE"], [("GenAI Engineer", "F", False), ("GenAI Engineer VIE", None, True)]),
-        (["VIE"], [("GenAI Engineer VIE", None, True)]),
+        ([], PLAIN),
+        (["CDI"], PLAIN),
+        (["CDD"], PLAIN),
+        (["CDI", "CDD"], PLAIN),
+        (["Freelance"], PLAIN),
+        (["Stage"], PLAIN),
+        (["Alternance"], PLAIN),
+        (["CDI", "Alternance"], PLAIN),
+        (["CDI", "CDD", "Freelance", "Stage", "Alternance"], PLAIN),
+        # VIE has no LinkedIn code: a keyword search beside the plain one, VIE alone too.
+        (["VIE"], WITH_VIE),
+        (["CDI", "VIE"], WITH_VIE),
+        (["Stage", "Alternance", "VIE"], WITH_VIE),
     ],
 )
-def test_contract_types_become_linkedin_filters_or_checks(
-    contracts: list[str], expected: list[tuple[str, str | None, bool]]
+def test_no_contract_filter_is_sent_and_vie_adds_a_keyword_search(
+    contracts: list[str], keywords: list[str]
 ) -> None:
+    """Jobs J30 (owner, 2026-11-26: "Garder avec un badge"): LinkedIn is asked for every
+    contract, and the store keeps another one with its badge; the age filter stays."""
     queries = guest.queries_for(section(contract_types=contracts))
-    assert [(q.keywords, q.job_types, q.check_contract) for q in queries] == expected
+    assert [q.keywords for q in queries] == keywords
     assert all(q.title == "GenAI Engineer" for q in queries)
     for query in queries:
-        assert params(query).get("f_JT") == ([query.job_types] if query.job_types else None)
+        sent = params(query)
+        assert "f_JT" not in sent
+        assert sent["f_TPR"] == ["r2592000"]
 
 
 def test_no_title_to_type_is_unsupported_and_saved_patterns_give_their_words() -> None:
@@ -796,13 +801,18 @@ def test_a_security_role_is_left_out_only_by_the_persons_own_rule(
     assert (entry.get("found", 0), entry.get("unwanted", 0)) == ((1, 0) if fetched else (0, 1))
 
 
-def test_a_posting_of_another_contract_is_dropped_only_when_linkedin_could_not_filter() -> None:
-    entries, _, _, _ = execute(section(contract_types=["CDI", "Alternance"]))
-    assert entries[0]["other_contract"] == 3  # the three postings are internships
-    assert entries[0]["found"] == 0
-    entries, _, _, _ = execute(section(contract_types=["CDI"]))  # f_JT=F filtered natively
+@pytest.mark.parametrize("contracts", [["CDI"], ["CDI", "Alternance"], ["Freelance"], ["VIE"]])
+def test_a_posting_of_another_contract_is_kept_and_no_contract_filter_is_sent(
+    contracts: list[str],
+) -> None:
+    """Jobs J30: the three postings are internships; whatever contract is saved, the search asks
+    LinkedIn for every contract and keeps them, and the store gives them their badge."""
+    entries, fake, _, _ = execute(section(contract_types=contracts))
     assert "other_contract" not in entries[0]
     assert entries[0]["found"] == 3
+    searched = [r.url.params for r in fake.requests if "start" in r.url.params]
+    assert len(searched) == (2 if "VIE" in contracts else 1)
+    assert [sent for sent in searched if "f_JT" in sent] == []
 
 
 def test_the_permission_is_checked_before_every_request() -> None:
