@@ -193,6 +193,8 @@ test("a new account fills its profile from empty to 100%", async () => {
   // DNS answers it); the search it starts on this stack, which has no browser, finds nothing.
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
+  // Find jobs opens on Your searches (jobs J33): the main search's form is one click away.
+  await page.getByRole("button", { name: "Edit Main search" }).click();
   const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
   await setup.getByLabel("Website address").fill(WEBSITE);

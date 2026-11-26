@@ -794,9 +794,11 @@ describe("Past searches", () => {
       within(dialog).getByRole("list", { name: "Last searches" }),
     ).getAllByRole("button");
     expect(items).toHaveLength(2);
-    expect(items[0]).toHaveTextContent(/Automatic, Done/);
+    expect(items[0]).toHaveTextContent(/Main search, automatic, Done/);
     expect(items[0]).toHaveTextContent("3 new");
-    expect(items[1]).toHaveTextContent(/By hand, Failed, 1 board failed/);
+    expect(items[1]).toHaveTextContent(
+      /Main search, by hand, Failed, 1 board failed/,
+    );
     await user.click(items[0]!);
     expect(
       await screen.findByRole("dialog", { name: "2 new postings found" }),
@@ -902,7 +904,7 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
     const [item] = within(
       within(history).getByRole("list", { name: "Last searches" }),
     ).getAllByRole("button");
-    expect(item).toHaveTextContent(/By hand, Done/);
+    expect(item).toHaveTextContent(/by hand, Done/);
     expect(item).not.toHaveTextContent(/websites only/i);
     await user.click(item!);
     const summary = await screen.findByRole("dialog", {

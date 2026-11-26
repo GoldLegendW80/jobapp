@@ -26,7 +26,7 @@ import {
  * reports its one posting, Robot Engineer at Example Robotics.
  *
  * - Person A adds the website in Find jobs and starts: the progress comes over the event stream
- *   through Caddy (no polling), Find jobs is disabled while it runs, the summary names the new
+ *   through Caddy (no polling), Find jobs stays usable while it runs (jobs J33), the summary names the new
  *   posting and fits a phone, the list refreshes, and the history says automatic search is off
  *   and lists the search by hand. A second start while one runs is refused (409) and names the
  *   running one; that search finds the posting again and adds nothing.
@@ -226,6 +226,8 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
     /\/api\/jobs\/sweeps\/[0-9a-f-]{36}\/events$/,
   );
   await page.getByRole("button", { name: "Find jobs" }).click();
+  // Find jobs opens on Your searches (jobs J33): the main search's form is one click away.
+  await page.getByRole("button", { name: "Edit Main search" }).click();
   const setup = page.getByRole("dialog", { name: "Find jobs" });
   await setup.getByLabel("Website address").fill(SITE);
   await setup.getByRole("button", { name: "Add", exact: true }).click();
@@ -241,7 +243,7 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
   });
   await expect(
     page.getByRole("button", { name: "Finding jobs" }),
-  ).toBeDisabled();
+  ).toBeEnabled();
   await shots(page, "find-jobs-progress", false);
 
   const dialog = page.getByRole("dialog", { name: "1 new posting found" });
@@ -277,7 +279,7 @@ test("Find jobs on a website: live progress, summary, history, list refreshed", 
   ).toContainText("Automatic search: off.");
   await expect(
     history.getByRole("list", { name: "Last searches" }),
-  ).toContainText(/By hand, Done/);
+  ).toContainText(/Main search, by hand, Done/);
   await fitsInside(page, history);
   await shots(page, "sweep-history", false);
   await history.getByRole("button", { name: "Close" }).click();
