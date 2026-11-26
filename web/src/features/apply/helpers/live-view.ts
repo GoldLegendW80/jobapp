@@ -9,6 +9,8 @@ type Run = Pick<Application, "mode" | "state" | "dry_run" | "needs">;
 
 /** The submit lease (api submit.PURPOSE): the person only watches it. */
 export const SUBMIT_PURPOSE = "apply_submit";
+/** Review first's apply agent (api applier.REVIEW_PURPOSE). */
+const REVIEW_PURPOSE = "apply_review";
 
 const STATUS = {
   fill: "The assistant is filling the form.",
@@ -42,11 +44,25 @@ export function liveStatus(purpose: string, run: Run | null): string {
       return run?.mode === "direct" ? STATUS.directSubmits : STATUS.submits;
     case "apply_agent":
       return filling ? STATUS.agentFills : STATUS.agentSends;
-    case "apply_review":
+    case REVIEW_PURPOSE:
       return filling ? STATUS.reviewFills : STATUS.reviewSends;
     default:
       return STATUS.fill;
   }
+}
+
+/**
+ * Whether the person only watches the lease the api names for `run`, without Use the browser
+ * myself: the submit lease, and Review first's agent past its fill. After the person's Confirm
+ * (`approved`, then `submitting`) the gate clicks in that held session on the page it checked
+ * once (api confirm.hold), so the submit stays watch only. One click Apply's agent keeps it.
+ */
+export function liveWatchOnly(
+  purpose: string,
+  run: Pick<Run, "state"> | null,
+): boolean {
+  if (purpose === SUBMIT_PURPOSE) return true;
+  return purpose === REVIEW_PURPOSE && run?.state !== "filling";
 }
 
 /** What an application waits for, from the `needs` the api wrote while it waits. */

@@ -3,7 +3,11 @@ import type {
   ApplicationEvent,
 } from "@/features/apply/api/apply-api";
 import type { Phase } from "@/features/apply/helpers/apply-state";
-import { liveStatus, liveWait } from "@/features/apply/helpers/live-view";
+import {
+  liveStatus,
+  liveWait,
+  liveWatchOnly,
+} from "@/features/apply/helpers/live-view";
 import { retrySentence } from "@/features/apply/helpers/needs-person-state";
 import { LiveViewSlot } from "../live-view-slot";
 
@@ -29,8 +33,8 @@ function waitingSentence(
 /**
  * The live view of the person's browser while the app works on an application: the wait before
  * the fill, then the lease the api names for the application, whatever its state (A23): the fill
- * with Use the browser myself, the submit lease watch only. Not for Apply myself, where the
- * person's own browser panel stands in.
+ * with Use the browser myself, the submit lease and Review first's agent after the Confirm watch
+ * only. Not for Apply myself, where the person's own browser panel stands in.
  */
 export function ApplicationLiveViews({
   application,
@@ -51,6 +55,7 @@ export function ApplicationLiveViews({
   submitLease: { application: string } | null;
 }) {
   const status = (purpose: string) => liveStatus(purpose, application);
+  const watchOnly = (purpose: string) => liveWatchOnly(purpose, application);
   return (
     <>
       {phase === "filling" && application ? (
@@ -58,6 +63,7 @@ export function ApplicationLiveViews({
           idle={fillingSentence(direct, agentFill)}
           leaseOf={{ application: application.id }}
           status={status}
+          watchOnly={watchOnly}
         />
       ) : null}
       {phase === "waiting" ? (
@@ -71,6 +77,7 @@ export function ApplicationLiveViews({
           idle={liveWait(application)}
           leaseOf={submitLease}
           status={status}
+          watchOnly={watchOnly}
           stopped={application.state === "held"}
           namedOnly
         />

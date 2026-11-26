@@ -972,10 +972,10 @@ describe("the live views of the applications under way", () => {
       "The assistant is filling the form. It sends it by itself once it is filled.",
     ],
     [
-      "Review first's agent, confirmed",
-      queueItem(1, "approved", { mode: "review" }),
+      "Review first's agent, filling",
+      queueItem(1, "filling", { mode: "review" }),
       "apply_review",
-      "The app sends the form you confirmed. The assistant then reads the site's answer.",
+      "The assistant is filling the form. Then you check what it filled and confirm.",
     ],
   ])(
     "shows %s with Use the browser myself",
@@ -1001,6 +1001,41 @@ describe("the live views of the applications under way", () => {
         within(view).getByRole("button", { name: "Use the browser myself" }),
       ).toBeEnabled();
       expect(view.textContent).not.toMatch(/Waiting|spaces out/);
+    },
+  );
+
+  it.each(["approved", "submitting"])(
+    "shows Review first's agent watch only once the person confirmed (%s)",
+    async (state) => {
+      const opened = fakeScreens();
+      const item = queueItem(1, state, { mode: "review" });
+      server.use(
+        http.get("*/api/browser", () =>
+          HttpResponse.json(
+            browserOf({
+              ...FILL_ACTIVE,
+              purpose: "apply_review",
+              application_id: item.id,
+            }),
+          ),
+        ),
+      );
+      fakeQueue([item]);
+      const views = await watchTheBrowser();
+      const { screen: drawn } = await connected(opened);
+      const view = within(views).getByRole("region", {
+        name: live("Robotics Engineer 1"),
+      });
+      expect(await within(view).findByRole("status")).toHaveTextContent(
+        "The app sends the form you confirmed. The assistant then reads the site's answer.",
+      );
+      expect(drawn.viewOnly).toBe(true);
+      for (const name of ["Use the browser myself", "Keyboard"]) {
+        expect(within(view).queryByRole("button", { name })).toBeNull();
+      }
+      expect(
+        within(view).queryByLabelText("Type into your browser"),
+      ).toBeNull();
     },
   );
 

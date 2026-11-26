@@ -1340,10 +1340,10 @@ describe("the submit lease on the job page", () => {
       "The assistant is sending the form. It may still fill a step or two first.",
     ],
     [
-      "Review first's agent once confirmed",
-      fakeApplication("approved", { mode: "review" }),
+      "Review first's agent while it fills",
+      fakeApplication("filling", { mode: "review" }),
       "apply_review",
-      "The app sends the form you confirmed. The assistant then reads the site's answer.",
+      "The assistant is filling the form. Then you check what it filled and confirm.",
     ],
   ])(
     "shows %s with Use the browser myself, never the wait",
@@ -1363,6 +1363,31 @@ describe("the submit lease on the job page", () => {
       ).toBeEnabled();
       expect(section.textContent).not.toMatch(/spaces out|Its result shows/);
       expect(section.textContent).not.toMatch(SEPARATOR);
+    },
+  );
+
+  it.each(["approved", "submitting"])(
+    "shows Review first's agent watch only once the person confirmed (%s)",
+    async (state) => {
+      const opened = fakeScreens();
+      fakeApply({
+        application: fakeApplication(state, { mode: "review" }),
+        answers: filled(),
+      });
+      holding(APP_ID, "apply_review");
+      const { section } = await openSection();
+      const view = await connected(opened);
+      const live = await watching(section);
+      expect(within(live).getByRole("status")).toHaveTextContent(
+        "The app sends the form you confirmed. The assistant then reads the site's answer.",
+      );
+      expect(view.screen.viewOnly).toBe(true);
+      for (const name of ["Use the browser myself", "Keyboard"]) {
+        expect(within(section).queryByRole("button", { name })).toBeNull();
+      }
+      expect(
+        within(section).queryByLabelText("Type into your browser"),
+      ).toBeNull();
     },
   );
 

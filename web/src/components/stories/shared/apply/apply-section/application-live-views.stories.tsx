@@ -27,7 +27,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The live view of the person's browser in Your application while the app works: the wait before the fill, then the lease the api names for the application, whatever its state (a fill with Use the browser myself, the submit lease watch only). Without that lease it says what the application waits for, from its own needs.",
+          "The live view of the person's browser in Your application while the app works: the wait before the fill, then the lease the api names for the application, whatever its state (a fill with Use the browser myself, the submit lease and Review first's agent after the Confirm watch only). Without that lease it says what the application waits for, from its own needs.",
       },
     },
   },
@@ -132,6 +132,24 @@ export const SendingOneClickAgent: Story = {
     liveRoutes();
     browserHolds(
       lease({ purpose: "apply_agent", application_id: APP_ID, max_s: 3600 }),
+    );
+    return fakeLiveScreens({ pages: ["form"] });
+  },
+};
+
+/** Review first's agent after the person's Confirm: the app clicks send in its session, watched only. */
+export const SendingReviewFirstAgent: Story = {
+  name: "Sending what you confirmed, watched only",
+  args: {
+    application: applicationIn("submitting", { mode: "review" }),
+    phase: "submitting",
+    agentFill: true,
+    submitLease: { application: APP_ID },
+  },
+  beforeEach: () => {
+    liveRoutes();
+    browserHolds(
+      lease({ purpose: "apply_review", application_id: APP_ID, max_s: 3600 }),
     );
     return fakeLiveScreens({ pages: ["form"] });
   },

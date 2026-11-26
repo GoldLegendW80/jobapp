@@ -81,16 +81,18 @@ function useApplicationLease(
  * api names for the application, whatever the application's state: a fill's with Use the browser
  * myself, the submit lease's watch only. Without that lease it shows `idle` in words; the "before"
  * screenshot appears below when the fill ends. `status` is the sentence of the live view's status
- * line, or the function that gives it for the lease's purpose. `stopped`: nothing runs, so no
- * spinner. `namedOnly`: the application fills nothing now, so a fill lease that names no
- * application is not its own. `label` (and `detail`): the view of a grid of views (LiveViews, the
- * Applications page), named and with its state; a sign in hand off then stays on the
- * application's card (FillHandoff).
+ * line, or the function that gives it for the lease's purpose. `watchOnly`: whether a fill lease
+ * of that purpose is watch only too in the application's state (liveWatchOnly: Review first's
+ * agent after the Confirm). `stopped`: nothing runs, so no spinner. `namedOnly`: the application
+ * fills nothing now, so a fill lease that names no application is not its own. `label` (and
+ * `detail`): the view of a grid of views (LiveViews, the Applications page), named and with its
+ * state; a sign in hand off then stays on the application's card (FillHandoff).
  */
 export function LiveViewSlot({
   idle,
   leaseOf,
   status = "The assistant is filling the form.",
+  watchOnly = () => false,
   stopped = false,
   namedOnly = false,
   label,
@@ -99,6 +101,7 @@ export function LiveViewSlot({
   idle: string;
   leaseOf: LeaseOf;
   status?: string | ((purpose: string) => string);
+  watchOnly?: (purpose: string) => boolean;
   stopped?: boolean;
   namedOnly?: boolean;
   label?: string;
@@ -107,7 +110,7 @@ export function LiveViewSlot({
   const lease = useApplicationLease(leaseOf, APPLY_PURPOSES, namedOnly);
   const statusOf = (purpose: string) =>
     typeof status === "function" ? status(purpose) : status;
-  if (lease?.purpose === SUBMIT_PURPOSE) {
+  if (lease && (lease.purpose === SUBMIT_PURPOSE || watchOnly(lease.purpose))) {
     return (
       <div data-testid="live-view-slot">
         <LiveBrowser

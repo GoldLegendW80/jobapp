@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { LiveViewSlot } from "@/components/shared/apply/live-view-slot";
 import { withApp } from "@/design-system/with-app";
 import { applicationIn } from "@/design-system/fixtures/shared-apply";
-import { liveStatus } from "@/features/apply/helpers/live-view";
+import { liveStatus, liveWatchOnly } from "@/features/apply/helpers/live-view";
 import {
   browserHolds,
   fakeLiveScreens,
@@ -19,6 +19,12 @@ const statusOf =
   (purpose: string) =>
     liveStatus(purpose, applicationIn(...run));
 
+/** Whether `run`'s lease is watch only, as the job page and the Applications page give it. */
+const watchOnlyOf =
+  (...run: Parameters<typeof applicationIn>) =>
+  (purpose: string) =>
+    liveWatchOnly(purpose, applicationIn(...run));
+
 const meta = {
   title: "Shared/Apply/Live view slot",
   component: LiveViewSlot,
@@ -28,7 +34,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "Where the live view of the person's browser goes while the assistant fills or sends an application: on a job's Your application, and named in the live views of the Applications page. It shows the lease the api names for the application, whatever the application's state: a fill with Use the browser myself, the submit lease watch only. Without that lease, a sentence says what the application waits for.",
+          "Where the live view of the person's browser goes while the assistant fills or sends an application: on a job's Your application, and named in the live views of the Applications page. It shows the lease the api names for the application, whatever the application's state: a fill with Use the browser myself, the submit lease and Review first's agent after the Confirm watch only. Without that lease, a sentence says what the application waits for.",
       },
     },
   },
@@ -36,6 +42,7 @@ const meta = {
     idle: "The assistant is filling the form. You can watch it live here, then it sends it.",
     leaseOf: { application: APPLICATION },
     status: statusOf("filling", { mode: "direct" }),
+    watchOnly: watchOnlyOf("filling", { mode: "direct" }),
   },
   beforeEach: () => {
     liveRoutes();
@@ -64,7 +71,28 @@ export const TheAssistantSends: Story = {
   args: {
     idle: "Sending the form. Its result shows here once the app has it.",
     status: statusOf("submitting", { mode: "direct" }),
+    watchOnly: watchOnlyOf("submitting", { mode: "direct" }),
     namedOnly: true,
+  },
+};
+
+/** Review first's agent once the person confirmed: the app clicks send in its session, watched only. */
+export const ReviewFirstSends: Story = {
+  name: "Review first sends the confirmed form, watched only",
+  args: {
+    idle: "Sending the form. Its result shows here once the app has it.",
+    status: statusOf("submitting", { mode: "review" }),
+    watchOnly: watchOnlyOf("submitting", { mode: "review" }),
+    namedOnly: true,
+  },
+  beforeEach: () => {
+    browserHolds(
+      lease({
+        purpose: "apply_review",
+        application_id: APPLICATION,
+        max_s: 3600,
+      }),
+    );
   },
 };
 
@@ -82,6 +110,7 @@ export const TheFormIsSent: Story = {
   args: {
     idle: "Your browser starts soon. Then you can watch the assistant send the form here.",
     status: statusOf("approved"),
+    watchOnly: watchOnlyOf("approved"),
     namedOnly: true,
   },
   beforeEach: () => {

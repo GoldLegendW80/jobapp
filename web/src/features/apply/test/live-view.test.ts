@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { fakeApplication } from "@/test/apply";
 
-import { liveStatus, liveWait } from "../helpers/live-view";
+import { liveStatus, liveWait, liveWatchOnly } from "../helpers/live-view";
 
 const SEPARATOR = /[–—]| - /;
 const PACE = /spaces out/;
@@ -86,6 +86,51 @@ describe("the status line over the lease", () => {
         expect(liveStatus(purpose, fakeApplication(state))).not.toMatch(
           SEPARATOR,
         );
+  });
+});
+
+describe("who has the browser of the lease", () => {
+  it.each([
+    ["apply_review", "filling", false],
+    ["apply_review", "approved", true],
+    ["apply_review", "submitting", true],
+    ["apply_agent", "filling", false],
+    ["apply_agent", "approved", false],
+    ["apply_agent", "submitting", false],
+  ])(
+    "gives Use the browser myself for a lease of %s while %s unless watch only (%s)",
+    (purpose, state, watchOnly) => {
+      for (const mode of ["review", "direct"]) {
+        expect(liveWatchOnly(purpose, fakeApplication(state, { mode }))).toBe(
+          watchOnly,
+        );
+      }
+    },
+  );
+
+  it.each(STATES)("keeps the submit lease watch only while %s", (state) => {
+    expect(liveWatchOnly("apply_submit", fakeApplication(state))).toBe(true);
+  });
+
+  it.each(["apply_fill", "full_auto"])(
+    "keeps Use the browser myself for a fill of %s in every state",
+    (purpose) => {
+      for (const state of STATES) {
+        expect(liveWatchOnly(purpose, fakeApplication(state))).toBe(false);
+      }
+    },
+  );
+
+  it.each(["held", "ready", "an_unknown_state", "valueOf"])(
+    "keeps Review first's agent watch only in any state but filling (%s)",
+    (state) => {
+      expect(liveWatchOnly("apply_review", fakeApplication(state))).toBe(true);
+    },
+  );
+
+  it("keeps Review first's agent watch only without its application", () => {
+    expect(liveWatchOnly("apply_review", null)).toBe(true);
+    expect(liveWatchOnly("apply_agent", null)).toBe(false);
   });
 });
 

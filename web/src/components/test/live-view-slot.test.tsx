@@ -23,7 +23,7 @@ import {
   LiveViewSlot,
   type LeaseOf,
 } from "@/components/shared/apply/live-view-slot";
-import { liveStatus } from "@/features/apply/helpers/live-view";
+import { liveStatus, liveWatchOnly } from "@/features/apply/helpers/live-view";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -88,9 +88,18 @@ function slot(
       idle={IDLE}
       leaseOf={leaseOf}
       status={(purpose) => liveStatus(purpose, run)}
+      watchOnly={(purpose) => liveWatchOnly(purpose, run)}
       namedOnly={state !== "filling"}
     />,
   );
+}
+
+/** The live view shows the window watch only: no take over, no keyboard. */
+function watchedOnly() {
+  for (const name of TAKE_OVER) {
+    expect(screen.queryByRole("button", { name })).toBeNull();
+  }
+  expect(screen.queryByLabelText("Type into your browser")).toBeNull();
 }
 
 /** The slot has read the browser once, so what it shows is its answer to that read. */
@@ -101,8 +110,11 @@ async function read(client: QueryClient) {
 }
 
 describe("the lease the api names for the application, whatever its state", () => {
+  // Review first's agent after the Confirm is watch only (below).
   const cases = STATES.flatMap((state) =>
     FILL_PURPOSES.map((purpose) => [purpose, state] as const),
+  ).filter(
+    ([purpose, state]) => purpose !== "apply_review" || state === "filling",
   );
 
   it.each(cases)(
@@ -137,10 +149,7 @@ describe("the lease the api names for the application, whatever its state", () =
       expect(await screen.findByRole("status")).toHaveTextContent(
         "The assistant fills the form again with your approved answers, then submits it.",
       );
-      for (const name of TAKE_OVER) {
-        expect(screen.queryByRole("button", { name })).toBeNull();
-      }
-      expect(screen.queryByLabelText("Type into your browser")).toBeNull();
+      watchedOnly();
       expect(
         screen.getByRole("button", { name: "Full screen" }),
       ).toBeInTheDocument();
@@ -193,6 +202,85 @@ describe("the lease the api names for the application, whatever its state", () =
       screen.getByRole("button", { name: "Use the browser myself" }),
     ).toBeEnabled();
     expect(opened).toHaveLength(1);
+  });
+});
+
+describe("Review first's agent once the person confirmed", () => {
+  const SENDS =
+    "The app sends the form you confirmed. The assistant then reads the site's answer.";
+
+  it.each(["approved", "submitting"])(
+    "shows its lease watch only while %s",
+    async (state) => {
+      const opened = fakeScreens();
+      browser(lease({ purpose: "apply_review" }));
+      slot(OF_MINE, { state, mode: "review" });
+      const view = await connected(opened);
+      expect(await screen.findByRole("status")).toHaveTextContent(SENDS);
+      expect(view.screen.viewOnly).toBe(true);
+      watchedOnly();
+      expect(
+        screen.getByRole("button", { name: "Full screen" }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("keeps its lease watch only while it waits on the page after the Confirm", async () => {
+    const opened = fakeScreens();
+    browser(
+      lease({
+        purpose: "apply_review",
+        state: "waiting_person",
+        wait_reason: "captcha",
+        wait_host: "jobs.example.org",
+      }),
+    );
+    slot(OF_MINE, { state: "submitting", mode: "review" });
+    const view = await connected(opened);
+    expect(await screen.findByRole("status")).toHaveTextContent(SENDS);
+    expect(view.screen.viewOnly).toBe(true);
+    watchedOnly();
+  });
+
+  it.each([
+    [
+      "apply_review",
+      "filling",
+      "review",
+      "The assistant is filling the form. Then you check what it filled and confirm.",
+    ],
+    [
+      "apply_agent",
+      "submitting",
+      "direct",
+      "The assistant is sending the form. It may still fill a step or two first.",
+    ],
+  ])(
+    "keeps Use the browser myself for a lease of %s while %s",
+    async (purpose, state, mode, sentence) => {
+      const opened = fakeScreens();
+      browser(lease({ purpose }));
+      slot(OF_MINE, { state, mode });
+      await connected(opened);
+      expect(await screen.findByRole("status")).toHaveTextContent(sentence);
+      expect(
+        screen.getByRole("button", { name: "Use the browser myself" }),
+      ).toBeEnabled();
+      expect(
+        screen.getByLabelText("Type into your browser"),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it("keeps the submit lease watch only whatever the caller's rule says", async () => {
+    const opened = fakeScreens();
+    browser(lease());
+    renderWithQuery(
+      <LiveViewSlot idle={IDLE} leaseOf={OF_MINE} watchOnly={() => false} />,
+    );
+    const view = await connected(opened);
+    expect(view.screen.viewOnly).toBe(true);
+    watchedOnly();
   });
 });
 
