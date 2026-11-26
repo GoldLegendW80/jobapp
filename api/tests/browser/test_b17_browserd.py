@@ -86,6 +86,12 @@ class Context:
         self.order.append("cdp")
         return self.cdp
 
+    async def new_page(self) -> Page:  # B29: opened before the browser's last page closes
+        page = Page()
+        page.context = self
+        self.pages.append(page)
+        return page
+
     async def close(self) -> None:  # the person's own context is never closed by a search
         self.closed = True
 
@@ -154,6 +160,8 @@ def test_a_hardening_step_that_fails_ends_the_discovery(fail: str) -> None:
     assert tab.state.native_failed
     assert page.closed  # the tab only, never the person's context
     assert not context.closed
+    # B29: the browser's last page, so a blank one opened first (Chromium quits without one).
+    assert [p.url for p in context.pages if not p.closed] == [actions.ABOUT_BLANK]
 
 
 def test_a_page_already_open_is_never_upgraded() -> None:
