@@ -34,6 +34,7 @@ it("lists LinkedIn's public job search with its searches and leaves a deleted bo
           new: 2,
           searches: 1,
           searched: [{ title: "GenAI Engineer", place: null }],
+          other_contract: 2,
         }),
         source({ mode: "api", kind: "ashby", host: null, found: 9, new: 9 }),
       ]}
@@ -42,7 +43,7 @@ it("lists LinkedIn's public job search with its searches and leaves a deleted bo
   const items = screen.getAllByRole("listitem");
   expect(items).toHaveLength(1);
   expect(items[0]).toHaveTextContent(
-    "LinkedIn: 1 search ran: GenAI Engineer. 3 postings found, 2 new.",
+    "LinkedIn: 1 search ran: GenAI Engineer. 3 postings found, 2 new. 2 postings of a contract you did not choose left out.",
   );
 });
 

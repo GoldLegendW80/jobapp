@@ -23,6 +23,7 @@ import {
 } from "@/features/jobs/helpers/labels";
 import {
   hasReportedFigures,
+  otherContractSentence,
   reportedSentences,
 } from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
@@ -51,6 +52,17 @@ export function SweepSources({ sources }: { sources: SweepSource[] }) {
   );
 }
 
+/** A source's line as before jobs J30 ("3 postings found, 2 new."), with an older sweep's postings
+ * of another contract. */
+function asBefore(source: SweepSource, verb: string): string {
+  return [
+    `${plural(source.found, "posting")} ${verb}, ${source.new.toLocaleString("en-GB")} new.`,
+    otherContractSentence(source),
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
 /** A board's line, named by its company (frozen with the sweep, else its `<ats>:<board>`):
  * what it found and kept, or why it was not read (its `reason`). */
 function boardStatus(source: SweepSource): string {
@@ -62,7 +74,7 @@ function boardStatus(source: SweepSource): string {
     );
   const found = hasReportedFigures(source)
     ? reportedSentences(source)
-    : `${plural(source.found, "posting")} matched, ${source.new.toLocaleString("en-GB")} new.`;
+    : asBefore(source, "matched");
   return source.error
     ? `${found} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
     : found;
@@ -108,7 +120,7 @@ function sourceStatus(source: SweepSource): string {
   const searches = searchesSentence(source);
   const found = hasReportedFigures(source)
     ? reportedSentences(source)
-    : `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
+    : asBefore(source, "found");
   const counts = [
     searches,
     leftOutSentence(source),

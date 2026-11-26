@@ -47,7 +47,8 @@ export interface ReportedFigures {
 const positive = (n: number | null | undefined): n is number =>
   typeof n === "number" && n > 0;
 
-/** Whether a source has a figure of J30 to say; without one it reads as before. */
+/** Whether a source has a figure of J30 to say; without one it reads as before. `other_contract`
+ * is a sweep's from before J30 (otherContractSentence). */
 export function hasReportedFigures(figures: ReportedFigures): boolean {
   return (
     [
@@ -56,7 +57,6 @@ export function hasReportedFigures(figures: ReportedFigures): boolean {
       figures.unwanted,
       figures.opened_by_app,
       figures.results_read,
-      figures.other_contract,
     ].some(positive) || Object.values(figures.refused ?? {}).some(positive)
   );
 }
@@ -97,6 +97,13 @@ export function keptParts(figures: ReportedFigures): string[] {
   return parts;
 }
 
+/** An older sweep's postings of a contract the person did not choose, left out before J30. */
+export function otherContractSentence(figures: ReportedFigures): string {
+  return positive(figures.other_contract)
+    ? `${plural(figures.other_contract, "posting")} of a contract you did not choose left out.`
+    : "";
+}
+
 /** What a source of a search did with what it reported, in sentences (its line in the summary). */
 export function reportedSentences(figures: ReportedFigures): string {
   const head = positive(figures.found)
@@ -123,9 +130,7 @@ export function reportedSentences(figures: ReportedFigures): string {
     positive(figures.results_read)
       ? `The assistant says it read ${plural(figures.results_read, "result")}.`
       : "",
-    positive(figures.other_contract)
-      ? `${plural(figures.other_contract, "posting")} of a contract you did not choose left out.`
-      : "",
+    otherContractSentence(figures),
   ];
   return [first, ...more].filter((part) => part !== "").join(" ");
 }

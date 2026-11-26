@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   hasReportedFigures,
   keptParts,
+  otherContractSentence,
   refusedSentence,
   reportedSentences,
   REFUSAL_REASONS,
@@ -52,9 +53,10 @@ describe("what a source of a search did with what it reported (J30)", () => {
   });
 
   it("says an older sweep's postings of another contract", () => {
-    expect(reportedSentences({ found: 1, new: 1, other_contract: 3 })).toBe(
-      "1 posting found: 1 new posting kept. 3 postings of a contract you did not choose left out.",
+    expect(otherContractSentence({ other_contract: 3 })).toBe(
+      "3 postings of a contract you did not choose left out.",
     );
+    expect(otherContractSentence({ other_contract: 0 })).toBe("");
   });
 
   it.each(Object.entries(REFUSAL_REASONS))(
@@ -85,7 +87,7 @@ describe("what a source of a search did with what it reported (J30)", () => {
         refused: {},
         opened_by_app: 0,
         results_read: null,
-        other_contract: 0,
+        other_contract: 4,
       }),
     ).toBe(false);
     for (const figures of [
@@ -95,7 +97,6 @@ describe("what a source of a search did with what it reported (J30)", () => {
       { refused: { page_error: 1 } },
       { opened_by_app: 1 },
       { results_read: 12 },
-      { other_contract: 1 },
     ])
       expect(hasReportedFigures(figures)).toBe(true);
   });
