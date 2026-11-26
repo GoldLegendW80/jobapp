@@ -27,8 +27,9 @@ Kept (the orchestrator, said in the reply; the owner gave no preference):
   unless the person's Try again came after the last act that may have sent it (`retry`);
 - the person's Cancel (A24, `gate.cancel`): the run is cancelled through the runs' own cancel,
   whose runner interrupts it at its next poll (0.5 s), and the state is read before every tool
-  call; a run's Cancel in Activity ends the application the same way (`finish`,
-  `gate.stopped_by_person`);
+  call and after the pace's pause; a run's Cancel in Activity ends the application the same way
+  (`finish`, `gate.stopped_by_person`); a confirmation the agent read before either Cancel
+  reached the run is recorded as the send it is (`finish`, `_sent_before_cancel`);
 - hard rule 3: an application by e-mail never reaches this module (`service.start` makes it
   Review first, `worker.apply_fill` sends it to `email.prepare`).
 
@@ -85,7 +86,7 @@ from sqlalchemy.orm import Session
 from app.agents import credentials, definitions, runs
 from app.agents.models import CredentialKind, RunStatus
 from app.apply import bank, states
-from app.apply.models import AnswerSource, Application, ApplicationAnswer, Mode, State
+from app.apply.models import ENDED, AnswerSource, Application, ApplicationAnswer, Mode, State
 from app.browser import screenshot, tool_sessions
 from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
@@ -469,13 +470,16 @@ class ApplySession:
     def _ended(self) -> tuple[str, bool]:
         return ENDS.get(self.stopped, "Stop now: the run ended."), True
 
-    async def _pace(self) -> None:
-        """At least a draw of PACE_S after the end of the previous act (the owner's pacing)."""
+    async def _pace(self) -> bool:
+        """At least a draw of PACE_S after the end of the previous act (the owner's pacing); True
+        when it waited."""
         if self.last_act is None:
-            return
+            return False
         wait = self.last_act + self.draw(*PACE_S) - self.monotonic()
-        if wait > 0:
-            await self.sleep(wait)
+        if wait <= 0:
+            return False
+        await self.sleep(wait)
+        return True
 
     async def _view(self) -> tuple[str, bool]:
         shot = await self.tools.call("browser_snapshot", {})
@@ -562,8 +566,9 @@ class ApplySession:
             paced = name in PACED and (
                 name != "browser_tabs" or args.get("action") in ("new", "select")
             )
-            if paced:
-                await self._pace()
+            # A Cancel during the pause (3 to 8 s) stops the act it was waiting for.
+            if paced and await self._pace() and await self._gone():
+                return self._ended()
             if (halted := await self._halt()) is not None:
                 self.stopped = halted
                 return self._ended()
@@ -1024,6 +1029,8 @@ def _report(
     # A20: the answers the agent chose for the person, readable afterwards (owner, 2026-11-06).
     row.value = {"summary": summary, "confirmation_url": address, "chosen": session.chosen_rows()}
     _cost(application, session, ran, now)
+    # Sessions do not autoflush, and `submit.record` reads the row again over what is not flushed.
+    db.flush()
 
 
 def _cost(application: Application, session: ApplySession, ran: Ran, now: datetime) -> None:
@@ -1059,8 +1066,10 @@ def finish(
     """The end of the run, in one transaction (the caller commits): `submitted` on the
     confirmation the agent read, `submit_unknown` after a submit act it cannot confirm,
     `needs_person` on a question nobody watched, `failed` otherwise. A run the person cancelled
-    in Activity ends as the application's Cancel ends it (`gate.stopped_by_person`); after the
-    application's Cancel the state is already written and only the run's cost is kept."""
+    in Activity ends as the application's Cancel ends it (`gate.stopped_by_person`), unless the
+    agent read the site's confirmation first: that send ends the run as its own end records it.
+    After the application's Cancel the state is already written and only the run's cost is kept,
+    unless the agent read the confirmation first (`_sent_before_cancel`)."""
     from app.apply import gate, run, submit
 
     found = run._locked(db, application_id)
@@ -1068,11 +1077,13 @@ def finish(
         return "gone"
     application = found[0]
     if application.state not in (State.filling, State.submitting):
+        if confirmed(session) and application.error_code == gate.CANCELLED_BY_PERSON:
+            return _sent_before_cancel(db, application, session, ran, now)
         _cost(application, session, ran, now)
         run._event(db, application, "outcome_superseded", now, state=application.state.value)
         return "superseded"
     _report(db, application, session, ran, now)
-    if ran.stopped == "cancelled":
+    if ran.stopped == "cancelled" and not confirmed(session):
         run._event(db, application, "agent_done", now, outcome=None, code="cancelled")
         return gate.stopped_by_person(db, application, now)
     if session.review:
@@ -1152,6 +1163,57 @@ def sent_before_confirm(db: Session, application: Application, now: datetime) ->
     db.flush()
     return submit.record(db, application.id, State.submit_unknown, now,
                          code="sent_before_confirm")  # fmt: skip
+
+
+def confirmed(session: ApplySession) -> bool:
+    """The agent reported the site's confirmation on a page this run read: apply_done records it
+    only before any stop, so the form was sent whatever stopped the run after."""
+    return session.done is not None and session.done[0] == "submitted"
+
+
+SENT_BEFORE_CANCEL = "sent_before_cancel"
+
+
+def _sent_before_cancel(
+    db: Session, application: Application, session: ApplySession, ran: Ran, now: datetime
+) -> str:
+    """The person's Cancel (`cancelled_by_person`) came after the agent read the site's
+    confirmation (A24): the send it confirmed is the end, with its report. `submitted` with
+    `sent_before_cancel` (the person reads that their Cancel came after the send); in Review
+    first before the gate's click, A20's rule: maybe sent, `submit_unknown`. Kept as the Cancel
+    ended it when another live application took the posting or its form since."""
+    from app.apply import gate, run, submit
+
+    _report(db, application, session, ran, now)
+    run._event(db, application, "agent_done", now, outcome="submitted", code=SENT_BEFORE_CANCEL)
+    before_click = session.review and not session.clicked
+    if (before_click and application.state is State.submit_unknown) or _taken(db, application):
+        return "superseded"
+    states.move(application, State.submitting, now, confirmed_before_cancel=True)
+    db.flush()
+    if before_click:
+        return submit.record(
+            db, application.id, State.submit_unknown, now, code=gate.CANCELLED_BY_PERSON
+        )
+    return submit.record(db, application.id, State.submitted, now, code=SENT_BEFORE_CANCEL)
+
+
+def _taken(db: Session, application: Application) -> bool:
+    """Another live application holds the posting or the form address (their unique indexes)."""
+    if application.state is not State.cancelled:
+        return False
+    other = db.scalar(
+        sa.select(Application.id).where(
+            Application.user_id == application.user_id,
+            Application.id != application.id,
+            Application.state.not_in(ENDED),
+            sa.or_(
+                Application.posting_id == application.posting_id,
+                Application.canonical_key == application.canonical_key,
+            ),
+        )
+    )
+    return other is not None
 
 
 def _requeue(db: Session, application: Application, now: datetime) -> str | None:

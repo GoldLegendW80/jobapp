@@ -47,7 +47,9 @@ Tightened by apply A6 (issue #296):
 - The person's Cancel at any moment (A24, owner 2026-11-26, `gate.stopped_by_person`): before
   an end, `cancelled`; from `submitting` the table's own `submit_unknown`. Only the person's "It
   was not sent" (`gate.not_sent`) moves `submit_unknown` to `cancelled`
-  (`move(..., not_sent_by_person=True)`, PERSON_NOT_SENT), never the app.
+  (`move(..., not_sent_by_person=True)`, PERSON_NOT_SENT), never the app. A confirmation the
+  apply agent read before the Cancel reached its run is recorded over the Cancel's end, through
+  `submitting` (`move(..., confirmed_before_cancel=True)`, SENT_BEFORE_CANCEL).
 """
 
 from datetime import datetime
@@ -99,6 +101,12 @@ AGENT_MOVES = {S.filling: frozenset({S.submitting}), S.ready: frozenset({S.submi
 PERSON_RETRIES = {S.submit_unknown: frozenset({S.queued})}
 # The person's "It was not sent" (A24): their own word frees the posting for their next Apply.
 PERSON_NOT_SENT = {S.submit_unknown: frozenset({S.cancelled})}
+# A24: the apply agent read the site's confirmation before the person's Cancel reached its run:
+# the send it confirmed is recorded over the Cancel's end (applier.finish), never a click.
+SENT_BEFORE_CANCEL = {
+    S.cancelled: frozenset({S.submitting}),
+    S.submit_unknown: frozenset({S.submitting}),
+}
 
 # Where a `submitting` with no click goes (`move(..., click_refused=True)`): back to `ready`, or
 # the end `recheck` gives the same refusal before the arm (never apply, a closed posting).
@@ -128,6 +136,7 @@ def move(
     by_agent: bool = False,
     retried_by_person: bool = False,
     not_sent_by_person: bool = False,
+    confirmed_before_cancel: bool = False,
 ) -> None:
     """Move `application` to `to`, or raise TransitionError. The caller holds its row lock and
     commits. `submitted_at` is set when the move records the click, and kept after it. Only the
@@ -154,12 +163,18 @@ def move(
         and to in PERSON_RETRIES.get(current, ())
     )
     said_not_sent = not_sent_by_person and to in PERSON_NOT_SENT.get(current, ())
+    agent_confirmed = (
+        confirmed_before_cancel
+        and application.mode in (Mode.direct, Mode.review)
+        and to in SENT_BEFORE_CANCEL.get(current, ())
+    )
     if not (
         sent_by_person
         or no_click
         or agent_click
         or person_retry
         or said_not_sent
+        or agent_confirmed
         or allowed(current, to)
     ):
         raise TransitionError(f"an application cannot move from {current.value} to {to.value}")

@@ -6,7 +6,9 @@ application à tout moment"), on a real Postgres:
   after one (the form may have been received; never sent again by the app);
 - the application's agent run is cancelled through the runs' own cancel (`runs.request_cancel`,
   what Activity's Cancel calls), and the Cancel of that run in Activity ends the application as
-  the application's own Cancel does, the lease released and the run's cost kept;
+  the application's own Cancel does, the lease released and the run's cost kept; a confirmation
+  the agent read before either Cancel reached its run ends it with the send, never "Nothing was
+  sent"; a Cancel during the pace's pause stops the act it waited for;
 - only the person's "It was not sent" ends a `submit_unknown` `cancelled`, and the posting is
   free for their next Apply;
 - Cancel all stops exactly the applications the confirmation named.
@@ -30,11 +32,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.agents import runs
 from app.agents.models import AgentRun, RunStatus
 from app.apply import applier, confirm, gate, service
-from app.apply.models import Application, ApplicationEvent, Mode, State
+from app.apply.models import Application, ApplicationAnswer, ApplicationEvent, Mode, State
+from app.jobs.models import JobStatus
 from app.main import create_app
 from tests.apply.a6_support import FakeQueue
 from tests.apply.conftest import AT, Person
-from tests.apply.test_a5_run import application, events, started
+from tests.apply.test_a5_run import application, events, started, status
 from tests.apply.test_a6_gate import _password
 from tests.apply.test_a12_likes import SECRET_KEY
 from tests.apply.test_a19_applier import Site, svc
@@ -313,6 +316,204 @@ def test_a_cancel_before_the_run_is_created_starts_no_run(
         sa.select(sa.func.count(AgentRun.id)).where(AgentRun.workflow_run_id == app_id)
     )
     assert count == 0
+
+
+# --- a confirmation the agent read before the Cancel reached its run ------------------------------
+
+SUMMARY = "Sent, the site thanked us."
+THANKS = "https://example.org/thanks"
+# Where the run stood, and the end its own end records once the agent read the confirmation.
+CONFIRMED = {
+    "direct_filling": (Mode.direct, State.filling, False, State.submitted, None),
+    "direct_submitting": (Mode.direct, State.submitting, False, State.submitted, None),
+    "review_filling": (
+        Mode.review,
+        State.filling,
+        False,
+        State.submit_unknown,
+        "sent_before_confirm",
+    ),
+    "review_clicked": (Mode.review, State.submitting, True, State.submitted, None),
+}
+
+
+def reported(
+    app_id: uuid.UUID, *, review: bool = False, clicked: bool = False, done: bool = True
+) -> applier.ApplySession:
+    """The worker's session of the run, after apply_done `submitted` on a page it read."""
+    session = applier.ApplySession(
+        tools=None,
+        capability=None,
+        stop=lambda: asyncio.sleep(0),  # type: ignore[arg-type]
+        arm=lambda: asyncio.sleep(0),  # type: ignore[arg-type]
+        flow=runs.WorkflowRef("application", app_id, "apply"),
+        review=review,
+    )
+    session.clicked = clicked
+    if done:
+        session.done = ("submitted", SUMMARY, THANKS)
+    return session
+
+
+def finished(
+    factory: sessionmaker[Session], app_id: uuid.UUID, session: applier.ApplySession
+) -> str:
+    with factory() as s:
+        written = applier.finish(s, app_id, session, applier.Ran(700, 90, "cancelled"), AT)
+        s.commit()
+    return written
+
+
+def kept(db: Session, app_id: uuid.UUID) -> None:
+    """The run's report and cost, as the agent left them."""
+    found = application(db, app_id)
+    assert (found.cost["input_tokens"], found.cost["output_tokens"]) == (700, 90)
+    report = db.get(ApplicationAnswer, (app_id, applier.REPORT_KEY))
+    assert report is not None
+    assert (report.value["summary"], report.value["confirmation_url"]) == (SUMMARY, THANKS)
+
+
+def begun(db: Session, person: Person, mode: Mode, state: State) -> uuid.UUID:
+    app_id = ticked(db, person) if mode is Mode.review else started(db, person, mode)
+    put(db, app_id, state)
+    return app_id
+
+
+@pytest.mark.parametrize("case", list(CONFIRMED))
+def test_a_run_cancelled_in_activity_after_a_confirmation_it_read_records_the_send(
+    db: Session, factory: sessionmaker[Session], person_a: Person, case: str
+) -> None:
+    mode, state, clicked, end, code = CONFIRMED[case]
+    app_id = begun(db, person_a, mode, state)
+    session = reported(app_id, review=mode is Mode.review, clicked=clicked)
+
+    written = finished(factory, app_id, session)
+
+    found = application(db, app_id)
+    assert (written, found.state, found.error_code) == (end.value, end, code)
+    assert "cancelled" not in kinds(db, app_id)
+    kept(db, app_id)
+    if end is State.submitted:
+        assert status(db, person_a) is JobStatus.applied
+
+
+def test_a_run_cancelled_in_activity_after_a_traced_step_act_says_it_may_have_been_sent(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    from app.apply import run
+
+    app_id = begun(db, person_a, Mode.review, State.filling)
+    run._event(db, application(db, app_id), applier.STEP_SENT, AT)
+    db.commit()
+    session = reported(app_id, review=True, done=False)
+    session.step_sent = True
+
+    finished(factory, app_id, session)
+
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.submit_unknown, gate.CANCELLED_BY_PERSON)
+
+
+@pytest.mark.parametrize("case", list(CONFIRMED))
+def test_the_application_s_cancel_after_a_confirmation_the_agent_read_ends_with_the_send(
+    db: Session, factory: sessionmaker[Session], person_a: Person, case: str
+) -> None:
+    mode, state, clicked, _, _ = CONFIRMED[case]
+    app_id = begun(db, person_a, mode, state)
+    session = reported(app_id, review=mode is Mode.review, clicked=clicked)
+    # The card's Cancel cannot see the worker's session: it writes the Cancel's end first.
+    assert cancel(factory, person_a, app_id).error_code == gate.CANCELLED_BY_PERSON
+
+    finished(factory, app_id, session)
+
+    found = application(db, app_id)
+    kept(db, app_id)
+    assert found.submitted_at is not None
+    if case == "review_filling":
+        # A20: a confirmation before the gate's click is a send by a step control, maybe sent.
+        assert (found.state, found.error_code) == (State.submit_unknown, gate.CANCELLED_BY_PERSON)
+        return
+    # The person reads that their Cancel came after the send.
+    assert (found.state, found.error_code) == (State.submitted, applier.SENT_BEFORE_CANCEL)
+    assert status(db, person_a) is JobStatus.applied
+
+
+def test_a_send_confirmed_before_the_cancel_leaves_a_new_application_its_posting(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = begun(db, person_a, Mode.direct, State.filling)
+    cancel(factory, person_a, app_id)
+    again = started(db, person_a, Mode.direct)
+
+    assert finished(factory, app_id, reported(app_id)) == "superseded"
+
+    assert application(db, app_id).state is State.cancelled
+    assert application(db, again).state is State.queued
+    kept(db, app_id)
+
+
+@pytest.mark.parametrize(
+    ("review", "clicked", "done", "end"),
+    [
+        (False, False, False, State.submit_unknown),
+        (True, True, True, State.submitted),
+        (True, True, False, State.submit_unknown),
+        (True, False, False, State.submit_unknown),
+    ],
+)
+def test_every_end_after_a_click_keeps_the_run_s_cost(
+    db: Session,
+    factory: sessionmaker[Session],
+    person_a: Person,
+    review: bool,
+    clicked: bool,
+    done: bool,
+    end: State,
+) -> None:
+    app_id = begun(db, person_a, Mode.review if review else Mode.direct, State.submitting)
+    session = reported(app_id, review=review, clicked=clicked, done=done)
+    with factory() as s:
+        applier.finish(s, app_id, session, applier.Ran(700, 90), AT)
+        s.commit()
+    found = application(db, app_id)
+    assert found.state is end
+    assert found.cost == {"input_tokens": 700, "output_tokens": 90, "acts": 0}
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_a_cancel_during_the_pace_s_pause_stops_the_act_it_waited_for(cancelled: bool) -> None:
+    sent: list[str] = []
+    going = {"alive": True}
+
+    class Tools:
+        async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+            sent.append(name)
+            return {"ok": True, "snapshot": '- button "Next" [ref=e1]', "url": THANKS}
+
+    async def alive() -> bool:
+        return going["alive"]
+
+    async def pause(seconds: float) -> None:
+        going["alive"] = not cancelled  # the person's Cancel lands during the pause
+
+    session = applier.ApplySession(
+        tools=Tools(),
+        capability=None,
+        stop=lambda: asyncio.sleep(0),  # type: ignore[arg-type]
+        arm=lambda: asyncio.sleep(0),  # type: ignore[arg-type]
+        alive=alive,
+        sleep=pause,
+        monotonic=lambda: 10.0,
+        draw=lambda low, high: 5.0,
+    )
+    session.last_act = 9.0
+
+    _, error = asyncio.run(session.interact("browser_click", {"ref": "e1"}))
+
+    if cancelled:
+        assert (error, sent, session.stopped) == (True, [], "superseded")
+    else:
+        assert sent == ["browser_click", "browser_snapshot"]
 
 
 # --- "It was not sent", and Cancel all -----------------------------------------------------------
