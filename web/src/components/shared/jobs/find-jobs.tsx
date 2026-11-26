@@ -54,7 +54,7 @@ import type { SweepRunner } from "@/features/jobs/api/use-sweep-runner";
 import { useFetchSweep, useSweeps } from "@/features/jobs/api/use-sweeps";
 
 /** A button that opens the page's Find jobs setup (use-find-jobs.ts); it says when a search
- * runs. */
+ * runs, and stays usable then, so another search can wait in the line (jobs J33). */
 export function FindJobsButton({ finder }: { finder: FindJobs }) {
   const busy = finder.runner.starting || finder.runner.running !== null;
   return (
@@ -63,7 +63,7 @@ export function FindJobsButton({ finder }: { finder: FindJobs }) {
       onClick={(event) => {
         finder.show(event.currentTarget);
       }}
-      disabled={busy}
+      disabled={finder.runner.starting}
     >
       {busy ? (
         <Spinner aria-hidden="true" role={undefined} />
@@ -81,6 +81,7 @@ export function FindJobsSetup({ finder }: { finder: FindJobs }) {
   return (
     <SearchSetup
       runner={finder.runner}
+      initial={finder.screen}
       onClose={finder.close}
       onReturnFocus={finder.returnFocus}
     />
@@ -246,6 +247,7 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
                 : "No new posting"}
           </DialogTitle>
           <DialogDescription>
+            {sweep.search ? `${sweep.search.name}: ` : ""}
             {summaryLine(sweep)}
             {sweep.duplicates
               ? ` ${plural(sweep.duplicates, "match", "matches")} already in your list.`
@@ -458,7 +460,8 @@ export function PastSearchesDialog({
                         {formatDateTime(sweep.started_at)}
                       </span>
                       <span className="text-xs text-muted-foreground">
-                        {sweep.trigger === "schedule" ? "Automatic" : "By hand"}
+                        {sweep.search?.name ?? "Main search"},{" "}
+                        {sweep.trigger === "schedule" ? "automatic" : "by hand"}
                         , {STATUS_TEXT[sweep.status] ?? sweep.status}
                         {sweep.boards_failed.length
                           ? `, ${plural(sweep.boards_failed.length, "board")} failed`

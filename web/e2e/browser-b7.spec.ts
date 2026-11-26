@@ -136,6 +136,8 @@ test("A signs in to the site through the live view, on a phone", async () => {
   // Sign in happens from a website's line in Find jobs (B17); nothing is saved to the list.
   await pageA.goto("/jobs");
   await pageA.getByRole("button", { name: "Find jobs" }).click();
+  // Find jobs opens on Your searches (jobs J33): the main search's form is one click away.
+  await pageA.getByRole("button", { name: "Edit Main search" }).click();
   const setup = pageA.getByRole("dialog", { name: "Find jobs" });
   await setup.getByLabel("Website address").fill(SITE);
   await setup.getByRole("button", { name: "Add", exact: true }).click();
@@ -180,7 +182,9 @@ test("A signs in to the site through the live view, on a phone", async () => {
   await row.getByRole("button", { name: "Done" }).click();
   await expect(row).toContainText("Signed in", { timeout: 45_000 });
   await expect.poll(() => currentLease().lease).toBeNull();
-  await setup.getByRole("button", { name: "Cancel" }).click();
+  // Back to Your searches (jobs J33), then Escape closes Find jobs without saving.
+  await setup.getByRole("button", { name: "Back" }).click();
+  await pageA.keyboard.press("Escape");
 
   // Account lists the site, with its Sign in, and nothing else of the old card.
   await pageA.goto("/account");

@@ -94,7 +94,11 @@ async function open(
   await screen.findByRole("list", { name: "Postings" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Edit Main search" }),
+  );
   const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
+  await within(dialog).findByText("Where to search");
   return { profile, user, dialog, detected };
 }
 

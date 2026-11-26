@@ -91,7 +91,7 @@ export function SourceLine({
               note={note}
             />
           ) : null}
-          {isLinkedIn && first && row.enabled ? (
+          {isLinkedIn && first && row.enabled && sources.ownsPersonal ? (
             <LinkedInSearchChoice
               value={sources.linkedinMode}
               onChange={sources.setLinkedinMode}

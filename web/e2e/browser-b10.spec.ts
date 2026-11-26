@@ -159,6 +159,8 @@ async function lastSources(request: APIRequestContext): Promise<Source[]> {
 async function findJobs(page: Page, listed = false) {
   await page.goto("/jobs");
   await page.getByRole("button", { name: "Find jobs" }).click();
+  // Find jobs opens on Your searches (jobs J33): the main search's form is one click away.
+  await page.getByRole("button", { name: "Edit Main search" }).click();
   const setup = page.getByRole("dialog", { name: "Find jobs" });
   await expect(setup).toBeVisible();
   // A second search of the same person finds LinkedIn already in the list: the example is gone.

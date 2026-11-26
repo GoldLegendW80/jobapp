@@ -1,25 +1,33 @@
 import { Search as SearchIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Form } from "@/components/ui/form";
+import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 
 import type { SearchSetupState } from "@/features/jobs/hooks/use-search-setup";
+import { NAME_MAX } from "@/features/jobs/helpers/saved-searches";
 import { SourcesEditor } from "@/components/shared/jobs/sources/sources-editor";
+import { BLOCK, COLUMN } from "@/components/shared/jobs/setup-grid";
 import { BODY, EDGES } from "./setup-surface";
 import { WhatYouWant } from "./what-you-want";
 
-/** The two steps of Find jobs (where to search, what you want) and the footer that stays in
- * view: what went wrong, Cancel, and "Save and start search". */
+/** The two steps of one search (where to search, what you want), its name when it is a saved
+ * one, and the footer that stays in view: what went wrong, Back (or Cancel), Save, and "Save and
+ * start search". */
 export function SetupForm({
   setup,
   onClose,
   onReload,
+  onBack,
 }: {
   setup: SearchSetupState;
   onClose: () => void;
   onReload: () => Promise<void>;
+  /** Back to Your searches, keeping the draft. */
+  onBack?: () => void;
 }) {
   const { locked, conflict, error, emptyReason } = setup;
   return (
@@ -35,6 +43,21 @@ export function SetupForm({
             aria-busy={locked}
             className="flex min-w-0 flex-col gap-6"
           >
+            {setup.target === "main" ? null : (
+              <Field className={cn(COLUMN, BLOCK)}>
+                <FieldLabel htmlFor="search-name">Name</FieldLabel>
+                <Input
+                  id="search-name"
+                  value={setup.name}
+                  maxLength={NAME_MAX}
+                  autoComplete="off"
+                  placeholder="For example: Remote roles in Lyon"
+                  onChange={(event) => {
+                    setup.setName(event.target.value);
+                  }}
+                />
+              </Field>
+            )}
             <SourcesEditor
               sources={setup.sources}
               reviewed={setup.reviewed}
@@ -79,14 +102,24 @@ export function SetupForm({
               {emptyReason}
             </p>
           ) : null}
-          <div className="flex items-center justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button
               type="button"
               variant="outline"
-              onClick={onClose}
+              onClick={onBack ?? onClose}
               disabled={locked}
             >
-              Cancel
+              {onBack ? "Back" : "Cancel"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setup.onSave();
+              }}
+              disabled={conflict || locked}
+            >
+              Save
             </Button>
             <Button
               type="submit"

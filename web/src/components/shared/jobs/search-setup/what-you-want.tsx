@@ -5,7 +5,6 @@ import { AdvancedSection } from "@/components/blocks/advanced-section";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { SearchLists } from "@/components/shared/profile/search-lists";
-import { TargetFields } from "@/components/shared/profile/target-fields";
 import type { SearchForm } from "@/features/profile/helpers/editor-forms";
 import { cn } from "@/lib/utils";
 
@@ -19,7 +18,8 @@ import {
 import { CriteriaFields } from "./criteria-fields";
 
 /** Step 2 of Find jobs: the titles and places wanted, the rest under More options (the words
- * not wanted, the criteria, what the person aims for, instructions for the assistant). */
+ * not wanted, the criteria, instructions for the assistant). What the person aims for applies to
+ * every search: it is in Settings, Search (jobs J33). */
 export function WhatYouWant({
   form,
   more,
@@ -63,11 +63,6 @@ export function WhatYouWant({
       >
         <SearchLists form={form} only={["title_exclude", "location_exclude"]} />
         <CriteriaFields form={form} />
-        {/* The profile's "What you aim for" box, without its border and padding here, so
-          its words keep the setup's one edge. */}
-        <div className="[&>section]:rounded-none [&>section]:border-0 [&>section]:p-0 sm:[&>section]:p-0">
-          <TargetFields form={form} />
-        </div>
         <Field className={BLOCK}>
           <FieldLabel htmlFor={`${id}-instructions`} className="leading-none">
             Instructions for the assistant
