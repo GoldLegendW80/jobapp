@@ -427,7 +427,7 @@ def test_the_prompt_states_every_criterion_the_tools_the_reasons_and_the_line():
         "Run a search for each wanted title",
         "load more, open the next pages, scroll",
         "When in doubt, report it",
-        "the person's own never\napply rules exclude",
+        "the person's own never apply\nrules exclude",
         "(best right\nafter reading it)",
     ):
         assert words in prompt, words
