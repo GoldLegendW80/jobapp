@@ -49,6 +49,7 @@ import { plural } from "@/features/jobs/helpers/selection";
 import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel, sourceName } from "@/features/jobs/helpers/labels";
 import { SweepBrowsers } from "./sweep-browsers";
+import { SweepAssistantWords } from "./sweep-assistant-words";
 import { SweepSources } from "./sweep-sources";
 import { SearchSetup } from "./search-setup/search-setup";
 import { type Sweep } from "@/features/jobs/api/sweeps-api";
@@ -356,6 +357,16 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
           </section>
         ) : null}
         <SweepSources sources={sweep.sources} />
+        {sweep.sources.some(
+          (source) => source.mode === "llm_browser" || source.mode === "web",
+        ) ? (
+          <SweepAssistantWords
+            sweepId={sweep.id}
+            onLeave={() => {
+              runner.showSummary(null);
+            }}
+          />
+        ) : null}
         {sweep.boards_failed.length ? (
           <section aria-label="Failed boards" className="flex flex-col gap-1">
             <h3 className="flex items-center gap-1.5 text-sm font-medium">
