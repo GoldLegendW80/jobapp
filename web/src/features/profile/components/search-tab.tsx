@@ -116,6 +116,12 @@ function SearchForms({
           onSubmit={(event) => void onSubmit(event)}
         >
           <FormErrorAlert message={formError} />
+          {/* Jobs J33: one sentence on what every search shares and what is the main one's. */}
+          <p className="text-sm text-muted-foreground">
+            This is your main search. The never apply rules, the minimum fit,
+            what you aim for and the pay apply to every search, your saved
+            searches of Find jobs too.
+          </p>
           <SettingsSection
             title="Titles and places"
             description="Each word or phrase matches as a whole word, in any case, with an optional plural."

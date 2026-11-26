@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import { jobsKey } from "./jobs-api";
+import { searchesKey } from "./searches-api";
 import {
   runningSweepOf,
   startSweep,
@@ -26,6 +27,8 @@ export interface SweepRunner {
   running: Sweep | null;
   starting: boolean;
   start: (profileRevision?: number) => Promise<void>;
+  /** Follows a sweep started elsewhere: a search's Run now (jobs J33). */
+  follow: (sweep: Sweep) => void;
   summary: SweepDetail | null;
   showSummary: (sweep: SweepDetail | null) => void;
 }
@@ -53,6 +56,8 @@ export function useSweepRunner(): SweepRunner {
       setEnded((old) => new Set(old).add(target));
       setProgress(null);
       void client.invalidateQueries({ queryKey: sweepsKey });
+      // The line moves on: a search that waited starts now.
+      void client.invalidateQueries({ queryKey: searchesKey });
     };
     return watchSweep(target, {
       onProgress: setProgress,
@@ -77,6 +82,8 @@ export function useSweepRunner(): SweepRunner {
         },
         (error: unknown) => {
           setStarting(false);
+          // Setup owns its editable error state, and puts its search in the line when one runs.
+          if (profileRevision !== undefined) throw error;
           const already = runningSweepOf(error);
           if (already) {
             toast.info("A search is already running: showing it.");
@@ -88,8 +95,6 @@ export function useSweepRunner(): SweepRunner {
             setStarted(already);
             return;
           }
-          // Setup owns its editable error state and must not disappear after a refusal.
-          if (profileRevision !== undefined) throw error;
           if (isApiError(error) && error.status === 422) {
             // No ticked job website, or a stored search section to save again (the api's
             // detail says which).
@@ -110,13 +115,29 @@ export function useSweepRunner(): SweepRunner {
     [client, navigate],
   );
 
+  const follow = useCallback(
+    (sweep: Sweep) => {
+      setProgress(sweep);
+      setStarted(sweep.id);
+      void client.invalidateQueries({ queryKey: sweepsKey });
+    },
+    [client],
+  );
+
   let running: Sweep | null = null;
   if (target) {
     if (progress?.id === target) running = progress;
     else if (listed?.id === target) running = listed;
     else running = { ...EMPTY_PROGRESS, id: target };
   }
-  return { running, starting, start, summary, showSummary: setSummary };
+  return {
+    running,
+    starting,
+    start,
+    follow,
+    summary,
+    showSummary: setSummary,
+  };
 }
 
 /** What the progress line shows for a sweep whose first update has not arrived yet. */

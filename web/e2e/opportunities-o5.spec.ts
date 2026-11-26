@@ -503,7 +503,8 @@ test("pay, how the app applies, the summary, and Start opens Find jobs on an emp
   await expect(pageN).toHaveURL(/\/jobs$/);
   const findJobs = pageN.getByRole("dialog", { name: "Find jobs" });
   await expect(findJobs).toBeVisible();
-  await press(findJobs.getByRole("button", { name: "Cancel" }), "Enter");
+  // It opens on the main search's form (jobs J33); Escape closes Find jobs.
+  await pageN.keyboard.press("Escape");
   await expect(findJobs).toBeHidden();
   const sweeps = await pageN.request.get("/api/jobs/sweeps?limit=1");
   expect(((await sweeps.json()) as { items: unknown[] }).items).toEqual([]);
