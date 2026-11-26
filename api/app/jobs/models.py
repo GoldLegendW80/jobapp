@@ -395,7 +395,8 @@ class SweepRequest(Base):
     """A run asked while the person's sweep runs (jobs J32, the line, migration 0050): of a saved
     search, or of the main search when `saved_search_id` is null; by hand, or by a schedule slot
     that met the running sweep (`schedule_slot`). One waits per search; the oldest starts when
-    the sweep before it ends."""
+    the sweep before it ends. A slot's run the person took back stays, `taken_back_at` set, so
+    the slot counts as taken until it leaves its window (sweep.slot_taken)."""
 
     __tablename__ = "sweep_requests"
     __table_args__ = (
@@ -409,14 +410,14 @@ class SweepRequest(Base):
             "ix_sweep_requests_one_main",
             "user_id",
             unique=True,
-            postgresql_where=sa.text("saved_search_id IS NULL"),
+            postgresql_where=sa.text("saved_search_id IS NULL AND taken_back_at IS NULL"),
         ),
         sa.Index(
             "ix_sweep_requests_one_per_search",
             "user_id",
             "saved_search_id",
             unique=True,
-            postgresql_where=sa.text("saved_search_id IS NOT NULL"),
+            postgresql_where=sa.text("saved_search_id IS NOT NULL AND taken_back_at IS NULL"),
         ),
         sa.Index("ix_sweep_requests_user_id_position", "user_id", "position"),
     )
@@ -429,6 +430,7 @@ class SweepRequest(Base):
     trigger: Mapped[SweepTrigger] = mapped_column(SWEEP_TRIGGER_ENUM, nullable=False)
     schedule_slot: Mapped[str | None] = mapped_column(sa.Text)
     requested_at: Mapped[datetime] = _now_column()
+    taken_back_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class JobRescore(Base):

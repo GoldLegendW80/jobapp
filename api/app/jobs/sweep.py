@@ -1900,7 +1900,7 @@ class DueSweep:
 
 def slot_taken(db: Session, user_id: uuid.UUID, key: str) -> bool:
     """Whether the user already has a sweep for this schedule slot (whatever its status), or a
-    request in the line that holds it (jobs J32)."""
+    request in the line that holds it, waiting or taken back (jobs J32)."""
     swept = (
         sa.select(sa.literal(True))
         .select_from(Sweep)
@@ -2060,17 +2060,20 @@ def start(
 
 
 def start_next(db: Session, user_id: uuid.UUID, now: datetime) -> Sweep | None:
-    """The person's oldest request in the line started (jobs J32), or None when a sweep runs or
-    none waits. A request that holds a schedule slot starts as that slot's sweep. A search that
-    lost its websites or no longer validates still starts, and its claim fails it with the
-    reason, so the history says why and the line goes on. The caller commits."""
+    """The person's oldest request in the line started (jobs J32), or None when a sweep runs,
+    none waits or the account is disabled. A request that holds a schedule slot starts as that
+    slot's sweep. A search that lost its websites or no longer validates still starts, and its
+    claim fails it with the reason, so the history says why and the line goes on. The caller
+    commits."""
     db.execute(sa.select(Profile.user_id).where(Profile.user_id == user_id).with_for_update())
+    if not db.execute(sa.select(User.is_active).where(User.id == user_id)).scalar():
+        return None
     reap_stale(db, now, user_id)
     if service.running_sweep(db, user_id) is not None:
         return None
     request = db.execute(
         sa.select(SweepRequest)
-        .where(SweepRequest.user_id == user_id)
+        .where(SweepRequest.user_id == user_id, searches.WAITS)
         .order_by(SweepRequest.position)
         .limit(1)
         .with_for_update(skip_locked=True)

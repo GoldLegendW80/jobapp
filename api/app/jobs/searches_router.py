@@ -397,10 +397,13 @@ async def run_search(search_id: str, user: CurrentUser, request: Request) -> Sea
 
 
 def _take_back(
-    sessions: sessionmaker[Session], user_id: uuid.UUID, saved_search_id: uuid.UUID | None
+    sessions: sessionmaker[Session],
+    user_id: uuid.UUID,
+    saved_search_id: uuid.UUID | None,
+    now: datetime,
 ) -> bool:
     with sessions() as db:
-        gone = searches.take_back(db, user_id, saved_search_id)
+        gone = searches.take_back(db, user_id, saved_search_id, now)
         db.commit()
         return gone
 
@@ -413,7 +416,7 @@ def _take_back(
 async def take_back(search_id: str, user: CurrentUser, request: Request) -> Response:
     """Take back the search's run waiting in the line."""
     if not await run_in_threadpool(
-        _take_back, sessions_of(request), user.id, _search_id(search_id)
+        _take_back, sessions_of(request), user.id, _search_id(search_id), deps.clock(request)
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NONE_WAITING)
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers=NO_STORE)

@@ -20,7 +20,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -103,6 +103,10 @@ class ApplicationChoice(enum.StrEnum):
     failed = "failed"
 
 
+# searches.MAIN: the main search is the profile's own section, with no row of its own.
+MainSearch = Literal["main"]
+
+
 @dataclass(frozen=True)
 class JobFilters:
     """The list filters of GET /api/jobs. Empty means no filter on that field."""
@@ -125,6 +129,7 @@ class JobFilters:
     pay_period: PayPeriod | None = None
     applications: Sequence[ApplicationChoice] = ()
     sweep: uuid.UUID | None = None  # the postings this sweep added
+    search: uuid.UUID | MainSearch | None = None  # the postings this search's sweeps added
 
 
 def _like_escape(text: str) -> str:
@@ -164,13 +169,28 @@ def source_condition(names: Sequence[str]) -> sa.ColumnElement[bool]:
 
 def added_by(user_id: uuid.UUID, sweep_id: uuid.UUID) -> sa.ScalarSelect[uuid.UUID]:
     """The ids of the jobs a sweep added, by their `sweep` event."""
+    return _added(user_id, JobEvent.data["sweep_id"].astext == str(sweep_id))
+
+
+def added_by_search(
+    user_id: uuid.UUID, search: uuid.UUID | MainSearch
+) -> sa.ScalarSelect[uuid.UUID]:
+    """The ids of the jobs the person's sweeps of one search added (jobs J32): `main`, the sweeps
+    that froze no saved search, as sweep_router.search_ran reads them (a deleted search's sweep
+    keeps its frozen name, so it is never the main search's); else those of the saved search."""
+    ran = sa.select(sa.cast(Sweep.id, sa.Text)).where(Sweep.user_id == user_id)
+    if search == "main":
+        frozen = sa.func.jsonb_typeof(Sweep.stats[("search_scope", "saved_search", "name")])
+        ran = ran.where(Sweep.saved_search_id.is_(None), sa.func.coalesce(frozen, "") != "string")
+    else:
+        ran = ran.where(Sweep.saved_search_id == search)
+    return _added(user_id, JobEvent.data["sweep_id"].astext.in_(ran))
+
+
+def _added(user_id: uuid.UUID, of_sweep: sa.ColumnElement[bool]) -> sa.ScalarSelect[uuid.UUID]:
     return (
         sa.select(JobEvent.job_id)
-        .where(
-            JobEvent.user_id == user_id,
-            JobEvent.kind == JobEventKind.sweep,
-            JobEvent.data["sweep_id"].astext == str(sweep_id),
-        )
+        .where(JobEvent.user_id == user_id, JobEvent.kind == JobEventKind.sweep, of_sweep)
         .scalar_subquery()
     )
 
@@ -222,7 +242,8 @@ def filtered(user_id: uuid.UUID, filters: JobFilters) -> sa.Select[tuple[Job]]:
 def _more_filters(
     query: sa.Select[tuple[Job]], user_id: uuid.UUID, filters: JobFilters
 ) -> sa.Select[tuple[Job]]:
-    """The filters of jobs J29: place, work mode, website, published, pay, application, sweep."""
+    """The filters of jobs J29: place, work mode, website, published, pay, application, sweep;
+    and the search of jobs J32."""
     if filters.places:
         words = place_words(Job.location)
         query = query.where(
@@ -248,6 +269,8 @@ def _more_filters(
         query = query.where(_application_condition[0](filters.applications))
     if filters.sweep is not None:
         query = query.where(Job.id.in_(added_by(user_id, filters.sweep)))
+    if filters.search is not None:
+        query = query.where(Job.id.in_(added_by_search(user_id, filters.search)))
     return query
 
 

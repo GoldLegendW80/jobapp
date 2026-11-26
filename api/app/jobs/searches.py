@@ -14,12 +14,14 @@ search. A saved search lists only websites whose permission the person gave (`un
 The line: one sweep runs per person. A run asked while one runs waits as a `sweep_requests` row,
 one per search (a second ask answers the same row), of a saved search or of the main search, by
 hand or by a schedule slot that met the running sweep (`add_request`). The oldest starts when the
-sweep before it ends, or at the next schedule tick (sweep.start_next).
+sweep before it ends, or at the next schedule tick (sweep.start_next). A run taken back that holds
+a slot is kept, marked `taken_back_at`, so its slot stays taken until it leaves its window
+(`take_back`, `forget_taken_back`).
 """
 
 import uuid
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 import sqlalchemy as sa
@@ -27,6 +29,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.identity.models import User
 from app.jobs.models import SavedSearch, SweepRequest, SweepTrigger
 from app.profile.models import Profile
 from app.profile.schemas import (
@@ -301,12 +304,15 @@ def delete(db: Session, user_id: uuid.UUID, search_id: uuid.UUID) -> bool:
 # --- the line -----------------------------------------------------------------------------------
 
 
+WAITS = SweepRequest.taken_back_at.is_(None)
+
+
 def waiting(db: Session, user_id: uuid.UUID) -> list[SweepRequest]:
     """The person's requests in the order they start."""
     return list(
         db.execute(
             sa.select(SweepRequest)
-            .where(SweepRequest.user_id == user_id)
+            .where(SweepRequest.user_id == user_id, WAITS)
             .order_by(SweepRequest.position)
         ).scalars()
     )
@@ -322,6 +328,7 @@ def request_of(
 ) -> SweepRequest | None:
     query = sa.select(SweepRequest).where(
         SweepRequest.user_id == user_id,
+        WAITS,
         SweepRequest.saved_search_id.is_(None)
         if saved_search_id is None
         else SweepRequest.saved_search_id == saved_search_id,
@@ -365,19 +372,42 @@ def add_request(
     raise RuntimeError("the request of this search could not be read")
 
 
-def take_back(db: Session, user_id: uuid.UUID, saved_search_id: uuid.UUID | None) -> bool:
-    """Remove the search's waiting request; False when none waits. The caller commits."""
+def take_back(
+    db: Session, user_id: uuid.UUID, saved_search_id: uuid.UUID | None, now: datetime
+) -> bool:
+    """Take back the search's waiting request; False when none waits. One that holds a schedule
+    slot is kept as taken back, so the next ticks do not put its slot in the line again
+    (sweep.slot_taken); the others go. The caller commits."""
     found = request_of(db, user_id, saved_search_id, lock=True)
     if found is None:
         return False
-    db.delete(found)
+    if found.schedule_slot is None:
+        db.delete(found)
+    else:
+        found.taken_back_at = now
     db.flush()
     return True
 
 
+def forget_taken_back(db: Session, now: datetime, window: timedelta) -> int:
+    """Remove the runs taken back more than `window` ago: a slot is taken back after its instant,
+    so it has left the tick's window by then. The caller commits."""
+    gone = db.execute(
+        sa.delete(SweepRequest)
+        .where(SweepRequest.taken_back_at < now - window)
+        .execution_options(synchronize_session=False)
+    )
+    return int(gone.rowcount or 0)
+
+
 def users_waiting(db: Session) -> list[uuid.UUID]:
+    """The active people with a run waiting (a disabled account's runs never start)."""
     return list(
         db.execute(
-            sa.select(SweepRequest.user_id).distinct().order_by(SweepRequest.user_id)
+            sa.select(SweepRequest.user_id)
+            .join(User, User.id == SweepRequest.user_id)
+            .where(WAITS, User.is_active.is_(True))
+            .distinct()
+            .order_by(SweepRequest.user_id)
         ).scalars()
     )

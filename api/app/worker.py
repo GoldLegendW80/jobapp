@@ -16,7 +16,8 @@ Sweeps queue (app.queue.SWEEPS):
   job id schedule:<user>:<slot>. A slot fires once (advisory lock and the slot recorded in the
   sweep); a user already sweeping gets the slot as a request in the line (jobs J32,
   app/jobs/searches.py). The saved searches' schedules fire the same way, each slot key holding
-  its search. The tick then starts the line's next run for everyone with none running.
+  its search. The tick then starts the line's next run for every active person with none
+  running; one person's error is counted and the tick goes on.
 - run_sweep starts the next run of the person's line when its sweep ends (start_the_line).
 - reap_sweeps: cron every minute, and once at start: fails running sweeps with no heartbeat for
   sweep.STALE_AFTER (worker crash, lost queue message).
@@ -156,7 +157,7 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import reader, rescore, searches, service, sweep
+from app.jobs import reader, rescore, schedule, searches, service, sweep
 from app.jobs.models import Sweep
 from app.logging_config import configure_logging
 
@@ -296,7 +297,8 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
         reader=reader.SweepReader(lambda: agent_context(ctx)),
     )
     if "redis" in ctx:
-        await start_the_line(ctx, owner_of(sessions_of(ctx), uuid.UUID(sweep_id)))
+        owner = await asyncio.to_thread(owner_of, sessions_of(ctx), uuid.UUID(sweep_id))
+        await start_the_line(ctx, owner)
 
 
 def owner_of(sessions: sessionmaker[Session], sweep_id: uuid.UUID) -> list[uuid.UUID]:
@@ -308,8 +310,9 @@ def owner_of(sessions: sessionmaker[Session], sweep_id: uuid.UUID) -> list[uuid.
 def _start_next(
     sessions: sessionmaker[Session], users: list[uuid.UUID], now: datetime
 ) -> list[uuid.UUID]:
-    """The next request in the line of each of `users` started (jobs J32, sweep.start_next)."""
-    started = []
+    """The next request in the line of each of `users` started (jobs J32, sweep.start_next).
+    One person's error is logged as a count and the others still start."""
+    started, failed = [], 0
     for user_id in users:
         with sessions() as db:
             try:
@@ -318,8 +321,14 @@ def _start_next(
             except service.SweepRunningError:
                 db.rollback()
                 continue
+            except Exception:
+                db.rollback()
+                failed += 1
+                continue
             if row is not None:
                 started.append(row.id)
+    if failed:
+        logger.warning("runs of the line not started", extra={"count": failed})
     return started
 
 
@@ -419,10 +428,13 @@ async def reap_sweeps(ctx: dict[str, Any]) -> int:
 def _start_scheduled(
     sessions: sessionmaker[Session], now: datetime
 ) -> list[tuple[uuid.UUID, sweep.DueSweep]]:
-    """A running schedule sweep for every (user, slot) due; slots already started and users
-    already sweeping are skipped."""
-    started = []
+    """A running schedule sweep for every (user, slot) due; slots already started are skipped,
+    and a user already sweeping gets the slot in the line. One slot's error is logged as a count
+    and the other slots still start. The runs taken back whose slot left its window go first."""
+    started, failed = [], 0
     with sessions() as db:
+        searches.forget_taken_back(db, now, schedule.WINDOW)
+        db.commit()
         due = sweep.scheduled_due(db, now)
     for item in due:
         with sessions() as db:
@@ -432,8 +444,14 @@ def _start_scheduled(
             except service.SweepRunningError:
                 db.rollback()
                 continue
+            except Exception:
+                db.rollback()
+                failed += 1
+                continue
             if row is not None:
                 started.append((row.id, item))
+    if failed:
+        logger.warning("scheduled slots not started", extra={"count": failed})
     return started
 
 

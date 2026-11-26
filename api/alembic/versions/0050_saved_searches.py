@@ -1,7 +1,8 @@
 """Saved searches (jobs J32): the person's other searches beside the main one, the runs that wait
-for the running sweep, and the search a sweep ran. Expand only: two new tables, one nullable
-column and an index; the previous release ignores them, and its sweeps keep a null search (the
-main one).
+for the running sweep (a schedule slot's run taken back is kept, `taken_back_at`, until the slot
+leaves its window), and the search a sweep ran. Expand only: two new tables, one nullable column
+and an index; the previous release ignores them, and its sweeps keep a null search (the main
+one).
 
 Revision ID: 0050
 Revises: 0049
@@ -72,6 +73,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        sa.Column("taken_back_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["saved_search_id", "user_id"],
@@ -86,14 +88,14 @@ def upgrade() -> None:
         "sweep_requests",
         ["user_id"],
         unique=True,
-        postgresql_where=sa.text("saved_search_id IS NULL"),
+        postgresql_where=sa.text("saved_search_id IS NULL AND taken_back_at IS NULL"),
     )
     op.create_index(
         "ix_sweep_requests_one_per_search",
         "sweep_requests",
         ["user_id", "saved_search_id"],
         unique=True,
-        postgresql_where=sa.text("saved_search_id IS NOT NULL"),
+        postgresql_where=sa.text("saved_search_id IS NOT NULL AND taken_back_at IS NULL"),
     )
     op.create_index("ix_sweep_requests_user_id_position", "sweep_requests", ["user_id", "position"])
     op.add_column("sweeps", sa.Column("saved_search_id", pg.UUID(as_uuid=True), nullable=True))
