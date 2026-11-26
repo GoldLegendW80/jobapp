@@ -8,7 +8,10 @@ import {
   type SetupSnapshot,
   type SetupTarget,
 } from "@/features/jobs/hooks/use-search-setup";
-import { MAIN_SEARCH } from "@/features/jobs/api/searches-api";
+import {
+  MAIN_SEARCH,
+  type SavedSearch,
+} from "@/features/jobs/api/searches-api";
 import { useSavedSearches } from "@/features/jobs/api/use-saved-searches";
 import { describeError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -61,7 +64,10 @@ export function SearchSetup({
   const searches = useSavedSearches();
   const refreshPermissions = useRefreshPermissions();
   const [generation, setGeneration] = useState(0);
+  // A new search's id once its form wrote it: its draft and its reload are that search's.
+  const [created, setCreated] = useState<string | null>(null);
   const toList = () => {
+    setCreated(null);
     setScreen({ kind: "list" });
   };
 
@@ -138,33 +144,44 @@ export function SearchSetup({
     : saved
       ? { kind: "saved", search: saved }
       : { kind: "main" };
+  const id = screen.id || (created ?? "");
   return (
     <LoadedSetup
       key={`${screen.id}:${String(generation)}`}
       profile={profile.data}
       target={target}
       names={(searches.data?.items ?? [])
-        .filter((item) => !item.main && item.id !== screen.id)
+        .filter((item) => !item.main && item.id !== id)
         .map((item) => item.name)}
       initial={drafts.get(screen.id)}
       runner={runner}
       onClose={onClose}
       onReturnFocus={onReturnFocus}
       onBack={(snapshot) => {
-        keep(screen.id, snapshot);
+        keep(screen.id);
+        keep(id, snapshot);
         toList();
       }}
       onSaved={() => {
         keep(screen.id);
+        keep(id);
         toList();
+      }}
+      onWritten={(stored) => {
+        if (!screen.id) setCreated(stored.id);
       }}
       onReload={async () => {
         refreshPermissions();
         keep(screen.id);
+        keep(id);
         const [current] = await Promise.all([
           profile.refetch(),
           searches.refetch(),
         ]);
+        if (created) {
+          setCreated(null);
+          setScreen({ kind: "edit", id: created });
+        }
         if (current.isSuccess) setGeneration((value) => value + 1);
       }}
     />
@@ -185,6 +202,7 @@ function LoadedSetup({
   onReturnFocus,
   onBack,
   onSaved,
+  onWritten,
   onReload,
 }: {
   profile: Profile;
@@ -196,6 +214,7 @@ function LoadedSetup({
   onReturnFocus: () => void;
   onBack: (snapshot: SetupSnapshot) => void;
   onSaved: () => void;
+  onWritten: (saved: SavedSearch) => void;
   onReload: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -207,6 +226,7 @@ function LoadedSetup({
     initial,
     onClose,
     onSaved,
+    onWritten,
     onBusyChange: setBusy,
   });
   const name =

@@ -39,7 +39,7 @@ import {
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import { formatDateTime } from "../helpers/format";
-import { keptElsewhere } from "../helpers/saved-searches";
+import { halfSavedWords, keptElsewhere } from "../helpers/saved-searches";
 import {
   PROTECTED,
   permissionPlan,
@@ -78,6 +78,46 @@ export class SourcesFailure extends Error {
     super(message);
     this.conflict = conflict;
   }
+}
+
+/** A consent write that stopped: `refused` when its route said no, so nothing changed; `reason`
+ * is why, without what to do next. */
+class ConsentFailure extends SourcesFailure {
+  readonly refused: boolean;
+  readonly reason: string;
+  constructor(
+    message: string,
+    conflict: boolean,
+    { refused, reason }: { refused: boolean; reason: string },
+  ) {
+    super(message, conflict);
+    this.refused = refused;
+    this.reason = reason;
+  }
+}
+
+/** Why the write of a saved search failed, and whether it was written: null when unknown. */
+function writeFailure(failure: unknown): {
+  reason: string;
+  conflict: boolean;
+  written: false | null;
+} {
+  if (
+    !isApiError(failure) ||
+    failure.kind !== "http" ||
+    (failure.status ?? 500) >= 500
+  )
+    return { reason: describeError(failure), conflict: true, written: null };
+  if (
+    failure.status === 409 &&
+    (failure.body as { revision?: unknown } | null)?.revision !== undefined
+  )
+    return {
+      reason: "This search changed in another tab.",
+      conflict: true,
+      written: false,
+    };
+  return { reason: describeError(failure), conflict: false, written: false };
 }
 
 /** The search as reviewed, without what a consent write of `except` changes. */
@@ -159,6 +199,8 @@ export interface SaveSavedArgs {
   titles: readonly string[];
   instructions: string;
   onAdopt?: (current: Profile) => void;
+  /** Called as soon as the search write answers, before its take backs. */
+  onWritten?: (saved: SavedSearch) => void;
 }
 
 /** What a draft of the list holds, kept when the form is left and opened again. */
@@ -316,22 +358,30 @@ export function useSources(
     } catch (failure) {
       void client.invalidateQueries({ queryKey: key });
       if (isApiError(failure) && failure.status === 409)
-        throw new SourcesFailure(
+        throw new ConsentFailure(
           `The ${label} permission or its risk sentence changed in another tab. Your list is still here. Load current settings and review them before saving.`,
           true,
+          {
+            refused: true,
+            reason: `Your settings or the ${label} risk sentence changed in another tab.`,
+          },
         );
       if (
         isApiError(failure) &&
         failure.kind === "http" &&
         (failure.status ?? 500) < 500
-      )
-        throw new SourcesFailure(
-          `The ${label} permission was not saved. ${errorDetail(failure) ?? describeError(failure)}`,
+      ) {
+        const detail = errorDetail(failure) ?? describeError(failure);
+        throw new ConsentFailure(
+          `The ${label} permission was not saved. ${detail}`,
           false,
+          { refused: true, reason: detail },
         );
-      throw new SourcesFailure(
+      }
+      throw new ConsentFailure(
         `The ${label} permission was not confirmed. Your list is still here. Load current settings and review them before saving. ${describeError(failure)}`,
         true,
+        { refused: false, reason: describeError(failure) },
       );
     }
     client.setQueryData(key, answer);
@@ -342,9 +392,10 @@ export function useSources(
     try {
       current = await getProfile();
     } catch (failure) {
-      throw new SourcesFailure(
+      throw new ConsentFailure(
         `The ${label} permission was not confirmed. Your list is still here. Load current settings and review them before saving. ${describeError(failure)}`,
         true,
+        { refused: false, reason: describeError(failure) },
       );
     }
     if (!isMounted()) return null;
@@ -354,9 +405,13 @@ export function useSources(
         stable(ordinarySearch(base.sections.search, change.platform))
     ) {
       if (isCurrent(current, base)) client.setQueryData(profileKey, current);
-      throw new SourcesFailure(
+      throw new ConsentFailure(
         "Your search settings changed in another tab while a website permission was saved. Your list is still here. Load current settings and review them before saving.",
         true,
+        {
+          refused: false,
+          reason: "Your search settings changed in another tab.",
+        },
       );
     }
     adopt(current);
@@ -509,7 +564,7 @@ export function useSources(
 
   // A saved search: its grants first (the api refuses a ticked website without its permission),
   // then the search, then its take backs, so a failed write never leaves a stored search with a
-  // website whose permission it took back.
+  // website whose permission it took back. Once anything is written, a failure says what holds.
   const saveSaved = async (
     args: SaveSavedArgs,
   ): Promise<SavedSearch | null> => {
@@ -527,15 +582,37 @@ export function useSources(
         client.setQueryData(profileKey, current);
         args.onAdopt?.(current);
       };
+      const name = args.name.trim();
       let current = args.base;
       const grants = changes.filter((change) => change.body.enabled === true);
+      const takeBacks = changes.filter((one) => !grants.includes(one));
+      const given: Protected[] = [];
       for (const change of grants) {
-        const next = await record(change, current, adopt);
+        let next: Profile | null;
+        try {
+          next = await record(change, current, adopt);
+        } catch (failure) {
+          if (!given.length || !(failure instanceof ConsentFailure))
+            throw failure;
+          throw new SourcesFailure(
+            halfSavedWords({
+              name,
+              given,
+              written: false,
+              failed: { platform: change.platform, refused: failure.refused },
+              untried: [],
+              reason: failure.reason,
+              conflict: failure.conflict,
+            }),
+            failure.conflict,
+          );
+        }
         if (!next) return null;
         current = next;
+        given.push(change.platform);
       }
       const body = {
-        name: args.name.trim(),
+        name,
         criteria: {
           ...args.criteria,
           ...settings,
@@ -545,11 +622,46 @@ export function useSources(
         },
         schedule: args.schedule,
       };
-      const saved = args.id
-        ? await changeSearch(args.id, args.revision, body)
-        : await createSearch(body);
-      for (const change of changes.filter((one) => !grants.includes(one))) {
-        const next = await record(change, current, adopt);
+      let saved: SavedSearch;
+      try {
+        saved = args.id
+          ? await changeSearch(args.id, args.revision, body)
+          : await createSearch(body);
+      } catch (failure) {
+        if (!given.length) throw failure;
+        const { reason, conflict, written } = writeFailure(failure);
+        throw new SourcesFailure(
+          halfSavedWords({
+            name,
+            given,
+            written,
+            untried: [],
+            reason,
+            conflict,
+          }),
+          conflict,
+        );
+      }
+      args.onWritten?.(saved);
+      for (const [index, change] of takeBacks.entries()) {
+        let next: Profile | null;
+        try {
+          next = await record(change, current, adopt);
+        } catch (failure) {
+          if (!(failure instanceof ConsentFailure)) throw failure;
+          throw new SourcesFailure(
+            halfSavedWords({
+              name,
+              given,
+              written: true,
+              failed: { platform: change.platform, refused: failure.refused },
+              untried: takeBacks.slice(index + 1).map((one) => one.platform),
+              reason: failure.reason,
+              conflict: failure.conflict,
+            }),
+            failure.conflict,
+          );
+        }
         if (!next) return null;
         current = next;
       }

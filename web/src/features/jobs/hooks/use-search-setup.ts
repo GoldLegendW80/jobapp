@@ -21,7 +21,7 @@ import { toast } from "sonner";
 import type { Search } from "@/features/profile/api/profile-api";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 
-import { nameProblem } from "../helpers/saved-searches";
+import { nameProblem, runWords } from "../helpers/saved-searches";
 import { READERS, type Protected } from "../helpers/site-permissions";
 import {
   CRITERIA,
@@ -30,6 +30,7 @@ import {
   type Criteria,
   type SavedSearch,
 } from "../api/searches-api";
+import { runningSweepOf } from "../api/sweeps-api";
 import { useRunSearch } from "../api/use-saved-searches";
 import {
   SourcesFailure,
@@ -112,6 +113,7 @@ export function useSearchSetup({
   initial,
   onClose,
   onSaved = onClose,
+  onWritten,
   onBusyChange,
 }: {
   profile: Profile;
@@ -123,11 +125,15 @@ export function useSearchSetup({
   onClose: () => void;
   /** After Save, or a start that waits in the line: back to Your searches. */
   onSaved?: () => void;
+  /** A saved search was written, its take backs not done yet: a new one now has its id. */
+  onWritten?: (saved: SavedSearch) => void;
   /** Told when saving starts and ends, so the surface around stays open meanwhile. */
   onBusyChange: (busy: boolean) => void;
 }) {
   const [search] = useState(() => searchOf(profile.sections.search, target));
-  const saved = target.kind === "saved" ? target.search : null;
+  // The search as last written from this form: a retry after a failure halfway goes on from it.
+  const [written, setWritten] = useState<SavedSearch | null>(null);
+  const saved = written ?? (target.kind === "saved" ? target.search : null);
   const form = useForm<SearchForm>({
     resolver: zodResolver(searchSchema),
     defaultValues: initial?.values ?? toSearchForm(search),
@@ -188,13 +194,28 @@ export function useSearchSetup({
       ? EMPTY_LIST_REASON
       : null;
 
+  // A search started, or put in the line behind the running one, as its Run now does.
+  const startOrWait = async (id: string, label: string) => {
+    const ran = await run.mutateAsync(id);
+    if (!mounted.current) return;
+    if (ran.sweep) {
+      runner.follow(ran.sweep);
+      onClose();
+      return;
+    }
+    if (ran.outcome === "queued" || ran.outcome === "started")
+      toast.info(runWords(label, ran));
+    else toast.error(runWords(label, ran));
+    onSaved();
+  };
+
   // A saved search: its criteria written, then started or back to Your searches.
   const submitSaved = async (values: SearchForm, start: boolean) => {
     const draft = {
       ...fromSearchForm(values),
       interactive_instructions: instructions,
     };
-    const written = await sources.saveSaved({
+    const result = await sources.saveSaved({
       base: {
         ...profile,
         revision,
@@ -214,24 +235,20 @@ export function useSearchSetup({
       titles: draft.title_include.terms,
       instructions,
       onAdopt: adopt,
+      onWritten: (stored) => {
+        if (!mounted.current) return;
+        setWritten(stored);
+        setSavedRevision(stored.revision);
+        onWritten?.(stored);
+      },
     });
-    if (!written || !mounted.current) return;
-    setSavedRevision(written.revision);
+    if (!result || !mounted.current) return;
     if (!start) {
-      toast.success(`${written.name} saved.`);
+      toast.success(`${result.name} saved.`);
       onSaved();
       return;
     }
-    const ran = await run.mutateAsync(written.id);
-    if (ran.sweep) {
-      runner.follow(ran.sweep);
-      onClose();
-      return;
-    }
-    toast.info(
-      `${written.name} waits in line: number ${String(ran.request?.place ?? 1)}.`,
-    );
-    onSaved();
+    await startOrWait(result.id, result.name);
   };
 
   const submit = async (values: SearchForm, start: boolean) => {
@@ -269,7 +286,13 @@ export function useSearchSetup({
         onSaved();
         return;
       }
-      await runner.start(current.revision);
+      try {
+        await runner.start(current.revision);
+      } catch (failure) {
+        if (!runningSweepOf(failure)) throw failure;
+        await startOrWait(MAIN_SEARCH, "Main search");
+        return;
+      }
       onClose();
     } catch (failure) {
       if (!mounted.current) return;

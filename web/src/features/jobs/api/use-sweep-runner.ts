@@ -82,6 +82,8 @@ export function useSweepRunner(): SweepRunner {
         },
         (error: unknown) => {
           setStarting(false);
+          // Setup owns its editable error state, and puts its search in the line when one runs.
+          if (profileRevision !== undefined) throw error;
           const already = runningSweepOf(error);
           if (already) {
             toast.info("A search is already running: showing it.");
@@ -93,8 +95,6 @@ export function useSweepRunner(): SweepRunner {
             setStarted(already);
             return;
           }
-          // Setup owns its editable error state and must not disappear after a refusal.
-          if (profileRevision !== undefined) throw error;
           if (isApiError(error) && error.status === 422) {
             // No ticked job website, or a stored search section to save again (the api's
             // detail says which).

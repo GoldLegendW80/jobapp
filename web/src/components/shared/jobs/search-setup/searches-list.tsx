@@ -16,7 +16,11 @@ import {
 } from "@/features/jobs/api/use-saved-searches";
 import type { SweepRunner } from "@/features/jobs/api/use-sweep-runner";
 import { useSweeps } from "@/features/jobs/api/use-sweeps";
-import { lastRunOf, searchOf } from "@/features/jobs/helpers/saved-searches";
+import {
+  lastRunOf,
+  runWords,
+  searchOf,
+} from "@/features/jobs/helpers/saved-searches";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -81,9 +85,14 @@ export function SearchesList({
   const run = useRunSearch({
     onSuccess: (result) => {
       if (started(result)) return;
-      toast.info(
-        `Waits in line: number ${String(result.request?.place ?? 1)}.`,
+      const words = runWords(
+        items.find((item) => item.id === result.search_id)?.name ??
+          "The search",
+        result,
       );
+      if (result.outcome === "queued" || result.outcome === "started")
+        toast.info(words);
+      else toast.error(words);
     },
     onError: (error) => {
       failed("The search did not start", error);

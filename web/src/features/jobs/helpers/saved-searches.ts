@@ -1,8 +1,9 @@
 /** The words of Your searches (find jobs, jobs J33): what a search looks for, when it runs, its
- * last run, and the websites the other searches keep a permission for. */
+ * last run, what a run did, what a save that stopped halfway left, and the websites the other
+ * searches keep a permission for. */
 import { describeSchedule } from "@/features/profile/helpers/schedule";
 
-import type { Criteria, SavedSearch } from "../api/searches-api";
+import type { Criteria, SavedSearch, SearchRun } from "../api/searches-api";
 import type { ScheduleState, Sweep } from "../api/sweeps-api";
 import { platformOf, tickedOf, type Protected } from "./site-permissions";
 import { PLATFORM_NAMES, shortName } from "./sources";
@@ -97,6 +98,101 @@ export function nameProblem(
   )
     return "You already have a search with this name.";
   return null;
+}
+
+/** Why a run of the api started nothing (searches_router.py, sweep.BeginOutcome). */
+const NOT_STARTED: Record<string, string> = {
+  no_websites: "It has no job website, company board or job feed to search.",
+  search_invalid: "It no longer passes the checks: open it and save it again.",
+  queue_down: "The search could not be queued. Try again in a minute.",
+  running: "Another search is running.",
+  not_found: "It no longer exists.",
+};
+
+/** What a run that started no sweep here did: Run now and "Save and start search" say the same. */
+export function runWords(
+  name: string,
+  run: Pick<SearchRun, "outcome" | "request">,
+): string {
+  if (run.outcome === "queued")
+    return run.request
+      ? `${name} waits in line: number ${String(run.request.place)}.`
+      : `${name} waits in line.`;
+  if (run.outcome === "started") return `${name} started.`;
+  return `${name} did not start. ${NOT_STARTED[run.outcome] ?? "Try again."}`;
+}
+
+/** "the Indeed permission", "the Indeed and LinkedIn permissions". */
+function permissionsWords(platforms: readonly Protected[]): string {
+  const names = platforms.map((platform) => PLATFORM_NAMES[platform]);
+  return names.length < 2
+    ? `the ${names[0] ?? ""} permission`
+    : `the ${names.slice(0, -1).join(", ")} and ${names.at(-1) ?? ""} permissions`;
+}
+
+/** The permissions named, then the verb that agrees with them: "the Indeed permission was". */
+function permissionsAre(
+  platforms: readonly Protected[],
+  one: string,
+  many: string,
+): string {
+  return `${permissionsWords(platforms)} ${platforms.length < 2 ? one : many}`;
+}
+
+/** A saved search's save that stopped after it changed something (jobs J33). */
+export interface HalfSaved {
+  name: string;
+  /** The permissions this save gave before it stopped. */
+  given: readonly Protected[];
+  /** Whether the search was written: null when its answer was lost. */
+  written: boolean | null;
+  /** The permission write that failed; `refused` when its route said no, so nothing changed. */
+  failed?: { platform: Protected; refused: boolean };
+  /** The permissions to take back that were not tried after the failure. */
+  untried: readonly Protected[];
+  /** Why it stopped, in whole sentences. */
+  reason: string;
+  /** Current settings must be loaded before saving again. */
+  conflict: boolean;
+}
+
+/** What is saved and what is not, in plain words, then what to do. */
+export function halfSavedWords(state: HalfSaved): string {
+  const { name, given, failed, untried } = state;
+  const next = state.conflict
+    ? "Load current settings, then save again."
+    : state.written
+      ? "Try Save again."
+      : "";
+  let facts: string;
+  if (state.written) {
+    const done = given.length
+      ? `${name} is saved and ${permissionsAre(given, "is", "are")} given`
+      : `${name} is saved`;
+    const left = !failed
+      ? ""
+      : failed.refused
+        ? `${permissionsAre([failed.platform, ...untried], "was", "were")} not taken back`
+        : `taking back ${permissionsWords([failed.platform])} was not confirmed${
+            untried.length
+              ? `, and ${permissionsAre(untried, "was", "were")} not taken back`
+              : ""
+          }`;
+    facts = left ? `${done}, but ${left}.` : `${done}.`;
+  } else {
+    const search =
+      state.written === null
+        ? `${name} may not be saved`
+        : `${name} was not saved`;
+    const grant = !failed
+      ? ""
+      : failed.refused
+        ? `: ${permissionsWords([failed.platform])} was not given`
+        : `: giving ${permissionsWords([failed.platform])} was not confirmed`;
+    const head = permissionsAre(given, "is", "are");
+    facts = `${head.charAt(0).toUpperCase()}${head.slice(1)} given, but ${search}${grant}.`;
+  }
+  return [facts, state.reason, next].filter(Boolean).join(" ");
 }
 
 /** The known job websites ticked in the person's other searches: their permission stays. */
