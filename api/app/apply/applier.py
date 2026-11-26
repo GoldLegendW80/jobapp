@@ -109,7 +109,7 @@ PURPOSE = "apply_agent"  # browserd's actions.AGENT_PURPOSE
 MODEL = "claude-sonnet-5-5"  # as the website search's agent (B20)
 MAX_TURNS = 10_000  # no cap of its own, as on the Mac: the lease's hour and the idle timer hold
 # The lease's hour, inside the fill job; no longer than the longest agent the agents queue counts
-# (catalog._in_a_decision). An ask's wait counts in it (declared).
+# (catalog._in_a_decision). An ask's wait counts in it, cut to the time left (`_wait_left`).
 WALL_TIME_S = 3600.0
 # The owner, 2026-11-05: "you can add a random pacing to feel more like human like between 3 to
 # 8 seconds." Seconds between two acts of the agent on the page, a new draw each time.

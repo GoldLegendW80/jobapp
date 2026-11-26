@@ -437,8 +437,8 @@ class UsedSite(AskSite):
         return await super().call(name, args)
 
 
-@pytest.mark.parametrize("tool", ["browser_wait_for", "browser_take_screenshot"])
-def test_a_take_over_answered_to_a_wait_or_a_screenshot_is_known_to_the_run(
+@pytest.mark.parametrize("tool", ["browser_wait_for", "browser_take_screenshot", "browser_click"])
+def test_a_take_over_answered_to_a_wait_a_screenshot_or_an_act_is_known_to_the_run(
     db: Session, factory: sessionmaker[Session], person_a: Person, tool: str
 ) -> None:
     app_id = started(db, person_a, Mode.direct)
@@ -450,6 +450,8 @@ def test_a_take_over_answered_to_a_wait_or_a_screenshot_is_known_to_the_run(
         site.armed = True
         if tool == "browser_wait_for":
             go.told = await session.wait_for("Loaded", None)  # type: ignore[attr-defined]
+        elif tool == "browser_click":
+            go.told = await session.interact(tool, {"ref": "e6"})  # type: ignore[attr-defined]
         else:
             go.told = await session.screenshot()  # type: ignore[attr-defined]
         go.refused = await session.interact(  # type: ignore[attr-defined]
@@ -464,7 +466,9 @@ def test_a_take_over_answered_to_a_wait_or_a_screenshot_is_known_to_the_run(
         return applier.Ran(3, 1)
 
     assert go_apply(svc(factory, site, go), app_id) == "submitted"
-    assert go.told == (applier.USED, True)  # type: ignore[attr-defined]
+    told, error = go.told  # type: ignore[attr-defined]
+    assert error
+    assert told.endswith(applier.USED)
     text, error = go.refused  # type: ignore[attr-defined]
     assert error
     assert text.startswith("Refused: The person used the browser")
