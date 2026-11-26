@@ -720,6 +720,7 @@ def test_a_slot_taken_back_stays_taken_until_it_leaves_its_window(
     assert request.schedule_slot == key
     clock.now = slot + timedelta(minutes=4)
     assert call(api, alice, "DELETE", "/main/request").status_code == 204
+    assert call(api, alice, "DELETE", "/main/request").status_code == 404
     # The sweep still runs: the slot does not come back in the line.
     assert tick(8) == 0
     assert waiting_of(factory, alice.id) == []
@@ -735,6 +736,30 @@ def test_a_slot_taken_back_stays_taken_until_it_leaves_its_window(
     with factory() as db:
         assert db.execute(sa.select(SweepRequest)).scalars().all() == []
     assert (running_of(factory, alice.id), redis.queued) == ([], [])
+
+
+def test_a_run_asked_again_after_its_slot_was_taken_back_waits_again(
+    api: Api, factory: sessionmaker[Session], alice: Signed, clock: Clock, fake_queue: FakeQueue
+) -> None:
+    slot = clock.now.replace(second=0)
+    paris = slot.astimezone(ZoneInfo("Europe/Paris"))
+    plan = {"enabled": True, "times": [paris.strftime("%H:%M")], "timezone": "Europe/Paris"}
+    set_profile(factory, alice.id, search(sweep_schedule=plan))
+    with factory() as db:
+        running = sweep.start(db, alice.id, SweepTrigger.manual, slot - timedelta(minutes=1)).id
+        db.commit()
+    ctx = {"sessions": factory, "clock": lambda: slot + timedelta(minutes=3), "redis": Recording()}
+    assert asyncio.run(worker.scheduled_sweeps(ctx)) == 0
+    [taken] = waiting_of(factory, alice.id)
+    assert call(api, alice, "DELETE", "/main/request").status_code == 204
+    asked = call(api, alice, "POST", "/main/run").json()["request"]
+    assert (asked["place"], asked["trigger"]) == (1, "manual")
+    assert asked["id"] != str(taken.id)
+    end(factory, running)
+    row = start_next(factory, alice.id)
+    assert row is not None
+    assert (row.trigger, row.saved_search_id) == (SweepTrigger.manual, None)
+    assert "schedule_slot" not in row.stats
 
 
 def test_a_run_asked_by_hand_and_taken_back_is_gone(
@@ -920,5 +945,9 @@ def test_the_jobs_list_filters_by_search(
     assert set(walk(api, alice, 50, search=one, sweep=str(uuid.uuid4()))) == set()
     places = api.get("/api/jobs/places", token=alice.token, params={"search": one})
     assert (places.status_code, places.json()["total"]) == (200, 2)
+    facets = api.get("/api/jobs/facets", token=alice.token, params={"search": one}).json()
+    assert [facet["count"] for facet in facets["places"]] == [2]
     for bad in ("Main", "not-an-id", ""):
         assert listing(api, alice, search=bad).status_code == 422, bad
+        facets_of = api.get("/api/jobs/facets", token=alice.token, params={"search": bad})
+        assert facets_of.status_code == 422, bad
