@@ -145,15 +145,12 @@ def test_a_title_not_on_a_page_with_no_clear_heading_is_refused_with_what_to_do(
     ("url", "reason"),
     [
         ("/offres/999999", "not_seen"),  # never seen, never opened: an invented posting
-        ("/offres/246285", "detail_not_opened"),  # a link of a page read, never opened
+        ("/offres/246287", "detail_not_opened"),  # a link of a page read, never opened
         ("https://elsewhere.example.test/offres/1", "not_seen"),
     ],
 )
 def test_an_address_never_opened_is_refused_and_told_to_open_it(url, reason):
-    one, batches = opened(
-        (BASE + "offres/recherche", page('- link "Data Engineer"', "  - /url: /offres/246285")),
-        (JOB, OFFER),
-    )
+    one, batches = opened((BASE + "offres/recherche", RESULTS), (JOB, OFFER))
     answer = reported(one, title="Data Engineer", url=url)
     assert answer["kept"] == 0
     assert answer["refused"] == [
@@ -161,6 +158,24 @@ def test_an_address_never_opened_is_refused_and_told_to_open_it(url, reason):
     ]
     assert "open the posting's page" in finder.OPEN_THEN_REPORT.lower()
     assert not batches
+
+
+# Jobs J31: a link whose own text is the posting's title is its card; "Voir l'offre" is none.
+RESULTS = page(
+    '- link "Data Engineer"', "  - /url: /offres/246285", "- link \"Voir l'offre\"",
+    "  - /url: /offres/246287",
+)  # fmt: skip
+
+
+def test_a_card_of_a_page_read_stands_in_for_an_address_never_opened():
+    """B21 refused every address never opened; J31 (owner, 2026-11-26) keeps, for a card of a
+    list only, the posting the session saw as its link with its title, with the mention."""
+    one, batches = opened((BASE + "offres/recherche", RESULTS), (JOB, OFFER))
+    answer = reported(one, title="Data Engineer", url="/offres/246285")
+    assert (answer["kept"], answer["refused"]) == (1, [])
+    assert [f.list_url for f in batches[0].findings] == [
+        finder.canonical(BASE + "offres/recherche")
+    ]
 
 
 def test_a_company_claim_not_on_the_page_is_dropped_not_refusing():

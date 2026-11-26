@@ -217,8 +217,12 @@ STORES_AFTER_STOP = frozenset(
      "page_budget", "guard_failed", "browser_unavailable", "layout_changed"}
 )  # fmt: skip
 # The refusals of report_postings a card of a list the session read may stand in for (J31): the
-# app could not open the address, or opened a page that does not show the posting.
-CARD_FALLBACK = frozenset({"not_seen", "detail_not_opened", "app_opens_max", "not_on_opened_page"})
+# app could not open the address, or opened a page that does not show the posting. Never
+# `app_opens_max`: that page opens at the next call.
+CARD_FALLBACK = frozenset({"not_seen", "detail_not_opened", "not_on_opened_page"})
+# The error statuses of a posting's own page that say it is walled, not gone (J31): a card may
+# stand in for it. Any other error status (404, 410, 500) refuses its card `page_error`.
+WALL_STATUSES = frozenset({401, 403, 429, 503})
 # The routes of a website's search (B27): report_no_postings is refused until the agent tried
 # the three (accept and refuse table: test_b27_code_first.py). A route is tried once the agent's
 # tab landed on it, or once the agent's browser_navigate to it was refused by the app or
@@ -843,9 +847,9 @@ def _page_cards(url: str, root: Any) -> list[tuple[str, str]]:
     return cards
 
 
-def _strings(item: Any) -> list[str]:
-    """The strings of one item of a script's result, its nested objects' too, never the items of
-    a list inside it (those are cards of their own): iterative, CARD_NODES_MAX values at most."""
+def _strings(item: dict[str, Any]) -> list[str]:
+    """The strings of one object of a script's result, its nested objects' too, never the items
+    of a list inside it (those are cards of their own): iterative, CARD_NODES_MAX values at most."""
     found: list[str] = []
     stack, nodes = [item], 0
     while stack and nodes < CARD_NODES_MAX:
@@ -858,50 +862,69 @@ def _strings(item: Any) -> list[str]:
     return found
 
 
+def _own_links(one: dict[str, Any]) -> list[str]:
+    """The addresses an object of a script's result gives itself (J31): its values that are one,
+    and those of a nested object holding nothing else (`{"href": ...}`), never a nested posting's
+    (an object with words of its own is a card of its own)."""
+    links: list[str] = []
+    for value in one.values():
+        inner = _strings(value) if isinstance(value, dict) else [value]
+        if inner and all(isinstance(s, str) and SCRIPT_ADDRESS.fullmatch(s) for s in inner):
+            links.extend(inner)
+    return links
+
+
+def _written(given: str, link: str, code: str) -> bool:
+    """An address the script's own code writes is the model's word, never a card (J31): as given,
+    its path and query, or a piece of them holding a digit (`"/jobs/" + 9999`)."""
+    parts = urlsplit(link)
+    written = parts.path + (f"?{parts.query}" if parts.query else "")
+    pieces = re.split(r"[/?&=#._-]+", written)
+    return (
+        given in code
+        or (len(written) > 1 and written in code)
+        or any(any(c.isdigit() for c in piece) and piece in code for piece in pieces)
+    )
+
+
 def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str]]:
-    """The cards of a script's result (J31): each item of a list in it (an object or a text),
-    and the result itself when it is an object, else each line of a text result; an address
-    among the strings of an item is that item's card, its text the item's other strings. An
-    address the script's own code writes (its path and query, or as given) is the model's word,
-    never a card. Pure; linear in the result."""
+    """The cards of a script's result (J31): each object in it, its own addresses (`_own_links`)
+    with its strings and its nested objects' as text; each text of a list, else each
+    line of a text result, naming one address. A text naming several (a cut JSON, a joined list)
+    gives none: its words cannot be told apart. A string the code writes is no card's word, and
+    an address it writes (`_written`) no card. Pure; linear in the result."""
     text = raw if isinstance(raw, str) else ""
     try:
         value: Any = json.loads(text)
     except (ValueError, RecursionError):
         value = text
-    items: list[Any] = []
+    found: list[tuple[list[str], list[str]]] = []
+    lines: list[str] = []
     if isinstance(value, list | dict):
         stack: list[Any] = [value]
-        if isinstance(value, dict):
-            items.append(value)
-        while stack and len(items) <= SCRIPT_LINKS_MAX:
+        while stack and len(found) + len(lines) <= SCRIPT_LINKS_MAX:
             one = stack.pop()
-            values = one if isinstance(one, list) else list(one.values())
-            for child in values:
-                if isinstance(one, list) and isinstance(child, dict | str):
-                    items.append(child)
-                if isinstance(child, list | dict):
-                    stack.append(child)
+            if isinstance(one, dict):
+                words = [s for s in _strings(one) if not SCRIPT_ADDRESS.fullmatch(s)]
+                found.append((_own_links(one), words))
+                stack.extend(v for v in one.values() if isinstance(v, list | dict))
+            else:
+                lines.extend(child for child in one if isinstance(child, str))
+                stack.extend(child for child in one if isinstance(child, list | dict))
     else:
-        items = (value if isinstance(value, str) else text).split("\n")
+        lines = (value if isinstance(value, str) else text).split("\n")
+    for line in lines:
+        if SCRIPT_ADDRESS.fullmatch(line):
+            found.append(([line], []))
+        elif len(links := {m.group(0) for m in SCRIPT_LINK.finditer(line)}) == 1:
+            found.append((list(links), [SCRIPT_LINK.sub(" ", line)]))
     cards: list[tuple[str, str]] = []
-    for item in items:
-        if isinstance(item, dict):
-            strings = _strings(item)
-            links = [one for one in strings if SCRIPT_ADDRESS.fullmatch(one)]
-            words = " ".join(" ".join(o for o in strings if o not in links).split())
-        elif SCRIPT_ADDRESS.fullmatch(item):
-            links, words = [item], ""
-        else:
-            links = [m.group(0) for m in SCRIPT_LINK.finditer(item)]
-            words = " ".join(SCRIPT_LINK.sub(" ", item).split())
-        for given in links:
+    for links, strings in found:
+        words = " ".join(" ".join(s for s in strings if s not in code).split())
+        for given in links if words else ():
             link = canonical(urljoin(url, given))
-            parts = urlsplit(link)
-            written = parts.path + (f"?{parts.query}" if parts.query else "")
-            if not link or given in code or (len(written) > 1 and written in code):
-                continue
-            cards.append((link, words[:CARD_TEXT_MAX]))
+            if link and not _written(given, link, code):
+                cards.append((link, words[:CARD_TEXT_MAX]))
     return cards
 
 
@@ -1655,8 +1678,8 @@ class FinderSession:
     pages_read: dict[str, PageRead] = field(default_factory=dict)
     # The addresses browserd's navigate answered with an HTTP error status (4xx, 5xx), oldest
     # first, at most OPENED_MAX: read for their links, never a posting's page (B21: an error
-    # page's heading is no title).
-    error_pages: dict[str, None] = field(default_factory=dict)
+    # page's heading is no title); the status, which says whether a card stands in (J31).
+    error_pages: dict[str, int | None] = field(default_factory=dict)
     clock: Callable[[], datetime] = _utcnow
     # The website's searches (B20), read by the summary (interactive._Site): (what was typed,
     # what was chosen) once submitted, or (a saved title, a saved place) an address it opened
@@ -1782,6 +1805,12 @@ class FinderSession:
         whole = _head(text, PAGE_MAX)
         self.kept[self.tab] = Kept(url, title[:TITLE_MAX], whole, cut or len(whole) < len(text))
         return previous
+
+    def _error_page(self, url: str, status: int) -> None:
+        self.error_pages.pop(url, None)
+        self.error_pages[url] = status
+        while len(self.error_pages) > OPENED_MAX:
+            del self.error_pages[next(iter(self.error_pages))]
 
     def _note_cards(self, source: str, kind: str, cards: list[tuple[str, str]]) -> None:
         """Keep the cards a page, a fetch or a script result showed (J31), each address's
@@ -1921,9 +1950,7 @@ class FinderSession:
         status = result.get("status")
         self.error_pages.pop(opened, None)
         if isinstance(status, int) and status >= 400:
-            self.error_pages[opened] = None  # `_read` keeps no record of it
-            while len(self.error_pages) > OPENED_MAX:
-                del self.error_pages[next(iter(self.error_pages))]
+            self._error_page(opened, status)  # `_read` keeps no record of it
         await self._read_off_loop(opened, self.pages.last_text)
         self._route(opened, typed_address=True)
         pages = self.pages
@@ -2747,10 +2774,15 @@ class FinderSession:
                     opened = await self._open_for_report(
                         canonical(urljoin(self.current, item["url"]))
                     )
+                    if self.stopped and self.stopped not in STORES_AFTER_STOP:
+                        pending.clear()  # a permission taken back: nothing more is kept
+                        break
                     if opened:
                         finding, reason = self._verified({**item, "url": opened}, urls)
                         if reason == "title_not_on_page":
                             reason = "not_on_opened_page"
+                    elif self.stopped and (again := self._verified(item, urls))[0] is not None:
+                        finding, reason = again  # read, then its tab not given back (J31)
             if not listing and reason in CARD_FALLBACK:
                 # J31: a page the app could not open or read; a card of a list read stands in.
                 card, _why = self._card(item, urls)
@@ -2768,6 +2800,8 @@ class FinderSession:
                 return self._stop("store_failed")
         if not await flush():
             return self._stop("store_failed")
+        if self.stopped and self.stopped not in STORES_AFTER_STOP:
+            return self._stop(self.stopped)
         answer: dict[str, Any] = {
             "kept": kept,
             "refused": refusals[:50],
@@ -2839,6 +2873,9 @@ class FinderSession:
             if landed and not (isinstance(status, int) and status >= 400):
                 await self._read_off_loop(landed, self.pages.last_text)
                 opened = landed
+            elif isinstance(status, int) and status >= 400:
+                for address in {url, landed} - {""}:
+                    self._error_page(address, status)
         except SourceError as exc:
             # As `navigate`: a page that did not load, or an address browserd refused, leaves
             # the posting to the agent; browserd's guard_failed and every other code stop.
@@ -2984,8 +3021,11 @@ class FinderSession:
         url = canonical(urljoin(self.current, item["url"]))
         if not url:
             return None, "not_an_address"
-        if url in {self.start, self.landed} or url in self.lists:
-            return None, "not_a_posting_page"
+        home = {self.start, self.landed}
+        if url in home or url in self.lists or route_of(url, home, [], typed_address=True):
+            return None, "not_a_posting_page"  # a search address or a listing page's shape too
+        if url in self.error_pages and self.error_pages[url] not in WALL_STATUSES:
+            return None, "page_error"  # its page answered gone or failed, never walled
         if url in self.reported_urls or url in pending:
             return None, "duplicate"
         page = self.pages_read.get(url)

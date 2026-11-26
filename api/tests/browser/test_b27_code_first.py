@@ -162,36 +162,53 @@ def test_a_list_rendered_from_script_data_is_read_and_its_postings_opened_by_the
     assert entry["opened_by_app"] == 2
 
 
-def test_a_page_the_app_opens_without_the_title_is_refused_and_never_acted_on():
+# Jobs J31 (owner, 2026-11-26): a posting the app cannot open stands on its card when the session
+# saw one, its title beside its link (CARDS), kept with the mention "seen in a list"; a script
+# result of bare addresses (BARE) shows no card, and the refusals of B27 stand.
+BARE = [SEEN_1, "/jobs/7002"]
+EVALUATED = [pytest.param(BARE, id="no-card"), pytest.param(CARDS, id="cards")]
+
+
+@pytest.mark.parametrize("evaluated", EVALUATED)
+def test_a_page_the_app_opens_without_the_title_is_refused_and_never_acted_on(evaluated):
     """A security check on the reported address: the app only navigates and reads, never
-    clicks or types, and the report is refused with what to do."""
-    site = board(evaluated=scripted(CARDS))
+    clicks or types, and the report is refused with what to do; with its card seen, the card
+    stands in (the owner's case of a posting page behind a security check)."""
+    site = board(evaluated=scripted(evaluated))
     site.pages[SEEN_1] = CHECK_PAGE
     seen: dict[str, Any] = {}
 
     async def script(session):
-        await stored(session)
+        batches = await stored(session)
         await tool(session, "browser_navigate", url=BOARD)
         await tool(session, "browser_evaluate", function="() => 1")
         posting = {"title": "Robot Arm Engineer", "url": SEEN_1, "text": "A card."}
         seen["report"] = report_of(await tool(session, "report_postings", postings=[posting]))
+        seen["listed"] = [f.list_url for batch in batches for f in batch.findings]
         return finder.Ran()
 
     run(selected(), site, script)
-    [refusal] = seen["report"]["refused"]
-    assert refusal["reason"] == "not_on_opened_page"
+    if evaluated is CARDS:
+        assert seen["report"]["refused"] == []
+        assert seen["listed"] == [BOARD]
+    else:
+        [refusal] = seen["report"]["refused"]
+        assert refusal["reason"] == "not_on_opened_page"
+        assert seen["listed"] == []
     acted = {name for name, _ in site.calls}
     assert not acted & {"browser_click", "browser_type", "browser_press_key"}
 
 
-def test_no_free_tab_leaves_the_posting_to_the_agent():
-    """Three tabs open: the app cannot open its own, so the report is refused as before."""
-    site = board(evaluated=scripted(CARDS))
+@pytest.mark.parametrize("evaluated", EVALUATED)
+def test_no_free_tab_leaves_the_posting_to_the_agent(evaluated):
+    """Three tabs open: the app cannot open its own, so the report is refused as before, or
+    kept from the card the session saw (J31)."""
+    site = board(evaluated=scripted(evaluated))
     site.tabs = ["", "a", "b"]
     seen: dict[str, Any] = {}
 
     async def script(session):
-        await stored(session)
+        seen["batches"] = await stored(session)
         await tool(session, "browser_navigate", url=BOARD)
         await tool(session, "browser_evaluate", function="() => 1")
 
@@ -212,7 +229,12 @@ def test_no_free_tab_leaves_the_posting_to_the_agent():
         return finder.Ran()
 
     run(selected(), site, script)
-    assert seen["report"]["refused"][0]["reason"] == "detail_not_opened"
+    listed = [f.list_url for batch in seen["batches"] for f in batch.findings]
+    if evaluated is CARDS:
+        assert (seen["report"]["refused"], listed) == ([], [BOARD])
+    else:
+        assert seen["report"]["refused"][0]["reason"] == "detail_not_opened"
+        assert listed == []
 
 
 TWO = [
@@ -255,7 +277,23 @@ def report_two(site: TabSite, answer: Any) -> tuple[dict[str, Any], Any, list[An
         return finder.Ran()
 
     entry, _, _ = run(selected(), site, script)
+    seen["listed"] = [f.list_url for batch in seen["batches"] for f in batch.findings]
     return entry, seen, [f.url for batch in seen["batches"] for f in batch.findings]
+
+
+def stopped_keeps(
+    seen: dict[str, Any], urls: list[str], evaluated: Any, code: str, read: bool = False
+) -> None:
+    """Jobs J31: a stop after which the store works (STORES_AFTER_STOP) still keeps the report:
+    the first posting when the app read its page before the stop (`read`), and each posting
+    whose card the session saw, from its card (the second never opened); else nothing, as
+    before. The answer says what was kept and that the website stopped."""
+    said = json.loads(seen["answer"])
+    assert said["stopped"] == f"Stopped: {code}. Report what you found, then stop."
+    full = [SEEN_1] if read else []
+    expected = [u for u in (SEEN_1, SEEN_2) if u in full or evaluated is CARDS]
+    assert urls == expected
+    assert seen["listed"] == [None if u in full else BOARD for u in expected]
 
 
 def tabs_of(site: TabSite) -> list[dict[str, Any]]:
@@ -271,29 +309,31 @@ def tabs_of(site: TabSite) -> list[dict[str, Any]]:
         ("select", BrowserError("refused")),
     ],
 )
-def test_a_tab_the_app_cannot_give_back_stops_the_website(failure):
+@pytest.mark.parametrize("evaluated", EVALUATED)
+def test_a_tab_the_app_cannot_give_back_stops_the_website(failure, evaluated):
     """The app's tab not closed or the agent's not selected again: the agent's next action
-    would land elsewhere, so the website stops `guard_failed` and the report keeps nothing
-    more (the second posting is never opened)."""
+    would land elsewhere, so the website stops `guard_failed` and the app opens nothing more
+    (the second posting is never opened); the report keeps the cards seen (J31)."""
     action, given = failure
-    site = board(evaluated=scripted(CARDS))
+    site = board(evaluated=scripted(evaluated))
 
     def answer(name, args):
         return given if name == "browser_tabs" and args["action"] == action else None
 
     entry, seen, urls = report_two(site, answer)
     assert seen["stopped"] == finder.GUARD_FAILED
-    assert seen["answer"].startswith("Stopped: guard_failed.")
-    assert urls == []
+    # The app read the first page before its tab could not be given back: that page stands.
+    stopped_keeps(seen, urls, evaluated, finder.GUARD_FAILED, read=True)
     assert seen["opened_by_app"] == 0
     assert [t["action"] for t in tabs_of(site)].count("new") == 1
     assert entry["error"] == finder.GUARD_FAILED
 
 
-def test_browserd_guard_failed_on_the_apps_navigate_stops_the_website():
+@pytest.mark.parametrize("evaluated", EVALUATED)
+def test_browserd_guard_failed_on_the_apps_navigate_stops_the_website(evaluated):
     """browserd could not take a page off the list back (round 2 of PR 720): the website stops
     `guard_failed` as for the agent's own navigate, after the app's tab is given back."""
-    site = board(evaluated=scripted(CARDS))
+    site = board(evaluated=scripted(evaluated))
 
     def answer(name, args):
         if name == "browser_navigate" and args["url"] == SEEN_1:
@@ -302,7 +342,7 @@ def test_browserd_guard_failed_on_the_apps_navigate_stops_the_website():
 
     _, seen, urls = report_two(site, answer)
     assert seen["stopped"] == finder.GUARD_FAILED
-    assert urls == []
+    stopped_keeps(seen, urls, evaluated, finder.GUARD_FAILED)
     assert tabs_of(site) == [
         {"action": "new"},
         {"action": "close", "index": 1},
@@ -310,10 +350,11 @@ def test_browserd_guard_failed_on_the_apps_navigate_stops_the_website():
     ]
 
 
-def test_a_lease_ended_during_the_apps_open_stops_with_its_own_code():
+@pytest.mark.parametrize("evaluated", EVALUATED)
+def test_a_lease_ended_during_the_apps_open_stops_with_its_own_code(evaluated):
     """The lease ends while the app's tab loads: every later call fails too, and the website
     stops `lease_ended`, never `guard_failed` from the failed give back."""
-    site = board(evaluated=scripted(CARDS))
+    site = board(evaluated=scripted(evaluated))
     ended = [False]
 
     def answer(name, args):
@@ -323,15 +364,18 @@ def test_a_lease_ended_during_the_apps_open_stops_with_its_own_code():
 
     entry, seen, urls = report_two(site, answer)
     assert seen["stopped"] == "lease_ended"
-    assert urls == []
+    stopped_keeps(seen, urls, evaluated, "lease_ended")
     assert entry["error"] == "lease_ended"
 
 
+@pytest.mark.parametrize("evaluated", EVALUATED)
 @pytest.mark.parametrize("code", ["time_budget", "lease_budget", "permission_unavailable"])
-def test_a_budget_spent_during_the_apps_open_stops_with_its_own_code(code, monkeypatch):
+def test_a_budget_spent_during_the_apps_open_stops_with_its_own_code(code, evaluated, monkeypatch):
+    """A permission taken back keeps nothing more, whatever the session saw (J31: only the
+    stops of STORES_AFTER_STOP keep the report)."""
     from app.browser.sources import Pages, SourceError
 
-    site = board(evaluated=scripted(CARDS))
+    site = board(evaluated=scripted(evaluated))
     act = Pages._act
 
     async def spent(self, action, tool="browser_navigate"):
@@ -342,26 +386,38 @@ def test_a_budget_spent_during_the_apps_open_stops_with_its_own_code(code, monke
     monkeypatch.setattr(Pages, "_act", spent)
     _, seen, urls = report_two(site, lambda name, args: None)
     assert seen["stopped"] == code
-    assert urls == []
+    if code in finder.STORES_AFTER_STOP:
+        stopped_keeps(seen, urls, evaluated, code)
+    else:
+        assert seen["answer"] == f"Stopped: {code}. Nothing more is kept: stop now."
+        assert urls == []
     assert tabs_of(site)[-2:] == [{"action": "close", "index": 1}, {"action": "select", "index": 0}]
 
 
-def test_an_error_status_at_the_reported_address_is_refused():
-    """A 404 on the app's open: nothing read as a posting, `opened_by_app` unchanged, the
-    report refused and the website goes on."""
-    site = board(evaluated=scripted(CARDS))
+@pytest.mark.parametrize("evaluated", EVALUATED)
+@pytest.mark.parametrize("status", [404, 410, 500, 403, 503])
+def test_an_error_status_at_the_reported_address_is_refused(status, evaluated):
+    """An error status on the app's open: nothing read as a posting, `opened_by_app`
+    unchanged, the report refused and the website goes on. J31: a walled page (403, 503)
+    stands on its card when the session saw one; a gone or failed one never does."""
+    site = board(evaluated=scripted(evaluated))
 
     def answer(name, args):
         if name == "browser_navigate" and args["url"] == SEEN_1:
             site.current = site.tabs[site.at] = SEEN_1
-            return {"ok": True, "url": SEEN_1, "status": 404}
+            return {"ok": True, "url": SEEN_1, "status": status}
         return None
 
     _, seen, urls = report_two(site, answer)
     report = json.loads(seen["answer"])
-    assert report["kept"] == 1
-    assert [r["reason"] for r in report["refused"]] == ["detail_not_opened"]
-    assert urls == [SEEN_2]
+    if evaluated is CARDS and status in finder.WALL_STATUSES:
+        assert (report["kept"], report["refused"]) == (2, [])
+        assert urls == [SEEN_1, SEEN_2]
+        assert seen["listed"] == [BOARD, None]
+    else:
+        assert report["kept"] == 1
+        assert [r["reason"] for r in report["refused"]] == ["detail_not_opened"]
+        assert urls == [SEEN_2]
     assert seen["opened_by_app"] == 1
     assert seen["stopped"] == ""
 
@@ -386,10 +442,12 @@ def test_a_redirected_open_stores_the_landed_address(landed):
     assert seen["opened_by_app"] == 2
 
 
-def test_a_new_tab_browserd_does_not_name_is_given_back_and_nothing_opened():
+@pytest.mark.parametrize("evaluated", EVALUATED)
+def test_a_new_tab_browserd_does_not_name_is_given_back_and_nothing_opened(evaluated):
     """browserd made a tab but names none current: the agent's tab is selected again, no
-    address is opened in a tab that may be the agent's, the website goes on."""
-    site = board(evaluated=scripted(CARDS))
+    address is opened in a tab that may be the agent's, the website goes on; the cards the
+    session saw stand in (J31)."""
+    site = board(evaluated=scripted(evaluated))
 
     def answer(name, args):
         if name == "browser_tabs" and args["action"] == "new":
@@ -397,7 +455,8 @@ def test_a_new_tab_browserd_does_not_name_is_given_back_and_nothing_opened():
         return None
 
     _, seen, urls = report_two(site, answer)
-    assert urls == []
+    assert urls == ([SEEN_1, SEEN_2] if evaluated is CARDS else [])
+    assert seen["listed"] == [BOARD] * len(urls)
     assert seen["stopped"] == ""
     assert {"action": "select", "index": 0} in tabs_of(site)
     assert not any(t["action"] == "close" for t in tabs_of(site))
@@ -517,6 +576,7 @@ def test_a_script_result_is_said_cut_only_when_it_was(raw, cut):
     async def kept() -> finder.Kept:
         session = object.__new__(finder.FinderSession)
         session.script, session.script_links = None, {}
+        session.cards, session.lists = {}, {}  # J31: a script's result is read for its cards
         script, _ = await finder.FinderSession._keep_script(session, START, raw, False)
         return script
 
