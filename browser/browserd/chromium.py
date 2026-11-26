@@ -614,6 +614,11 @@ class Chromium:
         home = self._homes.pop(lease_id, None)
         contexts = [*self._extras.pop(lease_id, ())]
         self._leases.pop(lease_id, None)
+        persisted: list[Any] = []
+        if lease_id == self.persisted_by:
+            with contextlib.suppress(Exception):
+                persisted = list(self.browser.contexts[0].pages)
+        await self._keep_a_window([*contexts, *([home] if home is not None else [])], persisted)
         if home is not None:
             with contextlib.suppress(Exception):
                 cookies = await asyncio.wait_for(home.cookies(), c.CLOSE_S)
@@ -626,8 +631,23 @@ class Chromium:
         if lease_id == self.persisted_by:
             self.persisted_by = None
             with contextlib.suppress(Exception):
-                for page in list(self.browser.contexts[0].pages):
+                for page in persisted:
                     await asyncio.wait_for(page.close(), c.CLOSE_S)
+
+    async def _keep_a_window(self, contexts: list[Any], pages: list[Any]) -> None:
+        """Chromium quits when its last window closes, and the other slot's lease with it: when
+        every open page is in `contexts` or `pages`, about to close, a blank page of the
+        persisted context opens first, as guard_memory does (B29)."""
+        with contextlib.suppress(Exception):
+            kept = [
+                page
+                for context in self.browser.contexts
+                if not any(context is closing for closing in contexts)
+                for page in context.pages
+                if not any(page is closing for closing in pages)
+            ]
+            if not kept:
+                await asyncio.wait_for(self.browser.contexts[0].new_page(), c.CLOSE_S)
 
     def _memory_page(self, page: Any) -> None:
         with contextlib.suppress(Exception):

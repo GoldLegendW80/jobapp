@@ -407,9 +407,9 @@ class Tab:
         discovery, as a failed start does."""
         reason, used_mib = self._why_closed(closed)
         context = self.state.native_context
-        if not closed.is_closed():  # a crashed page goes before another opens
+        if not closed.is_closed():
             with contextlib.suppress(Exception):
-                await asyncio.wait_for(closed.close(), ACTION_S)
+                await asyncio.wait_for(self.close_page(closed), ACTION_S)
         try:
             async with asyncio.timeout(ACTION_S):
                 if reason == "memory" and not self.state.lean:
@@ -490,12 +490,32 @@ class Tab:
             return
         await route.abort("blockedbyclient")
 
+    def last_page(self, page: Any) -> bool:
+        """`page` is the browser's last open page, every context's counted as
+        chromium.guard_memory counts them; True when they cannot be read."""
+        try:
+            contexts = self.browser.browser.contexts
+            return not any(p is not page and not p.is_closed() for c in contexts for p in c.pages)
+        except Exception:
+            return True
+
+    async def close_page(self, page: Any) -> None:
+        """Closes a page of the discovery. Chromium quits when its last window closes, and the
+        lease with it (measured on Chromium 156, B29): the browser's last page gets a blank one
+        in its own context first, as chromium.guard_memory does; any other page closes first,
+        so a context never opens one past TABS_MAX. A last page that stays alone stays open."""
+        if self.last_page(page):
+            await page.context.new_page()
+            if self.last_page(page):  # the blank page was closed (extra_page, a failed watch)
+                raise RuntimeError("the browser's last page is not closed")
+        await page.close()
+
     async def close_discovery(self) -> None:
         self.state.native_failed = True
         if self.state.signed_in:  # never the person's own context: the discovery tab only
             if self.state.page is not None:
                 with contextlib.suppress(Exception):
-                    await asyncio.wait_for(self.state.page.close(), ACTION_S)
+                    await asyncio.wait_for(self.close_page(self.state.page), ACTION_S)
             return
         if self.state.native_context is not None:
             with contextlib.suppress(Exception):
@@ -621,7 +641,7 @@ class Tab:
             if other is not self.state.page and off:
                 log.warning("lease %s: a tab outside the allow list closed", self.lease_tag)
                 try:
-                    await other.close()
+                    await (self.close_page(other) if self.state.discovery else other.close())
                 except Exception as exc:
                     raise RefusalRecoveryError(exc) from exc
         page = self.state.page

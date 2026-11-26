@@ -39,6 +39,7 @@ POSTING = "https://jobs.example-robotics.test/jobs/42"
 SCOPE = {"start": START}
 LIMIT = 2048 << 20
 MARK = {"_discovery": discovery.MARKER, "_discovery_scope": SCOPE}
+SIGNED_IN = {"_discovery": discovery.MARKER, "_discovery_scope": {**SCOPE, "signed_in": True}}
 
 
 class Cdp:
@@ -72,6 +73,8 @@ class Page:
         self.closed = True
         if self in self.context.pages:
             self.context.pages.remove(self)
+        if self.context.browser is not None:
+            self.context.browser.page_closed()
 
     def is_closed(self) -> bool:
         return self.closed
@@ -96,15 +99,16 @@ class Page:
 
 
 class Context:
-    def __init__(self, pages: int = 1, fail_new_page: bool = False) -> None:
+    def __init__(self, pages: int = 1, fail_new_page: bool = False, fail_cdp: int = 0) -> None:
         self.pages: list[Page] = []
         self.pages.extend(Page(self) for _ in range(pages))
         self.routes: list[tuple[str, Any]] = []
         self.listeners: dict[str, list[Any]] = {}
         self.cdp_sent: list[tuple[str, Any]] = []
         self.watched: list[Page] = []  # the pages a CDP session was opened on
-        self.fail_new_page = fail_new_page
+        self.fail_new_page, self.fail_cdp = fail_new_page, fail_cdp
         self.closed = False
+        self.browser: Browser | None = None
 
     async def route(self, pattern: str, handler: Any) -> None:
         self.routes.append((pattern, handler))
@@ -113,11 +117,14 @@ class Context:
         self.listeners.setdefault(event, []).append(listener)
 
     async def new_cdp_session(self, page: Page) -> Cdp:
+        if self.fail_cdp:
+            self.fail_cdp -= 1
+            raise RuntimeError("Protocol error (Target.attachToTarget)")
         self.watched.append(page)
         return Cdp(self.cdp_sent)
 
     async def new_page(self) -> Page:
-        if self.fail_new_page:
+        if self.fail_new_page or (self.browser is not None and self.browser.gone):
             raise RuntimeError("Target page, context or browser has been closed")
         page = Page(self)
         self.pages.append(page)
@@ -127,6 +134,29 @@ class Context:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class Browser:
+    """Chromium as browserd runs it: when its last page closes, every context's counted, it
+    quits, and every later new_page raises (measured on Chromium 156 by the review of PR 839)."""
+
+    def __init__(self, contexts: list[Context], made: Context | None = None) -> None:
+        self.contexts: list[Context] = []
+        self.made, self.gone = made, False
+        for context in contexts:
+            self.adopt(context)
+
+    def adopt(self, context: Context) -> Context:
+        context.browser = self
+        self.contexts.append(context)
+        return context
+
+    async def new_context(self, **_: Any) -> Context:
+        assert self.made is not None
+        return self.adopt(self.made)
+
+    def page_closed(self) -> None:
+        self.gone = self.gone or not any(c.pages for c in self.contexts)
 
 
 async def no_sleep(_: float) -> None:
@@ -145,14 +175,10 @@ def started(signed_in: bool = False, **context: Any) -> tuple[actions.Tab, Conte
             "hosts": ["jobs.example-robotics.test"],
         }
     )
-    person = Context()
+    person = Context(**context) if signed_in else Context()
     made = person if signed_in else Context(**context)
-
-    async def new_context(**_: Any) -> Context:
-        return made
-
     browser = chromium.Chromium(request, "b29-lease", None, Config(secret=b"s"))
-    browser.browser = SimpleNamespace(contexts=[person], new_context=new_context)
+    browser.browser = Browser([person], made)
     tab = actions.Tab(
         request=request,
         state=actions.State(),
@@ -163,12 +189,10 @@ def started(signed_in: bool = False, **context: Any) -> tuple[actions.Tab, Conte
     )
     scope = discovery.Scope.parse({**SCOPE, "signed_in": signed_in})
     asyncio.run(tab.begin_discovery(scope, "browser_navigate", {"url": START}))
-    if not signed_in:
-        browser.browser.contexts.append(made)
     return tab, made, browser
 
 
-def call(tab: actions.Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
+def call(tab: actions.Tab, name: str, args: dict[str, Any], mark: Any = MARK) -> dict[str, Any]:
     """One tool call as routes.call_tool makes it: a Tab of its own on the lease's state."""
     fresh = actions.Tab(
         request=tab.request,
@@ -179,7 +203,7 @@ def call(tab: actions.Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
         person_holds=tab.person_holds,
     )
     marked = name not in ("browser_snapshot", "browser_wait_for")
-    return asyncio.run(actions.run(fresh, name, {**args, **MARK} if marked else dict(args)))
+    return asyncio.run(actions.run(fresh, name, {**args, **mark} if marked else dict(args)))
 
 
 def guard(browser: Any, used: int = 1850, owner: Any = None) -> list[dict[str, Any]]:
@@ -380,6 +404,108 @@ def test_the_persons_context_reuses_the_guards_blank_tab() -> None:
     assert tab.state.page is blank
     assert blank.listeners["crash"]
     assert not person.closed
+
+
+def test_a_signed_in_search_whose_only_tab_crashed_goes_on_and_chromium_stays_up() -> None:
+    """Signed in, the search's tab is the browser's only page: a blank page opens before the
+    crashed one closes, else Chromium quits and the lease ends (review of PR 839, Chromium 156)."""
+    tab, person, browser = started(signed_in=True)
+    assert call(tab, "browser_navigate", {"url": START}, SIGNED_IN)["ok"]
+    crashed = tab.state.page
+    assert [p for c in browser.browser.contexts for p in c.pages] == [crashed]
+    for listener in crashed.listeners["crash"]:
+        listener(crashed)
+    told = call(tab, "browser_snapshot", {})
+    assert (told["error"], told["tab_closed"]["reason"]) == ("tab_closed", "crash")
+    assert "rule" not in told
+    assert not browser.browser.gone
+    assert crashed.closed
+    [blank] = person.pages
+    assert blank.url == actions.ABOUT_BLANK
+    assert tab.state.page is blank
+    assert blank in person.watched
+    assert blank.listeners["crash"]
+    assert not person.closed
+    moved = call(tab, "browser_navigate", {"url": POSTING}, SIGNED_IN)
+    assert moved["ok"] is True
+    assert blank.url == POSTING
+
+
+@pytest.mark.parametrize("failures", [1, 9])
+def test_a_signed_in_search_that_ends_keeps_the_persons_window(failures: int) -> None:
+    """A failed start of a signed in search closes its tab, the browser's only page: a blank
+    page of the person's context opens first; when that blank page cannot stay (its watch fails
+    too, so it is closed), the search's tab stays open rather than end Chromium."""
+    request = Request.parse(
+        {
+            "user_id": "e2e-b29",
+            "profile_id": "1b29c0de-0000-4000-8000-00000000b029",
+            "uid": 20029,
+            "purpose": "sweep",
+            "hosts": ["jobs.example-robotics.test"],
+        }
+    )
+    person = Context(fail_cdp=failures)
+    browser = chromium.Chromium(request, "b29-lease", None, Config(secret=b"s"))
+    browser.browser = Browser([person])
+    tab = actions.Tab(
+        request=request,
+        state=actions.State(),
+        browser=browser,
+        pacer=pacing.Pacer(no_sleep),
+        lease_tag="b29-test",
+        person_holds=lambda: False,
+    )
+    [first] = person.pages
+    scope = discovery.Scope.parse({**SCOPE, "signed_in": True})
+    with pytest.raises(actions.UnsupportedDiscovery):
+        asyncio.run(tab.begin_discovery(scope, "browser_navigate", {"url": START}))
+    assert not browser.browser.gone
+    assert not person.closed
+    assert tab.state.native_failed
+    if failures == 1:
+        assert first.closed
+        assert [p.url for p in person.pages] == [actions.ABOUT_BLANK]
+    else:
+        assert person.pages == [first]
+
+
+def test_a_signed_in_search_closing_a_tab_off_the_line_keeps_a_window() -> None:
+    """settle() closes a tab of the search off the line; when it is the browser's last page (the
+    search's own tab closed meanwhile), a blank page opens first."""
+    tab, person, browser = started(signed_in=True)
+    assert call(tab, "browser_navigate", {"url": START}, SIGNED_IN)["ok"]
+    off = Page(person, "chrome-error://chromewebdata/")
+    person.pages.append(off)
+    asyncio.run(tab.state.page.close())
+    asyncio.run(tab.settle({"ok": True}))
+    assert off.closed
+    assert not browser.browser.gone
+    assert [p.url for p in person.pages] == [actions.ABOUT_BLANK]
+
+
+def test_the_end_of_a_slot_keeps_a_window_for_the_other_slot() -> None:
+    """Two browsers at once: the lease that started Chromium ends while the other slot's lease
+    has no page open; its tabs close after a blank page opens, so Chromium stays up."""
+    request = Request.parse(
+        {
+            "user_id": "e2e-b29",
+            "profile_id": "1b29c0de-0000-4000-8000-00000000b029",
+            "uid": 20029,
+            "purpose": "sweep",
+            "hosts": ["jobs.example-robotics.test"],
+        }
+    )
+    shared = chromium.Chromium(request, "first-lease", None, Config(secret=b"s", slots=2))
+    person, joined = Context(), Context(pages=0)
+    shared.browser = Browser([person, joined])
+    shared._homes["second-lease"] = joined
+    [search] = person.pages
+    asyncio.run(shared.end_slot("first-lease"))
+    assert search.closed
+    assert not shared.browser.gone
+    assert [p.url for p in person.pages] == [actions.ABOUT_BLANK]
+    assert not joined.closed
 
 
 def test_the_memory_guard_names_the_lease_whose_tab_it_closed(caplog) -> None:
