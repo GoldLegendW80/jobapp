@@ -734,8 +734,8 @@ class ApplySession:
                 return json.dumps(said, ensure_ascii=False), False
             try:
                 where = await self.tools.ask_state()
-            except BrowserError:
-                where = "unknown"
+            except BrowserError as exc:
+                where = "ended" if exc.code == "ended" else "unknown"
             if where == "ended":
                 self.stopped = "lease_ended"
                 return self._ended()

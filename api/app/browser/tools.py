@@ -89,6 +89,7 @@ class LeaseTools:
         """`waiting`, `held` (the person holds the input), `back` (active again: their Give
         back, a take over's end) or `ended`. The api's copy is settled first, so it mirrors a
         take over and never ends the lease at the ask's deadline under the person."""
+        await self._held()
         with contextlib.suppress(StoreUnavailableError):
             await self.leases.current(self.user_id)
         lease = held_in(await self.client.current(), self.lease_id)
@@ -102,6 +103,7 @@ class LeaseTools:
 
     async def ask_resume(self) -> None:
         """The person answered in the app: the lease is active again (a take over aside)."""
+        await self._held()
         await self.client.agent_ask(self.lease_id, self._token, "resume")
         with contextlib.suppress(StoreUnavailableError):
             await self.leases.resume(self.user_id, self.lease_id)
