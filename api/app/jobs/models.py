@@ -251,6 +251,13 @@ class Job(Base):
         sa.SmallInteger, nullable=False, default=0, server_default="0"
     )
     read_run_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
+    # What of the posting is outside the criteria of the search that found it (jobs J30,
+    # app/jobs/criteria_badge.py, migration 0051): its codes, [] within, null never computed;
+    # whether a word, a source, the reader or the person stated its contract (null: stored
+    # before 0051); the saved search that found it last (null: the main search).
+    outside_criteria: Mapped[list[str] | None] = mapped_column(pg.ARRAY(sa.Text))
+    contract_stated: Mapped[bool | None] = mapped_column(sa.Boolean)
+    criteria_search_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
     search: Mapped[Any] = mapped_column(
         pg.TSVECTOR, sa.Computed(SEARCH_EXPRESSION, persisted=True), deferred=True
     )
