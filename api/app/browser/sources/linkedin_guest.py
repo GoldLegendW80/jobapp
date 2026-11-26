@@ -15,19 +15,17 @@ gives its one permission (linkedin_guard), which this source checks too.
   `location=Worldwide&geoId=92000000`; any other place is sent as LinkedIn names it
   (linkedin_places: "Tahiti" as "French Polynesia", jobs J20), else as written, without a
   geoId; two saved places LinkedIn names the same are one search.
-  `f_TPR=r<days * 86400>` limits the age to the saved days. Contract types: `f_JT` with CDI as F
-  (full time), CDD as T (temporary), Freelance as C (contract), Stage as I (internship), all the
-  saved ones in one filter; Alternance has no code, so with it saved no `f_JT` is sent and the
-  postings read are checked against the saved types (`contract_of`). CDD saved without CDI sends
-  no `f_JT` either and is checked the same way: LinkedIn lists most fixed term contracts as full
-  time, so `f_JT=T` alone would miss them. VIE has no code either:
-  with VIE saved each title is also searched as "<title> VIE", without `f_JT` and checked the
-  same way; with VIE alone saved, only those searches run. Pages: `start=0, 10, 20`, at most
-  PAGES_PER_SEARCH a search, in rounds, breadth first: the first page of every search, then
-  the details of that round, then the second page of the searches that go on, and so on; a
-  search ends at a short or a stale page. The entry counts the searches that ran (`searches`)
-  against the ones planned (`planned`): a time cap that stops it shows as "11 of 21", and the
-  saved title and place pairs it did not search are named (`not_searched`, jobs J20).
+  `f_TPR=r<days * 86400>` limits the age to the saved days: kept, as this search has few
+  requests and an old posting is mostly closed. No contract filter (`f_JT`) is sent since jobs
+  J30 (owner 2026-11-26: "Je veux vraiment qu'on remonte un max de job", "Garder avec un
+  badge"): a posting of any contract is read and kept, and the store marks one outside the
+  saved contract types. With VIE saved, each title is also searched as "<title> VIE" (LinkedIn
+  has no VIE code), beside its plain search.
+  Pages: `start=0, 10, 20`, at most PAGES_PER_SEARCH a search, in rounds, breadth first: the first
+  page of every search, then the details of that round, then the second page of the searches that go
+  on, and so on; a search ends at a short or a stale page. The entry counts the searches that ran
+  (`searches`) against the ones planned (`planned`): a time cap that stops it shows as "11 of 21",
+  and the saved title and place pairs it did not search are named (`not_searched`, jobs J20).
 - Filter before any detail request (jobs J20, owner 2026-11-17: the title rule moved after
   reading): a card a search for a saved title returned is read whatever its title says
   ("Tech Lead", a French title), so scoring and the posting reader judge its fit; the unwanted
@@ -163,9 +161,6 @@ HEADERS = {
     # steps should LinkedIn compress anyway).
     "Accept-Encoding": "identity",
 }
-# LinkedIn's f_JT codes of the saved contract types (module docstring); Alternance and VIE have
-# none.
-JOB_TYPES = {"CDI": "F", "CDD": "T", "Freelance": "C", "Stage": "I"}
 # The contract type LinkedIn's "Employment type" criterion states, when the title states none.
 EMPLOYMENT = {
     "internship": ContractType.Stage,
@@ -199,16 +194,13 @@ class StopError(Exception):
 
 @dataclass(frozen=True)
 class Query:
-    """One search: the keywords, the saved place it stands for (None with no place saved), what
-    LinkedIn's `location` and `geoId` get, the `f_JT` filter, and whether the postings read are
-    checked against the saved contract types."""
+    """One search: the keywords, the saved place it stands for (None with no place saved), and
+    what LinkedIn's `location` and `geoId` get."""
 
     keywords: str
     place: str | None
     location: str
     geo_id: str | None = None
-    job_types: str | None = None
-    check_contract: bool = False
     title: str = ""  # the saved title it searches (the summary names it)
 
 
@@ -238,30 +230,13 @@ def every_query(search: SearchSection) -> list[Query]:
         if location.casefold() not in named:
             named.add(location.casefold())
             spots.append((place, location, None))
-    saved = set(search.contract_types)
-    others = saved - {"VIE"}
-    # CDD without CDI sends no filter: LinkedIn lists most fixed term contracts as full time,
-    # so "temporary" alone would miss them; the postings are checked instead.
-    cdd_alone = "CDD" in others and "CDI" not in others
-    native = bool(others) and others <= set(JOB_TYPES) and not cdd_alone
-    job_types = ",".join(sorted({JOB_TYPES[c] for c in others})) if native else None
+    vie = "VIE" in search.contract_types
     found: list[Query] = []
     for title in titles:
         for place, location, geo_id in spots:
-            if others or not saved:
-                found.append(
-                    Query(
-                        title,
-                        place,
-                        location,
-                        geo_id,
-                        job_types,
-                        bool(others) and not native,
-                        title,
-                    )
-                )
-            if "VIE" in saved:
-                found.append(Query(f"{title} VIE", place, location, geo_id, None, True, title))
+            found.append(Query(title, place, location, geo_id, title))
+            if vie:
+                found.append(Query(f"{title} VIE", place, location, geo_id, title))
     return found
 
 
@@ -270,8 +245,6 @@ def search_url(base: str, query: Query, days: int, start: int) -> str:
     if query.geo_id:
         params["geoId"] = query.geo_id
     params["f_TPR"] = f"r{days * 86400}"
-    if query.job_types:
-        params["f_JT"] = query.job_types
     params["start"] = str(start)
     return f"{base}{API_PATH}/seeMoreJobPostings/search?{urlencode(params)}"
 
@@ -805,7 +778,6 @@ class _Run:
     details: int = 0
     searches: dict[tuple[str, str | None], None] = field(default_factory=dict)
     unwanted: int = 0
-    other_contract: int = 0
     other_place: int = 0  # cards and postings of a place none of the saved ones (jobs J20)
     duplicates: int = 0
     found: int = 0  # findings counted without the run's commits
@@ -1268,11 +1240,10 @@ async def _details(
     """Fetch up to `count` pending postings and store them, one batch of at most
     finder.VERIFIED_BATCH_MAX at a time."""
     batch: list[GuestFinding] = []
-    saved = set(search.contract_types)
     where = wanted_places(search)
     try:
         for _ in range(min(count, len(pending))):
-            card, query = pending.popleft()
+            card, _ = pending.popleft()
             status, body = await guest.get(posting_url(base, card.job_id))
             if status != 200:
                 continue  # the posting is gone
@@ -1286,9 +1257,6 @@ async def _details(
                 done.other_place += 1  # a card without its place: the posting's says (J20)
                 continue
             contract = contract_of(card.title, location, url, detail.criteria)
-            if query.check_contract and saved and contract.value not in saved:
-                done.other_contract += 1
-                continue
             batch.append(_finding(card, detail, url, location, contract))
             if len(batch) >= finder.VERIFIED_BATCH_MAX:
                 await _store(plan, entry, batch, done)
@@ -1352,8 +1320,6 @@ def _write(entry: dict[str, Any], done: _Run, plan: Any) -> None:
         every_left[entry["source_id"]] = left
     if done.unwanted:
         entry["unwanted"] = done.unwanted
-    if done.other_contract:
-        entry["other_contract"] = done.other_contract
     if done.other_place:
         entry["other_place"] = done.other_place
     if getattr(plan, "commits", None) is None:

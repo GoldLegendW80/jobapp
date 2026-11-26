@@ -772,8 +772,9 @@ def shown(rows: tuple[Row, ...]) -> dict[str, Any]:
         # Jobs J24 (#815): what a row's searches report, beside what they must search.
         "report": (
             "every open posting of a place whose role is one of its titles or adjacent roles, "
-            "or fits the profile's skills, whatever its title wording, its seniority or the "
-            "years of experience it asks: the app scores its fit and gaps"
+            "or fits the profile's skills, whatever its title wording, its seniority, the "
+            "years of experience it asks, its contract, its work mode or its age: the app "
+            "scores its fit and gaps, and marks what is outside the criteria"
         ),
         "places": [
             {

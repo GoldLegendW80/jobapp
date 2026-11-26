@@ -211,7 +211,7 @@ def test_both_prompts_report_what_fits_whatever_the_title_seniority_or_years() -
             " or skills the profile has only in part",
             "When in doubt, report it",
             "Leave a posting only when it is in another place, closed or expired",
-            "excluded by the person's own never apply rules, or no job posting at all",
+            "of a title or a place the person does not want, or no job posting at all",
             "France Travail",
         ):
             assert words in flat, (words, prompt[:40])

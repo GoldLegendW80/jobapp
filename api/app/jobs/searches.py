@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.identity.models import User
+from app.jobs import criteria_badge
 from app.jobs.models import SavedSearch, SweepRequest, SweepTrigger
 from app.profile.models import Profile
 from app.profile.schemas import (
@@ -272,7 +273,8 @@ def change(
     criteria: Mapping[str, Any],
     schedule: SavedSchedule,
 ) -> SavedSearch | None:
-    """The saved search replaced, its revision one more; None when it is not the person's. Raises
+    """The saved search replaced, its revision one more, and the badges of its open postings
+    computed again against its new criteria (jobs J30); None when it is not the person's. Raises
     RevisionError (with the stored revision) when `revision` is not the stored one, and
     NameTakenError. The caller commits."""
     row = get(db, user_id, search_id, lock=True)
@@ -285,12 +287,15 @@ def change(
     row.name, row.criteria = name, criteria_of(criteria)
     row.schedule = schedule.model_dump(mode="json")
     row.revision, row.updated_at = row.revision + 1, sa.func.now()
-    return _flushed(db, row)
+    row = _flushed(db, row)
+    criteria_badge.refresh(db, user_id, row.id, criteria_badge.Criteria.read(row.criteria))
+    return row
 
 
 def delete(db: Session, user_id: uuid.UUID, search_id: uuid.UUID) -> bool:
     """Delete it, and its waiting request (cascade); its sweeps keep their name (frozen in their
-    scope) and lose the reference (set null). The profile row is locked first, the order in
+    scope) and lose the reference (set null), and its postings follow the main search, their
+    badges computed again against it (jobs J30). The profile row is locked first, the order in
     which the line's start (sweep.start_next) takes its locks. The caller commits."""
     db.execute(sa.select(Profile.user_id).where(Profile.user_id == user_id).with_for_update())
     row = get(db, user_id, search_id, lock=True)
@@ -298,6 +303,7 @@ def delete(db: Session, user_id: uuid.UUID, search_id: uuid.UUID) -> bool:
         return False
     db.delete(row)
     db.flush()
+    criteria_badge.refresh(db, user_id, None, criteria_badge.criteria_for(db, user_id, None))
     return True
 
 

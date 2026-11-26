@@ -950,13 +950,14 @@ def test_the_searches_of_a_website_store_each_posting_once_and_a_refusal_keeps_t
     assert_counts_agree(factory, row, alice)
 
 
-def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reach_the_store(
+def test_unwanted_places_and_an_address_read_two_ways_never_reach_the_store(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:
-    """Review of pull request 715, follow ups 2: the unwanted titles and places and the several
-    contracts are applied to each verified batch before it is saved, not only in the counts; an
-    address one search reads as unwanted and the next as wanted is never saved and counts once
-    (unwanted wins, fail closed)."""
+    """Review of pull request 715, follow ups 2: the unwanted titles and places are applied to
+    each verified batch before it is saved, not only in the counts; an address one search reads
+    as unwanted and the next as wanted is never saved and counts once (unwanted wins, fail
+    closed). Jobs J30: a posting of another contract than the saved ones is stored with its
+    badge."""
     profile(
         factory,
         alice,
@@ -1020,9 +1021,14 @@ def test_unwanted_places_other_contracts_and_an_address_read_two_ways_never_reac
     # Its detail page, then again after the next search (from the results page, round 2).
     assert read == ["flip", "flip"]
     assert (entry["error"], entry["outcome"]) == (None, "complete")
-    assert (entry["found"], entry["postings"], row.stats["new"]) == (1, 1, 1)
-    assert (entry["unwanted"], entry["other_contract"]) == (2, 1)
-    assert [(job.title, job.url) for job in jobs_of(factory, alice)] == [
-        ("Robot Engineer", BASE + "jobs/robot")
+    assert (entry["found"], entry["postings"], row.stats["new"]) == (2, 2, 2)
+    assert (entry["unwanted"], "other_contract" in entry) == (2, False)
+    stored = sorted((job.title, job.url, job.outside_criteria) for job in jobs_of(factory, alice))
+    assert [(title, url) for title, url, _ in stored] == [
+        ("Robot Engineer", BASE + "jobs/robot"),
+        ("Robot Engineer CDD", BASE + "jobs/cdd"),
     ]
+    # The robot posting's fixed date may be older than the window by the day the test runs.
+    assert ["contract" in badge for _, _, badge in stored] == [False, True]
+    assert entry["outside"] == sum(bool(badge) for _, _, badge in stored)
     assert_counts_agree(factory, row, alice)
