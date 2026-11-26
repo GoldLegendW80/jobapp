@@ -102,7 +102,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.agents.runs import WorkflowRef
 from app.identity.models import User
-from app.jobs import posting_titles, schedule, scoring, searches, service, signals
+from app.jobs import criteria_badge, posting_titles, schedule, scoring, searches, service, signals
 from app.jobs import slug as slugs
 from app.jobs.boards import catalog as boards
 from app.jobs.importer import kind
@@ -438,6 +438,8 @@ class Stats:
     new: int = 0
     duplicates: int = 0
     skipped_by_rule: int = 0
+    # Jobs J30: the new postings kept with a badge, outside the search's criteria.
+    outside: int = 0
     invalid: int = 0
     duration: float | None = None
     picked_at: str | None = None
@@ -691,6 +693,20 @@ class Plan:
     linkedin_not_searched: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)
 
     @property
+    def criteria(self) -> criteria_badge.Criteria:
+        """The frozen criteria of the search the sweep ran, what a posting's badge reads (J30)."""
+        return criteria_badge.Criteria.of(self.search)
+
+    @property
+    def criteria_search_id(self) -> uuid.UUID | None:
+        """The saved search the sweep ran (its frozen `saved_search`), None for the main one."""
+        saved = (self.search_scope or {}).get("saved_search")
+        try:
+            return uuid.UUID(saved["id"]) if isinstance(saved, dict) else None
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    @property
     def flow(self) -> WorkflowRef:
         """The sweep's run in Activity (agents A10): its websites' agents and its reader."""
         scope = self.search_scope or {}
@@ -718,12 +734,13 @@ def _new_job(
     now: datetime,
     contract: ContractType | None = None,
     work_mode: str | None = None,
+    contract_stated: bool = False,
 ) -> _NewJob:
     """The row of a new job, already scored and rule-checked, and its events: created, sweep,
     then the ones service.apply_score, set_status and set_notes would have written. A company
     board (app/jobs/boards, filters.contract_of) states the contract it filtered on, a job feed
     (app/jobs/feeds) may state the contract type and the work mode; else both are read from the
-    posting as for every source."""
+    posting as for every source. Its badge (jobs J30) reads the sweep's frozen criteria."""
     text = posting.text[:POSTING_TEXT_MAX]
     rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
     score = (
@@ -738,6 +755,15 @@ def _new_job(
     # shape, else nothing.
     pay = pays.pay_of(text, freelance=contract is ContractType.Freelance)
     work_mode = work_mode or pays.work_mode_of(posting.location)
+    found_on = now.astimezone(SWEEP_TZ).date()
+    published_on = published_date(posting.published)
+    facts = criteria_badge.Facts(
+        contract.value if contract_stated else None,
+        getattr(work_mode, "value", work_mode),
+        published_on,
+        found_on,
+        criteria_badge.nature_of(source),
+    )
     row = {
         "id": job_id,
         "user_id": plan.user_id,
@@ -755,14 +781,17 @@ def _new_job(
         "gaps": list(score.gaps) if score is not None else [],
         "description": text[:DESCRIPTION_CHARS] or None,
         "posting_text": text or None,
-        "published_on": published_date(posting.published),
+        "published_on": published_on,
         "pay_min": pay.min if pay else None,
         "pay_max": pay.max if pay else None,
         "pay_currency": pay.currency if pay else None,
         "pay_period": pay.period if pay else None,
         "work_mode": work_mode,
         **signals.stored(text),
-        "found_on": now.astimezone(SWEEP_TZ).date(),
+        "found_on": found_on,
+        "outside_criteria": criteria_badge.codes(facts, plan.criteria),
+        "contract_stated": contract_stated,
+        "criteria_search_id": plan.criteria_search_id,
         "notes": rule.text if rule is not None else "",
         "legacy": {},
         "created_at": now,
@@ -1506,6 +1535,7 @@ def _summary(stats: Stats) -> dict[str, Any]:
         "matched": stats.matched,
         "new": stats.new,
         "skipped_by_rule": stats.skipped_by_rule,
+        "outside": stats.outside,
         "duration": stats.duration,
     }
 
@@ -1549,8 +1579,8 @@ def _summary(stats: Stats) -> dict[str, Any]:
 # so the run's counts and duplicates are those stored.
 
 DRAIN_S = 5.0
-VERIFIED_COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule")
-SOURCE_COUNTERS = ("found", "postings", "duplicates", "skipped_by_rule")
+VERIFIED_COUNTERS = ("seen", "matched", "new", "duplicates", "skipped_by_rule", "outside")
+SOURCE_COUNTERS = ("found", "postings", "duplicates", "skipped_by_rule", "outside")
 
 
 class StoreRefusedError(Exception):
@@ -1567,6 +1597,7 @@ def _counted(stats: Stats, source_id: str, delta: Stats, found: int) -> None:
             entry["postings"] = entry.get("postings", 0) + delta.new
             entry["duplicates"] = entry.get("duplicates", 0) + delta.duplicates
             entry["skipped_by_rule"] = entry.get("skipped_by_rule", 0) + delta.skipped_by_rule
+            entry["outside"] = entry.get("outside", 0) + delta.outside
 
 
 def commit_verified(
@@ -1649,16 +1680,31 @@ def _store_finding(
     cross = posting_titles.cross_key(company, posting.title, posting.location)
     today = now.astimezone(SWEEP_TZ).date()
     # Jobs J26: the contract markers the title lost still make the contract type.
-    contract = getattr(finding, "contract", None) or (
+    given = getattr(finding, "contract", None)
+    contract = given or (
         kind(f"{posting.title} {cleaned.contract}", posting.location, posting.url)
         if cleaned.contract
         else None
+    )
+    # Jobs J30: a source's CDI may be `kind`'s default (LinkedIn's, a board's), so a CDI counts
+    # as stated only when a word says it.
+    stated = (
+        (given is not None and given is not ContractType.CDI)
+        or bool(cleaned.contract)
+        or criteria_badge.stated_contract(posting.title, posting.location, posting.url) is not None
     )
     for _ in range(2):
         if plan.known.has(key) or plan.known.cross_job(cross, today) is not None:
             break
         new = _new_job(
-            plan, company, posting, source, now, contract, getattr(finding, "work_mode", None)
+            plan,
+            company,
+            posting,
+            source,
+            now,
+            contract,
+            getattr(finding, "work_mode", None),
+            stated,
         )
         new.events[1]["data"]["discovery"] = {
             "source_id": source_id,
@@ -1687,6 +1733,7 @@ def _store_finding(
             plan.known.add_cross(cross, new.row["id"], today)
             delta.new += 1
             delta.skipped_by_rule += new.rule is not None
+            delta.outside += bool(new.row["outside_criteria"])
             return
         # Another request stored this address or took this slug meanwhile: learn the person's
         # rows in the way, then decide again (a duplicate, or a free slug).
@@ -1706,6 +1753,34 @@ def _store_finding(
             .where(Job.id == job_id, Job.user_id == plan.user_id)
             .values(source=joined, updated_at=Job.updated_at)
         )
+    if job_id is not None:
+        _badge_again(db, plan, job_id)
+
+
+def _badge_again(db: Session, plan: Plan, job_id: uuid.UUID) -> None:
+    """Jobs J30: a posting found again stays one row; its badge is computed again against this
+    sweep's criteria, and this sweep's search becomes its search. Its `updated_at` stays."""
+    row = db.execute(
+        sa.select(
+            Job.contract_type,
+            Job.contract_stated,
+            Job.work_mode,
+            Job.published_on,
+            Job.found_on,
+            Job.source,
+        ).where(Job.id == job_id, Job.user_id == plan.user_id)
+    ).one_or_none()
+    if row is None:
+        return
+    db.execute(
+        sa.update(Job)
+        .where(Job.id == job_id, Job.user_id == plan.user_id)
+        .values(
+            outside_criteria=criteria_badge.codes(criteria_badge.facts_of(row), plan.criteria),
+            criteria_search_id=plan.criteria_search_id,
+            updated_at=Job.updated_at,
+        )
+    )
 
 
 class Commits:

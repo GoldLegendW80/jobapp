@@ -35,6 +35,8 @@ POSTING = {
 # B27: what browser_find and browser_snapshot read, the page's kept snapshot or the last script's
 # kept result; B28: or the last page web_fetch read.
 SOURCE = {"type": "string", "enum": list(finder.SOURCES)}
+# Jobs J30: how many search results the agent says it read in this run, its own count.
+RESULTS_READ = {"type": "integer", "minimum": 0, "maximum": finder.RESULTS_READ_MAX}
 SCHEMAS: dict[str, dict[str, Any]] = {
     "browser_navigate": {
         "type": "object",
@@ -82,14 +84,18 @@ SCHEMAS: dict[str, dict[str, Any]] = {
     "report_postings": {
         "type": "object",
         "properties": {
-            "postings": {"type": "array", "items": POSTING, "maxItems": finder.POSTINGS_MAX}
+            "postings": {"type": "array", "items": POSTING, "maxItems": finder.POSTINGS_MAX},
+            "results_read": RESULTS_READ,
         },
         "required": ["postings"],
         "additionalProperties": False,
     },
     "report_no_postings": {
         "type": "object",
-        "properties": {"reason": {"type": "string", "enum": sorted(finder.NO_POSTINGS)}},
+        "properties": {
+            "reason": {"type": "string", "enum": sorted(finder.NO_POSTINGS)},
+            "results_read": RESULTS_READ,
+        },
         "required": ["reason"],
         "additionalProperties": False,
     },
@@ -212,16 +218,20 @@ DESCRIPTIONS = {
     "a captcha, accept something, sign in again, or (field, kind) answer a form's field you do "
     "not know. Answers when the person gave the browser back, or at once when nobody is "
     "watching.",
-    "report_postings": "Report job postings whose own page you opened in this search: the "
-    "title as the page shows it, location, company and published_on when the page shows them "
-    "(date_shown, the page's own words, when it gives no exact date), "
-    "the address of the posting's page, and its text. The app checks each one against the "
-    "pages you opened; what it keeps stays, and a refusal says what to do.",
+    "report_postings": "Report the job postings that fit the profile, whatever their contract, "
+    "work mode or age, that you opened or saw on a page, in a snapshot or in a script result "
+    "of this search: the title as the page shows it, location, company and published_on when "
+    "the page shows them (date_shown, the page's own words, when it gives no exact date), "
+    "the address of the posting's own page, and its text. The app opens an address you saw "
+    "and did not open, and checks each one against the pages opened; what it keeps stays, and "
+    "a refusal says what to do. results_read: how many search results you read in this run "
+    "so far, in all (optional, shown to the person as your own count).",
     "report_no_postings": "Say why this website gives no posting to report: no_match (the "
     "search ran and listed no matching job), no_list (a count or a push to sign up, no list), "
     "cookie_wall, signin_wall, no_search_control, app_refused (the app refused what you "
     "needed), or security_check (a check that did not clear and nobody could help). Only what "
-    "you saw.",
+    "you saw. results_read: how many search results you read in this run, in all (optional, "
+    "shown to the person as your own count).",
 }
 
 
@@ -287,8 +297,10 @@ def _factory(name: str) -> app_tools.Factory:
                 safe = {k: args[k] for k in SCHEMAS[name]["properties"] if k in args}
                 text, error = await session.interact(name, safe)
             elif name == "report_no_postings":
+                session.note_results_read(args.get("results_read"))
                 text, error = session.report_none(args.get("reason"))
             else:
+                session.note_results_read(args.get("results_read"))
                 text, error = await session.report_verified(args.get("postings"))
             return app_tools.text_result(text, error=error)
 

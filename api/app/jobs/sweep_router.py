@@ -167,6 +167,21 @@ def sweep_out(row: Sweep) -> SweepOut:
             "media_blocked": item.get("media_blocked") is True,
         }
 
+    def reported(item: dict[str, Any]) -> dict[str, Any]:
+        """What happened to what a source reported (jobs J30), read defensively: counts below
+        zero read as zero, the verification's reasons as words, the assistant's own count."""
+        said = item.get("results_read")
+        return {
+            **{
+                name: max(0, count(item, name))
+                for name in ("duplicates", "outside", "unwanted", "opened_by_app", "other_contract")
+            },
+            "refused": refusals(item.get("refused")),
+            "results_read": said
+            if isinstance(said, int) and not isinstance(said, bool) and said >= 0
+            else None,
+        }
+
     sources = [
         SourceOut(
             kind=str(item.get("kind", "")),
@@ -178,6 +193,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             new=count(item, "postings"),
             skipped_by_rule=count(item, "skipped_by_rule"),
             items_skipped=max(0, count(item, "items_skipped")),
+            **reported(item),
             searches=max(0, count(item, "searches")),
             searched=searched(item.get("searched")),
             refusals=refusals(item.get("refusals")),
@@ -257,6 +273,7 @@ def sweep_out(row: Sweep) -> SweepOut:
         new=number("new"),
         duplicates=number("duplicates"),
         skipped_by_rule=number("skipped_by_rule"),
+        outside=number("outside"),
         duration=float(duration) if isinstance(duration, int | float) else None,
         sources=sources,
         search_scope=summary,

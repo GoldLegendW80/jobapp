@@ -129,11 +129,13 @@ def nature_of(source: str | None) -> str | None:
     return None
 
 
-def facts_of(row: Any) -> Facts:
-    """A job row's facts (a Job or a row of its columns). A contract stored before 0051 (stated
-    unknown) counts as stated unless it is CDI, the one `kind` gives when nothing says it."""
+def facts_of(row: Any, contract_read: bool = False) -> Facts:
+    """A job row's facts (a Job or a row of its columns); `contract_read`: the posting reader has
+    just quoted its contract. A contract stored before 0051 (stated unknown) counts as stated
+    unless it is CDI, the one `kind` gives when nothing says it."""
     contract = getattr(row.contract_type, "value", row.contract_type)
-    if row.contract_stated is False or (row.contract_stated is None and contract == "CDI"):
+    stated = True if contract_read else row.contract_stated
+    if stated is False or (stated is None and contract == "CDI"):
         contract = None
     mode = getattr(row.work_mode, "value", row.work_mode)
     return Facts(contract, mode, row.published_on, row.found_on, nature_of(row.source))

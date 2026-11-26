@@ -27,7 +27,9 @@ What `save` stores, under the posting's row lock:
   reader's own, VIA), never a company or location that would make the posting a duplicate of
   another of the person's, never another contract on a website whose postings have one by nature
   (the VIE website, B21);
-- what changed as one `edit` event with `"via": "reader"`, and `read_at`.
+- what changed as one `edit` event with `"via": "reader"`, and `read_at`;
+- the posting's badge computed again from the fields it now holds (jobs J30,
+  app/jobs/criteria_badge.py), a contract the reader quoted counting as stated.
 
 The code readers (opportunities/pay.py, the finder's labels, `work_mode_of`) give the first values
 when the posting is stored and stay when no reader runs. Two ways a posting is read:
@@ -73,7 +75,7 @@ from app.agents import credentials, definitions, failures, runs
 from app.agents.models import AgentRun, RunStatus
 from app.browser.nature import nature_contract
 from app.browser.words import words as _words
-from app.jobs import service
+from app.jobs import criteria_badge, service
 from app.jobs.models import (
     ContractType,
     Job,
@@ -632,11 +634,24 @@ def save(
         db.execute(
             sa.update(Job)
             .where(Job.id == job.id)
-            .values(read_at=now, updated_at=Job.updated_at)
+            .values(read_at=now, **_badge(db, job, "contract_type" in values))
+            .values(updated_at=Job.updated_at)
             .execution_options(synchronize_session=False)
         )
         db.commit()
     return Saved(outcome.answer(facts.index), read=True, refused=outcome.refused)
+
+
+def _badge(db: Session, job: Job, contract_read: bool) -> dict[str, Any]:
+    """Jobs J30: the badge computed again from the fields the reader filled, against the current
+    criteria of the posting's search; a contract it quoted is a stated one. Criteria that cannot be
+    read keep the badge as it is."""
+    stated = {"contract_stated": True} if contract_read else {}
+    criteria = criteria_badge.criteria_for(db, job.user_id, job.criteria_search_id)
+    if criteria is None:
+        return stated
+    badge = criteria_badge.codes(criteria_badge.facts_of(job, contract_read), criteria)
+    return {**stated, "outside_criteria": badge}
 
 
 def _keep(db: Session, job: Job, values: dict[str, Any], hand: set[str], outcome: Outcome) -> None:

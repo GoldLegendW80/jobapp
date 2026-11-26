@@ -27,7 +27,8 @@ normal browser on the owner's Mac listed every card (14 searches, 256 cards).
   a search page gone (404) leaves its pair not searched. Each new card that passes J20's rules
   (the unwanted titles and places, the never apply rules, the saved places, the person's
   postings) has its `/jobs/view/<id>` page read for its text, then is stored through the run's
-  commits as the guest search stores it.
+  commits as the guest search stores it, whatever its contract (jobs J30: the store marks one
+  outside the saved contract types).
 - Pace and stops: LinkedIn's page pace (sources/linkedin.py PAUSE_S, 10 to 30 s after the
   previous page of LinkedIn's host ended, whoever opened it, the shared pacer), the permission
   checks before every call (platform_policy), at most PAGES_MAX pages. A sign in wall, a
@@ -584,11 +585,10 @@ async def _details(
 ) -> None:
     """Each pending card's posting page, stored in batches (`guest._details`'s rules)."""
     batch: list[guest.GuestFinding] = []
-    saved = set(search.contract_types)
     where = guest.wanted_places(search)
     try:
         while pending:
-            card, query = pending.popleft()
+            card, _ = pending.popleft()
             value = await reader.read(posting_page(base, card.job_id), POSTING_SCRIPT)
             detail = posting_of(value) if value is not None else None
             if detail is None:
@@ -600,9 +600,6 @@ async def _details(
                 done.other_place += 1
                 continue
             contract = guest.contract_of(card.title, location, url, detail.criteria)
-            if query.check_contract and saved and contract.value not in saved:
-                done.other_contract += 1
-                continue
             found = guest._finding(card, detail, url, location, contract)
             evidence = {**found.evidence, "read_through": READ_THROUGH}
             batch.append(dataclasses.replace(found, evidence=evidence))
@@ -629,7 +626,7 @@ def _write(entry: dict[str, Any], done: _PageRun, plan: Any, before: int) -> Non
     entry["searches"] = int(entry.get("searches") or 0) + len(done.searches)
     left = [pair for pair in done.pairs if pair not in done.searches]
     entry["not_searched"] = [{"title": t, "place": p} for t, p in left[:SEARCHES_LISTED]]
-    for name in ("unwanted", "other_contract", "other_place"):
+    for name in ("unwanted", "other_place"):
         count = getattr(done, name)
         if count:
             entry[name] = int(entry.get(name) or 0) + count

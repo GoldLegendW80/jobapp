@@ -27,7 +27,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction, undefer
 
 from app.agents.models import Proposal, ProposalDecider, ProposalStatus
-from app.jobs import scoring, signals
+from app.jobs import criteria_badge, scoring, signals
 from app.jobs import slug as slugs
 from app.jobs import undo as undo_tokens
 from app.jobs.models import (
@@ -92,6 +92,15 @@ class PayChoice(enum.StrEnum):
     not_stated = "not_stated"
 
 
+class CriteriaChoice(enum.StrEnum):
+    """The criteria filter (jobs J30): every posting, those within the criteria of the search
+    that found them (no badge, a row never computed included), or those outside (a badge)."""
+
+    all = "all"
+    within = "within"
+    outside = "outside"
+
+
 class ApplicationChoice(enum.StrEnum):
     """The application filter: what the posting's newest application says. How each state reads
     is apply's (`app/apply/list_filter.py`), which registers it."""
@@ -130,6 +139,7 @@ class JobFilters:
     applications: Sequence[ApplicationChoice] = ()
     sweep: uuid.UUID | None = None  # the postings this sweep added
     search: uuid.UUID | MainSearch | None = None  # the postings this search's sweeps added
+    criteria: CriteriaChoice = CriteriaChoice.all
 
 
 def _like_escape(text: str) -> str:
@@ -243,7 +253,7 @@ def _more_filters(
     query: sa.Select[tuple[Job]], user_id: uuid.UUID, filters: JobFilters
 ) -> sa.Select[tuple[Job]]:
     """The filters of jobs J29: place, work mode, website, published, pay, application, sweep;
-    and the search of jobs J32."""
+    the search of jobs J32; the criteria of jobs J30."""
     if filters.places:
         words = place_words(Job.location)
         query = query.where(
@@ -271,6 +281,9 @@ def _more_filters(
         query = query.where(Job.id.in_(added_by(user_id, filters.sweep)))
     if filters.search is not None:
         query = query.where(Job.id.in_(added_by_search(user_id, filters.search)))
+    if filters.criteria is not CriteriaChoice.all:
+        badged = sa.func.coalesce(sa.func.cardinality(Job.outside_criteria), 0) > 0
+        query = query.where(badged if filters.criteria is CriteriaChoice.outside else ~badged)
     return query
 
 
@@ -1499,6 +1512,8 @@ def edit_job(
             setattr(job, name, changes.fields[name])
         if "url" in edits:
             job.liveness = sa.null()  # SQL NULL: the last check read the old address
+        if edits.keys() & {"contract_type", "work_mode"}:
+            _badge_again(db, job, "contract_type" in edits)
         add_event(db, job, JobEventKind.edit, {"changes": edits}, now)
         touch(job, now)
         db.flush()
@@ -1513,6 +1528,16 @@ def edit_job(
         else:
             changed = set_manual_fit(db, job, changes.fit, now) or changed
     return changed
+
+
+def _badge_again(db: Session, job: Job, contract_set: bool) -> None:
+    """Jobs J30: the person's own contract is a stated one, and the badge follows what the person
+    set, against the current criteria of the posting's search (unreadable criteria keep it)."""
+    if contract_set:
+        job.contract_stated = True
+    criteria = criteria_badge.criteria_for(db, job.user_id, job.criteria_search_id)
+    if criteria is not None:
+        job.outside_criteria = criteria_badge.codes(criteria_badge.facts_of(job), criteria)
 
 
 # --- bulk ---------------------------------------------------------------------------------------
