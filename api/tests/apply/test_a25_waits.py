@@ -9,9 +9,11 @@ poll of the wait (browserd's lease read), never during the pace's pauses."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 from collections.abc import Callable
+from datetime import datetime, timedelta
 from typing import Any
 
 import pytest
@@ -201,6 +203,7 @@ def test_nobody_in_time_ends_the_run_needs_person_with_its_sentence_and_try_agai
     assert applier.open_ask(db, found).label == SENTENCE
     assert applier.chat(db, found)[0]["end"] == applier.PERSON_LATE
     assert "failed" not in kinds(db, app_id)
+    assert kinds(db, app_id).count(applier.PERSON_LATE) == 1
     assert site.submissions == []
     # The app's box answers nothing once the run ended: Try again runs the agent once more.
     with factory() as s, pytest.raises(applier.QuestionError):
@@ -260,6 +263,8 @@ def test_a_cancel_during_the_wait_ends_it_at_once(
         gate.CANCELLED_BY_PERSON,
         None,
     )
+    assert applier.chat(db, found)[0]["end"] == "cancelled"
+    assert applier.PERSON_LATE not in kinds(db, app_id)
 
 
 @pytest.mark.parametrize("end", ["activity_cancel", "crash", "worker_start"])
@@ -282,9 +287,12 @@ def test_a_run_cancelled_in_activity_or_dead_during_its_wait(
     found = application(db, app_id)
     if end == "activity_cancel":
         assert (found.state, found.error_code) == (State.cancelled, gate.CANCELLED_BY_PERSON)
+        assert applier.chat(db, found)[0]["end"] == "cancelled"
     else:
         assert (found.state, found.needs) == (State.needs_person, applier.ASKED)
         assert applier.chat(db, found)[0]["end"] == "interrupted"
+        assert "ask_interrupted" in kinds(db, app_id)
+    assert applier.PERSON_LATE not in kinds(db, app_id)  # somebody may have come: not "late"
 
 
 def test_a_code_is_never_taken_in_the_app_s_box(
@@ -376,3 +384,219 @@ def test_the_detail_serves_the_question_and_the_chat_and_the_route_takes_the_ans
         api = Api(client)
         count = api.get("/api/apply/queue/count", token=api.login_token(person_a.email)).json()
         assert (count["waiting_on_you"], count["needs_you"]) == (1, 1)
+
+
+# --- review round 1 -----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("sent", ["yes", "unsure"])
+def test_try_again_after_the_agent_said_it_clicked_send_runs_it_once_more_looking_first(
+    db: Session, factory: sessionmaker[Session], person_a: Person, sent: str
+) -> None:
+    """A send the agent says it clicked through a control browserd did not mark is a possible
+    send: Try again is one more run of the agent in the same mode, which looks on the site first
+    (A19), never an empty Review first item."""
+    from app.apply.router import _agent
+
+    app_id = started(db, person_a, Mode.direct)
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        await session.navigate(json.loads(message)["posting"]["url"])
+        session.finish("failed", "I clicked Send, no confirmation came.", "", sent=sent)
+        return applier.Ran(1, 1)
+
+    assert go_apply(svc(factory, AskSite(), go), app_id) == "submit_unknown"
+    found = application(db, app_id)
+    assert found.error_code == applier.SAID_SENT[sent]
+    assert applier.SAID_SENT_EVENT in kinds(db, app_id)
+    assert _agent(db, found)  # the detail's `agent`: Try again runs the agent
+    with factory() as s:
+        gate.retry(s, person_a.user_id, app_id, AT)
+        s.commit()
+    found = application(db, app_id)
+    assert (found.state, found.mode) == (State.queued, Mode.direct)
+    retried = [e for e in events(db, app_id) if e.kind == "retry"]
+    assert retried[-1].data["previous"] == State.submit_unknown.value
+    again = asking("other")
+    go_apply(svc(factory, AskSite(), again), app_id)
+    assert again.brief["earlier_send"] is True
+
+
+class UsedSite(AskSite):
+    """The person took the browser over and sent the form there: browserd answers `person_used`
+    to the agent's next call, whichever tool it is."""
+
+    def __init__(self, tool: str) -> None:
+        super().__init__()
+        self.tool, self.armed = tool, False
+
+    async def call(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        if name == self.tool and self.armed:
+            self.armed, self.page = False, THANKS
+            return {"ok": False, "error": "person_used", "message": "The person used it."}
+        return await super().call(name, args)
+
+
+@pytest.mark.parametrize("tool", ["browser_wait_for", "browser_take_screenshot"])
+def test_a_take_over_answered_to_a_wait_or_a_screenshot_is_known_to_the_run(
+    db: Session, factory: sessionmaker[Session], person_a: Person, tool: str
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    site = UsedSite(tool)
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        await session.navigate(json.loads(message)["posting"]["url"])
+        await session.interact("browser_click", {"ref": "e1"})
+        site.armed = True
+        if tool == "browser_wait_for":
+            go.told = await session.wait_for("Loaded", None)  # type: ignore[attr-defined]
+        else:
+            go.told = await session.screenshot()  # type: ignore[attr-defined]
+        go.refused = await session.interact(  # type: ignore[attr-defined]
+            "browser_type", {"ref": "e2", "text": "Alex Example"}
+        )
+        await session.snapshot()
+        go.after = await session.interact(  # type: ignore[attr-defined]
+            "browser_type", {"ref": "e2", "text": "Alex Example"}
+        )
+        await session.snapshot()
+        session.finish("submitted", "The person sent it.", session.url)
+        return applier.Ran(3, 1)
+
+    assert go_apply(svc(factory, site, go), app_id) == "submitted"
+    assert go.told == (applier.USED, True)  # type: ignore[attr-defined]
+    text, error = go.refused  # type: ignore[attr-defined]
+    assert error
+    assert text.startswith("Refused: The person used the browser")
+    assert not go.after[1]  # type: ignore[attr-defined]  # the page read, the agent acts again
+    assert [name for name, _ in site.calls].count("browser_type") == 1  # the refused one never
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (State.submitted, applier.SENT_BY_PERSON)
+    assert "person_used" in kinds(db, app_id)
+
+
+def test_an_answer_at_the_deadline_is_kept_and_given_to_the_agent(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    """Two sessions: the answer commits after the poll read nothing and before the deadline's
+    write; `late` reads it under the lock and keeps the run waiting, so the next poll gives it."""
+    app_id = started(db, person_a, Mode.direct)
+
+    def at_the_deadline(_: AskSite) -> None:
+        answer(factory, person_a, app_id, "I signed in just now.")
+
+    deadline = WAIT_S // int(applier.ASK_POLL_S)
+    site, script = AskSite({deadline: at_the_deadline}), asking("signin")
+    assert go_apply(svc(factory, site, script), app_id) == "submitted"
+    assert site.polls == deadline
+    text, error = script.said
+    assert not error
+    assert json.loads(text)["from_the_person"] == "I signed in just now."
+    said = kinds(db, app_id)
+    assert applier.PERSON_LATE not in said
+    assert not [k for k in said if k.startswith("ask_")]
+    assert applier.chat(db, application(db, app_id))[0]["end"] == "answer"
+
+
+def test_an_answer_typed_as_the_browser_is_given_back_reaches_the_agent(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+
+    def answer_and_give_back(site: AskSite) -> None:
+        answer(factory, person_a, app_id, "I accepted the cookies and signed in.")
+        site.where = "back"
+
+    site, script = AskSite({2: answer_and_give_back}), asking("signin")
+    assert go_apply(svc(factory, site, script), app_id) == "submitted"
+    text, error = script.said
+    assert not error
+    said = json.loads(text)
+    assert said["from_the_person"] == "I accepted the cookies and signed in."
+    assert said["then"] == applier.USED
+    assert script.refused[1]  # the page is read before any act
+    assert applier.chat(db, application(db, app_id))[0]["end"] == "browser"
+
+
+def test_the_lease_ending_during_the_wait_leaves_the_sentence_and_try_again(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+
+    def lease_gone(site: AskSite) -> None:
+        site.where = "ended"
+
+    site, script = AskSite({3: lease_gone}), asking("captcha")
+    assert go_apply(svc(factory, site, script), app_id) == "needs_person"
+    assert script.said == (applier.ENDS["lease_ended"], True)
+    found = application(db, app_id)
+    assert (found.state, found.needs) == (State.needs_person, applier.ASKED)
+    assert applier.chat(db, found)[0]["end"] == "run_ended"
+    said = kinds(db, app_id)
+    assert "ask_run_ended" in said
+    assert applier.PERSON_LATE not in said
+    with factory() as s:
+        gate.retry(s, person_a.user_id, app_id, AT)
+        s.commit()
+    assert application(db, app_id).state is State.queued
+
+
+def cut_by_the_time_limit(*, after_submit: bool) -> Any:
+    """Asks, then the runner's time limit interrupts the tool (the hook cancels its task) and
+    the run ends with the runner's code."""
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        await session.navigate(json.loads(message)["posting"]["url"])
+        await session.interact("browser_click", {"ref": "e1"})
+        await session.interact("browser_type", {"ref": "e8", "text": "One month"})
+        if after_submit:
+            await session.interact("browser_click", {"ref": "e6"})
+        go.task = asyncio.ensure_future(session.ask_person("other", SENTENCE))  # type: ignore[attr-defined]
+        with contextlib.suppress(asyncio.CancelledError):
+            await go.task  # type: ignore[attr-defined]
+        return applier.Ran(5, 1, "error")
+
+    return go
+
+
+@pytest.mark.parametrize("after_submit", [False, True])
+def test_the_run_s_time_limit_during_the_wait(
+    db: Session, factory: sessionmaker[Session], person_a: Person, after_submit: bool
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    script = cut_by_the_time_limit(after_submit=after_submit)
+    site = AskSite({3: lambda _: script.task.cancel()})
+    expected = State.submit_unknown if after_submit else State.needs_person
+    assert go_apply(svc(factory, site, script), app_id) == expected.value
+    found = application(db, app_id)
+    if after_submit:
+        assert (found.state, found.error_code, found.needs) == (expected, "error", None)
+    else:
+        assert (found.state, found.needs) == (expected, applier.ASKED)
+    assert applier.chat(db, found)[0]["end"] == "run_ended"
+    assert applier.PERSON_LATE not in kinds(db, app_id)
+
+
+def test_the_wait_is_cut_to_the_run_s_time_left_and_the_brief_says_how_long(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    left = 100
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        go.brief = json.loads(message)  # type: ignore[attr-defined]
+        await session.navigate(go.brief["posting"]["url"])  # type: ignore[attr-defined]
+        session.run_until = session.monotonic() + left
+        await session.ask_person("captcha", SENTENCE)
+        return applier.Ran(1, 1)
+
+    site = AskSite()
+    assert go_apply(svc(factory, site, go), app_id) == "needs_person"
+    cut = left - applier.ASK_MARGIN_S
+    assert site.begun == [cut]
+    assert site.polls == cut // int(applier.ASK_POLL_S)
+    value = applier.open_ask(db, application(db, app_id)).value
+    asked_at, until = (datetime.fromisoformat(value[k]) for k in ("asked_at", "until"))
+    assert until - asked_at == timedelta(seconds=cut)
+    assert go.brief["ask_waits_minutes"] == WAIT_S // 60  # type: ignore[attr-defined]
+    assert "15 minutes" not in applier.PROMPT
