@@ -51,6 +51,9 @@ export const jobListItemSchema = z.object({
   created_at: z.string(),
   updated_at: z.string(),
   liveness: livenessSchema.nullable().optional(),
+  // Jobs J30: what of the posting is outside the criteria of the search that found it (contract,
+  // work_mode, older); [] within. Absent from an older api.
+  outside_criteria: z.array(z.string()).default([]),
 });
 export type JobListItem = z.infer<typeof jobListItemSchema>;
 

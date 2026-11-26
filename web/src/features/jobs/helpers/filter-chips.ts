@@ -2,6 +2,7 @@
 import { formatCount } from "@/lib/format";
 import { PAY_PERIOD_WORDS } from "@/lib/wording";
 
+import { CRITERIA_CHOICE_LABELS } from "./criteria-words";
 import type { JobFilters } from "./filters";
 import { formatDate } from "./format";
 import {
@@ -58,8 +59,8 @@ function payText(filters: JobFilters): string {
 }
 
 /** The chips in the order of the Filters panel: the search first, then place, work mode,
- * contract, website, published, pay, fit, application, status, found, company, and the search
- * that added the postings. */
+ * contract, criteria, website, published, pay, fit, application, status, found, company, and the
+ * search that added the postings. */
 export function activeFilterChips(filters: JobFilters): FilterChip[] {
   const chips: FilterChip[] = [];
   if (filters.q)
@@ -76,6 +77,14 @@ export function activeFilterChips(filters: JobFilters): FilterChip[] {
       (mode) => `Work mode: ${WORK_MODE_CHOICE_LABELS[mode as WorkModeChoice]}`,
     ),
     ...each(filters, "types", (type) => `Contract: ${type}`),
+  );
+  if (filters.criteria)
+    chips.push({
+      key: "criteria",
+      text: CRITERIA_CHOICE_LABELS[filters.criteria],
+      without: { ...filters, criteria: null },
+    });
+  chips.push(
     ...each(filters, "sources", (source) => `Website: ${websiteName(source)}`),
   );
   if (filters.publishedWithin !== null || filters.publishedFrom)
