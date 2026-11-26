@@ -96,6 +96,7 @@ INTERACTIVE_TOOLS = (
     "web_fetch",  # B28: a public page read without the tab (browserd tools/fetch.py)
     "browser_ask_person",
     "report_postings",
+    "report_listing",  # jobs J31: the cards of a list whose own pages could not be read
     "report_no_postings",
 )
 # The tools that act on the page through browserd with the discovery marker (`interact`).
@@ -108,6 +109,7 @@ ACTIONS = frozenset(INTERACTIVE_TOOLS) - {
     "web_fetch",
     "browser_ask_person",
     "report_postings",
+    "report_listing",
     "report_no_postings",
 }
 # The search agent runs Sonnet for every credential kind (owner, 2026-11-04, B20).
@@ -192,6 +194,29 @@ SCRIPT_LINK = re.compile(r"https?://[^\s\"'<>\\]{1,2000}|(?<=\")/[^\s\"'<>\\]{0,
 # pause of APP_OPEN_PAUSE_S (a person's pace), in a tab of its own on the same lease.
 APP_OPENS_MAX = 20
 APP_OPEN_PAUSE_S = (2.0, 4.0)
+# Jobs J31 (owner, 2026-11-26: "Oui, avec une mention"): a posting seen only as a card of a list,
+# its own page not read, is kept from the card (`report_listing`, `FinderSession._card`). A card is
+# a link the session saw on a page it read or fetched (the link's own text and the heading that
+# holds it) or an item of a script's result (the strings of that item); CARDS_MAX addresses, the
+# newest CARD_SOURCES_MAX cards of each, CARD_TEXT_MAX characters each. A source that showed
+# LIST_CARDS_MIN cards or more is a list: its own address is no posting.
+CARDS_MAX = 5_000
+CARD_SOURCES_MAX = 2
+CARD_TEXT_MAX = 1_000
+CARD_NODES_MAX = 200  # the nodes a link's own text is read from
+LIST_CARDS_MIN = 5
+LISTS_MAX = 2_000
+CARD_KINDS = ("page", "fetch", "script")
+# The stops after which the store still works (the sweep's row is still this run's): a report of
+# what the session read before the stop is still kept, as the stop's answer says. Any other stop
+# (the person took the permission back, the store failed) keeps nothing more.
+STORES_AFTER_STOP = frozenset(
+    {"browser_memory", "lease_ended", "lease_budget", "time_budget", "token_budget", "page_failed",
+     "page_budget", "guard_failed", "browser_unavailable", "layout_changed"}
+)  # fmt: skip
+# The refusals of report_postings a card of a list the session read may stand in for (J31): the
+# app could not open the address, or opened a page that does not show the posting.
+CARD_FALLBACK = frozenset({"not_seen", "detail_not_opened", "app_opens_max", "not_on_opened_page"})
 # The routes of a website's search (B27): report_no_postings is refused until the agent tried
 # the three (accept and refuse table: test_b27_code_first.py). A route is tried once the agent's
 # tab landed on it, or once the agent's browser_navigate to it was refused by the app or
@@ -320,6 +345,12 @@ REPORT_ADVICE = {
         "check or a sign in wall): open it yourself, then report the title as the page shows it."
     ),
     "app_opens_max": "Report fewer postings the app has to open in one call.",
+    "card_not_seen": (
+        "Report only a card you saw in this search, on a page, a fetched page or in a script's "
+        "result: its title as the card shows it and its link exactly as the list gives it."
+    ),
+    "page_readable": "This posting's page was read and shows its title: report it with "
+    "report_postings.",
 }
 # What browserd answers when it refused a navigation or an action of the agent's (B19): counted
 # as the app's refusal (`refused["unsupported_interaction"]`), never a page that did not load.
@@ -476,7 +507,13 @@ Report a posting you opened or saw in a list with report_postings (best right
 after reading it): its title as its page shows it, the address of that page and its text
 (the card's text when you did not open it), and company, location and published_on
 (YYYY-MM-DD) as the page shows them. The app keeps a posting whose page shows its title; when
-it refuses one, its answer says what to do. Give results_read with each report: how many
+it refuses one, its answer says what to do. A posting whose own page cannot be opened (a
+security check, a sign in wall, an aggregator that links nowhere readable) and that you saw as
+a card of a list (on a page, a fetched page or in a script's result) is reported with
+report_listing: its title and link exactly as the card gives them, with the company, the place
+and the date when the card shows them. The app keeps it from the card, marked for the person as
+seen only in a list. Never use report_listing for a posting whose page opens: report_postings.
+Give results_read with each report: how many
 search results you read in this run so far, in all. When the website shows
 no list of postings, say why with report_no_postings: no_match (the search ran and listed no
 job that fits), no_list, cookie_wall, signin_wall, no_search_control, app_refused (the app
@@ -751,6 +788,113 @@ class VerifiedFinding:
     published_on: str | None
     evidence: dict[str, str]
     detail_read_at: str
+    # Jobs J31: the address of the list whose card it was kept from, its own page not read.
+    list_url: str | None = None
+
+
+@dataclass(frozen=True)
+class Card:
+    """A link of a list the session read (J31): the list's address, how it was read (CARD_KINDS),
+    the card's text as shown and its words folded (`_words`, one space at each end)."""
+
+    list_url: str
+    kind: str
+    text: str
+    words: str
+
+
+def _own_text(node: Any) -> str:
+    """A link's own text: its label and its visible descendants', the first CARD_NODES_MAX
+    nodes, CARD_TEXT_MAX characters at most."""
+    parts: list[str] = []
+    size, stack, nodes = 0, [node], 0
+    while stack and size <= CARD_TEXT_MAX and nodes < CARD_NODES_MAX:
+        one = stack.pop()
+        nodes += 1
+        if one.hidden:
+            continue
+        label = one.label()
+        if label:
+            parts.append(label)
+            size += len(label) + 1
+        stack.extend(reversed(one.children))
+    return " ".join(" ".join(parts).split())[:CARD_TEXT_MAX]
+
+
+def _page_cards(url: str, root: Any) -> list[tuple[str, str]]:
+    """The cards of a page read or fetched (J31): each visible link's address and its text, its
+    own text with the heading that holds it. Never the text around it: a title of another card
+    of the list is no evidence for this one. Linear but for links nested in links."""
+    cards: list[tuple[str, str]] = []
+    stack: list[tuple[Any, str]] = [(root, "")]
+    while stack:
+        node, heading = stack.pop()
+        if node.hidden:
+            continue
+        if node.role == "heading":
+            heading = " ".join(node.label().split())[:CARD_TEXT_MAX]
+        if node.url and (link := canonical(urljoin(url, node.url))):
+            own = _own_text(node)
+            text = own if heading in ("", own) else f"{heading} {own}"
+            cards.append((link, text[:CARD_TEXT_MAX]))
+        stack.extend((child, heading) for child in reversed(node.children))
+    return cards
+
+
+def _strings(item: Any) -> list[str]:
+    """The strings of one item of a script's result, its nested objects' too, never the items of
+    a list inside it (those are cards of their own): iterative, CARD_NODES_MAX values at most."""
+    found: list[str] = []
+    stack, nodes = [item], 0
+    while stack and nodes < CARD_NODES_MAX:
+        one = stack.pop()
+        nodes += 1
+        if isinstance(one, str):
+            found.append(one)
+        elif isinstance(one, dict):
+            stack.extend(reversed([v for v in one.values() if not isinstance(v, list)]))
+    return found
+
+
+def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str]]:
+    """The cards of a script's result (J31): each item of a list in it (an object or a text),
+    and the result itself when it is an object, else each line of a text result; an address
+    among the strings of an item is that item's card, its text the item's other strings. An
+    address the script's own code writes (its path and query, or as given) is the model's word,
+    never a card. Pure; linear in the result."""
+    text = raw if isinstance(raw, str) else ""
+    try:
+        value: Any = json.loads(text)
+    except (ValueError, RecursionError):
+        value = text
+    items: list[Any] = []
+    if isinstance(value, list | dict):
+        stack: list[Any] = [value]
+        if isinstance(value, dict):
+            items.append(value)
+        while stack and len(items) <= SCRIPT_LINKS_MAX:
+            one = stack.pop()
+            values = one if isinstance(one, list) else list(one.values())
+            for child in values:
+                if isinstance(one, list) and isinstance(child, dict | str):
+                    items.append(child)
+                if isinstance(child, list | dict):
+                    stack.append(child)
+    else:
+        items = (value if isinstance(value, str) else text).split("\n")
+    cards: list[tuple[str, str]] = []
+    for item in items:
+        strings = _strings(item) if isinstance(item, dict) else [item]
+        links = [m.group(0) for one in strings for m in SCRIPT_LINK.finditer(one)]
+        words = " ".join(" ".join(SCRIPT_LINK.sub(" ", one) for one in strings).split())
+        for given in links:
+            link = canonical(urljoin(url, given))
+            parts = urlsplit(link)
+            written = parts.path + (f"?{parts.query}" if parts.query else "")
+            if not link or given in code or (len(written) > 1 and written in code):
+                continue
+            cards.append((link, words[:CARD_TEXT_MAX]))
+    return cards
 
 
 @dataclass(frozen=True)
@@ -1344,22 +1488,23 @@ def _record_size(record: PageRead) -> int:
 
 
 Detail = tuple[tuple[str, list[str], dict[str, tuple[str, str]]], tuple[list[str], list[str]]]
+Parsed = tuple[list[str], Detail, list[tuple[str, str]]]
 
 
-def _parsed(url: str, text: str) -> tuple[list[str], Detail]:
+def _parsed(url: str, text: str) -> Parsed:
     """What `FinderSession._read` keeps of a page, worked out off the event loop (#797: the whole
     kept page, up to PAGE_MAX, took about 1.1 s to parse on the Mac): the canonical addresses of
-    its links, in page order, and its detail and visible lines. Pure."""
+    its links, in page order, its detail and visible lines, and its cards (J31). Pure."""
     from app.browser import sources
 
     root = sources.parse_snapshot(text[:PAGE_MAX])
     links = [
         link for node in root.walk() if node.url and (link := canonical(urljoin(url, node.url)))
     ]
-    return links, (_detail(root), _seen_text(root))
+    return links, (_detail(root), _seen_text(root)), _page_cards(url, root)
 
 
-async def parsed_off_loop(url: str, text: str) -> tuple[list[str], Detail] | None:
+async def parsed_off_loop(url: str, text: str) -> Parsed | None:
     """`_parsed` in a thread for a page past PARSE_INLINE_MAX characters (#797: a page of
     PAGE_MAX took about 1.1 s on the Mac), so it never holds the worker's event loop; None for
     a smaller one, which `FinderSession._read` parses in place (about 55 ms at the bound)."""
@@ -1565,9 +1710,15 @@ class FinderSession:
     _closed_said: str = field(default="", repr=False)
     # The start page's parse (`parsed_off_loop` of where it landed), made in a thread by the
     # caller before the session (#797): a session is built in the event loop.
-    parsed: InitVar[tuple[list[str], Detail] | None] = None
+    # Jobs J31: the cards of the lists the session read, by canonical address (`Card`, oldest
+    # first, CARDS_MAX), the addresses of the lists among them, what report_listing and the
+    # cards report_listing refused, by reason.
+    cards: dict[str, tuple[Card, ...]] = field(default_factory=dict, repr=False)
+    lists: dict[str, None] = field(default_factory=dict, repr=False)
+    cards_refused: Counter[str] = field(default_factory=Counter)
+    parsed: InitVar[Parsed | None] = None
 
-    def __post_init__(self, parsed: tuple[list[str], Detail] | None) -> None:
+    def __post_init__(self, parsed: Parsed | None) -> None:
         if self.interactive is None or canonical(self.interactive.start) != self.start:
             raise ValueError("discovery scope does not match the opened site")
         if self.landed and canonical(self.landed) != self.landed:
@@ -1582,13 +1733,16 @@ class FinderSession:
         """Any address `canonical` reads (B20): browserd's egress proxy refuses a private one."""
         return bool(canonical(url))
 
-    async def _read_off_loop(self, url: str, text: str) -> None:
+    async def _read_off_loop(self, url: str, text: str, kind: str = "page") -> None:
         """`_read`, its parsing in a thread for a large page (`parsed_off_loop`)."""
-        self._read(url, text, await parsed_off_loop(url, text))
+        self._read(url, text, await parsed_off_loop(url, text), kind)
 
-    def _read(self, url: str, text: str, parsed: tuple[list[str], Detail] | None = None) -> None:
-        """Note the links of a page read and its visible text (`_parsed`, unless given)."""
-        links, ((body, titles, fields), (lines, headings)) = parsed or _parsed(url, text)
+    def _read(self, url: str, text: str, parsed: Parsed | None = None, kind: str = "page") -> None:
+        """Note the links of a page read, its visible text and its cards (`_parsed`, unless
+        given); an error page's cards are none (J31)."""
+        links, ((body, titles, fields), (lines, headings)), cards = parsed or _parsed(url, text)
+        if canonical(url) not in self.error_pages:
+            self._note_cards(url, kind, cards)
         for link in links:
             if self.on_site(link) and len(self.seen) < SEEN_MAX:
                 self.seen.add(link)
@@ -1621,6 +1775,30 @@ class FinderSession:
         self.kept[self.tab] = Kept(url, title[:TITLE_MAX], whole, cut or len(whole) < len(text))
         return previous
 
+    def _note_cards(self, source: str, kind: str, cards: list[tuple[str, str]]) -> None:
+        """Keep the cards a page, a fetch or a script result showed (J31), each address's
+        newest CARD_SOURCES_MAX, CARDS_MAX addresses (the oldest dropped); a link to the source
+        itself is none. A source with LIST_CARDS_MIN cards or more is a list."""
+        list_url = canonical(source)
+        if not list_url:
+            return
+        shown: set[str] = set()
+        for address, text in cards:
+            words = _words(text)
+            if address == list_url or not words:
+                continue
+            shown.add(address)
+            card = Card(list_url, kind, text, f" {words} ")
+            held = tuple(c for c in self.cards.pop(address, ()) if c != card)
+            self.cards[address] = (*held, card)[-CARD_SOURCES_MAX:]
+        while len(self.cards) > CARDS_MAX:
+            del self.cards[next(iter(self.cards))]
+        if len(shown) >= LIST_CARDS_MIN:
+            self.lists.pop(list_url, None)
+            self.lists[list_url] = None
+            while len(self.lists) > LISTS_MAX:
+                del self.lists[next(iter(self.lists))]
+
     def _view(self, url: str, text: str, title: str = "", cut: bool = False) -> str:
         """An action's answer (B26, as Playwright CLI gives it): the address, the title and a
         compact view of the page (`_compact`), the full snapshot kept for the tab (`_hold`) and a
@@ -1641,7 +1819,9 @@ class FinderSession:
 
     def _stop(self, code: str) -> tuple[str, bool]:
         self.stopped = self.stopped or code
-        return f"Stopped: {code}. Report what you found, then stop.", True
+        if self.stopped in STORES_AFTER_STOP:
+            return f"Stopped: {self.stopped}. Report what you found, then stop.", True
+        return f"Stopped: {self.stopped}. Nothing more is kept: stop now.", True
 
     def _closed(self, result: dict[str, Any], agent: bool = True) -> str:
         """B29: the close of the website's tab a browserd answer names (`tab_closed`), counted
@@ -1819,11 +1999,16 @@ class FinderSession:
         if route:
             self.routes[route] = None
 
-    async def _keep_script(self, url: str, raw: object, cut: bool) -> tuple[Kept, str]:
-        """Keep a script's result (B27) and the addresses it names; the answer's line on it."""
+    async def _keep_script(
+        self, url: str, raw: object, cut: bool, code: str = ""
+    ) -> tuple[Kept, str]:
+        """Keep a script's result (B27), the addresses it names and its cards (J31, `code` the
+        script's own); the answer's line on it."""
         whole = await asyncio.to_thread(_script_whole, raw)
         text = _head(whole, SCRIPT_RESULT_MAX)
         links = await asyncio.to_thread(_script_links, url, text)
+        if isinstance(raw, str) and len(raw) <= SCRIPT_RESULT_MAX:
+            self._note_cards(url, "script", await asyncio.to_thread(_script_cards, url, raw, code))
         script = self.script = Kept(url, "", text, cut or len(text) < len(whole))
         for link in links:
             self.script_links.pop(link, None)
@@ -1923,7 +2108,7 @@ class FinderSession:
         self.interactions["web_fetch"] += 1
         status = result.get("status")
         if not (isinstance(status, int) and status >= 400):
-            await self._read_off_loop(landed, text)  # opened, for report_postings (B21)
+            await self._read_off_loop(landed, text, "fetch")  # opened, for report_postings
         title = result.get("title") if isinstance(result.get("title"), str) else ""
         whole = _head(text, PAGE_MAX)
         fetched = self.fetched = Kept(
@@ -2021,7 +2206,7 @@ class FinderSession:
         view = json.loads(self._view(url, pages.last_text, pages.last_title, pages.last_cut))
         if name == "browser_evaluate":  # B27: kept whole, its start shown; page content
             script, said = await self._keep_script(
-                url, result.get("result", ""), result.get("cut") is True
+                url, result.get("result", ""), result.get("cut") is True, args.get("function", "")
             )
             view["untrusted_script_result"] = _head(script.text, COMPACT_MAX)
             view["script"] = said
@@ -2512,8 +2697,10 @@ class FinderSession:
         async with self._report_lock:
             return await self._report_verified(items)
 
-    async def _report_verified(self, items: Any) -> tuple[str, bool]:
-        if self.stopped:
+    async def _report_verified(self, items: Any, listing: bool = False) -> tuple[str, bool]:
+        # J31: a stop after which the store still works keeps what the session read before it;
+        # no browser act follows (the app opens nothing), and a card stands in for a page.
+        if self.stopped and self.stopped not in STORES_AFTER_STOP:
             return self._stop(self.stopped)
         if not isinstance(items, list) or len(items) > POSTINGS_MAX:
             return "postings must be a bounded list.", True
@@ -2538,8 +2725,12 @@ class FinderSession:
 
         opens = 0
         for index, item in enumerate(items):
-            finding, reason = self._verified(item, {f.url for f in pending})
-            if reason == "detail_not_opened" and not self.stopped:
+            urls = {f.url for f in pending}
+            if listing:
+                finding, reason = self._card(item, urls)
+            else:
+                finding, reason = self._verified(item, urls)
+            if not listing and reason == "detail_not_opened" and not self.stopped:
                 # B27: an address the agent saw and did not open, the app opens itself.
                 if opens >= APP_OPENS_MAX:
                     reason = "app_opens_max"
@@ -2548,15 +2739,19 @@ class FinderSession:
                     opened = await self._open_for_report(
                         canonical(urljoin(self.current, item["url"]))
                     )
-                    if self.stopped:
-                        break  # the website stopped: the report keeps nothing more
                     if opened:
-                        finding, reason = self._verified(
-                            {**item, "url": opened}, {f.url for f in pending}
-                        )
+                        finding, reason = self._verified({**item, "url": opened}, urls)
                         if reason == "title_not_on_page":
                             reason = "not_on_opened_page"
-            if reason:
+            if not listing and reason in CARD_FALLBACK:
+                # J31: a page the app could not open or read; a card of a list read stands in.
+                card, _why = self._card(item, urls)
+                if card is not None:
+                    finding, reason = card, ""
+            if reason and listing:
+                self.cards_refused[reason] += 1
+                refusals.append(self._refusal(index, reason))
+            elif reason:
                 self.refused[reason] += 1
                 refusals.append(self._refusal(index, reason))
             elif finding:
@@ -2565,11 +2760,15 @@ class FinderSession:
                 return self._stop("store_failed")
         if not await flush():
             return self._stop("store_failed")
+        answer: dict[str, Any] = {
+            "kept": kept,
+            "refused": refusals[:50],
+            "kept_in_all": self.verified_count,
+        }
         if self.stopped:
-            return self._stop(self.stopped)
-        return self._with_plan(
-            {"kept": kept, "refused": refusals[:50], "kept_in_all": self.verified_count}
-        ), False
+            answer["stopped"] = self._stop(self.stopped)[0]
+            return json.dumps(answer), True
+        return self._with_plan(answer), False
 
     async def _open_for_report(self, url: str) -> str:
         """Open a reported address the agent did not open (B27), as the agent would: a tab of
@@ -2756,6 +2955,79 @@ class FinderSession:
             evidence,
             page.read_at,
         ), ""
+
+    def _card(self, item: Any, pending: set[str]) -> tuple[VerifiedFinding | None, str]:
+        """A posting kept from a card of a list (J31), its own page not read: its address is a
+        link the session saw on a page it read or fetched, or an item of a script's result, and
+        the reported title's words are in that card's text (case, accents, spacing and
+        punctuation aside, a gender marker at its end aside); its company, place and date when
+        their words are in the card too. Refused `card_not_seen` otherwise: an address another
+        run, another card or the model wrote is no evidence. The start page and a list are no
+        posting; a page read that shows the title is reported with report_postings."""
+        if not isinstance(item, dict):
+            return None, "not_a_posting"
+        if not all(isinstance(item.get(k), str) for k in ("title", "url")):
+            return None, "missing_field"
+        title = " ".join(item["title"].split())
+        if not title or len(title) > TITLE_MAX or len(item["url"]) > 2000:
+            return None, "missing_field"
+        if CONTROLS.search(title) or CONTROLS.search(item["url"]) or not _words(_bare(title)):
+            return None, "missing_field"
+        url = canonical(urljoin(self.current, item["url"]))
+        if not url:
+            return None, "not_an_address"
+        if url in {self.start, self.landed} or url in self.lists:
+            return None, "not_a_posting_page"
+        if url in self.reported_urls or url in pending:
+            return None, "duplicate"
+        page = self.pages_read.get(url)
+        if page is not None and title_on(page, title) is not None:
+            return None, "page_readable"
+        keys = {_words(title), _words(_bare(title))} - {""}
+        card = next(
+            (
+                c
+                for c in reversed(self.cards.get(url, ()))
+                if any(f" {key} " in c.words for key in keys)
+            ),
+            None,
+        )
+        if card is None:
+            return None, "card_not_seen"
+        values: dict[str, str | None] = {}
+        for key in ("company", "location", "published_on"):
+            value = item.get(key)
+            value = " ".join(value.split()) if isinstance(value, str) else ""
+            held = bool(value) and len(value) <= LOCATION_MAX and not CONTROLS.search(value)
+            if held and key == "published_on":
+                try:
+                    held = date.fromisoformat(value).isoformat() == value
+                except ValueError:
+                    held = False
+            words = _words(value) if held else ""
+            values[key] = value if words and f" {words} " in card.words else None
+        evidence = {"title": title, "rule": "card", "card": card.kind, "list": card.list_url}
+        return VerifiedFinding(
+            title,
+            values["location"] or "",
+            url,
+            card.text,
+            values["company"],
+            values["published_on"],
+            evidence,
+            self.clock().isoformat(),
+            card.list_url,
+        ), ""
+
+    async def report_listing(self, items: Any) -> tuple[str, bool]:
+        """`report_listing` (J31): the cards of a list whose own pages could not be read, each
+        kept from its card (`_card`); the app opens none of them."""
+        if self.interactive is None:
+            return "Refused: this run has no interactive search permission.", True
+        if self.on_verified is None:
+            return "Refused: this run keeps no posting seen only in a list.", True
+        async with self._report_lock:
+            return await self._report_verified(items, listing=True)
 
     def _keep(self, item: Any) -> str:
         if not isinstance(item, dict):
@@ -3009,7 +3281,12 @@ shows it, the company, the location, published_on (YYYY-MM-DD) when the page sho
 date, else date_shown with the page's own words for it ("il y a un mois", "about a month ago",
 "30+ jours"), the address of the posting's own page (never a search result's or a list's
 address), its text, and results_read: how many search results you read in this run so far, in
-all. The app checks each against the pages you opened and says what it kept.
+all. The app checks each against the pages you opened and says what it kept. A posting you saw
+as a card of a list on a page you read or fetched (an aggregator's list), whose own page cannot
+be opened (blocked, a sign in wall, no readable page), is reported with report_listing: its
+title and link exactly as the card gives them, with the company, the place and the date when
+the card shows them; the app keeps it marked as seen only in a list. A search result alone is
+no card: open its page. Never use report_listing for a page that opens.
 7. Dates: never leave a posting for its date. One older than the saved window
 (`criteria.days`, in days) is reported too, and the app marks it for the person; one whose date
 is approximate or not shown is reported with date_shown, and the person sees the flag.

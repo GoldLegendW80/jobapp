@@ -32,6 +32,19 @@ POSTING = {
     "required": ["title", "url", "text"],
     "additionalProperties": False,
 }
+# Jobs J31: one card of a list whose own page could not be read, as the card shows it.
+CARD = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "maxLength": finder.TITLE_MAX},
+        "url": {"type": "string", "maxLength": 2000},
+        "company": {"type": "string", "maxLength": 300},
+        "location": {"type": "string", "maxLength": finder.LOCATION_MAX},
+        "published_on": {"type": "string", "maxLength": 10},
+    },
+    "required": ["title", "url"],
+    "additionalProperties": False,
+}
 # B27: what browser_find and browser_snapshot read, the page's kept snapshot or the last script's
 # kept result; B28: or the last page web_fetch read.
 SOURCE = {"type": "string", "enum": list(finder.SOURCES)}
@@ -88,6 +101,15 @@ SCHEMAS: dict[str, dict[str, Any]] = {
             "results_read": RESULTS_READ,
         },
         "required": ["postings"],
+        "additionalProperties": False,
+    },
+    "report_listing": {
+        "type": "object",
+        "properties": {
+            "cards": {"type": "array", "items": CARD, "maxItems": finder.POSTINGS_MAX},
+            "results_read": RESULTS_READ,
+        },
+        "required": ["cards"],
         "additionalProperties": False,
     },
     "report_no_postings": {
@@ -226,6 +248,13 @@ DESCRIPTIONS = {
     "and did not open, and checks each one against the pages opened; what it keeps stays, and "
     "a refusal says what to do. results_read: how many search results you read in this run "
     "so far, in all (optional, shown to the person as your own count).",
+    "report_listing": "Report the postings that fit the profile and that you saw only as cards "
+    "of a list (on a page, a fetched page or in a script's result of this search) because their "
+    "own page cannot be opened: a security check, a sign in wall, an aggregator. Each card: its "
+    "title and its link exactly as the card gives them, and company, location and published_on "
+    "(YYYY-MM-DD) when the card shows them. The app opens nothing: it keeps a card whose link and "
+    "title it saw together, marked for the person as seen only in a list, and its answer says "
+    "why it refused the others. Never for a posting whose page opens: use report_postings.",
     "report_no_postings": "Say why this website gives no posting to report: no_match (the "
     "search ran and listed no matching job), no_list (a count or a push to sign up, no list), "
     "cookie_wall, signin_wall, no_search_control, app_refused (the app refused what you "
@@ -299,6 +328,9 @@ def _factory(name: str) -> app_tools.Factory:
             elif name == "report_no_postings":
                 session.note_results_read(args.get("results_read"))
                 text, error = session.report_none(args.get("reason"))
+            elif name == "report_listing":
+                session.note_results_read(args.get("results_read"))
+                text, error = await session.report_listing(args.get("cards"))
             else:
                 session.note_results_read(args.get("results_read"))
                 text, error = await session.report_verified(args.get("postings"))
