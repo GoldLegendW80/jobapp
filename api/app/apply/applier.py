@@ -216,7 +216,7 @@ PROMPT = """You apply to one job posting for a person, the way the person would,
 browser, with the Playwright tools. Your first message holds the posting, the person's profile
 (contact details included), their saved application answers, the answers they gave earlier, the
 letter's text and the documents placed on this browser (cv.pdf, and letter.pdf when there is
-one). Nobody answers a question during this run: you do all the work yourself.
+one). You do all the work yourself, and ask the person only for what only they can do.
 
 Open the posting and find its application (the site's own Apply, an applicant tracking system,
 LinkedIn Easy Apply, a panel of the site, any site). When the site asks you to sign in, first
