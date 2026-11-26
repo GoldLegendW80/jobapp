@@ -116,6 +116,37 @@ export const FollowApplicationsUnderWay: Story = {
   },
 };
 
+/** As a job seeker, I want to stop every application under way in one click, told first which ones may already have been sent, so that nothing more goes out when I change my mind. */
+export const CancelAllUnderWay: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeQueue([
+      writing(),
+      application(3, "filling", 2, { mode: "direct" }),
+      application(4, "submitting", 3, { mode: "direct" }),
+    ]);
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    await userEvent.click(
+      await page.findByRole("button", { name: /Cancel all/ }),
+    );
+  },
+};
+
+/** As a job seeker, I want to stop an application the assistant is sending, told that the site may already have it, so that I know to check before I apply again. */
+export const StopAfterASendButton: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeQueue([
+      application(4, "submit_unknown", 3, {
+        mode: "direct",
+        error_code: "cancelled_by_person",
+      }),
+    ]);
+  },
+};
+
 /** As a job seeker who clicked Apply, I want the card of an application the assistant sends by itself to list its documents without asking me to review them, so that my click stays the only approval it needs. */
 export const DocumentsOfAnApplicationSentByItself: Story = {
   beforeEach: () => {

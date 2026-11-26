@@ -6,6 +6,7 @@
 import {
   cancelApplication,
   confirmSubmitted,
+  notSentApplication,
   rejectApplication,
   retryApplication,
   type Application,
@@ -30,6 +31,21 @@ export const DECISIONS = {
     sentence: "Nothing is sent.",
     confirm: "Cancel the application",
     call: cancelApplication,
+  },
+  // A24: after the assistant's first act on a send button the form may have reached the site.
+  cancelAfterSend: {
+    title: "Cancel this application?",
+    sentence:
+      "The assistant already clicked a send button, so the site may have it. Nothing more is sent. Check the site or your mail afterwards.",
+    confirm: "Cancel the application",
+    call: cancelApplication,
+  },
+  notSent: {
+    title: "Mark this application as not sent?",
+    sentence:
+      "Only do this if you checked the site or your mail and found nothing. The application ends, the app never sends it by itself, and you can apply to this posting again.",
+    confirm: "It was not sent",
+    call: notSentApplication,
   },
   submitted: {
     title: "Mark this application as submitted?",

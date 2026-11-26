@@ -636,10 +636,9 @@ def freeze_sent(db: Session, application: Application, at: datetime) -> int:
     return frozen
 
 
-# The person may stop an application at any moment (owner, 2026-11-26: "je veux pouvoir cancel une
-# application à tout moment"): every state but an end. `submit_unknown` already stopped: its
-# Cancel is the person's "It was not sent" (`not_sent`).
-CANCELLABLE = frozenset(
+# Before any act on a submit element: a Cancel there sends nothing (the deck's Undo of a Like
+# reads this set, web/src/features/opportunities/api/deck/use-deck.ts).
+UNSENT = frozenset(
     {
         State.queued,
         State.filling,
@@ -648,9 +647,12 @@ CANCELLABLE = frozenset(
         State.approved,
         State.held,
         State.refused_by_site,
-        State.submitting,
     }
 )
+# The person may stop an application at any moment (owner, 2026-11-26: "je veux pouvoir cancel une
+# application à tout moment"): every state but an end. `submit_unknown` already stopped: its
+# Cancel is the person's "It was not sent" (`not_sent`).
+CANCELLABLE = UNSENT | {State.submitting}
 REJECTABLE = frozenset({State.needs_person, State.ready})
 CANCELLED_BY_PERSON = "cancelled_by_person"
 NOT_SENT = "not_sent"

@@ -13,7 +13,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The decisions on an application that ask first, in Your application: It was submitted and Try again after a click the app could not confirm, Try again after the site refused it, and Cancel application while the api still takes it.",
+          "The decisions on an application that ask first, in Your application: It was submitted, It was not sent and Try again after a click the app could not confirm, Try again after the site refused it, and Cancel application at any moment before an end.",
       },
     },
   },
@@ -22,7 +22,7 @@ const meta = {
     busy: false,
     questionAfterSend: false,
     retryKind: "retry",
-    cancellable: false,
+    cancelKind: "notSent",
     onAsk: fn(),
   },
 } satisfies Meta<typeof DecisionButtons>;
@@ -30,7 +30,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** The app could not confirm the send: the person says it was submitted, or tries again. */
+/** The app could not confirm the send: the person says it was submitted, or not sent, or tries again. */
 export const CouldNotConfirm: Story = {
   name: "The send could not be confirmed",
 };
@@ -41,16 +41,22 @@ export const QuestionAfterTheSend: Story = {
   args: { questionAfterSend: true },
 };
 
-/** The site refused the application: Try again. */
+/** The site refused the application: Try again, and Cancel application. */
 export const RefusedBySite: Story = {
   name: "Refused by the site",
-  args: { phase: "refused" },
+  args: { phase: "refused", cancelKind: "cancel" },
 };
 
 /** While the app works, Cancel application is offered. */
 export const Cancellable: Story = {
   name: "Cancel while the app works",
-  args: { phase: "filling", cancellable: true },
+  args: { phase: "filling", cancelKind: "cancel" },
+};
+
+/** After the assistant clicked a send button, Cancel application asks with what it may have sent. */
+export const CancelAfterASend: Story = {
+  name: "Cancel after a send button",
+  args: { phase: "submitting", cancelKind: "cancelAfterSend" },
 };
 
 /** While a decision is on its way, every button waits. */

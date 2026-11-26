@@ -225,11 +225,22 @@ export function fakeApply(initial: {
       }
       const next: Record<string, string> = {
         reject: "cancelled",
-        cancel: "cancelled",
+        cancel:
+          state.application?.state === "submitting"
+            ? "submit_unknown"
+            : "cancelled",
+        "not-sent": "cancelled",
         submitted: "submitted",
         retry: "ready",
       };
-      state.application = fakeApplication(next[action] ?? "failed");
+      // The api's codes of the person's Cancel and of their "It was not sent" (A24).
+      const codes: Record<string, string> = {
+        cancel: "cancelled_by_person",
+        "not-sent": "not_sent",
+      };
+      state.application = fakeApplication(next[action] ?? "failed", {
+        error_code: codes[action] ?? null,
+      });
       return HttpResponse.json(state.application);
     }),
   );

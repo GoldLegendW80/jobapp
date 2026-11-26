@@ -20,12 +20,12 @@ import { currentFormOf, emailToOf } from "../helpers/approval-form";
 import { DECISIONS } from "../helpers/decisions";
 
 /** The decisions of an item after the click, as the posting's Apply section offers them. */
-export type AfterClick = "submitted" | "retry";
+export type AfterClick = "submitted" | "notSent" | "retry";
 
 /**
  * What the person does on one card of the review queue: save an answer, approve the form shown,
- * reject (and maybe skip the posting), cancel, and after the click "It was submitted" or Try
- * again, each behind its dialog. A card that leaves (Reject, Cancel, "It was submitted") calls
+ * reject (and maybe skip the posting), cancel, and after the click "It was submitted", "It was
+ * not sent" or Try again, each behind its dialog. A card that leaves (Reject, Cancel, the end) calls
  * `onLeave` once it is gone; after an approval the focus moves to the next card's title.
  * `onStaleForm` runs when Approve was refused because the form moved, to show the answers again.
  */
@@ -161,10 +161,12 @@ export function useQueueCardActions(
   const cancel = useMutation({
     mutationFn: () => cancelApplication(item.id),
     onMutate: clearNotice,
-    onSuccess: () => {
+    onSuccess: (stopped) => {
       setCancelling(false);
       toast.success(
-        `Cancelled ${item.title} at ${item.company}. Nothing was sent.`,
+        stopped.state === "submit_unknown"
+          ? `Stopped ${item.title} at ${item.company}. It may have been sent: check the site or your mail.`
+          : `Cancelled ${item.title} at ${item.company}. Nothing was sent.`,
       );
       leaving.current = true;
       refresh();
@@ -175,16 +177,16 @@ export function useQueueCardActions(
     },
   });
 
-  // After the click: "It was submitted" ends the application (the card leaves), "Try again"
-  // brings it back for a new approval (the card stays, with the form to approve).
+  // After the click: "It was submitted" and "It was not sent" end the application (the card
+  // leaves), "Try again" brings it back for a new approval (the card stays).
   const decision = useMutation({
     mutationFn: (kind: AfterClick) => DECISIONS[kind].call(item.id),
     onMutate: clearNotice,
     onSuccess: (_changed, kind) => {
       setAsking(null);
-      if (kind === "submitted") {
+      if (kind === "submitted" || kind === "notSent") {
         toast.success(
-          `Recorded ${item.title} at ${item.company} as submitted.`,
+          `Recorded ${item.title} at ${item.company} as ${kind === "submitted" ? "submitted" : "not sent"}.`,
         );
         leaving.current = true;
       }

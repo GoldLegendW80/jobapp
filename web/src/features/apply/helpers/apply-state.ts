@@ -167,6 +167,9 @@ const DIRECT_LINES: Record<string, string> = {
   submitted: "Sent. Below is what the assistant sent.",
 };
 
+/** The code of the person's own Cancel (api/app/apply/gate.py, A24). */
+const CANCELLED_BY_YOU = "cancelled_by_person";
+
 /**
  * The status line under the section's title. `reviewAgent`: Review first filled by the apply
  * agent, whose one approval is Confirm and send (A20), so its line says confirm, not approve.
@@ -211,10 +214,16 @@ export function statusLine(
     case "submitted":
       return "Applied. The form was submitted.";
     case "submit_unknown":
-      return "We could not confirm this application. Look for a confirmation mail or on the site.";
+      return application.error_code === CANCELLED_BY_YOU
+        ? "You stopped it after the assistant had clicked a send button. Check the site or your mail."
+        : "We could not confirm this application. Look for a confirmation mail or on the site.";
     case "refused_by_site":
       return "The site showed errors after the click, so it did not accept the application. Check the screenshot, then try again.";
     case "cancelled":
+      if (application.error_code === CANCELLED_BY_YOU)
+        return "Cancelled by you. Nothing was sent.";
+      if (application.error_code === "not_sent")
+        return "You said it was not sent, so it ended. The app does not send it again by itself: apply again if you want to.";
       return "The last application was cancelled. Nothing was sent.";
     case "failed": {
       const why = FAILURES[application.error_code ?? ""];

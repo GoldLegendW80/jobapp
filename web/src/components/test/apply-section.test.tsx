@@ -593,6 +593,18 @@ describe("the destructive buttons", () => {
       "Fill and approve again?",
       "the company may receive two applications",
     ],
+    [
+      "submit_unknown",
+      "It was not sent",
+      "Mark this application as not sent?",
+      "Only do this if you checked the site or your mail and found nothing.",
+    ],
+    [
+      "refused_by_site",
+      "Cancel application",
+      "Cancel this application?",
+      "Nothing is sent.",
+    ],
   ])(
     "%s: %s opens a confirmation with its own sentence and sends nothing until it is confirmed",
     async (state, button, title, sentence) => {
@@ -624,6 +636,26 @@ describe("the destructive buttons", () => {
       expect(api.decisions).toEqual([]);
     },
   );
+
+  it("ends an application the app could not confirm on the person's word that it was not sent", async () => {
+    const api = fakeApply({
+      application: fakeApplication("submit_unknown", { mode: "direct" }),
+      answers: filled().slice(0, 2),
+    });
+    const { user, section } = await openSection();
+    await user.click(
+      await within(section).findByRole("button", { name: "It was not sent" }),
+    );
+    await confirm(user, "It was not sent");
+    await waitFor(() => {
+      expect(api.decisions).toEqual(["not-sent"]);
+    });
+    expect(
+      await within(section).findByText(
+        "You said it was not sent, so it ended. The app does not send it again by itself: apply again if you want to.",
+      ),
+    ).toBeInTheDocument();
+  });
 
   it("reads the application again when a decision is refused, and shows where it stands", async () => {
     const api = fakeApply({
@@ -1111,16 +1143,17 @@ describe("Full auto's hold on the job page", () => {
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
 
-  it("offers Reject, not Cancel, on a Review first form waiting for the approval", async () => {
+  it("offers Reject and Cancel on a Review first form waiting for the approval", async () => {
     fakeApply({
       application: fakeApplication("ready"),
       answers: filled().slice(0, 2),
     });
     const { section } = await openSection();
     await within(section).findByRole("button", { name: "Reject" });
+    // A24 (owner, 2026-11-26): Cancel at any moment before an end.
     expect(
-      within(section).queryByRole("button", { name: "Cancel application" }),
-    ).toBeNull();
+      within(section).getAllByRole("button", { name: "Cancel application" }),
+    ).toHaveLength(1);
   });
 
   it("counts the hold down on the server's clock, with one Cancel that stops it", async () => {
@@ -1241,19 +1274,39 @@ describe("the submit lease on the job page", () => {
     },
   );
 
-  it("follows the lease after the click, with nothing left to cancel", async () => {
+  it("follows the lease after the click, and its Cancel says the site may have it", async () => {
     const opened = fakeScreens();
-    fakeApply({
+    const api = fakeApply({
       application: fakeApplication("submitting"),
       answers: filled(),
     });
     holding(APP_ID);
-    const { section } = await openSection();
+    const { user, section } = await openSection();
     await connected(opened);
     const live = await watching(section);
     expect(within(live).getByRole("status")).toHaveTextContent(SUBMITS);
-    for (const name of ["Use the browser myself", "Cancel application"]) {
-      expect(within(section).queryByRole("button", { name })).toBeNull();
+    expect(
+      within(section).queryByRole("button", { name: "Use the browser myself" }),
+    ).toBeNull();
+    await user.click(
+      within(section).getByRole("button", { name: "Cancel application" }),
+    );
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent(
+      "The assistant already clicked a send button, so the site may have it.",
+    );
+    expect(dialog.textContent).not.toMatch(SEPARATOR);
+    await confirm(user, "Cancel the application");
+    await waitFor(() => {
+      expect(api.decisions).toEqual(["cancel"]);
+    });
+    expect(
+      await within(section).findByText(
+        "You stopped it after the assistant had clicked a send button. Check the site or your mail.",
+      ),
+    ).toBeInTheDocument();
+    for (const name of ["It was submitted", "It was not sent", "Try again"]) {
+      expect(within(section).getByRole("button", { name })).toBeEnabled();
     }
   });
 
