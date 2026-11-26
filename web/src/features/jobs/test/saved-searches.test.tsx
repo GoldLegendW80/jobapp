@@ -166,6 +166,31 @@ describe("Your searches (jobs J33)", () => {
     expect(searches.line).toEqual([]);
   });
 
+  it("puts a saved search's Save and start in the line while another runs, in Run now's words", async () => {
+    const searches = fakeSearches({
+      saved: [makeSearch(REMOTE, "Lyon")],
+    });
+    searches.running = "busy";
+    const { user, list } = await openFindJobs();
+    await user.click(within(list).getByRole("button", { name: "Edit Lyon" }));
+    const dialog = await screen.findByRole("dialog", { name: "Find jobs" });
+    await user.click(
+      await within(dialog).findByRole("button", {
+        name: "Save and start search",
+      }),
+    );
+    expect(
+      await screen.findByText("Lyon waits in line: number 1."),
+    ).toBeInTheDocument();
+    expect(searches.writes.map((one) => one.method)).toEqual(["PUT"]);
+    expect(searches.runs).toEqual([REMOTE]);
+    const row = rowOf(
+      await screen.findByRole("list", { name: "Your searches" }),
+      "Lyon",
+    );
+    await within(row).findByText(/Waits in line: number 1/);
+  });
+
   it("duplicates, renames and deletes a saved search, and offers neither rename nor delete for the main one", async () => {
     const searches = fakeSearches({
       saved: [makeSearch(REMOTE, "Remote roles")],
