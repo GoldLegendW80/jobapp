@@ -84,6 +84,9 @@ SENTENCES = {
     "below_min_fit": (
         "This posting's fit is below your threshold for Full auto, so it waits for you."
     ),
+    "outside_criteria": (
+        "This posting is outside the criteria of your search, so it waits for you."
+    ),
     "unsupported_source": "Full auto does not apply on this site yet, so it waits for you.",
     "company_site_unverified": (
         "The LinkedIn posting links to a site the app cannot match to its company, so it waits"
@@ -243,6 +246,8 @@ def checks(
     values = caps.settings_of(db, application.user_id)
     if posting.fit is None or posting.fit < values.min_fit:
         return "below_min_fit"
+    if posting.outside_criteria:  # jobs J30: a posting kept with a badge
+        return "outside_criteria"
     answers = list(
         db.scalars(
             sa.select(ApplicationAnswer).where(
