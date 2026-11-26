@@ -431,7 +431,7 @@ def test_the_persons_edit_of_the_contract_or_the_mode_badges_it_again(
     with factory() as db:
         job = service.lock_job(db, alice, job_id)
         assert job is not None
-        service.edit_job(db, job, service.JobChanges(fields={"contract_type": "CDI"}), now())
+        service.edit_job(db, job, service.JobChanges(fields={"contract_type": "CDD"}), now())
         db.commit()
     job = row_of(factory, job_id)
     assert (job.contract_stated, job.outside_criteria) == (True, [CONTRACT, WORK_MODE])
