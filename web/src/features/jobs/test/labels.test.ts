@@ -350,7 +350,10 @@ describe("tabClosedSentence", () => {
     ]) {
       const said = tabClosedSentence({
         tab_closed: 1,
-        tab_closed_reasons: JSON.parse(`{"${reason}": 1}`),
+        tab_closed_reasons: JSON.parse(`{"${reason}": 1}`) as Record<
+          string,
+          number
+        >,
       });
       expect(said).toBe("The website's tab was closed and opened again once.");
     }
