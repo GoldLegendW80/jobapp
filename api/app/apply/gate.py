@@ -636,8 +636,9 @@ def freeze_sent(db: Session, application: Application, at: datetime) -> int:
     return frozen
 
 
-# Before the click, and after a refusal by the site: the person may stop it. Never once the app
-# clicked (`submitting`, `submitted`, `submit_unknown`) and never after an end.
+# The person may stop an application at any moment (owner, 2026-11-26: "je veux pouvoir cancel une
+# application à tout moment"): every state but an end. `submit_unknown` already stopped: its
+# Cancel is the person's "It was not sent" (`not_sent`).
 CANCELLABLE = frozenset(
     {
         State.queued,
@@ -647,23 +648,108 @@ CANCELLABLE = frozenset(
         State.approved,
         State.held,
         State.refused_by_site,
+        State.submitting,
     }
 )
 REJECTABLE = frozenset({State.needs_person, State.ready})
+CANCELLED_BY_PERSON = "cancelled_by_person"
+NOT_SENT = "not_sent"
 
 
 def cancel(
     db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datetime, *, reject: bool
 ) -> Application:
-    """Reject (the form as filled, before an approval) or Cancel (anything before the click).
-    A submit lease under way sees the state changed under its lock and does not click."""
+    """Reject (the form as filled, before an approval) or Cancel (at any moment before an end,
+    `stopped_by_person`). The application's agent run is cancelled through the runs' own cancel
+    (`_cancel_runs`), so it stops at once and its lease is released; a submit lease under way
+    sees the state changed under its lock and does not click. An e-mail application being sent
+    keeps its own end (the mail gate's)."""
     application, _ = lock(db, user_id, application_id)
-    if application.state not in (REJECTABLE if reject else CANCELLABLE):
+    if reject:
+        if application.state not in REJECTABLE:
+            raise RefusedError("not_cancellable")
+        states.move(application, State.cancelled, now)
+        application.error_code = "rejected"
+        _event(db, application, "cancelled", now, code="rejected")
+    elif application.state not in CANCELLABLE or (
+        application.ats == "email" and application.state is State.submitting
+    ):
         raise RefusedError("not_cancellable")
-    code = "rejected" if reject else "cancelled_by_person"
+    else:
+        stopped_by_person(db, application, now)
+    _cancel_runs(db, application, now)
+    return application
+
+
+def stopped_by_person(db: Session, application: Application, now: datetime) -> str:
+    """The end of the person's Cancel, the same from the application's Cancel and from the
+    Cancel of its agent run in Activity (`applier.finish`): `submit_unknown` with
+    `cancelled_by_person` once an act on a submit element may have sent the form (`submitting`,
+    or a step act browserd traced in Review first's agent run), the sent versions frozen and
+    never sent again by the app (A19); `cancelled` otherwise, nothing sent. The caller holds the
+    locks and commits."""
+    from app.apply import submit
+
+    if _stepped(db, application):
+        states.move(application, State.submitting, now, by_agent=True)
+    _event(db, application, "cancelled", now, code=CANCELLED_BY_PERSON)
+    if application.state is State.submitting:
+        # `record` reads the row again over what is not flushed (the run's cost, the move).
+        db.flush()
+        return submit.record(
+            db, application.id, State.submit_unknown, now, code=CANCELLED_BY_PERSON
+        )
     states.move(application, State.cancelled, now)
-    application.error_code = code
-    _event(db, application, "cancelled", now, code=code)
+    application.error_code = CANCELLED_BY_PERSON
+    return State.cancelled.value
+
+
+def _stepped(db: Session, application: Application) -> bool:
+    """Review first's agent run passed a step act browserd traced (A20), before the gate's click."""
+    from app.apply import applier
+
+    return (
+        application.mode is Mode.review
+        and application.state in (State.filling, State.ready, State.approved)
+        and applier.stepped(db, application)
+    )
+
+
+def _cancel_runs(db: Session, application: Application, now: datetime) -> None:
+    """The application's apply agent run, queued or running, cancelled as Activity's Cancel does
+    (`runs.request_cancel`: the runner interrupts it within a second, records its cost, and the
+    applier releases the lease). The adapters' fills read the state and stop as before."""
+    from app.agents import runs
+    from app.agents.models import AgentRun, RunStatus
+    from app.apply.applier import NAME
+
+    active = db.scalars(
+        sa.select(AgentRun.id).where(
+            AgentRun.user_id == application.user_id,
+            AgentRun.workflow_run_id == application.id,
+            AgentRun.workflow == "application",
+            AgentRun.agent == NAME,
+            AgentRun.status.in_((RunStatus.queued, RunStatus.running)),
+        )
+    ).all()
+    for run_id in active:
+        runs.request_cancel(db, application.user_id, run_id, now)
+        _event(db, application, "agent_run_cancelled", now, run_id=str(run_id))
+
+
+def not_sent(
+    db: Session, user_id: uuid.UUID, application_id: uuid.UUID, now: datetime
+) -> Application:
+    """ "It was not sent" on a `submit_unknown` (A24): the person's own word ends it `cancelled`
+    with `not_sent`, its click time cleared, so the posting is free for their next Apply. The app
+    never sends it again by itself (A19). An e-mail application keeps the mail gate's answer."""
+    application, _ = lock(db, user_id, application_id)
+    if application.state is not State.submit_unknown or application.ats == "email":
+        raise RefusedError("not_unknown")
+    states.move(application, State.cancelled, now, not_sent_by_person=True)
+    application.error_code = NOT_SENT
+    application.submitted_at = None
+    _event(db, application, "cancelled", now, code=NOT_SENT)
     return application
 
 

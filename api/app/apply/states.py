@@ -44,6 +44,10 @@ Tightened by apply A6 (issue #296):
   run of the agent (`move(..., retried_by_person=True)`, PERSON_RETRIES), never the tick.
 - Before the click the submit lease may stop: `approved` to `ready` (a difference on the read
   back, the approval spent), `needs_person` (a captcha on the refilled form), or an end.
+- The person's Cancel at any moment (A24, owner 2026-11-26, `gate.stopped_by_person`): before
+  an end, `cancelled`; from `submitting` the table's own `submit_unknown`. Only the person's "It
+  was not sent" (`gate.not_sent`) moves `submit_unknown` to `cancelled`
+  (`move(..., not_sent_by_person=True)`, PERSON_NOT_SENT), never the app.
 """
 
 from datetime import datetime
@@ -93,6 +97,8 @@ AGENT_MOVES = {S.filling: frozenset({S.submitting}), S.ready: frozenset({S.submi
 # The apply agent (A19, Review first's A20): the person's Try again after a send it could not
 # confirm (applier.retry, only for an application the agent ran).
 PERSON_RETRIES = {S.submit_unknown: frozenset({S.queued})}
+# The person's "It was not sent" (A24): their own word frees the posting for their next Apply.
+PERSON_NOT_SENT = {S.submit_unknown: frozenset({S.cancelled})}
 
 # Where a `submitting` with no click goes (`move(..., click_refused=True)`): back to `ready`, or
 # the end `recheck` gives the same refusal before the arm (never apply, a closed posting).
@@ -121,6 +127,7 @@ def move(
     click_refused: bool = False,
     by_agent: bool = False,
     retried_by_person: bool = False,
+    not_sent_by_person: bool = False,
 ) -> None:
     """Move `application` to `to`, or raise TransitionError. The caller holds its row lock and
     commits. `submitted_at` is set when the move records the click, and kept after it. Only the
@@ -146,7 +153,15 @@ def move(
         and application.mode in (Mode.direct, Mode.review)
         and to in PERSON_RETRIES.get(current, ())
     )
-    if not (sent_by_person or no_click or agent_click or person_retry or allowed(current, to)):
+    said_not_sent = not_sent_by_person and to in PERSON_NOT_SENT.get(current, ())
+    if not (
+        sent_by_person
+        or no_click
+        or agent_click
+        or person_retry
+        or said_not_sent
+        or allowed(current, to)
+    ):
         raise TransitionError(f"an application cannot move from {current.value} to {to.value}")
     if to in DECIDED and not by_gate:
         raise TransitionError(

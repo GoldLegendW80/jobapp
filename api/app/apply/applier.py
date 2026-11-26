@@ -1020,6 +1020,10 @@ def _report(
         db.add(row)
     # A20: the answers the agent chose for the person, readable afterwards (owner, 2026-11-06).
     row.value = {"summary": summary, "confirmation_url": address, "chosen": session.chosen_rows()}
+    _cost(application, session, ran, now)
+
+
+def _cost(application: Application, session: ApplySession, ran: Ran, now: datetime) -> None:
     application.cost = {
         "input_tokens": ran.input_tokens,
         "output_tokens": ran.output_tokens,
@@ -1051,17 +1055,23 @@ def finish(
 ) -> str:
     """The end of the run, in one transaction (the caller commits): `submitted` on the
     confirmation the agent read, `submit_unknown` after a submit act it cannot confirm,
-    `needs_person` on a question nobody watched, `failed` otherwise."""
-    from app.apply import run, submit
+    `needs_person` on a question nobody watched, `failed` otherwise. A run the person cancelled
+    in Activity ends as the application's Cancel ends it (`gate.stopped_by_person`); after the
+    application's Cancel the state is already written and only the run's cost is kept."""
+    from app.apply import gate, run, submit
 
     found = run._locked(db, application_id)
     if found is None:
         return "gone"
     application = found[0]
     if application.state not in (State.filling, State.submitting):
+        _cost(application, session, ran, now)
         run._event(db, application, "outcome_superseded", now, state=application.state.value)
         return "superseded"
     _report(db, application, session, ran, now)
+    if ran.stopped == "cancelled":
+        run._event(db, application, "agent_done", now, outcome=None, code="cancelled")
+        return gate.stopped_by_person(db, application, now)
     if session.review:
         return _finish_review(db, application, session, ran, now)
     outcome = session.done[0] if session.done and not session.stopped else None
@@ -1158,6 +1168,11 @@ def _requeue(db: Session, application: Application, now: datetime) -> str | None
 def still_runs(db: Session, application_id: uuid.UUID) -> bool:
     state = db.scalar(sa.select(Application.state).where(Application.id == application_id))
     return state in (State.filling, State.submitting)
+
+
+def _runs_locked(db: Session, application_id: uuid.UUID) -> bool:
+    found = run_locked(db, application_id)
+    return found is not None and found.state in (State.filling, State.submitting)
 
 
 def interrupted(db: Session, application_id: uuid.UUID, now: datetime) -> str:
@@ -1597,6 +1612,22 @@ APPLY_AGENT = definitions.register(
 )
 
 
+def start_run(
+    db: Session, user_id: uuid.UUID, session: ApplySession, data: dict[str, Any], now: datetime
+) -> uuid.UUID | str:
+    """The `apply_agent` run in Activity, created under the application's lock as `gate.cancel`
+    reads the runs: a Cancel committed before starts none, one after finds it and cancels it."""
+    if credentials.get(db, user_id) is None:
+        return "no_credential"
+    flow_id = session.flow.run_id if session.flow else None
+    if flow_id is not None and not _runs_locked(db, flow_id):
+        return "superseded"
+    try:
+        return runs.create_run(db, user_id, NAME, None, data, MODEL, now, session.flow).id
+    except runs.ActiveRunsError:
+        return "busy"
+
+
 @dataclass
 class RuntimeApplier:
     """`Agent` on the agents runtime: one `apply_agent` run, executed in this process (the
@@ -1616,14 +1647,7 @@ class RuntimeApplier:
         user_id = uuid.UUID(session.tools.user_id)
 
         def create(db: Session) -> uuid.UUID | str:
-            if credentials.get(db, user_id) is None:
-                return "no_credential"
-            try:
-                return runs.create_run(
-                    db, user_id, NAME, None, data, MODEL, context.clock(), session.flow
-                ).id
-            except runs.ActiveRunsError:
-                return "busy"
+            return start_run(db, user_id, session, data, context.clock())
 
         created = await asyncio.to_thread(run._in_db, context.sessions, create)
         if isinstance(created, str):
