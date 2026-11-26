@@ -61,7 +61,7 @@ class Criteria:
     def of(cls, search: SearchSection | None) -> "Criteria":
         if search is None:
             return cls()
-        contracts = frozenset(contract.value for contract in search.contract_types)
+        contracts = frozenset(str(contract) for contract in search.contract_types)
         return cls(contracts, search.remote_stance, search.days)
 
     @classmethod
