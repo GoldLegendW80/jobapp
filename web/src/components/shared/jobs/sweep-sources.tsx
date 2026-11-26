@@ -1,7 +1,8 @@
 /**
  * The browser sources of a sweep in its summary (browser B8, `stats.sources` of
- * api/app/browser/sources): per job site read in the person's browser, what it found, what was
- * new, and in plain words why it stopped early when it did. A site the sweep never began
+ * api/app/browser/sources): per job site read in the person's browser, what it found and what
+ * happened to it (jobs J30: kept, outside the criteria, already in the list, set aside, refused,
+ * opened by the app, the assistant's own count), and in plain words why it stopped early when it did. A site the sweep never began
  * (`not_started`, after another stopped the sweep's sites) shows only that. The freelance and
  * project feeds of the same list have their own heading and words (opportunities O8).
  */
@@ -20,6 +21,10 @@ import {
   sourceName,
   tabClosedSentence,
 } from "@/features/jobs/helpers/labels";
+import {
+  hasReportedFigures,
+  reportedSentences,
+} from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
 import type { SweepSource } from "@/features/jobs/api/sweeps-api";
 
@@ -55,7 +60,9 @@ function boardStatus(source: SweepSource): string {
       SOURCE_PROBLEMS.not_started ??
       ""
     );
-  const found = `${plural(source.found, "posting")} matched, ${source.new.toLocaleString("en-GB")} new.`;
+  const found = hasReportedFigures(source)
+    ? reportedSentences(source)
+    : `${plural(source.found, "posting")} matched, ${source.new.toLocaleString("en-GB")} new.`;
   return source.error
     ? `${found} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
     : found;
@@ -99,7 +106,9 @@ function sourceStatus(source: SweepSource): string {
   }
   if (source.error === "not_started") return `${SOURCE_PROBLEMS.not_started}`;
   const searches = searchesSentence(source);
-  const found = `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
+  const found = hasReportedFigures(source)
+    ? reportedSentences(source)
+    : `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
   const counts = [
     searches,
     leftOutSentence(source),
