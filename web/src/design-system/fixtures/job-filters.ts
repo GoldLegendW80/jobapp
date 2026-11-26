@@ -1,5 +1,8 @@
 import type { FiltersSummary } from "@/components/shared/jobs/filters/filters-toolbar";
-import type { FitBucket } from "@/features/jobs/api/jobs-api";
+import { http, HttpResponse } from "msw";
+
+import type { Facets, FitBucket } from "@/features/jobs/api/jobs-api";
+import { server } from "@/test/server";
 import {
   EMPTY_FILTERS,
   type JobFilters,
@@ -58,3 +61,27 @@ export const SOME_FILTERS: JobFilters = {
   foundFrom: "2026-10-01",
   foundTo: "2026-11-06",
 };
+
+/** The places and the websites of those postings, most first, as GET /api/jobs/facets says. */
+export const FACETS: Facets = {
+  places: [
+    { value: "Paris", count: 64 },
+    { value: "Remote", count: 38 },
+    { value: "Saint-Denis", count: 21 },
+    { value: "La Réunion", count: 19 },
+    { value: "Lyon", count: 12 },
+    { value: "Papeete", count: 4 },
+  ],
+  sources: [
+    { value: "web", count: 71 },
+    { value: "linkedin", count: 66 },
+    { value: "www.welcometothejungle.com", count: 18 },
+    { value: "ashby", count: 9 },
+    { value: "mail", count: 5 },
+  ],
+};
+
+/** GET /api/jobs/facets answers FACETS. */
+export function fakeFacets(facets: Facets = FACETS) {
+  server.use(http.get("*/api/jobs/facets", () => HttpResponse.json(facets)));
+}

@@ -19,7 +19,7 @@ import {
 const OLD = { id: "old-run", finished_at: "2026-11-10T08:00:00Z" };
 const SEARCH: WorkflowRunDetail = {
   ...SWEEP_RUN,
-  id: "search-run",
+  id: "5d0c1f6e-2b7a-4c1e-9a8b-3f2e1d0c9b8a",
   workflow_title: "Job search",
   status: "success",
   subject: { words: "Robotics engineer in Lyon", job_id: null },
@@ -125,11 +125,14 @@ describe("the toast of a run's end", () => {
     expect(card.getByText("12 new postings added.")).toBeInTheDocument();
     expect(card.getByRole("link", { name: "Open the run" })).toHaveAttribute(
       "href",
-      "/activity/runs/search-run",
+      "/activity/runs/5d0c1f6e-2b7a-4c1e-9a8b-3f2e1d0c9b8a",
     );
     expect(
       card.getByRole("link", { name: "See the new postings" }),
-    ).toHaveAttribute("href", "/jobs?status=found");
+    ).toHaveAttribute(
+      "href",
+      "/jobs?sweep=5d0c1f6e-2b7a-4c1e-9a8b-3f2e1d0c9b8a",
+    );
     // In the toaster's polite live region: a screen reader says it when it is free.
     expect(shown?.closest("section")).toHaveAttribute("aria-live", "polite");
     expect(shown?.closest("[aria-live=assertive]")).toBeNull();
@@ -137,7 +140,7 @@ describe("the toast of a run's end", () => {
     await readCount(app);
     await readCount(app);
     expect(toasts()).toHaveLength(1);
-    expect(calls.summaries).toEqual(["search-run"]);
+    expect(calls.summaries).toEqual(["5d0c1f6e-2b7a-4c1e-9a8b-3f2e1d0c9b8a"]);
   });
 
   it("says why a run failed, with no postings link", async () => {
@@ -256,7 +259,7 @@ describe("the toast of a run's end", () => {
     await firstCountRead(app);
     await readCount(app);
     await vi.waitFor(() => {
-      expect(calls.summaries).toEqual(["search-run"]);
+      expect(calls.summaries).toEqual(["5d0c1f6e-2b7a-4c1e-9a8b-3f2e1d0c9b8a"]);
     });
     expect(toasts()).toHaveLength(0);
 
@@ -291,6 +294,8 @@ describe("the toast of a run's end", () => {
         title.closest<HTMLElement>("[data-sonner-toast]") as HTMLElement,
       ).getByRole("link", { name: "See the new postings" }),
     );
-    expect(app.location()).toBe("/jobs?status=found");
+    expect(app.location()).toBe(
+      "/jobs?sweep=5d0c1f6e-2b7a-4c1e-9a8b-3f2e1d0c9b8a",
+    );
   });
 });

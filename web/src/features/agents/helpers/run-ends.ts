@@ -132,7 +132,9 @@ export function runEndWords(run: WorkflowRunDetail): RunEndWords {
   };
 }
 
-/** Where a toast leads: the run on Activity, and a search's new postings in the Jobs list. */
+/** Where a toast leads: the run on Activity, and a search's new postings in the Jobs list (a
+ * job search's run is named by its sweep, so the list keeps the postings that sweep added). */
 export const runHref = (id: string) =>
   `/activity/runs/${encodeURIComponent(id)}`;
-export const NEW_POSTINGS_HREF = "/jobs?status=found";
+export const newPostingsHref = (sweepId: string) =>
+  `/jobs?sweep=${encodeURIComponent(sweepId)}`;

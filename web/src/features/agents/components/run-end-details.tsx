@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import type { WorkflowRunDetail } from "../api/activity-api";
 import {
-  NEW_POSTINGS_HREF,
+  newPostingsHref,
   runHref,
   type RunEndWords,
 } from "../helpers/run-ends";
@@ -36,7 +36,7 @@ export function RunEndDetails({
           Open the run
         </Link>
         {words.postings ? (
-          <Link to={NEW_POSTINGS_HREF} className={LINK} onClick={close}>
+          <Link to={newPostingsHref(run.id)} className={LINK} onClick={close}>
             See the new postings
           </Link>
         ) : null}

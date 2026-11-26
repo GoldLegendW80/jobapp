@@ -2,6 +2,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 
 import { LiveViewSlot } from "@/components/shared/apply/live-view-slot";
 import { withApp } from "@/design-system/with-app";
+import { applicationIn } from "@/design-system/fixtures/shared-apply";
+import { liveStatus, liveWatchOnly } from "@/features/apply/helpers/live-view";
 import {
   browserHolds,
   fakeLiveScreens,
@@ -10,6 +12,18 @@ import {
 } from "@/design-system/fixtures/live-browser";
 
 const APPLICATION = "00000000-0000-4000-a000-000000000001";
+
+/** The status line of `run`'s lease, as the job page and the Applications page give it. */
+const statusOf =
+  (...run: Parameters<typeof applicationIn>) =>
+  (purpose: string) =>
+    liveStatus(purpose, applicationIn(...run));
+
+/** Whether `run`'s lease is watch only, as the job page and the Applications page give it. */
+const watchOnlyOf =
+  (...run: Parameters<typeof applicationIn>) =>
+  (purpose: string) =>
+    liveWatchOnly(purpose, applicationIn(...run));
 
 const meta = {
   title: "Shared/Apply/Live view slot",
@@ -20,13 +34,15 @@ const meta = {
     docs: {
       description: {
         component:
-          "Where the live view of the person's browser goes while the assistant fills or sends an application: on a job's Your application, and named in the live views of the Applications page. Without this application's lease, a sentence says what comes.",
+          "Where the live view of the person's browser goes while the assistant fills or sends an application: on a job's Your application, and named in the live views of the Applications page. It shows the lease the api names for the application, whatever the application's state: a fill with Use the browser myself, the submit lease and Review first's agent after the Confirm watch only. Without that lease, a sentence says what the application waits for.",
       },
     },
   },
   args: {
     idle: "The assistant is filling the form. You can watch it live here, then it sends it.",
     leaseOf: { application: APPLICATION },
+    status: statusOf("filling", { mode: "direct" }),
+    watchOnly: watchOnlyOf("filling", { mode: "direct" }),
   },
   beforeEach: () => {
     liveRoutes();
@@ -49,6 +65,37 @@ export const TheAssistantFills: Story = {
   name: "The assistant fills the form",
 };
 
+/** One click Apply's agent past its first send button: still its lease, still Use the browser myself. */
+export const TheAssistantSends: Story = {
+  name: "The assistant sends the form",
+  args: {
+    idle: "Sending the form. Its result shows here once the app has it.",
+    status: statusOf("submitting", { mode: "direct" }),
+    watchOnly: watchOnlyOf("submitting", { mode: "direct" }),
+    namedOnly: true,
+  },
+};
+
+/** Review first's agent once the person confirmed: the app clicks send in its session, watched only. */
+export const ReviewFirstSends: Story = {
+  name: "Review first sends the confirmed form, watched only",
+  args: {
+    idle: "Sending the form. Its result shows here once the app has it.",
+    status: statusOf("submitting", { mode: "review" }),
+    watchOnly: watchOnlyOf("submitting", { mode: "review" }),
+    namedOnly: true,
+  },
+  beforeEach: () => {
+    browserHolds(
+      lease({
+        purpose: "apply_review",
+        application_id: APPLICATION,
+        max_s: 3600,
+      }),
+    );
+  },
+};
+
 /** The fill has not started: the sentence in its place. */
 export const BeforeTheFill: Story = {
   name: "Before the fill",
@@ -61,11 +108,10 @@ export const BeforeTheFill: Story = {
 export const TheFormIsSent: Story = {
   name: "The form is sent, watched only",
   args: {
-    idle: "Waiting for your browser.",
-    leaseOf: { application: APPLICATION },
-    submit: true,
-    status:
-      "The assistant fills the form again with your approved answers, then submits it.",
+    idle: "Your browser starts soon. Then you can watch the assistant send the form here.",
+    status: statusOf("approved"),
+    watchOnly: watchOnlyOf("approved"),
+    namedOnly: true,
   },
   beforeEach: () => {
     browserHolds(
@@ -75,6 +121,18 @@ export const TheFormIsSent: Story = {
         max_s: 900,
       }),
     );
+  },
+};
+
+/** An approved form waits for its turn on the site: only a pace says so. */
+export const WaitingForItsTurn: Story = {
+  name: "Waiting for its turn on the site",
+  args: {
+    idle: "Waiting for its turn. The app spaces out submissions to the same site, so this one waits a little.",
+    namedOnly: true,
+  },
+  beforeEach: () => {
+    browserHolds(null);
   },
 };
 

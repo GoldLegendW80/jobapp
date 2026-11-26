@@ -12,13 +12,15 @@ import base64
 import binascii
 import enum
 import json
+import re
+import unicodedata
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 import sqlalchemy as sa
 from sqlalchemy.exc import DBAPIError, IntegrityError
@@ -36,9 +38,11 @@ from app.jobs.models import (
     JobEventKind,
     JobFile,
     JobStatus,
+    PayPeriod,
     Sweep,
     SweepStatus,
     SweepTrigger,
+    WorkMode,
 )
 from app.jobs.schemas import ImportFile, ImportJob
 from app.jobs.scoring import ScoreResult
@@ -74,6 +78,35 @@ def get_job_by_slug(db: Session, user_id: uuid.UUID, slug: str) -> Job | None:
     return db.execute(jobs_of(user_id).where(Job.slug == slug)).scalar_one_or_none()
 
 
+class WorkModeChoice(enum.StrEnum):
+    """The work mode filter: a mode the posting states, or none stated."""
+
+    remote = "remote"
+    hybrid = "hybrid"
+    office = "office"
+    not_stated = "not_stated"
+
+
+class PayChoice(enum.StrEnum):
+    stated = "stated"
+    not_stated = "not_stated"
+
+
+class ApplicationChoice(enum.StrEnum):
+    """The application filter: what the posting's newest application says. How each state reads
+    is apply's (`app/apply/list_filter.py`), which registers it."""
+
+    none = "none"
+    under_way = "under_way"
+    waiting = "waiting"
+    sent = "sent"
+    failed = "failed"
+
+
+# searches.MAIN: the main search is the profile's own section, with no row of its own.
+MainSearch = Literal["main"]
+
+
 @dataclass(frozen=True)
 class JobFilters:
     """The list filters of GET /api/jobs. Empty means no filter on that field."""
@@ -86,15 +119,103 @@ class JobFilters:
     fit_max: int | None = None
     found_from: date | None = None
     found_to: date | None = None  # inclusive
+    places: Sequence[str] = ()  # the location holds one as whole words, case and accents aside
+    work_modes: Sequence[WorkModeChoice] = ()
+    sources: Sequence[str] = ()  # one of the source's names, or the part of one before ":"
+    published_from: date | None = None  # inclusive
+    published_undated: bool = False  # with published_from, the postings without a date stay
+    pay: PayChoice | None = None
+    pay_min: int | None = None  # with pay_period: the top of the posting's range reaches it
+    pay_period: PayPeriod | None = None
+    applications: Sequence[ApplicationChoice] = ()
+    sweep: uuid.UUID | None = None  # the postings this sweep added
+    search: uuid.UUID | MainSearch | None = None  # the postings this search's sweeps added
 
 
 def _like_escape(text: str) -> str:
     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+# The location's words for the place filter: what gazetteer.fold does (combining marks dropped
+# after NFD, lower case), then every run of spaces and ASCII punctuation one space, padded.
+_MARKS = "[\u0300-\u036f]"
+_SEPARATORS = "[[:space:]!-/:-@[-`{-~]+"
+
+
+def place_words(text: Any) -> Any:
+    """`text` (a column or a value) as " word word ", folded as the place filter compares it."""
+    folded = sa.func.lower(
+        sa.func.regexp_replace(sa.func.normalize(text, sa.literal_column("NFD")), _MARKS, "", "g")
+    )
+    words = sa.func.btrim(sa.func.regexp_replace(folded, _SEPARATORS, " ", "g"))
+    return sa.literal(" ") + words + sa.literal(" ")
+
+
+# A job's `source` names every source that found it joined by this (sweep.SOURCES_SEP, which
+# imports this module).
+SOURCES_SEP = ", "
+
+
+def source_condition(names: Sequence[str]) -> sa.ColumnElement[bool]:
+    """A job one of whose source names is in `names`, or whose part before ":" is."""
+    name = sa.func.unnest(sa.func.string_to_array(Job.source, SOURCES_SEP)).column_valued("name")
+    wanted = list(names)
+    return (
+        sa.select(sa.literal(1))
+        .where(sa.or_(name.in_(wanted), sa.func.split_part(name, ":", 1).in_(wanted)))
+        .exists()
+    )
+
+
+def added_by(user_id: uuid.UUID, sweep_id: uuid.UUID) -> sa.ScalarSelect[uuid.UUID]:
+    """The ids of the jobs a sweep added, by their `sweep` event."""
+    return _added(user_id, JobEvent.data["sweep_id"].astext == str(sweep_id))
+
+
+def added_by_search(
+    user_id: uuid.UUID, search: uuid.UUID | MainSearch
+) -> sa.ScalarSelect[uuid.UUID]:
+    """The ids of the jobs the person's sweeps of one search added (jobs J32): `main`, the sweeps
+    that froze no saved search, as sweep_router.search_ran reads them (a deleted search's sweep
+    keeps its frozen name, so it is never the main search's); else those of the saved search."""
+    ran = sa.select(sa.cast(Sweep.id, sa.Text)).where(Sweep.user_id == user_id)
+    if search == "main":
+        frozen = sa.func.jsonb_typeof(Sweep.stats[("search_scope", "saved_search", "name")])
+        ran = ran.where(Sweep.saved_search_id.is_(None), sa.func.coalesce(frozen, "") != "string")
+    else:
+        ran = ran.where(Sweep.saved_search_id == search)
+    return _added(user_id, JobEvent.data["sweep_id"].astext.in_(ran))
+
+
+def _added(user_id: uuid.UUID, of_sweep: sa.ColumnElement[bool]) -> sa.ScalarSelect[uuid.UUID]:
+    return (
+        sa.select(JobEvent.job_id)
+        .where(JobEvent.user_id == user_id, JobEvent.kind == JobEventKind.sweep, of_sweep)
+        .scalar_subquery()
+    )
+
+
+# The application filter's condition, registered by apply (which depends on jobs): the jobs
+# whose newest application reads as one of the choices.
+ApplicationCondition = Callable[[Sequence[ApplicationChoice]], sa.ColumnElement[bool]]
+_application_condition: list[ApplicationCondition] = []
+
+
+def register_application_condition(condition: ApplicationCondition) -> None:
+    _application_condition[:] = [condition]
+
+
+def _work_mode_condition(choices: Sequence[WorkModeChoice]) -> sa.ColumnElement[bool]:
+    stated = [WorkMode(c.value) for c in choices if c is not WorkModeChoice.not_stated]
+    clauses: list[sa.ColumnElement[bool]] = [Job.work_mode.in_(stated)] if stated else []
+    if WorkModeChoice.not_stated in choices:
+        clauses.append(Job.work_mode.is_(None))
+    return sa.or_(*clauses)
+
+
 def filtered(user_id: uuid.UUID, filters: JobFilters) -> sa.Select[tuple[Job]]:
     """The user's jobs matching every filter given. A fit range leaves out unscored jobs."""
-    query = jobs_of(user_id)
+    query = _more_filters(jobs_of(user_id), user_id, filters)
     if filters.statuses:
         query = query.where(Job.status.in_(list(filters.statuses)))
     if filters.contract_types:
@@ -116,6 +237,106 @@ def filtered(user_id: uuid.UUID, filters: JobFilters) -> sa.Select[tuple[Job]]:
     if filters.found_to is not None:
         query = query.where(Job.found_on <= filters.found_to)
     return query
+
+
+def _more_filters(
+    query: sa.Select[tuple[Job]], user_id: uuid.UUID, filters: JobFilters
+) -> sa.Select[tuple[Job]]:
+    """The filters of jobs J29: place, work mode, website, published, pay, application, sweep;
+    and the search of jobs J32."""
+    if filters.places:
+        words = place_words(Job.location)
+        query = query.where(
+            sa.or_(*(sa.func.strpos(words, place_words(p)) > 0 for p in filters.places))
+        )
+    if filters.work_modes:
+        query = query.where(_work_mode_condition(filters.work_modes))
+    if filters.sources:
+        query = query.where(source_condition(filters.sources))
+    if filters.published_from is not None:
+        dated = Job.published_on >= filters.published_from
+        query = query.where(
+            sa.or_(dated, Job.published_on.is_(None)) if filters.published_undated else dated
+        )
+    if filters.pay is not None:
+        stated = Job.pay_max.is_not(None)
+        query = query.where(stated if filters.pay is PayChoice.stated else ~stated)
+    if filters.pay_min is not None and filters.pay_period is not None:
+        query = query.where(Job.pay_period == filters.pay_period, Job.pay_max >= filters.pay_min)
+    if filters.applications:
+        if not _application_condition:
+            raise RuntimeError("no application condition registered (apply registers it)")
+        query = query.where(_application_condition[0](filters.applications))
+    if filters.sweep is not None:
+        query = query.where(Job.id.in_(added_by(user_id, filters.sweep)))
+    if filters.search is not None:
+        query = query.where(Job.id.in_(added_by_search(user_id, filters.search)))
+    return query
+
+
+FACETS_MAX = 50
+# A location's places for the pickers: its parts between commas, semicolons, slashes, bars,
+# brackets and spaced dashes.
+_PLACE_PARTS = re.compile(r"[,;/|()\[\]\u00b7]|\s[-\u2013\u2014]\s")
+_FACET_SEPARATORS = re.compile(r"[\s!-/:-@\[-`{-~]+")
+PLACE_CHARS = 100
+
+
+@dataclass(frozen=True)
+class Facet:
+    value: str
+    count: int
+
+
+def _place_key(part: str) -> str:
+    """A place as the place filter compares it (place_words), for grouping spellings."""
+    folded = unicodedata.normalize("NFD", part)
+    folded = "".join(c for c in folded if not "\u0300" <= c <= "\u036f").lower()
+    return _FACET_SEPARATORS.sub(" ", folded).strip()
+
+
+def _places_of(location: str) -> dict[str, str]:
+    parts = (part.strip() for part in _PLACE_PARTS.split(location))
+    return {
+        _place_key(part): part
+        for part in parts
+        if 0 < len(part) <= PLACE_CHARS and any(c.isalnum() for c in part)
+    }
+
+
+def _websites_of(source: str) -> dict[str, str]:
+    names = (name.split(":", 1)[0].strip() for name in source.split(SOURCES_SEP))
+    return {name: name for name in names if name}
+
+
+def _ranked(rows: Iterable[Any], parts: Callable[[str], dict[str, str]]) -> list[Facet]:
+    """The values `parts` reads in each text, by the jobs holding them (a job counts once per
+    value), most first, each in its most frequent spelling, FACETS_MAX at most."""
+    counts: dict[str, int] = defaultdict(int)
+    spellings: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for text, count in rows:
+        for key, spelling in parts(text or "").items():
+            counts[key] += count
+            spellings[key][spelling] += count
+    ranked = sorted(counts, key=lambda key: (-counts[key], key))[:FACETS_MAX]
+    return [
+        Facet(max(spellings[key], key=lambda s: (spellings[key][s], s)), counts[key])
+        for key in ranked
+    ]
+
+
+def facets(db: Session, user_id: uuid.UUID, filters: JobFilters) -> tuple[list[Facet], list[Facet]]:
+    """The places and the websites of the jobs matching `filters` but their own filter, with
+    the number of jobs of each."""
+
+    def grouped(column: Any, without: JobFilters) -> list[Any]:
+        base = filtered(user_id, without).with_only_columns(column.label("text")).subquery()
+        query = sa.select(base.c.text, sa.func.count()).group_by(base.c.text)
+        return list(db.execute(query).all())
+
+    places = _ranked(grouped(Job.location, replace(filters, places=())), _places_of)
+    websites = _ranked(grouped(Job.source, replace(filters, sources=())), _websites_of)
+    return places, websites
 
 
 def list_events(db: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> list[JobEvent]:
@@ -455,6 +676,9 @@ class JobSort(enum.StrEnum):
     company = "company"  # company A to Z (case-insensitive), then title
     status = "status"  # pipeline order (found ... skipped), then best fit
     updated = "updated"  # last changed first
+    published = "published"  # newest published first, undated last, then newest found
+    # yearly pays first, then monthly, daily, hourly, each highest first; unstated last
+    pay = "pay"
 
 
 @dataclass(frozen=True)
@@ -469,6 +693,21 @@ class _SortKey:
 _FIT = _SortKey(sa.func.coalesce(Job.fit, -1), True, int, lambda j: -1 if j.fit is None else j.fit)
 _FOUND = _SortKey(Job.found_on, True, date.fromisoformat, lambda j: j.found_on.isoformat())
 _ID = _SortKey(Job.id, False, lambda v: uuid.UUID(str(v)), lambda j: str(j.id))
+_UNDATED = date(1, 1, 1)
+_PUBLISHED = _SortKey(
+    sa.func.coalesce(Job.published_on, _UNDATED),
+    True,
+    date.fromisoformat,
+    lambda j: (j.published_on or _UNDATED).isoformat(),
+)
+_PERIODS = {PayPeriod.year: 0, PayPeriod.month: 1, PayPeriod.day: 2, PayPeriod.hour: 3}
+_PERIOD = _SortKey(
+    sa.case(*((Job.pay_period == p, rank) for p, rank in _PERIODS.items()), else_=len(_PERIODS)),
+    False,
+    int,
+    lambda j: _PERIODS.get(j.pay_period, len(_PERIODS)),
+)
+_PAY = _SortKey(sa.func.coalesce(Job.pay_max, 0), True, int, lambda j: j.pay_max or 0)
 SORT_KEYS: dict[JobSort, tuple[_SortKey, ...]] = {
     JobSort.found_on: (_FOUND, _FIT, _ID),
     JobSort.fit: (_FIT, _FOUND, _ID),
@@ -482,6 +721,8 @@ SORT_KEYS: dict[JobSort, tuple[_SortKey, ...]] = {
         _SortKey(Job.updated_at, True, datetime.fromisoformat, lambda j: j.updated_at.isoformat()),
         _ID,
     ),
+    JobSort.published: (_PUBLISHED, _FOUND, _ID),
+    JobSort.pay: (_PERIOD, _PAY, _FOUND, _ID),
 }
 
 

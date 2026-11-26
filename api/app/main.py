@@ -43,6 +43,7 @@ from app.jobs.assess_router import router as jobs_assess_router
 from app.jobs.boards.router import router as boards_router
 from app.jobs.feeds.router import router as job_feeds_router
 from app.jobs.router import router as jobs_router
+from app.jobs.searches_router import router as searches_router
 from app.jobs.sweep_router import router as sweeps_router
 from app.logging_config import configure_logging, error_name, private_trace
 from app.mail import accounts as mail_accounts
@@ -317,6 +318,7 @@ def create_app(
     # Before the jobs router: /api/jobs/sweeps, /api/jobs/boards and /api/jobs/feeds must not be
     # read as /api/jobs/{job_id}.
     app.include_router(sweeps_router)
+    app.include_router(searches_router)
     app.include_router(boards_router)
     app.include_router(job_feeds_router)
     app.include_router(jobs_router)

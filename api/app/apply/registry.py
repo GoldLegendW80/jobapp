@@ -41,8 +41,10 @@ def load(
 
 
 def include(app: FastAPI) -> None:
+    from app.apply import list_filter
     from app.apply.signin import register
 
     register()
+    list_filter.register()
     for router in load():
         app.include_router(router)

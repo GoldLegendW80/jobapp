@@ -58,6 +58,7 @@ from sqlalchemy.orm import Session, undefer
 from app.apply import caps, guardrails
 from app.apply.models import Application, Mode, State
 from app.jobs import notices, scoring, sweep
+from app.jobs import service as jobs_service
 from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus, WorkMode
 from app.jobs.notices import Notice
 from app.jobs.sweep import NeverApplyRule
@@ -225,12 +226,7 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) 
             sa.case((Job.work_mode.is_not(None), Job.work_mode == wanted), else_=by_location)
         )
     if filters.source is not None:
-        query = query.where(
-            sa.or_(
-                Job.source == filters.source,
-                sa.func.split_part(Job.source, ":", 1) == filters.source,
-            )
-        )
+        query = query.where(jobs_service.source_condition([filters.source]))
     return query
 
 

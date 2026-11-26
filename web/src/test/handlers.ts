@@ -134,6 +134,9 @@ export const handlers = [
   ),
   http.get("*/api/jobs", () => HttpResponse.json(emptyJobsPage)),
   http.get("*/api/jobs/sweeps", () => HttpResponse.json(emptySweeps)),
+  http.get("*/api/jobs/facets", () =>
+    HttpResponse.json({ places: [], sources: [] }),
+  ),
   // The job feeds, no Adzuna key stored (Find jobs and the Account page's Adzuna key card).
   http.get("*/api/jobs/feeds", () => HttpResponse.json(noFeedKeys)),
   // Find jobs' list of addresses: no address is a company job board, and no board ideas.

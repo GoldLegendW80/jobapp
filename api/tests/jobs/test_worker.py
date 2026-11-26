@@ -28,7 +28,7 @@ from app import worker
 from app.config import Settings
 from app.ingestion import jobs as ingestion_jobs
 from app.jobs import sweep
-from app.jobs.models import Job, Sweep, SweepStatus, SweepTrigger
+from app.jobs.models import Job, Sweep, SweepRequest, SweepStatus, SweepTrigger
 from app.logging_config import JsonFormatter
 from tests.conftest import make_settings
 from tests.jobs.sweep_helpers import (
@@ -676,7 +676,7 @@ def test_the_schedule_cron_enqueues_each_due_slot_once(
     }
 
 
-def test_the_schedule_tick_skips_a_user_already_sweeping_and_fails_what_it_cannot_queue(
+def test_the_schedule_tick_puts_a_sweeping_users_slot_in_line_and_fails_what_it_cannot_queue(
     settings: Settings,
     factory: sessionmaker[Session],
     alice: uuid.UUID,
@@ -702,6 +702,14 @@ def test_the_schedule_tick_skips_a_user_already_sweeping_and_fails_what_it_canno
         bobs = db.execute(sa.select(Sweep).where(Sweep.user_id == bob)).scalar_one()
         assert (bobs.status, bobs.error) == (SweepStatus.failed, sweep.QUEUE_DOWN)
         assert db.get(Sweep, manual).status is SweepStatus.running
+        # Alice's slot waits in the line behind her running sweep.
+        [request] = db.execute(sa.select(SweepRequest)).scalars().all()
+        assert (request.user_id, request.saved_search_id, request.trigger) == (
+            alice,
+            None,
+            SweepTrigger.schedule,
+        )
+        assert request.schedule_slot == "2026-10-10T06:17 Europe/Paris"
 
 
 # --- the queue from the api's side ---------------------------------------------------------------

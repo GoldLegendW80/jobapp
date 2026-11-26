@@ -3,7 +3,9 @@
 A schedule is weekdays, local times ("HH:MM") and an IANA time zone. A slot is one (local date,
 time) pair on one of those weekdays; its key, "<YYYY-MM-DD>T<HH:MM> <zone>", is the slot's
 identity everywhere (sweeps.stats.schedule_slot, the queue's job id), so a slot fires at most
-once whatever the number of ticks, workers or retries that see it.
+once whatever the number of ticks, workers or retries that see it. A saved search's slot (jobs
+J32, `of_search`) adds the search's id to that key, so its lock, its index entry and its job id
+are its own: two searches due at the same minute both fire, one after the other.
 
 Instants, daylight saving time included:
 - a local time that exists once is that instant;
@@ -87,3 +89,8 @@ def next_run(schedule: SweepSchedule, now: datetime) -> datetime | None:
         return None
     upcoming = slots_between(schedule, now, now + LOOKAHEAD)
     return upcoming[0].at if upcoming else None
+
+
+def of_search(slot: Slot, search_id: object) -> Slot:
+    """The slot of a saved search: "<YYYY-MM-DD>T<HH:MM> <zone> <search id>"."""
+    return Slot(key=f"{slot.key} {search_id}", at=slot.at)

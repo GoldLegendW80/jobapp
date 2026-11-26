@@ -14,8 +14,11 @@ Sweeps queue (app.queue.SWEEPS):
   (user, slot) due in the window before the tick (sweep.scheduled_due, app/jobs/schedule.py:
   only users who enabled `search.sweep_schedule`, the default is off) and queues it under the
   job id schedule:<user>:<slot>. A slot fires once (advisory lock and the slot recorded in the
-  sweep); a user already sweeping is skipped and the slot retried by the next ticks of the
-  window.
+  sweep); a user already sweeping gets the slot as a request in the line (jobs J32,
+  app/jobs/searches.py). The saved searches' schedules fire the same way, each slot key holding
+  its search. The tick then starts the line's next run for every active person with none
+  running; one person's error is counted and the tick goes on.
+- run_sweep starts the next run of the person's line when its sweep ends (start_the_line).
 - reap_sweeps: cron every minute, and once at start: fails running sweeps with no heartbeat for
   sweep.STALE_AFTER (worker crash, lost queue message).
 - cron:browser_removals: every minute, the profile directories queued for removal are removed
@@ -154,7 +157,8 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import reader, rescore, service, sweep
+from app.jobs import reader, rescore, schedule, searches, service, sweep
+from app.jobs.models import Sweep
 from app.logging_config import configure_logging
 
 logger = logging.getLogger("app.worker")
@@ -292,6 +296,65 @@ async def run_sweep(ctx: dict[str, Any], sweep_id: str) -> None:
         browser=websites,
         reader=reader.SweepReader(lambda: agent_context(ctx)),
     )
+    if "redis" in ctx:
+        owner = await asyncio.to_thread(owner_of, sessions_of(ctx), uuid.UUID(sweep_id))
+        await start_the_line(ctx, owner)
+
+
+def owner_of(sessions: sessionmaker[Session], sweep_id: uuid.UUID) -> list[uuid.UUID]:
+    with sessions() as db:
+        row = db.get(Sweep, sweep_id)
+        return [row.user_id] if row is not None else []
+
+
+def _start_next(
+    sessions: sessionmaker[Session], users: list[uuid.UUID], now: datetime
+) -> list[uuid.UUID]:
+    """The next request in the line of each of `users` started (jobs J32, sweep.start_next).
+    One person's error is logged as a count and the others still start."""
+    started, failed = [], 0
+    for user_id in users:
+        with sessions() as db:
+            try:
+                row = sweep.start_next(db, user_id, now)
+                db.commit()
+            except service.SweepRunningError:
+                db.rollback()
+                continue
+            except Exception:
+                db.rollback()
+                failed += 1
+                continue
+            if row is not None:
+                started.append(row.id)
+    if failed:
+        logger.warning("runs of the line not started", extra={"count": failed})
+    return started
+
+
+async def start_the_line(ctx: dict[str, Any], users: list[uuid.UUID]) -> int:
+    """Start and queue the next run waiting in the line of each of `users`: after a sweep ends,
+    and at each schedule tick for everyone (a sweep the reaper ended has no end of its own)."""
+    sessions, clock = sessions_of(ctx), clock_of(ctx)
+    started = await asyncio.to_thread(_start_next, sessions, users, clock())
+    redis: ArqRedis = ctx["redis"]
+    for sweep_id in started:
+        try:
+            await redis.enqueue_job(
+                "run_sweep",
+                str(sweep_id),
+                _job_id=queue.sweep_job_id(sweep_id),
+                _queue_name=queue.SWEEPS,
+            )
+        except Exception:
+            logger.exception("sweep of the line not queued", extra={"sweep_id": str(sweep_id)})
+            await asyncio.to_thread(sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
+    return len(started)
+
+
+def _waiting(sessions: sessionmaker[Session]) -> list[uuid.UUID]:
+    with sessions() as db:
+        return searches.users_waiting(db)
 
 
 def split_websites(
@@ -365,10 +428,13 @@ async def reap_sweeps(ctx: dict[str, Any]) -> int:
 def _start_scheduled(
     sessions: sessionmaker[Session], now: datetime
 ) -> list[tuple[uuid.UUID, sweep.DueSweep]]:
-    """A running schedule sweep for every (user, slot) due; slots already started and users
-    already sweeping are skipped."""
-    started = []
+    """A running schedule sweep for every (user, slot) due; slots already started are skipped,
+    and a user already sweeping gets the slot in the line. One slot's error is logged as a count
+    and the other slots still start. The runs taken back whose slot left its window go first."""
+    started, failed = [], 0
     with sessions() as db:
+        searches.forget_taken_back(db, now, schedule.WINDOW)
+        db.commit()
         due = sweep.scheduled_due(db, now)
     for item in due:
         with sessions() as db:
@@ -378,8 +444,14 @@ def _start_scheduled(
             except service.SweepRunningError:
                 db.rollback()
                 continue
+            except Exception:
+                db.rollback()
+                failed += 1
+                continue
             if row is not None:
                 started.append((row.id, item))
+    if failed:
+        logger.warning("scheduled slots not started", extra={"count": failed})
     return started
 
 
@@ -400,7 +472,8 @@ async def scheduled_sweeps(ctx: dict[str, Any]) -> int:
             await asyncio.to_thread(sweep.fail_sweep, sessions, sweep_id, sweep.QUEUE_DOWN, clock())
     if started:
         logger.info("scheduled sweeps queued", extra={"count": len(started)})
-    return len(started)
+    lined = await start_the_line(ctx, await asyncio.to_thread(_waiting, sessions))
+    return len(started) + lined
 
 
 # --- agents queue -----------------------------------------------------------------------------

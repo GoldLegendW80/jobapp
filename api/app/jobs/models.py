@@ -15,6 +15,8 @@
   (partial unique index), and `finished_at` is set exactly when the sweep is no longer running.
 - job_rescores: the rescore a change of the skills section asks for (app/jobs/rescore.py), one
   row per person: the profile revision asked for, the one done, the one running and since when.
+- saved_searches, sweep_requests: the person's other searches and the runs that wait for the
+  running sweep (app/jobs/searches.py, jobs J32).
 
 Large columns (`posting_text`, `bytes`, `search`) are deferred so list queries never load them.
 Migration: alembic/versions/0004_jobs.py, which must stay in step with this file
@@ -329,6 +331,11 @@ class Sweep(Base):
             sa.text("(stats ->> 'schedule_slot')"),
             postgresql_where=sa.text("trigger = 'schedule'"),
         ),
+        sa.Index(
+            "ix_sweeps_saved_search_id",
+            "saved_search_id",
+            postgresql_where=sa.text("saved_search_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
@@ -346,6 +353,84 @@ class Sweep(Base):
         pg.JSONB, nullable=False, default=dict, server_default=sa.text("'{}'::jsonb")
     )
     error: Mapped[str | None] = mapped_column(sa.Text)
+    # The saved search it ran (jobs J32, migration 0050); null for the main search, and once that
+    # search is deleted (its name stays in `stats.search_scope.saved_search`).
+    saved_search_id: Mapped[uuid.UUID | None] = mapped_column(
+        pg.UUID(as_uuid=True), sa.ForeignKey("saved_searches.id", ondelete="SET NULL")
+    )
+
+
+SAVED_SEARCH_NAME_MAX = 60
+
+
+class SavedSearch(Base):
+    """A search of the person's beside the main one, the profile's search section (jobs J32,
+    migration 0050): a name, the criteria of one search (app/jobs/searches.py CRITERIA, checked
+    by the profile's search schema), its own schedule without a time zone, and a revision a
+    change must name. Everything else a sweep reads stays the person's, in the profile."""
+
+    __tablename__ = "saved_searches"
+    __table_args__ = (
+        sa.UniqueConstraint("id", "user_id", name="uq_saved_searches_id_user_id"),
+        sa.CheckConstraint(
+            f"char_length(name) BETWEEN 1 AND {SAVED_SEARCH_NAME_MAX}", name="name_length"
+        ),
+        sa.CheckConstraint("jsonb_typeof(criteria) = 'object'", name="criteria_is_object"),
+        sa.CheckConstraint("jsonb_typeof(schedule) = 'object'", name="schedule_is_object"),
+        sa.CheckConstraint("revision >= 1", name="revision_positive"),
+        sa.Index("ix_saved_searches_user_id_name", "user_id", sa.text("lower(name)"), unique=True),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = _user_fk()
+    name: Mapped[str] = mapped_column(sa.Text, nullable=False)
+    criteria: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+    schedule: Mapped[dict[str, Any]] = mapped_column(pg.JSONB, nullable=False)
+    revision: Mapped[int] = mapped_column(sa.Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = _now_column()
+    updated_at: Mapped[datetime] = _now_column()
+
+
+class SweepRequest(Base):
+    """A run asked while the person's sweep runs (jobs J32, the line, migration 0050): of a saved
+    search, or of the main search when `saved_search_id` is null; by hand, or by a schedule slot
+    that met the running sweep (`schedule_slot`). One waits per search; the oldest starts when
+    the sweep before it ends. A slot's run the person took back stays, `taken_back_at` set, so
+    the slot counts as taken until it leaves its window (sweep.slot_taken)."""
+
+    __tablename__ = "sweep_requests"
+    __table_args__ = (
+        sa.ForeignKeyConstraint(
+            ["saved_search_id", "user_id"],
+            ["saved_searches.id", "saved_searches.user_id"],
+            name="fk_sweep_requests_saved_search_id_saved_searches",
+            ondelete="CASCADE",
+        ),
+        sa.Index(
+            "ix_sweep_requests_one_main",
+            "user_id",
+            unique=True,
+            postgresql_where=sa.text("saved_search_id IS NULL AND taken_back_at IS NULL"),
+        ),
+        sa.Index(
+            "ix_sweep_requests_one_per_search",
+            "user_id",
+            "saved_search_id",
+            unique=True,
+            postgresql_where=sa.text("saved_search_id IS NOT NULL AND taken_back_at IS NULL"),
+        ),
+        sa.Index("ix_sweep_requests_user_id_position", "user_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    # The order of arrival, whatever the clock says: the line starts the smallest first.
+    position: Mapped[int] = mapped_column(sa.BigInteger, sa.Identity(always=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = _user_fk()
+    saved_search_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
+    trigger: Mapped[SweepTrigger] = mapped_column(SWEEP_TRIGGER_ENUM, nullable=False)
+    schedule_slot: Mapped[str | None] = mapped_column(sa.Text)
+    requested_at: Mapped[datetime] = _now_column()
+    taken_back_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
 
 class JobRescore(Base):
