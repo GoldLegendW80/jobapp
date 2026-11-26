@@ -229,7 +229,7 @@ function reportedTotals(sweep: Sweep): string[] {
       ? `${plural(unwanted, "posting")} set aside by your unwanted titles and places.`
       : "",
     refused
-      ? `${plural(refused, "posting")} refused by the app's check, each source below says why.`
+      ? `${plural(refused, "posting")} refused by the app's check: each source below says why.`
       : "",
     opened ? `The app opened ${plural(opened, "posting")} itself.` : "",
   ].filter((part) => part !== "");

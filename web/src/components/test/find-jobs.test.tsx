@@ -17,6 +17,10 @@ import type {
   SweepSource,
 } from "@/features/jobs/api/sweeps-api";
 import { sweepTiming } from "@/features/jobs/api/sweeps-api";
+import {
+  assistantWordsHandlers,
+  WORDS_SWEEP_ID,
+} from "@/design-system/fixtures/assistant-words";
 
 const ID = "11111111-2222-4333-8444-555555555555";
 
@@ -932,6 +936,77 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
     });
     expect(summary).toHaveTextContent("2 boards read, 120 postings seen");
     expect(summary).not.toHaveTextContent("websites searched");
+  });
+
+  // Jobs J30: the true numbers in sentences, and what each assistant said, one click away.
+  it("says what the search kept and why the rest was not, with the assistants' words", async () => {
+    server.use(...assistantWordsHandlers);
+    const website: SweepSource = {
+      kind: "welcome_to_the_jungle",
+      query: "",
+      location: null,
+      mode: "llm_browser",
+      host: "www.welcometothejungle.com",
+      result_pages: 1,
+      found: 5,
+      new: 2,
+      skipped_by_rule: 0,
+      items_skipped: 0,
+      duplicates: 3,
+      outside: 1,
+      unwanted: 1,
+      refused: { title_not_on_page: 2 },
+      opened_by_app: 1,
+      results_read: 80,
+      error: null,
+    };
+    const done = finished({
+      id: WORDS_SWEEP_ID,
+      boards_total: 0,
+      boards_done: 0,
+      boards_ok: 0,
+      boards_failed: [],
+      seen: 5,
+      matched: 5,
+      duplicates: 3,
+      outside: 1,
+      search_scope: scope,
+      sources: [website],
+    });
+    fakeSweeps({ list: [done], states: [done] });
+    await openJobs();
+    const user = userEvent.setup();
+    const history = await openPastSearches(user);
+    await user.click(
+      within(
+        within(history).getByRole("list", { name: "Last searches" }),
+      ).getAllByRole("button")[0]!,
+    );
+    const summary = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(summary).toHaveTextContent(
+      "1 website searched. 2 new postings kept, 1 of them outside your criteria; 3 already in your list. " +
+        "1 posting set aside by your unwanted titles and places. " +
+        "2 postings refused by the app's check: each source below says why. " +
+        "The app opened 1 posting itself.",
+    );
+    expect(summary).not.toHaveTextContent("seen");
+    expect(summary).not.toHaveTextContent("matched your search");
+    expect(summary).toHaveTextContent(
+      "2 refused by the app's check: 2 because its title was not on its page.",
+    );
+    expect(summary).toHaveTextContent("The assistant says it read 80 results.");
+    expect(summary).not.toHaveTextContent(/[–—]| - /);
+    const words = await within(summary).findByRole("region", {
+      name: "What the assistants said",
+    });
+    await user.click(
+      within(words).getByRole("button", { name: /^Website search, / }),
+    );
+    expect(
+      await within(words).findByText(/read about 80 results/),
+    ).toBeInTheDocument();
   });
 });
 

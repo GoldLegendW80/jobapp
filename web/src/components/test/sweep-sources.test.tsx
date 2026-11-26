@@ -181,3 +181,51 @@ it("says that a website's tab was closed and opened again, and why", () => {
   );
   expect(item).not.toHaveTextContent("The app refused");
 });
+
+// Jobs J30: what happened to what a website reported, in sentences, in place of "found, new".
+it("says what a website's reports became, the assistant's count as its own", () => {
+  render(
+    <SweepSources
+      sources={[
+        source({
+          mode: "llm_browser",
+          kind: "welcome_to_the_jungle",
+          host: "www.welcometothejungle.com",
+          phase: "done",
+          outcome: "complete",
+          found: 5,
+          new: 2,
+          outside: 1,
+          duplicates: 3,
+          unwanted: 1,
+          refused: { not_on_opened_page: 1, brand_new_rule: 2 },
+          opened_by_app: 1,
+          results_read: 80,
+        }),
+        source({
+          mode: "api",
+          kind: "board",
+          host: "boards-api.greenhouse.io",
+          query: "greenhouse:examplelabs",
+          company: "Example Labs",
+          found: 4,
+          new: 1,
+          duplicates: 3,
+        }),
+      ]}
+    />,
+  );
+  const [site, board] = screen.getAllByRole("listitem");
+  expect(site).toHaveTextContent(
+    "Welcome to the Jungle: 5 postings found: 2 new postings kept, 1 of them outside your criteria; 3 already in your list. " +
+      "1 posting set aside by your unwanted titles and places. " +
+      "3 refused by the app's check: 1 because the app opened its page and did not find its title there (a security check or a sign in wall may have shown); 2 because the app's check found another problem. " +
+      "The app opened 1 posting itself, as the assistant had not. " +
+      "The assistant says it read 80 results.",
+  );
+  expect(site).not.toHaveTextContent("brand_new_rule");
+  expect(site?.textContent).not.toMatch(/[–—]| - /);
+  expect(board).toHaveTextContent(
+    "Example Labs: 4 postings found: 1 new posting kept; 3 already in your list.",
+  );
+});
