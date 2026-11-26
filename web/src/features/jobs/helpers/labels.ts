@@ -85,6 +85,8 @@ export const SORTS = [
   "company",
   "status",
   "updated",
+  "published",
+  "pay",
 ] as const;
 export type JobSort = (typeof SORTS)[number];
 export const DEFAULT_SORT: JobSort = "found_on";
@@ -95,7 +97,54 @@ export const SORT_LABELS: Record<JobSort, string> = {
   company: "Company, A to Z",
   status: "Pipeline order",
   updated: "Last changed",
+  published: "Newest published",
+  pay: "Best pay, yearly first",
 };
+
+/** The work mode filter: a stated mode, or none stated (api `work_mode`). */
+export const WORK_MODE_CHOICES = [
+  "remote",
+  "hybrid",
+  "office",
+  "not_stated",
+] as const;
+export type WorkModeChoice = (typeof WORK_MODE_CHOICES)[number];
+export const WORK_MODE_CHOICE_LABELS: Record<WorkModeChoice, string> = {
+  remote: "Remote",
+  hybrid: "Hybrid",
+  office: "On site",
+  not_stated: "Not stated",
+};
+
+/** The application filter: what a posting's newest application says (api `application`). */
+export const APPLICATION_CHOICES = [
+  "none",
+  "under_way",
+  "waiting",
+  "sent",
+  "failed",
+] as const;
+export type ApplicationChoice = (typeof APPLICATION_CHOICES)[number];
+export const APPLICATION_CHOICE_LABELS: Record<ApplicationChoice, string> = {
+  none: "No application",
+  under_way: "Applying",
+  waiting: "Waiting for you",
+  sent: "Sent",
+  failed: "Failed",
+};
+
+export const PAY_PERIODS = ["year", "month", "day", "hour"] as const;
+export type PayPeriodChoice = (typeof PAY_PERIODS)[number];
+
+const WEBSITE_NAMES: Record<string, string> = {
+  mail: "Job alert e-mails",
+  manual: "Added by hand",
+  import: "Imported",
+};
+
+/** A website of the facets (a source name before ":", or a host) in words. */
+export const websiteName = (value: string): string =>
+  KIND_NAMES[value] ?? WEBSITE_NAMES[value] ?? value;
 
 export const isSort = (value: string): value is JobSort =>
   (SORTS as readonly string[]).includes(value);
