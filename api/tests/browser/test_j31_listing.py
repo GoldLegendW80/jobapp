@@ -71,6 +71,7 @@ def cards(one: finder.FinderSession, *items: dict) -> dict:
         ("ML Engineer", JOB + "102"),  # the heading that holds its link
         ("GenAI Engineer", JOB + "103"),  # a link that wraps the card
         ("Data  Analyst", JOB + "104"),  # spacing aside
+        ("Data Scientist", JOB + "101/"),  # B31: one trailing slash aside
     ],
 )
 def test_a_card_seen_on_a_page_read_is_kept_with_its_list(title: str, url: str) -> None:
@@ -92,8 +93,8 @@ def test_a_card_seen_on_a_page_read_is_kept_with_its_list(title: str, url: str) 
             ("Example Robotics", JOB + "101"),
             ("Senior Data Scientist", JOB + "101"),
             ("ML Engineer", JOB + "101"),
-            ("Data Scientist", JOB + "101?ref=list"),
-            ("Data Scientist", JOB + "101/"),
+            ("Data Scientist", JOB + "101?ref=list"),  # B31: a parameter not listed identifies
+            ("Data Scientist", JOB + "101//"),
             ("Data Scientist", "http://jobs.example.test/jobs/101"),
             ("Data Scientist", "https://www.jobs.example.test/jobs/101"),
             ("Data Scientist", "https://board2.example.test/jobs/1010"),
@@ -363,12 +364,17 @@ def test_a_card_stands_in_when_the_app_cannot_open_the_address(monkeypatch) -> N
     item = {"title": "Data Scientist", "url": JOB + "101", "text": "x"}
     assert json.loads(asyncio.run(one.report_verified([item]))[0])["kept"] == 1
     assert batches[0].findings[0].list_url == finder.canonical(LIST)
-    # Past the opens of one call the page opens at the next one: no card stands in for it.
+    # Past the opens of one call, B31: its card stands in, in the same call; a posting with no
+    # card (a title its card does not show) is refused, its page opening at the next call.
     monkeypatch.setattr(finder, "APP_OPENS_MAX", 0)
     again, stored = listed((LIST, LIST_PAGE))
     answer = json.loads(asyncio.run(again.report_verified([item]))[0])
+    assert (answer["kept"], answer["kept_from_card"]) == (1, 1)
+    assert stored[0].findings[0].list_url == finder.canonical(LIST)
+    bare, stored = listed((LIST, LIST_PAGE))
+    answer = json.loads(asyncio.run(bare.report_verified([{**item, "title": "Robot Painter"}]))[0])
     assert answer["kept"] == 0
-    assert again.refused["app_opens_max"] == 1
+    assert bare.refused["app_opens_max"] == 1
     assert stored == []
 
 

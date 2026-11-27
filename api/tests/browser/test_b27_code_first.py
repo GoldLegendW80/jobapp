@@ -465,9 +465,16 @@ def test_a_new_tab_browserd_does_not_name_is_given_back_and_nothing_opened(evalu
     ] == []
 
 
-def test_the_app_opens_at_most_twenty_postings_per_call():
+@pytest.mark.parametrize("carded", [False, True])
+def test_the_app_opens_at_most_twenty_postings_per_call(carded: bool):
+    """The app opens at most APP_OPENS_MAX postings a call. With no card of the 21st (the
+    script's items give their links alone) it is refused, with what to do; B31: with its card
+    it is kept from that card in the same call, and the answer says so and why."""
     links = [START + f"jobs/{8000 + i}" for i in range(finder.APP_OPENS_MAX + 1)]
-    cards = [{"title": f"Robot Role {i}", "link": link} for i, link in enumerate(links)]
+    cards = [
+        {"title": f"Robot Role {i}", "link": link} if carded else {"link": link}
+        for i, link in enumerate(links)
+    ]
     site = board(evaluated=scripted(cards))
     for i, link in enumerate(links):
         site.pages[link] = f'- heading "Robot Role {i}" [level=1]\n- paragraph: Invented.'
@@ -485,10 +492,22 @@ def test_the_app_opens_at_most_twenty_postings_per_call():
         return finder.Ran()
 
     entry, _, _ = run(selected(), site, script)
-    assert seen["report"]["kept"] == finder.APP_OPENS_MAX
-    assert seen["report"]["refused"] == [
-        {"index": 20, "reason": "app_opens_max", "do": finder.REPORT_ADVICE["app_opens_max"]}
-    ]
+    assert seen["report"]["kept"] == finder.APP_OPENS_MAX + carded
+    findings = [f for batch in seen["batches"] for f in batch.findings]
+    assert [f.list_url for f in findings].count(BOARD) == carded
+    if carded:
+        assert seen["report"]["refused"] == []
+        assert seen["report"]["kept_from_card"] == 1
+        assert seen["report"]["from_card"] == [
+            {"indexes": [20], "why": finder.CARD_WHY["app_opens_max"]}
+        ]
+        assert "app_opens_max" not in entry.get("refused", {})
+    else:
+        assert seen["report"]["refused"] == [
+            {"index": 20, "reason": "app_opens_max", "do": finder.REPORT_ADVICE["app_opens_max"]}
+        ]
+        assert "kept_from_card" not in seen["report"]
+        assert entry["refused"]["app_opens_max"] == 1
     assert [t["action"] for t in tabs_of(site)].count("new") == finder.APP_OPENS_MAX
     assert entry["opened_by_app"] == finder.APP_OPENS_MAX
 
@@ -577,6 +596,7 @@ def test_a_script_result_is_said_cut_only_when_it_was(raw, cut):
         session = object.__new__(finder.FinderSession)
         session.script, session.script_links = None, {}
         session.cards, session.lists = {}, {}  # J31: a script's result is read for its cards
+        session.postings = {}  # B31: and for the postings it names
         script, _ = await finder.FinderSession._keep_script(session, START, raw, False)
         return script
 
