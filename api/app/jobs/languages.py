@@ -312,10 +312,14 @@ GAP = 3
 # Rule 2: words that make another language she lists an alternative to the one asked, anywhere in
 # the quote ("German or English"); a slash does too ("German/English", "and/or").
 _OR = (
-    "or", "either", "one of", "any of", "alternativ*", "otherwise", "else",
+    "or", "either", "one of", "any of", "alternativ*", "otherwise", "else", "at least one",
+    "any one", "one is enough",
     "ou", "soit", "voire", "sinon", "au choix", "l une des", "une des", "un des", "l un des",
+    "au moins une", "au moins un",
     "oder", "entweder", "bzw", "beziehungsweise", "respektive", "wahlweise", "ansonsten",
-    "andernfalls", "eine der", "einer der", "eine dieser", "einer dieser",
+    "andernfalls", "eine der", "einer der", "eine dieser", "einer dieser", "mindestens eine",
+    "mindestens einer", "mindestens eines", "eine davon", "einer davon", "eines davon",
+    "eins davon",
 )  # fmt: skip
 # Rule 2: what may stand between the language asked and another she lists, so that the quote asks
 # for both ("Fluent German and English"): these, _LINK_PHRASES and another language's name.
@@ -832,8 +836,9 @@ def spoken_of(db: Session, user_id: uuid.UUID) -> tuple[Spoken, ...]:
 
 
 # Entries of her profile that name no language ("N/A", "none", "aucune"): as no entry at all.
+# Never "no": Norwegian's ISO code.
 _NO_LANGUAGE = frozenset({
-    "n a", "na", "none", "no", "nothing", "nil", "null", "not applicable", "tbd", "x",
+    "n a", "na", "none", "nothing", "nil", "null", "not applicable", "tbd", "x",
     "aucun", "aucune", "rien", "neant", "non", "non applicable", "sans",
     "keine", "kein", "nichts", "nein",
 })  # fmt: skip

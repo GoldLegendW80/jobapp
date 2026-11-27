@@ -345,6 +345,11 @@ NOT_REQUIRED = [
     ("German", "Deutsch, alternativ Englisch, fließend"),
     ("German", "Une des langues suivantes : allemand, anglais"),
     ("German", "One of: German, English, French, fluent"),
+    ("German", "Fluent in German and English (at least one)"),
+    ("German", "Fluent German and English, one is enough"),
+    ("German", "Allemand et anglais courants (au moins un)"),
+    ("German", "Fließend Deutsch und Englisch, mindestens eine"),
+    ("German", "Deutsch und Englisch fließend, eins davon reicht"),
     ("German", "Fluent English and German speaking clients"),
     ("German", "Fluent English and German market experience"),
     ("German", "Our team speaks English and German"),
@@ -780,6 +785,12 @@ def test_an_entry_that_names_no_language_is_no_entry(entry: str) -> None:
 @pytest.mark.parametrize("entry", ["Latin", "Kabyle", "Nauru", "Norsk", "Nein danke"])
 def test_a_word_of_no_language_inside_a_name_is_not_absent(entry: str) -> None:
     assert not languages.absent(entry)
+
+
+def test_an_iso_code_that_is_also_a_word_stays_her_language() -> None:
+    mine = (Spoken("Français", "natif"), Spoken("NO", "C1"))
+    assert not languages.absent("NO")
+    assert missing(stored(asked("Norwegian", "fluent")), mine) == []
 
 
 def test_unread_names_each_entry_the_list_cannot_read_once() -> None:
