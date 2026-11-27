@@ -98,6 +98,8 @@ class RenderError(Exception):
 class Rendered:
     pdf: bytes
     pages: int
+    # The PDF's text layer as PDFium reads it (`pdf_text`); None: not read (a stand in).
+    text: str | None = None
 
 
 def _setting(name: str) -> int:
@@ -143,8 +145,8 @@ async def render(
                 data, host or HOST, port or PORT, timeout_s + MARGIN_S, max_pdf_bytes
             )
         size = len(pdf)
-        pages = await asyncio.to_thread(_check, pdf, said, html)
-        return Rendered(pdf=pdf, pages=pages)
+        pages, text = await asyncio.to_thread(_check, pdf, said, html)
+        return Rendered(pdf=pdf, pages=pages, text=text)
     except RenderError as error:
         outcome = error.code
         raise
@@ -373,11 +375,13 @@ async def _exchange(
     return bytes(found)
 
 
-def _check(pdf: bytes, said: int, html: str) -> int:
-    """The page count PDFium reads, which must be the service's, and the font check."""
+def _check(pdf: bytes, said: int, html: str) -> tuple[int, str]:
+    """The page count PDFium reads, which must be the service's, the font check, and the text
+    layer of the PDF for `pdf_text` (read here, from a PDF the app's renderer made)."""
     import pypdfium2 as pdfium
 
     asked = families_asked(html)
+    text = ""
     with PDFIUM:
         try:
             document = pdfium.PdfDocument(pdf)
@@ -386,13 +390,38 @@ def _check(pdf: bytes, said: int, html: str) -> int:
         try:
             pages = len(document)
             fonts = fonts_of(document) if pages == said and pages >= 1 else []
+            if fonts_asked(fonts, asked) and pages == said and pages >= 1:
+                text = text_of(document)
         finally:
             document.close()
     if pages != said or pages < 1:
         raise RenderError("render_failed")
     if not fonts_asked(fonts, asked):
         raise RenderError("render_failed")
-    return pages
+    return pages, text
+
+
+TEXT_MAX = 200_000  # characters of the text layer kept: a page of text is a few thousand
+
+
+def text_of(document: object) -> str:
+    """The text layer of every page, as PDFium extracts it, pages apart by a blank line, at
+    most TEXT_MAX characters. The caller holds PDFIUM."""
+    parts: list[str] = []
+    size = 0
+    for page in document:  # type: ignore[attr-defined]
+        try:
+            if size < TEXT_MAX:
+                layer = page.get_textpage()
+                try:
+                    part = layer.get_text_range()
+                finally:
+                    layer.close()
+                parts.append(part)
+                size += len(part)
+        finally:
+            page.close()
+    return "\n\n".join(parts)[:TEXT_MAX]
 
 
 def fonts_of(document: object) -> list[str]:

@@ -67,6 +67,29 @@ FILLED_IN = "Filled in because nothing was left"
 KEPT = "Kept as written, for you to check"
 NOT_PRINTABLE_REASON = "A character this template cannot print"
 PLACEHOLDER_REASON = "A fact your profile does not hold: asked in the hiring panel"
+COPIED = "Words copied from the posting"
+COPIED_KEPT = "Words copied from the posting, kept for you to put in your own words"
+# The check of a finished PDF's text layer (`pdf_text`): what was found, with what to do.
+PDF_CHECKED = "The text of the PDF was checked"
+PDF_NO_TEXT = (
+    "This PDF holds no text an application system can read. Render it again, and if it stays "
+    "so, choose another template."
+)
+PDF_EMAIL = (
+    "Your e-mail is not text in this PDF, so an application system cannot read it. Choose "
+    "another template, or check the e-mail of your profile."
+)
+PDF_PHONE = (
+    "Your phone number is not text in this PDF, so an application system cannot read it. "
+    "Choose another template, or check the phone number of your profile."
+)
+PDF_REPLACEMENT = (
+    "Some characters of this PDF read as a blank box. Check the spelling of the text, or "
+    "choose another template."
+)
+PDF_GLYPH_NAME = (
+    "Some letters of this PDF read as glyph codes, not letters. Choose another template."
+)
 REASONS: tuple[str, ...] = (
     NOT_IN_PROFILE,
     NUMBER_NOT_STATED,
@@ -76,6 +99,14 @@ REASONS: tuple[str, ...] = (
     KEPT,
     NOT_PRINTABLE_REASON,
     PLACEHOLDER_REASON,
+    COPIED,
+    COPIED_KEPT,
+    PDF_CHECKED,
+    PDF_NO_TEXT,
+    PDF_EMAIL,
+    PDF_PHONE,
+    PDF_REPLACEMENT,
+    PDF_GLYPH_NAME,
 )
 
 FALLBACK = "fallback"
@@ -143,6 +174,8 @@ def reason_for(code: str) -> str:
         return NOT_PRINTABLE_REASON
     if code == PLACEHOLDER:
         return PLACEHOLDER_REASON
+    if code == rules.COPIED_RUN:
+        return COPIED
     return NOT_IN_PROFILE
 
 
@@ -849,7 +882,14 @@ def remove_remaining(
         # The ambiguous claims no token cut could take: the sentence stays as written, and the
         # record shows the person the claim (the model rewrite of D7 comes first when it runs).
         records += [
-            Correction(path, sentence, sentence, code, "code", KEPT)
+            Correction(
+                path,
+                sentence,
+                sentence,
+                code,
+                "code",
+                COPIED_KEPT if code == rules.COPIED_RUN else KEPT,
+            )
             for i, code in sorted(kept_for_check.items())
             if i not in removed
             for sentence in [text[spans[i][0] : spans[i][1]].strip()]

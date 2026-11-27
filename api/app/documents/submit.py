@@ -315,19 +315,36 @@ def _invalid_answer(found: checks.Checks, left: int) -> str:
     return "Not stored: the content breaks these rules.\n" + "\n".join(lines) + "\n" + tail
 
 
+# How a copied run is fixed: never by removing it, since its sentence holds facts.
+COPIED_HOW = (
+    "these words stand in the posting: say the same in the person's own words, keeping every "
+    "fact and the posting's hard terms (tools, methods, certifications, the role's title)"
+)
+
+
 def _correction_answer(content: c.Content, found: checks.Checks) -> str:
     lines = []
     for issue in found.claims:
-        how = (
-            "rewrite it with what the profile or the base CV states, or remove it"
-            if issue.rewrite
-            else "remove it, or rewrite it with what the profile or the base CV states"
-        )
+        if issue.code == rules.COPIED_RUN:
+            how = COPIED_HOW
+        elif issue.rewrite:
+            how = "rewrite it with what the profile or the base CV states, or remove it"
+        else:
+            how = "remove it, or rewrite it with what the profile or the base CV states"
         lines.append(f'- {issue.field}: "{checks.excerpt(content, issue)}" ({issue.code}): {how}')
+    copied = any(issue.code == rules.COPIED_RUN for issue in found.claims)
+    facts = any(issue.code != rules.COPIED_RUN for issue in found.claims)
+    head = "Not stored yet: "
+    if facts:
+        head += (
+            "the fact check found claims that the profile and the base CV do not state. The "
+            "posting is never a source. "
+        )
+    if copied:
+        head += "Some words copy the posting's own sentences. "
     return (
-        "Not stored yet: the fact check found claims that the profile and the base CV do not "
-        "state. The posting is never a source. Fix each one below, change nothing else, and "
-        "submit the whole document again once.\n" + "\n".join(lines)
+        head + "Fix each one below, change nothing else, and submit the whole document again "
+        "once.\n" + "\n".join(lines)
     )
 
 

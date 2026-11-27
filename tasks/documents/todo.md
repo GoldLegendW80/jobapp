@@ -298,6 +298,14 @@ Migration **0015 (D5)**, the only one of this plan: the seven tables of the spec
 **Playwright journey:** none: no journey drives an offer letter.
 **Scope:** S. **Depends on:** D30. **Migration:** none. **Owns:** `offer_notes.py`, `offer_router.py`, `chat_router.py`'s refusals, the offer notes web components and their tests.
 
+## D32: Letters of about 350 words, no run copied from the posting, the finished PDF's text
+**Issue:** #862 (plan #856, rows 7 and 8). **Decision:** docs/decisions.md, Documents, 2026-11-27 (D32). **Spec:** SPEC-documents.md, "Being careful": copied runs, a letter's length, the finished PDF. The id D30 of the issue's title was taken by #768.
+**Acceptance:** a letter's body aims at about 350 words (the writer's message, `content.LETTER_WORDS`) and a note shows one under 250 or over 420; a run of five or more words of the posting's text, the posting's own terms aside, is a `needs_rewrite` claim of `checks.run` in a letter and in a CV's free sentences, rewritten by the correction pass and kept with its sentence when it stays; the text layer of every PDF the renderer makes is read where its pages are counted, and the findings are recorded on the version and answered apart from the corrections; nothing refuses a render, a download or a send.
+**Edge cases to test:** a run of 4 and of 5, across a line break, with other punctuation, the title, the company, a skill term, a quoted name, a posting in another language, a hostile posting of 60,000 characters; the length note at 249, 250, 420 and 421 words; a good PDF and one with an image in place of the e-mail, rendered by the tests; a layer not read records nothing.
+**Playwright journey:** none new; the letter's journey stream no longer copies its posting.
+**Left to do:** the length as a setting of the person (a column of `document_settings`, migration 0054 after #860, the writing rules card); the findings of the PDF's check shown on the document's page.
+**Scope:** M. **Depends on:** none. **Migration:** none in this slice. **Owns:** `copied_runs.py`, `pdf_text.py`, their places in `checks.py`, `corrections.py`, `submit.py`, `sources.py`, `render_client.py`, `fit.py`, `render_job.py`, `store.attach_pdf` and `router.py`, their tests.
+
 ## D23: Privacy proof and limits over the module
 **Issue:** to create.
 **Acceptance:** one test file that runs every route and job of the module with the canary planted in the profile, the uploaded CV and its page images, the base CV, a user template, the posting, the draft and a chat message of either channel, and finds it nowhere in logs, arq arguments and results, Redis keys and values, error answers or run events; isolation of every route against user B in one table driven test; every limit of the spec's "Limits" hit once with its answer; a test that no path of the module refuses a render, a download or a freeze on content grounds; deletion of a posting and of an account removes every row of the module (counted before and after); the gallery shows the twenty templates (D18 and D19 to D22 all merged); the backup note of the README names the module's tables.
@@ -344,6 +352,7 @@ Migration **0015 (D5)**, the only one of this plan: the seven tables of the spec
 | D28 | none | The design capture copies an upload by measurement | L | D27 | none | after D27 |
 | D30 | #768 | No documents consent | M | none | none | after D29 |
 | D31 | #778 | The offer letter reader asks no consent | S | D30 | none | after D30 |
+| D32 | #862 | Letters of about 350 words, copied runs, the PDF's text | M | none | none | after D31 |
 | Checkpoint D | to create | The owner's own profile, after D13, after D25c and after D23 | human | D13, D25c, then D23 | none | after 8, 11 and 13 |
 
 Thirty tasks (D0 to D26, with D4 split into D4a and D4b and D25 into D25a, D25b and D25c) and a checkpoint. No task is L. Twenty two are M and eight are S (D0 included); each M is sized for one agent run of about 90 tool calls.

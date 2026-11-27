@@ -348,7 +348,7 @@ def test_every_use_of_pdfium_holds_the_process_lock(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(pdfium, "PdfDocument", WatchedDocument)
     monkeypatch.setattr(WatchedDocument, "seen", [])
     render_client.page1_png(one_page, 480)
-    assert render_client._check(two_pages, 2, HTML) == 2
+    assert render_client._check(two_pages, 2, HTML)[0] == 2
     with pytest.raises(RenderError):
         render_client._check(one_page, 2, HTML)
     with pytest.raises(RenderError):

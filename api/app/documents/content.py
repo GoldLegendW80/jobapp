@@ -69,6 +69,9 @@ PARAGRAPHS_MAX = 5
 # A proposal: the writer is asked for at most PROPOSAL_WORDS words, more than PROPOSAL_WORDS_MAX
 # are refused ("about 150 words"), and the body's characters are capped as a paragraph's.
 PROPOSAL_WORDS = 150
+# A letter's body: the writer is asked for about LETTER_WORDS words (owner, 2026-11-27: "Environ
+# 350 mots"), and a note shows a body far from it (`rules.letter_length`); nothing is refused.
+LETTER_WORDS = 350
 PROPOSAL_WORDS_MAX = 180
 PROPOSAL_BODY_MAX = 1_500
 # The render minimums: what a template needs to print the document at all. Only a letter has

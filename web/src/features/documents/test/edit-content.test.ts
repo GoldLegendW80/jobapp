@@ -111,6 +111,32 @@ describe("the draft of the Edit view", () => {
     expect(notes.size).toBe(3);
   });
 
+  it("says each note of a letter in a sentence of its own", () => {
+    const codes = [
+      "copied_from_posting",
+      "letter_under_length",
+      "letter_over_length",
+    ];
+    const saved = fakeDocumentOf(fakeCv(), {
+      draft: { summary: "Led 40 engineers." },
+      notes: codes.map((code) => ({
+        field: "summary",
+        start: 0,
+        end: 0,
+        code,
+        level: "note",
+      })),
+    });
+    const sentences = (
+      notesByField(saved, saved.draft).get("summary") ?? []
+    ).map((note) => note.sentence);
+    expect(sentences).toEqual([
+      "A run of words copied from the posting",
+      "A letter shorter than about 350 words",
+      "A letter longer than about 350 words",
+    ]);
+  });
+
   it("counts against the template's counter of each field, the first employer's longer", () => {
     expect(softLimit(LIMITS, ["summary"])).toBe(330);
     expect(softLimit(LIMITS, ["experience", 0, "bullets", 2])).toBe(190);
