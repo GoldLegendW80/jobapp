@@ -22,9 +22,6 @@
   A19 question left from before; `{code}` gives the code an ask of kind code waits for, which
   browserd keeps on the run's lease and types for the agent (`applier.answer_code`); words to such
   an ask hold no code (422).
-- POST /api/applications/{id}/messages `{text}` is the person's message to the apply agent at
-  work (A25, `applier.post_message`): 201 with its chat line, 409 when no run works on it, 429
-  past the rate, 422 not plain text.
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 posting or application answers 404, as a missing one. Every answer is `Cache-Control: no-store`.
@@ -141,8 +138,6 @@ class ChatOut(BaseModel):
     text: str
     # An ask's end: answer, browser, person_late, run_ended, interrupted or cancelled.
     end: str | None = None
-    # A person's message: whether the assistant got it (with the answer of a tool call).
-    read: bool | None = None
 
 
 class QuestionIn(BaseModel):
@@ -153,12 +148,6 @@ class QuestionIn(BaseModel):
     # A25: the code an ask of kind code waits for, never with an answer. Checked by the route,
     # whose refusals never echo it (a validation error would).
     code: str | None = None
-
-
-class MessageIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    text: str = Field(min_length=1, max_length=1000)  # applier.MESSAGE_MAX
 
 
 class StartedOut(ApplicationOut):
@@ -452,28 +441,3 @@ def answer_question(
         raise HTTPException(status_code=exc.status, detail=detail) from None
     db.commit()
     return _out(application)
-
-
-@router.post(
-    "/api/applications/{application_id}/messages",
-    status_code=status.HTTP_201_CREATED,
-    response_model=ChatOut,
-    responses={**_404, 409: {"model": ErrorOut, "description": "No run of the assistant works"}},
-)
-def post_message(
-    application_id: str, body: MessageIn, request: Request, user: CurrentUser, db: Db
-) -> ChatOut:
-    """A25: the person's message to the apply agent while it works on their application."""
-    from app.apply import applier
-
-    try:
-        line = applier.post_message(
-            db, user.id, _uuid_or_404(application_id, NO_APPLICATION), body.text,
-            deps.clock(request),
-        )  # fmt: skip
-    except applier.QuestionError as exc:
-        db.rollback()
-        detail = NO_APPLICATION if exc.status == 404 else exc.detail
-        raise HTTPException(status_code=exc.status, detail=detail) from None
-    db.commit()
-    return ChatOut.model_validate(line)
