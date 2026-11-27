@@ -307,6 +307,8 @@ const REVIEW_REASONS: Record<string, string> = {
     "LinkedIn's limit of applications in 24 hours is reached, so it waits for you.",
   below_min_fit:
     "This posting's fit is below your threshold for Full auto, so it waits for you.",
+  outside_criteria:
+    "This posting is outside the criteria of your search, so it waits for you.",
   unsupported_source:
     "Full auto does not apply on this site yet, so it waits for you.",
   full_auto_off:

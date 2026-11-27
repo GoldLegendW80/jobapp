@@ -74,6 +74,18 @@ export const sweepSourceSchema = z.object({
     .optional(),
   tab_closed_mib: z.array(z.number().int().nonnegative()).optional(),
   media_blocked: z.boolean().optional(),
+  // Jobs J30, what happened to what the source reported, each counted once: `new` kept, of them
+  // `outside` kept with a badge, `duplicates` already in the list, `unwanted` set aside by the
+  // person's unwanted titles and places, `refused` by the app's check (by reason), the postings
+  // `opened_by_app` itself, and `results_read`, the assistant's own count of the results it read
+  // (null when it gave none); `other_contract` a sweep's from before J30. Absent from an older api.
+  duplicates: z.number().int().nonnegative().optional(),
+  outside: z.number().int().nonnegative().optional(),
+  unwanted: z.number().int().nonnegative().optional(),
+  refused: z.record(z.string(), z.number().int().nonnegative()).optional(),
+  opened_by_app: z.number().int().nonnegative().optional(),
+  results_read: z.number().int().nonnegative().nullable().optional(),
+  other_contract: z.number().int().nonnegative().optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;
@@ -95,6 +107,8 @@ export const sweepSchema = z.object({
   new: z.number().int().nonnegative(),
   duplicates: z.number().int().nonnegative(),
   skipped_by_rule: z.number().int().nonnegative(),
+  // Jobs J30: the new postings kept with a badge; absent from an older api.
+  outside: z.number().int().nonnegative().optional(),
   duration: z.number().nullable(),
   // Absent from an api older than browser B8.
   sources: z.array(sweepSourceSchema).default([]),

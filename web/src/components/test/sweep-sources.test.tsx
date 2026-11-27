@@ -34,6 +34,7 @@ it("lists LinkedIn's public job search with its searches and leaves a deleted bo
           new: 2,
           searches: 1,
           searched: [{ title: "GenAI Engineer", place: null }],
+          other_contract: 2,
         }),
         source({ mode: "api", kind: "ashby", host: null, found: 9, new: 9 }),
       ]}
@@ -42,7 +43,7 @@ it("lists LinkedIn's public job search with its searches and leaves a deleted bo
   const items = screen.getAllByRole("listitem");
   expect(items).toHaveLength(1);
   expect(items[0]).toHaveTextContent(
-    "LinkedIn: 1 search ran: GenAI Engineer. 3 postings found, 2 new.",
+    "LinkedIn: 1 search ran: GenAI Engineer. 3 postings found: 2 new postings kept. 2 postings of a contract you did not choose left out.",
   );
 });
 
@@ -125,9 +126,11 @@ it("keeps LinkedIn's public job search among the job sites beside boards and fee
   expect(sites).toHaveTextContent("LinkedIn: ");
   expect(sites).not.toHaveTextContent("Example Labs");
   expect(sites).not.toHaveTextContent("Arbeitnow");
-  expect(
-    screen.getByRole("region", { name: "Company job boards" }),
-  ).toHaveTextContent("Example Labs: 4 postings matched, 1 new.");
+  const boards = screen.getByRole("region", { name: "Company job boards" });
+  expect(boards).toHaveTextContent(
+    "Example Labs: 4 postings found: 1 new posting kept.",
+  );
+  expect(boards).not.toHaveTextContent(/matched|read/);
   expect(screen.getByRole("region", { name: "Job feeds" })).toHaveTextContent(
     "Arbeitnow",
   );
@@ -180,4 +183,52 @@ it("says that a website's tab was closed and opened again, and why", () => {
     "The website's tab was closed and opened again once as the browser's memory ran short, at 1,850 MiB, and the search then loaded no images, videos or fonts.",
   );
   expect(item).not.toHaveTextContent("The app refused");
+});
+
+// Jobs J30: what happened to what a website reported, in sentences, in place of "found, new".
+it("says what a website's reports became, the assistant's count as its own", () => {
+  render(
+    <SweepSources
+      sources={[
+        source({
+          mode: "llm_browser",
+          kind: "welcome_to_the_jungle",
+          host: "www.welcometothejungle.com",
+          phase: "done",
+          outcome: "complete",
+          found: 5,
+          new: 2,
+          outside: 1,
+          duplicates: 3,
+          unwanted: 1,
+          refused: { not_on_opened_page: 1, brand_new_rule: 2 },
+          opened_by_app: 1,
+          results_read: 80,
+        }),
+        source({
+          mode: "api",
+          kind: "board",
+          host: "boards-api.greenhouse.io",
+          query: "greenhouse:examplelabs",
+          company: "Example Labs",
+          found: 4,
+          new: 1,
+          duplicates: 3,
+        }),
+      ]}
+    />,
+  );
+  const [site, board] = screen.getAllByRole("listitem");
+  expect(site).toHaveTextContent(
+    "Welcome to the Jungle: 5 postings found: 2 new postings kept, 1 of them outside your criteria; 3 already in your list. " +
+      "1 posting set aside by your unwanted titles and places. " +
+      "3 refused by the app's check: 1 because the app opened its page and did not find its title there (a security check or a sign in wall may have shown); 2 because the app's check found another problem. " +
+      "The app opened 1 posting itself, as the assistant had not. " +
+      "The assistant says it read 80 results.",
+  );
+  expect(site).not.toHaveTextContent("brand_new_rule");
+  expect(site?.textContent).not.toMatch(/[–—]| - /);
+  expect(board).toHaveTextContent(
+    "Example Labs: 4 postings found: 1 new posting kept; 3 already in your list.",
+  );
 });

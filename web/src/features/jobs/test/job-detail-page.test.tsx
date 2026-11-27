@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { admin, fakeSession } from "@/test/auth";
 import { csvJobs, fakeJobDetail, fakeJobsApi, makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
-import { server } from "@/test/server";
+import { emptySweeps, server } from "@/test/server";
 import { crumb } from "@/test/breadcrumb";
 
 import type { JobFile } from "../api/jobs-api";
@@ -88,6 +88,50 @@ describe("job detail", () => {
     );
     expect(within(badges()).queryByText("Remote")).toBeNull();
     expect(within(badges()).queryByText("On site")).toBeNull();
+  });
+
+  // Jobs J30: a posting kept outside the criteria of its search says so in its header.
+  it("says in words what of the posting is outside the criteria of its search", async () => {
+    fakeJobDetail(
+      makeDetail({
+        contract_type: "Stage",
+        work_mode: "hybrid",
+        published_on: "2026-10-01",
+        found_on: "2026-11-26",
+        outside_criteria: ["contract", "work_mode", "older"],
+      }),
+    );
+    // After the detail's fake, whose /api/jobs/:id would answer /api/jobs/searches too.
+    server.use(
+      http.get("*/api/jobs/searches", () =>
+        HttpResponse.json({
+          items: [
+            {
+              id: "main",
+              name: "Main search",
+              main: true,
+              revision: 1,
+              criteria: { days: 14 },
+              schedule: emptySweeps.schedule,
+              request: null,
+            },
+          ],
+          running_sweep_id: null,
+        }),
+      ),
+    );
+    await openDetail();
+    expect(
+      await within(header()).findByText(
+        "Outside your criteria: internship, hybrid, older than 14 days",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no criteria badge on a posting within them", async () => {
+    fakeJobDetail(makeDetail({ outside_criteria: [] }));
+    await openDetail();
+    expect(within(header()).queryByTestId("criteria-badge")).toBeNull();
   });
 
   it("says the contract in words and the fit as Fit and its number, never a code or a bare number", async () => {

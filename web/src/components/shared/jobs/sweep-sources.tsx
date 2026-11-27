@@ -1,7 +1,8 @@
 /**
  * The browser sources of a sweep in its summary (browser B8, `stats.sources` of
- * api/app/browser/sources): per job site read in the person's browser, what it found, what was
- * new, and in plain words why it stopped early when it did. A site the sweep never began
+ * api/app/browser/sources): per job site read in the person's browser, what it found and what
+ * happened to it (jobs J30: kept, outside the criteria, already in the list, set aside, refused,
+ * opened by the app, the assistant's own count), and in plain words why it stopped early when it did. A site the sweep never began
  * (`not_started`, after another stopped the sweep's sites) shows only that. The freelance and
  * project feeds of the same list have their own heading and words (opportunities O8).
  */
@@ -20,6 +21,7 @@ import {
   sourceName,
   tabClosedSentence,
 } from "@/features/jobs/helpers/labels";
+import { reportedSentences } from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
 import type { SweepSource } from "@/features/jobs/api/sweeps-api";
 
@@ -47,7 +49,8 @@ export function SweepSources({ sources }: { sources: SweepSource[] }) {
 }
 
 /** A board's line, named by its company (frozen with the sweep, else its `<ats>:<board>`):
- * what it found and kept, or why it was not read (its `reason`). */
+ * what it found and kept, or why it was not read (its `reason`). Its source entry serves no count
+ * of what the board listed before its filters, so the line says what was kept, never "read". */
 function boardStatus(source: SweepSource): string {
   if (source.error === "not_started")
     return (
@@ -55,7 +58,7 @@ function boardStatus(source: SweepSource): string {
       SOURCE_PROBLEMS.not_started ??
       ""
     );
-  const found = `${plural(source.found, "posting")} matched, ${source.new.toLocaleString("en-GB")} new.`;
+  const found = reportedSentences(source);
   return source.error
     ? `${found} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
     : found;
@@ -99,12 +102,11 @@ function sourceStatus(source: SweepSource): string {
   }
   if (source.error === "not_started") return `${SOURCE_PROBLEMS.not_started}`;
   const searches = searchesSentence(source);
-  const found = `${plural(source.found, "posting")} found, ${source.new.toLocaleString("en-GB")} new.`;
   const counts = [
     searches,
     leftOutSentence(source),
     guestSentence(source),
-    found,
+    reportedSentences(source),
     refusalsSentence(source),
     tabClosedSentence(source),
   ]

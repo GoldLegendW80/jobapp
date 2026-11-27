@@ -15,9 +15,11 @@ import {
   PayText,
   StatusBadge,
 } from "@/components/shared/jobs/badges";
+import { CriteriaBadge } from "@/components/shared/jobs/criteria-badge";
 
 /** One posting of the list as a compact card: the company's initial, the title, the company,
- * the place, the pay, the date found, the fit, the status and its Apply. */
+ * the place, what is outside the criteria of its search, the pay, the date found, the fit, the
+ * status and its Apply. */
 export function PostingItem({
   job,
   index,
@@ -97,6 +99,7 @@ export function PostingItem({
         <p className="truncate text-xs text-muted-foreground">
           {placeLine(job)}
         </p>
+        <CriteriaBadge job={job} className="my-0.5" />
         <p className="flex items-baseline justify-between gap-2 text-xs">
           <PayText job={job} className="font-medium" />
           <time
