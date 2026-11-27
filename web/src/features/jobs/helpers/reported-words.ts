@@ -2,8 +2,8 @@
  * Jobs J30 (#829, "true numbers"): what happened to the postings a source of a search reported,
  * in sentences, from the counters the api serves (api/app/jobs/schemas.py SourceOut, SweepOut). A
  * figure that is zero or absent is not said. The assistant's own count of the results it read is
- * said as its words, never as a fact of the app. A source or a sweep without any of these figures
- * (every sweep before J30) reads as before.
+ * said as its words, never as a fact of the app. A sweep from before J30 is said the same way, from
+ * the figures it has (`found`, `new`, and the sweep's `duplicates`).
  */
 import { plural } from "./selection";
 
@@ -46,20 +46,6 @@ export interface ReportedFigures {
 
 const positive = (n: number | null | undefined): n is number =>
   typeof n === "number" && n > 0;
-
-/** Whether a source has a figure of J30 to say; without one it reads as before. `other_contract`
- * is a sweep's from before J30 (otherContractSentence). */
-export function hasReportedFigures(figures: ReportedFigures): boolean {
-  return (
-    [
-      figures.duplicates,
-      figures.outside,
-      figures.unwanted,
-      figures.opened_by_app,
-      figures.results_read,
-    ].some(positive) || Object.values(figures.refused ?? {}).some(positive)
-  );
-}
 
 /** "3 refused by the app's check: 2 because its title was not on its page; 1 because ...". */
 export function refusedSentence(refused?: Record<string, number>): string {
@@ -115,7 +101,7 @@ export function reportedSentences(figures: ReportedFigures): string {
       `${figures.skipped_by_rule.toLocaleString("en-GB")} set to Skipped by a never apply rule`,
     );
   const first = head
-    ? `${head}${kept.length ? `: ${kept.join("; ")}` : ""}.`
+    ? `${head}${kept.length ? `: ${kept.join("; ")}` : ", none kept"}.`
     : kept.length
       ? `${kept.join("; ")}.`
       : "No posting kept.";

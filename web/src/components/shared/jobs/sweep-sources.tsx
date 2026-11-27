@@ -21,11 +21,7 @@ import {
   sourceName,
   tabClosedSentence,
 } from "@/features/jobs/helpers/labels";
-import {
-  hasReportedFigures,
-  otherContractSentence,
-  reportedSentences,
-} from "@/features/jobs/helpers/reported-words";
+import { reportedSentences } from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
 import type { SweepSource } from "@/features/jobs/api/sweeps-api";
 
@@ -52,19 +48,9 @@ export function SweepSources({ sources }: { sources: SweepSource[] }) {
   );
 }
 
-/** A source's line as before jobs J30 ("3 postings found, 2 new."), with an older sweep's postings
- * of another contract. */
-function asBefore(source: SweepSource, verb: string): string {
-  return [
-    `${plural(source.found, "posting")} ${verb}, ${source.new.toLocaleString("en-GB")} new.`,
-    otherContractSentence(source),
-  ]
-    .filter((part) => part !== "")
-    .join(" ");
-}
-
 /** A board's line, named by its company (frozen with the sweep, else its `<ats>:<board>`):
- * what it found and kept, or why it was not read (its `reason`). */
+ * what it found and kept, or why it was not read (its `reason`). Its source entry serves no count
+ * of what the board listed before its filters, so the line says what was kept, never "read". */
 function boardStatus(source: SweepSource): string {
   if (source.error === "not_started")
     return (
@@ -72,9 +58,7 @@ function boardStatus(source: SweepSource): string {
       SOURCE_PROBLEMS.not_started ??
       ""
     );
-  const found = hasReportedFigures(source)
-    ? reportedSentences(source)
-    : asBefore(source, "matched");
+  const found = reportedSentences(source);
   return source.error
     ? `${found} ${SOURCE_PROBLEMS[source.error] ?? "It stopped early."}`
     : found;
@@ -118,14 +102,11 @@ function sourceStatus(source: SweepSource): string {
   }
   if (source.error === "not_started") return `${SOURCE_PROBLEMS.not_started}`;
   const searches = searchesSentence(source);
-  const found = hasReportedFigures(source)
-    ? reportedSentences(source)
-    : asBefore(source, "found");
   const counts = [
     searches,
     leftOutSentence(source),
     guestSentence(source),
-    found,
+    reportedSentences(source),
     refusalsSentence(source),
     tabClosedSentence(source),
   ]

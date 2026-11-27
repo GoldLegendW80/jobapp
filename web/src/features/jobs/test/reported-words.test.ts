@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  hasReportedFigures,
   keptParts,
   otherContractSentence,
   refusedSentence,
@@ -77,28 +76,15 @@ describe("what a source of a search did with what it reported (J30)", () => {
     expect(said).not.toContain("salary_not_on_page");
   });
 
-  it("knows whether a source has a figure of J30, else it reads as before", () => {
-    expect(hasReportedFigures({ found: 3, new: 2 })).toBe(false);
-    expect(
-      hasReportedFigures({
-        duplicates: 0,
-        outside: 0,
-        unwanted: 0,
-        refused: {},
-        opened_by_app: 0,
-        results_read: null,
-        other_contract: 4,
-      }),
-    ).toBe(false);
-    for (const figures of [
-      { duplicates: 1 },
-      { outside: 1 },
-      { unwanted: 1 },
-      { refused: { page_error: 1 } },
-      { opened_by_app: 1 },
-      { results_read: 12 },
-    ])
-      expect(hasReportedFigures(figures)).toBe(true);
+  it("says a source from before J30 in the same words, never matched", () => {
+    const said = reportedSentences({ found: 3, new: 2, other_contract: 4 });
+    expect(said).toBe(
+      "3 postings found: 2 new postings kept. 4 postings of a contract you did not choose left out.",
+    );
+    expect(reportedSentences({ found: 2, new: 0 })).toBe(
+      "2 postings found, none kept.",
+    );
+    expect(said).not.toMatch(/matched/);
   });
 
   it("names the kept postings of a whole search", () => {
