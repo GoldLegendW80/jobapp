@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import { describeError } from "@/lib/api";
+import { describeError, isApiError } from "@/lib/api";
 
 import {
   answerQuestion,
@@ -29,6 +29,10 @@ export const WAIT_POLL_MS = 3000;
 
 const errorOf = (error: Error | null) =>
   error === null ? null : describeError(error);
+
+/** The api refused a message because no run works on the application now (409). */
+export const messageClosed = (error: unknown) =>
+  isApiError(error) && error.status === 409;
 
 /**
  * The apply agent's ask of one application (A25), from its detail (the cache the job page's Apply
@@ -103,7 +107,9 @@ export function useAgentWait(application: Application, works = false) {
     giving: code.isPending,
     codeError: errorOf(code.error),
     message,
-    messageError: errorOf(message.error),
+    // A 409: no run works on it now, so the box goes at the next read and the caller says it in
+    // a toast (`messageClosed`), which outlives the box.
+    messageError: messageClosed(message.error) ? null : errorOf(message.error),
     offset: serverOffset(read?.now, detail.dataUpdatedAt),
   };
 }

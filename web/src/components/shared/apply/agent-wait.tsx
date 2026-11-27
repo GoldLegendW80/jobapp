@@ -1,5 +1,6 @@
 import { Hourglass, MessageCircleQuestionMark } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
+import { toast } from "sonner";
 
 import { LoadError } from "@/components/blocks/load-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -10,7 +11,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { LiveViews } from "@/components/shared/browser/live-views";
 
 import type { Application, Question } from "@/features/apply/api/apply-api";
-import { useAgentWait } from "@/features/apply/api/use-agent-wait";
+import {
+  messageClosed,
+  useAgentWait,
+} from "@/features/apply/api/use-agent-wait";
 import {
   AFTER_SEND_WAIT,
   agentWaits,
@@ -34,6 +38,7 @@ import {
   spokenLeft,
 } from "@/features/apply/helpers/full-auto-state";
 import { liveStatus } from "@/features/apply/helpers/live-view";
+import { describeError } from "@/lib/api";
 import { AgentChat } from "./agent-chat";
 import { LiveViewSlot } from "./live-view-slot";
 
@@ -149,7 +154,12 @@ export function AgentWait({
           pending={wait.message.isPending}
           error={wait.messageError}
           onSend={(text, done) => {
-            wait.message.mutate(text, { onSuccess: done });
+            wait.message.mutate(text, {
+              onSuccess: done,
+              onError: (error) => {
+                if (messageClosed(error)) toast.error(describeError(error));
+              },
+            });
           }}
         />
       ) : null}
