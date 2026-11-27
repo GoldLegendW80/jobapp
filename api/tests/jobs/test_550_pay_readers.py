@@ -123,6 +123,7 @@ def test_actual_detail_construction_keeps_decimal_until_json(monkeypatch):
     monkeypatch.setattr(service, "list_files", lambda *args: [])
     monkeypatch.setattr(service, "recent_events", lambda *args: ([], 0))
     monkeypatch.setattr(notices, "notices_of", lambda db, user_id, jobs, today: {job.id: []})
+    monkeypatch.setattr(router.languages, "spoken_of", lambda db, user_id: ())
     detail = router._detail(None, SimpleNamespace(id=uuid.uuid4()), job, date(2026, 10, 8))
     assert detail.pay_min == Decimal("4.35")
     assert isinstance(detail.pay_min, Decimal)

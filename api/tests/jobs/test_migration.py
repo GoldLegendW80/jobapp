@@ -138,6 +138,7 @@ def test_upgrade_creates_the_jobs_schema(at_head: sa.Engine) -> None:
         "contract_stated",
         "criteria_search_id",
         "list_url",
+        "languages",
         "search",
         "created_at",
         "updated_at",

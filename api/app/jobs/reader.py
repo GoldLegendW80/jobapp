@@ -210,7 +210,7 @@ POSTING_READER = definitions.register(
     definitions.AgentDefinition(
         name=NAME,
         description="Reads each posting found and fills its location, pay, work mode, contract, "
-        "published date, company and description from its text.",
+        "published date, company, the languages it asks for and description from its text.",
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
         tools=(READ, SAVE),
         input_model=ReaderInput,
