@@ -33,14 +33,25 @@ cancel them).
 """
 
 import asyncio
+import contextlib
 import hashlib
 import hmac
 import logging
 import re
 import secrets
 from typing import Any
+from urllib.parse import urlsplit
 
-from browserd.leases import APPLY_WAIT_S, APPLY_WAITS, MANUAL_PURPOSE, Lease, LeaseEnded, LeaseError
+from browserd.leases import (
+    APPLY_WAIT_S,
+    APPLY_WAITS,
+    ASK_MAX_S,
+    ASK_PURPOSES,
+    MANUAL_PURPOSE,
+    Lease,
+    LeaseEnded,
+    LeaseError,
+)
 from browserd.tools import actions, linkedin, pacing, policy
 
 log = logging.getLogger("browserd")
@@ -266,6 +277,42 @@ async def apply_wait(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any
         return 200, {"lease": lease.public(now)}
 
 
+async def agent_ask(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """A25, code owned (never a model tool): `begin` `{left_s}` puts the apply agent's lease in
+    its wait for the person (`ask_person`, the tab's host noted, both timers suspended); a lease
+    the person holds already stays theirs. `resume` `{}` makes it active again after the person's
+    answer in the app; a take over under way keeps it until Give back."""
+    lease_id, action = match["lease_id"], match["action"]
+    lease = svc.manager.check_token(lease_id, req.headers.get("x-lease-token", ""))
+    if lease.request.purpose not in ASK_PURPOSES or not lease.request.automation:
+        raise LeaseError(403, "wrong_purpose")
+    body = req.json()
+    left = body.get("left_s") if isinstance(body, dict) else None
+    if action == "begin" and (
+        set(body) != {"left_s"} or type(left) is not int or not 1 <= left <= ASK_MAX_S
+    ):
+        raise LeaseError(400, "bad_args")
+    if action == "resume" and body != {}:
+        raise LeaseError(400, "bad_args")
+    async with _lock(lease, _held_ids(svc)):
+        if svc.manager.get(lease.lease_id) is not lease:
+            raise LeaseError(410, "lease_ended")
+        now = svc.manager.clock()
+        if reason := lease.expired(now):
+            await svc.manager.release(lease_id, reason)
+            raise LeaseError(410, "lease_ended", reason=reason)
+        if action == "begin" and lease.state == "active":
+            page = state_of(lease).page
+            host = ""
+            with contextlib.suppress(Exception):
+                if page is not None and not page.is_closed():
+                    host = (urlsplit(page.url).hostname or "")[:253]
+            lease.wait_person(now, "ask_person", host, left)
+        elif action == "resume" and lease.wait_reason == "ask_person":
+            lease.resume(now)
+        return 200, {"lease": lease.public(now)}
+
+
 async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
     name, lease_id = match["name"], match["lease_id"]
     token = req.headers.get("x-lease-token", "")
@@ -328,6 +375,7 @@ ROUTES = [
     ("POST", re.compile(rf"/leases/{LEASE_ID}/apply-wait/(?P<action>begin|read|resume)"),
      apply_wait, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/linkedin/open"), linkedin_open, 128),
+    ("POST", re.compile(rf"/leases/{LEASE_ID}/ask/(?P<action>begin|resume)"), agent_ask, 128),
     # B27: a discovery's script of 40,000 characters, JSON escaped, and its scope of 32 KiB.
     ("POST", re.compile(rf"/leases/{LEASE_ID}/tools/(?P<name>[a-z_]{{1,48}})"), call_tool,
      320 * 1024),

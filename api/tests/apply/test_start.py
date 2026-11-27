@@ -688,6 +688,7 @@ def test_the_routes(api: Api, factory: sessionmaker[Session], a: uuid.UUID, b: u
 
 DEFAULTS = {
     "APPLY_SUBMIT_ENABLED": "true",
+    "APPLY_AGENT_WAIT_S": "900",
     "APPLY_APPROVAL_TTL_S": "86400",
     "APPLY_HOLD_S": "900",
     "APPLY_FULL_AUTO_SAFETY_CEILING": "30",

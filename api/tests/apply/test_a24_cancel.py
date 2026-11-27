@@ -429,6 +429,8 @@ def test_the_application_s_cancel_after_a_confirmation_the_agent_read_ends_with_
     found = application(db, app_id)
     kept(db, app_id)
     assert found.submitted_at is not None
+    said = kinds(db, app_id)
+    assert said.index("cancelled") < said.index("agent_done") < said.index(found.state.value)
     if case == "review_filling":
         # A20: a confirmation before the gate's click is a send by a step control, maybe sent.
         assert (found.state, found.error_code) == (State.submit_unknown, gate.CANCELLED_BY_PERSON)
@@ -450,6 +452,35 @@ def test_a_send_confirmed_before_the_cancel_leaves_a_new_application_its_posting
     assert application(db, app_id).state is State.cancelled
     assert application(db, again).state is State.queued
     kept(db, app_id)
+
+
+# The person's word on the Cancel's `submit_unknown`, given before the run's end.
+SAID = {
+    "not_sent": (gate.not_sent, State.cancelled, gate.NOT_SENT),
+    "it_was_submitted": (gate.confirm_submitted, State.submitted, None),
+    "try_again": (gate.retry, State.queued, None),
+}
+
+
+@pytest.mark.parametrize("word", list(SAID))
+def test_the_person_s_word_before_the_run_s_end_stands_over_its_confirmation(
+    db: Session, factory: sessionmaker[Session], person_a: Person, word: str
+) -> None:
+    from app.apply import run
+
+    said, state, code = SAID[word]
+    app_id = begun(db, person_a, Mode.direct, State.submitting)
+    run._event(db, application(db, app_id), "agent_submit", AT)
+    db.commit()
+    cancel(factory, person_a, app_id)
+    with factory() as s:
+        said(s, person_a.user_id, app_id, AT)
+        s.commit()
+
+    assert finished(factory, app_id, reported(app_id)) == "superseded"
+
+    found = application(db, app_id)
+    assert (found.state, found.error_code) == (state, code)
 
 
 @pytest.mark.parametrize(
