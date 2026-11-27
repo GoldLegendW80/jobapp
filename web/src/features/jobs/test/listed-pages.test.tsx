@@ -41,7 +41,7 @@ describe("Jobs J36: the pages of the postings seen in a list, read after the sea
       "After the search, the app opened the pages of 1 posting seen only in a list: 1 read.",
     );
     expect(listedPagesSentence(pages({ left: 1, ended: "walled" }))).toBe(
-      "1 posting seen only in a list still waits for its page: the website showed a sign in page or a security check.",
+      "1 posting seen only in a list still waits for its page: the website asked to sign in, to pass a check or to slow down.",
     );
     expect(listedPagesSentence(pages({ left: 2, ended: "no_tab" }))).toBe(
       "2 postings seen only in a list still wait for their page: the browser could not open a tab for the app.",
@@ -84,7 +84,7 @@ describe("Jobs J36: the pages of the postings seen in a list, read after the sea
     );
   });
 
-  it("the mention says when its page asks to sign in or to pass a check", () => {
+  it("the mention says when the website asked to sign in, to pass a check or to slow down", () => {
     const job = {
       list_url: "https://jobs.example.org/search?q=robot",
       url: "https://jobs.example.org/jobs/1",
@@ -94,6 +94,9 @@ describe("Jobs J36: the pages of the postings seen in a list, read after the sea
     renderWithQuery(<ListedMention job={job} />);
     const mention = screen.getByTestId("listed-mention");
     expect(mention).toHaveTextContent(LISTED_WALLED);
+    expect(mention).toHaveTextContent(
+      "the website asked to sign in, to pass a check or to slow down",
+    );
     expect(mention).not.toHaveTextContent(LISTED_GIVEN_UP);
   });
 

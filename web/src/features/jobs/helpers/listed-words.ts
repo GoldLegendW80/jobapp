@@ -75,9 +75,10 @@ export const countedCards = total;
 export const LISTED_GIVEN_UP =
   "The app tried to read its own page on 3 different days and no longer tries: paste its text to use it.";
 
-/** Jobs J36: the same, when its page last asked to sign in or to pass a check (`page_walled`). */
+/** Jobs J36: the same, when its page last met a wall (`page_walled`: 401, 403, 429, a sign in or
+ * a check page). */
 export const LISTED_WALLED =
-  "The app tried to read its own page on 3 different days and no longer tries: the page asks to sign in or to pass a check. Open its own page to read it, or paste its text to use it.";
+  "The app tried to read its own page on 3 different days and no longer tries: the website asked to sign in, to pass a check or to slow down. Open its own page to read it, or paste its text to use it.";
 
 /** Jobs J36: on a posting whose page no search opens by itself (`page_elsewhere`). */
 export const LISTED_ELSEWHERE =
@@ -89,7 +90,7 @@ export const LISTED_PAGES_ENDS: Record<string, string> = {
   done: "the next search tries again",
   time_bound: "the time set for reading them ran out",
   browser_wanted: "an application needed the browser",
-  walled: "the website showed a sign in page or a security check",
+  walled: "the website asked to sign in, to pass a check or to slow down",
   memory: "the browser ran short of memory",
   permission: "the website's permission was taken back",
   store_failed: "the search ended",
