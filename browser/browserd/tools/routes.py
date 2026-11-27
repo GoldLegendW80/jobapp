@@ -197,7 +197,7 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
             try:
                 return await actions.run(tab, name, args)
             except ValueError as exc:
-                return actions.failure("bad_args", f"Bad argument: {exc}.")
+                return tab.state.shown.hide(actions.failure("bad_args", f"Bad argument: {exc}."))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -319,7 +319,7 @@ async def agent_ask(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
             host = ""
             with contextlib.suppress(Exception):
                 if state.page is not None and not state.page.is_closed():
-                    host = (urlsplit(state.page.url).hostname or "")[:253]
+                    host = state.shown.hide((urlsplit(state.page.url).hostname or "")[:253])
             state.drop_code()
             state.ask_id, state.ask_host = body.get("ask", ""), host
             state.ask_code = body.get("code", False)
@@ -336,9 +336,10 @@ async def give_code(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
     """A25, the api's code path only (the control secret, no lease token, never a model tool):
     `{user_id, ask, code}` keeps the code the person gave in the app on their apply agent's lease
     while its ask `ask` waits for one (`agent_ask` begin with `code`), bound to the host of that
-    ask's page, until `type_code` takes it, the next act or ask, `erase_code` or the lease's end.
-    404 another lease or person, 403 another purpose, 409 no such ask waits, 400 a malformed
-    body. Its answer, its refusals and its log line hold no code."""
+    ask's page, until `type_code` takes it, the next act or ask, `erase_code` or the lease's end;
+    one code per ask. Masked in every answer of the lease until the lease ends (`State.shown`).
+    404 another lease or person, 403 another purpose, 409 no such ask waits or a code waits
+    already, 400 a malformed body. Its answer, its refusals and its log line hold no code."""
     lease = svc.manager.get(match["lease_id"])
     body = req.json()
     if not isinstance(body, dict) or set(body) != {"user_id", "ask", "code"}:
@@ -354,6 +355,8 @@ async def give_code(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         waits = lease.state == "waiting_person" and lease.wait_reason in ("ask_person", "takeover")
         if not (waits and state.ask_code and state.ask_id and body["ask"] == state.ask_id):
             raise LeaseError(409, "not_waiting")
+        if state.code is not None or not state.shown.add(body["code"], state.ask_host):
+            raise LeaseError(409, "not_waiting")
         state.code, state.code_host = body["code"], state.ask_host
     log.info("lease %s: the person gave a code", lease.lease_id[:8])
     return 200, {"ok": True}
@@ -361,7 +364,8 @@ async def give_code(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
 
 async def erase_code(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
     """A25, the api's and the worker's: `{user_id}` drops the code the person gave, if any (an
-    answer the api could not record, the run's end). 404 another lease or person."""
+    answer the api could not record, the run's end); it stays masked until the lease ends. 404
+    another lease or person."""
     lease = svc.manager.get(match["lease_id"])
     body = req.json()
     if not isinstance(body, dict) or set(body) != {"user_id"}:

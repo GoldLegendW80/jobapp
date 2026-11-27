@@ -56,7 +56,16 @@ from urllib.parse import urlsplit
 
 from browserd import chromium, detect, pages
 from browserd.config import NAVIGATION_S
-from browserd.tools import ask_person, discovery, fetch, line, pacing, policy, request_signin
+from browserd.tools import (
+    ask_person,
+    codes,
+    discovery,
+    fetch,
+    line,
+    pacing,
+    policy,
+    request_signin,
+)
 
 log = logging.getLogger("browserd")
 
@@ -159,8 +168,12 @@ MESSAGES = {
     "character?). It was not typed and is gone: ask the person to type it in the browser.",
     "focus_moved": "The page moved the focus out of the box while the code was typed, so the box "
     "was emptied and the code is gone: ask the person to type it in the browser.",
-    "code_on_page": "Refused: the code the person gave is in a box of this page, so no screenshot "
-    "or script runs until it is sent or the box is emptied. Use browser_snapshot.",
+    "code_on_page": "Refused: the person gave a code on this browser, so no screenshot, script or "
+    "wait for a text runs until this session ends. Use browser_snapshot, or wait for a time.",
+    "code_elsewhere": "Refused: the code the person gave showed outside the site that asked for "
+    "it, or in your own call, so this browser takes no more calls in this run. Call apply_done.",
+    "code_box_kept": "Refused: this box holds the code the person gave, and it stays as the app "
+    "typed it. Send it with the site's own button.",
     # B20: the search's line (tools/line.py), whatever the tool.
     "line": "Refused: the search never applies, submits a form that is no search, writes to "
     "anyone, pays, signs out or changes the account. Go on another way.",
@@ -234,14 +247,17 @@ class State:
     chooser: Any = None
     chooser_id: int = 0
     # A25: the apply agent's open ask (routes.agent_ask: its id, the tab's host, whether a code
-    # may answer it), the code the person gave for it until `type_code` takes it, and the box it
-    # went into, whose value every answer of the lease masks while the box holds one.
+    # may answer it), the code the person gave for it until `type_code` takes it, the box it went
+    # into, every code given on the lease until it ends (masked in each answer, tools/codes.py),
+    # and whether one showed elsewhere, which closes the lease's tools.
     ask_id: str = ""
     ask_host: str = ""
     ask_code: bool = False
     code: str | None = field(default=None, repr=False)
     code_host: str = ""
     code_box: Any = field(default=None, repr=False)
+    shown: codes.Codes = field(default_factory=codes.Codes, repr=False)
+    code_closed: bool = False
 
     def drop_code(self) -> None:
         self.code, self.code_host = None, ""
@@ -251,6 +267,7 @@ class State:
         context's route handler (which holds this state) is collected."""
         self.drop_code()
         self.code_box, self.ask_id, self.ask_code = None, "", False
+        self.shown, self.code_closed = codes.Codes(), False
         self.files.clear()
         self.blocked.clear()
         self.stopped_kind, self.route_logged = "", 0
@@ -826,14 +843,18 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
                 "not_a_sweep_tool",
             )
         scope = discovery.Scope.parse(args.get("_discovery_scope"))
+    if tab.state.shown:
+        if tab.state.code_closed or tab.state.shown.found(args):
+            return close_codes(tab, name)
+        if name in CODE_HIDDEN or (name == "browser_wait_for" and CODE_FINDS & set(args)):
+            return refused("code_on_page")
+        edits = name == "browser_press_key" and args.get("key") in CODE_EDITS
+        if edits and await code_focused(tab):
+            return refused("code_box_kept")
     if name not in CODE_KEEPS:
         tab.state.drop_code()
-    if name in CODE_HIDDEN and await code_shown(tab.state) is not None:
-        return refused("code_on_page")
     answer = await _run(tab, name, args, marker, scope)
-    if (value := await code_shown(tab.state)) is not None:
-        return masked(answer, value)
-    return answer
+    return await hidden(tab, name, answer)
 
 
 async def _run(
@@ -1202,10 +1223,14 @@ MAIN_REF = re.compile(r"^e\d{1,7}$")  # a ref of the top document, never of a fr
 # The calls that keep a code the person gave until `type_code`: it reads them, or reads it. Any
 # other call (an act, a navigation, a tab) drops it first: the code goes in at once or never.
 CODE_KEEPS = frozenset({"browser_snapshot", "browser_wait_for", "browser_type_code"})
-CODE_MASK = "[the code the person gave]"
+# Refused from the first code given until the lease ends: browserd cannot know what pixels, a
+# script or a search of the page's text would give of it (a value Chromium restores on back or
+# forward, a GET form's address, the page's own copies), so it does not try.
 CODE_HIDDEN = frozenset({"browser_take_screenshot", "browser_evaluate"})
+CODE_FINDS = frozenset({"text", "textGone"})  # browser_wait_for's search of the page's text
+CODE_EDITS = frozenset({"Backspace", "Delete", "Space"})  # keys that change a box's value
 VALUE_JS = "e => e.isConnected ? String(e.value || '') : null"
-CODE_SHOWN_MIN = 4  # a shorter value is no code the app typed (the codes are 4 to 16 long)
+SAME_JS = "(e, other) => e === other"
 
 
 async def type_code(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
@@ -1261,31 +1286,63 @@ async def type_code(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
     return {**await tab.settle(await _here(tab)), "code_typed": True}
 
 
-async def code_shown(state: State) -> str | None:
-    """The value of the box the person's code went into while it holds one, else None (the box
-    emptied or gone: nothing is masked any more)."""
+async def code_shown(state: State) -> str:
+    """The value of the box the person's code went into while it is a part of a code (a page
+    that cut or reformatted it), else "" (the whole code is masked anyway: tools/codes.py)."""
     box = state.code_box
     if box is None:
-        return None
+        return ""
     try:
         value = await box.evaluate(VALUE_JS)
     except Exception:
         value = None
-    if not isinstance(value, str) or len(value) < CODE_SHOWN_MIN:
-        state.code_box = None
-        return None
-    return value
+    if value is None:
+        state.code_box = None  # a new document: its boxes are matched by the codes alone
+    return value if state.shown.part(value) else ""
 
 
-def masked(found: Any, value: str) -> Any:
-    """Every string of an answer with the box's value replaced by CODE_MASK."""
-    if isinstance(found, str):
-        return found.replace(value, CODE_MASK)
-    if isinstance(found, dict):
-        return {k: masked(v, value) for k, v in found.items()}
-    if isinstance(found, list):
-        return [masked(v, value) for v in found]
-    return found
+async def code_focused(tab: Tab) -> bool:
+    """A key goes to the box browserd typed a code into, or to a box whose value holds a whole
+    code (one back or forward restored); True when the focus cannot be read (fail closed)."""
+    try:
+        focused, _ = await focus_of(await tab.page())
+        value = await focused.evaluate(VALUE_JS) if focused is not None else None
+    except Exception:
+        return True
+    if focused is None or (value is not None and tab.state.shown.found(value)):
+        return True
+    try:
+        box = tab.state.code_box
+        return box is not None and await box.evaluate(SAME_JS, focused) is True
+    except Exception:
+        return False
+
+
+def close_codes(tab: Tab, name: str) -> dict[str, Any]:
+    """A code showed on a page of a host it was not given for, or in the agent's own call: the
+    lease's tools take no more calls until it ends (`code_elsewhere`)."""
+    if not tab.state.code_closed:
+        log.warning("lease %s: %s: a code showed elsewhere, the tools close", tab.lease_tag, name)
+    tab.state.code_closed = True
+    return refused("code_elsewhere")
+
+
+async def hidden(tab: Tab, name: str, answer: dict[str, Any]) -> dict[str, Any]:
+    """`answer` with every code given on the lease masked (tools/codes.py); a code found on a
+    page whose host is not the one it was given for closes the tools instead."""
+    state = tab.state
+    if not state.shown:
+        return answer
+    box = await code_shown(state)
+    url = answer.get("url")
+    if not isinstance(url, str):
+        try:
+            url = str(state.page.url)
+        except Exception:
+            url = ""
+    if any(host != host_of(url) for host in state.shown.found(answer)):
+        return close_codes(tab, name)
+    return state.shown.hide(answer, box)
 
 
 async def select_option(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
