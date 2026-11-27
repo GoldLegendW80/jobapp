@@ -70,11 +70,14 @@ class LeaseTools:
             raise BrowserError("ended")
         return lease
 
-    async def ask_begin(self, left_s: int) -> str:
+    async def ask_begin(self, left_s: int, ask: str = "", code: bool = False) -> str:
         """A25: the apply agent's wait for the person (browserd's `agent_ask`), the api's copy of
-        the lease waiting with it. Answers the tab's host browserd noted."""
+        the lease waiting with it; `code`: the ask takes a code the person gives in the app.
+        Answers the tab's host browserd noted."""
         await self._held()
-        answer = await self.client.agent_ask(self.lease_id, self._token, "begin", left_s)
+        answer = await self.client.agent_ask(
+            self.lease_id, self._token, "begin", left_s, ask=ask, code=code
+        )
         lease = answer.get("lease")
         if not isinstance(lease, dict):
             raise BrowserError("unavailable")
@@ -107,6 +110,11 @@ class LeaseTools:
         await self.client.agent_ask(self.lease_id, self._token, "resume")
         with contextlib.suppress(StoreUnavailableError):
             await self.leases.resume(self.user_id, self.lease_id)
+
+    async def erase_code(self) -> None:
+        """A25: the run ends: a code the person gave and the agent did not type is dropped."""
+        await self._held()
+        await self.client.erase_code(self.lease_id, self.user_id)
 
     async def _person_snapshot(self) -> dict[str, Any]:
         await self._owned_apply()

@@ -24,6 +24,7 @@ pytestmark = pytest.mark.skipif(
 )
 sys.path.insert(0, str(ROOT / "browser"))
 
+from browserd import detect  # noqa: E402
 from browserd.tools import actions, line, pacing  # noqa: E402
 
 from tests.browser.test_b5_actions import ON, Browser, Context, Element, Page, facts  # noqa: E402
@@ -90,11 +91,28 @@ class Field(Element):
     async def set_input_files(self, payloads: Any, **kw: Any) -> None:
         self.page.calls.append(("upload",))
 
-    async def evaluate(self, js: str, arg: Any = None) -> Any:
+    async def evaluate(self, js: str, arg: Any = None, **kw: Any) -> Any:
         if js == actions.EMPTY_ONLY_JS:
             self.page.calls.append(("write", arg))
             return {"ok": True}
+        if js == detect.CODE_BOX_JS:  # A25: the one time code box of browser_type_code
+            return {**self.f, "host": actions.host_of(self.page.url)}
+        if js == actions.FOCUSED_JS:
+            return True
+        if js == actions.SAME_JS:
+            return arg is self
+        if js == actions.VALUE_JS:  # the keys typed into it
+            return "".join(c[1] for c in self.page.calls if c[0] == "key")
+        if js == actions.SHOWN_JS:  # the site took it: the box left the page
+            return False
         return await super().evaluate(js, arg)
+
+    async def focus(self, **kw: Any) -> None:
+        self.page.calls.append(("focus",))
+        self.page.focused = self
+
+    async def element_handle(self) -> "Field":
+        return self
 
 
 class Chooser:
@@ -164,6 +182,10 @@ class Editing(Request):
     purpose = "profile_edit"
 
 
+class Agent(Request):
+    purpose = "apply_agent"
+
+
 class Sweep(Request):
     """A website search's lease (B20): its discovery is bound, so its own tools run."""
 
@@ -201,12 +223,17 @@ def run(
         pacer=Timed(page),
     )
     tab.discovery = request is Sweep
+    if name == "browser_type_code":  # A25: the code the person gave in the app, on the lease
+        tab.state.code, tab.state.code_host = "481516", actions.host_of(page.url)
     result = asyncio.run(actions.run(tab, name, args))
     assert result["ok"] is True, result
     return page.calls
 
 
 EMAIL = facts("Email", kind="email", field="email")
+CODE_BOX = {"tag": "input", "type": "text", "autocomplete": ["one-time-code"], "names": ["otp"],
+            "max": -1, "readonly": False, "disabled": False, "top": True,
+            "credential": True}  # fmt: skip
 LETTER = facts("Letter", tag="textarea", kind="textarea")
 NEXT = facts("Next", tag="button", kind="button")
 CASES = {
@@ -250,6 +277,7 @@ CASES = {
     "scroll the page": ("browser_scroll", {"dy": 600}, None, Request),
     "scroll an element": ("browser_scroll", {"ref": "e5", "dy": -300}, NEXT, Request),
     "evaluate": ("browser_evaluate", {"function": "() => 1"}, None, Sweep),
+    "type a code": ("browser_type_code", {"ref": "e5"}, CODE_BOX, Agent),
 }
 
 

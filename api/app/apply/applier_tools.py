@@ -1,6 +1,7 @@
-"""The two tools One click Apply's agent has beside B20's browser set (A19, app/apply/applier.py),
+"""The tools One click Apply's agent has beside B20's browser set (A19, app/apply/applier.py),
 registered with `app.agents.tools.register` (worker only: this module imports the Claude Agent
-SDK): the upload of the documents placed on its lease, and `apply_done`. The browser set is
+SDK): the upload of the documents placed on its lease, `apply_done`, `apply_ready` (A20),
+`apply_ask_person` and `apply_type_code` (A25). The browser set is
 `app/browser/finder_tools.py`'s, shared through `tool_sessions` and imported by the run itself
 (`applier.RuntimeApplier`), never at the worker's start: it imports the finder, whose sweep
 agents the agents queue's timeout must not count (agents/catalog.py SWEEP_AGENTS).
@@ -75,6 +76,8 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         },
         ("kind", "sentence"),
     ),
+    # A25: the code the person gave in the app, typed by browserd into the box named.
+    "apply_type_code": _object({"ref": REF, "submit": REF}, ("ref",)),
 }
 DESCRIPTIONS = {
     "browser_file_upload": "Upload documents placed on this browser (cv.pdf, letter.pdf) to the "
@@ -93,6 +96,11 @@ DESCRIPTIONS = {
     "for an ordinary field. Waits up to ask_waits_minutes of your first message: answers with "
     "their words, or that they used "
     "the browser (read the page again before any act), or that nobody came (stop then).",
+    "apply_type_code": "Once the person gave a code in the app (apply_ask_person's answer says "
+    "so), name the site's one time code box by its ref in your last snapshot, and as submit the "
+    "button that sends it when the form has one: the app types the code there once, sends it "
+    "and answers only whether the site took it (taken) or kept its box (kept). You never see it, "
+    "and only that box of the site that asked takes it.",
 }
 
 
@@ -110,6 +118,8 @@ def _factory(name: str) -> app_tools.Factory:
                 text, error = session.ready_at(args.get("submit_ref"), args.get("chosen"))
             elif name == "apply_ask_person":
                 text, error = await session.ask_person(args.get("kind"), args.get("sentence"))
+            elif name == "apply_type_code":
+                text, error = await session.type_code(args.get("ref"), args.get("submit"))
             else:
                 text, error = session.finish(
                     args.get("outcome"),
