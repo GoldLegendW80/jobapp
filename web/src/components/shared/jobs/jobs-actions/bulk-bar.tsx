@@ -1,6 +1,7 @@
 /**
  * The bulk bar of /jobs and its map: set a status (with Undo after), Apply, Like, add a note,
- * for the postings ticked in the list or on the map.
+ * for the postings ticked in the list or on the map. Apply and Like skip the postings seen only
+ * in a list (jobs J31), and the bar says how many before the click.
  */
 import { Send, StickyNote, X } from "lucide-react";
 import { useId, useRef, useState } from "react";
@@ -18,6 +19,7 @@ import { LikeButton } from "@/components/shared/apply/like-button";
 import { BULK_MAX } from "@/features/jobs/api/jobs-api";
 import { useBulkStatus } from "@/features/jobs/api/use-bulk-status";
 import { STATUSES, statusLabel } from "@/features/jobs/helpers/labels";
+import { listedSkipped } from "@/features/jobs/helpers/listed-words";
 import { plural, type BulkSelection } from "@/features/jobs/helpers/selection";
 import { BulkNoteDialog } from "./bulk-note-dialog";
 import { MarkAppliedDialog } from "./mark-applied-dialog";
@@ -34,6 +36,11 @@ export function BulkBar({ selection }: { selection: BulkSelection }) {
   const opens = useRef(0);
   const count = selection.ids.length;
   const busy = bulk.busy;
+  const listed = selection.listed;
+  const ready = listed?.size
+    ? selection.ids.filter((one) => !listed.has(one))
+    : selection.ids;
+  const skipped = count - ready.length;
 
   const applyStatus = (next: string) => {
     bulk.setStatus(selection.ids, next, () => {
@@ -109,16 +116,16 @@ export function BulkBar({ selection }: { selection: BulkSelection }) {
               </form>
               <Button
                 size="sm"
-                disabled={busy || count === 0}
+                disabled={busy || ready.length === 0}
                 onClick={() => {
                   opens.current += 1;
-                  setApplying({ ids: selection.ids, key: opens.current });
+                  setApplying({ ids: ready, key: opens.current });
                 }}
               >
                 <Send aria-hidden="true" />
                 Apply
               </Button>
-              <LikeButton ids={selection.ids} onDone={selection.clear} />
+              <LikeButton ids={ready} onDone={selection.clear} />
               <Button
                 variant="outline"
                 size="sm"
@@ -136,6 +143,11 @@ export function BulkBar({ selection }: { selection: BulkSelection }) {
               </Button>
             </div>
           </div>
+          {skipped > 0 ? (
+            <p role="note" className="text-xs font-medium text-warning">
+              {listedSkipped(skipped)}
+            </p>
+          ) : null}
           {selection.cappedFrom !== null ? (
             <p role="note" className="text-xs font-medium text-warning">
               Only the first {BULK_MAX} of{" "}

@@ -26,6 +26,9 @@ export interface BulkSelection {
   /** Set when "select all" stopped at the cap: how many matched. */
   cappedFrom: number | null;
   selectingAll: boolean;
+  /** Jobs J31: the selected postings known to be seen only in a list, which Apply and Like skip
+   * (the map knows none: the api's refusal says it of each). */
+  listed?: ReadonlySet<string>;
 }
 
 export type Selection = ListSelection & BulkSelection;

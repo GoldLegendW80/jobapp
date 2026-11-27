@@ -28,6 +28,7 @@ import {
   linkedInOf,
 } from "@/features/apply/helpers/apply-offer";
 import { phaseOf, type Phase } from "@/features/apply/helpers/apply-state";
+import { isListed, LISTED_WAITS } from "@/features/jobs/helpers/listed-words";
 
 /** What a row says once an application is under way, by its phase. */
 const UNDER_WAY: Partial<Record<Phase, string>> = {
@@ -85,11 +86,14 @@ export function ApplyRow({
   // The posting page offers no Apply on LinkedIn until LinkedIn is read and allowed.
   if (onLinkedIn && !linkedin.data?.allowed) return null;
 
-  const waits = recent.data
-    ? applyWaits(settings)
-    : recent.isError
-      ? "Your applications could not be read. Open the posting to apply."
-      : "Reading your applications";
+  // Jobs J31: a posting seen only in a list waits for its text, whatever the settings.
+  const waits = isListed(job)
+    ? LISTED_WAITS
+    : recent.data
+      ? applyWaits(settings)
+      : recent.isError
+        ? "Your applications could not be read. Open the posting to apply."
+        : "Reading your applications";
   const disabled = waits !== null;
   return (
     <Tooltip>

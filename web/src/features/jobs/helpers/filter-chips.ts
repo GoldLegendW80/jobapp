@@ -3,6 +3,7 @@ import { formatCount } from "@/lib/format";
 import { PAY_PERIOD_WORDS } from "@/lib/wording";
 
 import { CRITERIA_CHOICE_LABELS } from "./criteria-words";
+import { LISTING_CHOICE_LABELS } from "./listed-words";
 import type { JobFilters } from "./filters";
 import { formatDate } from "./format";
 import {
@@ -72,8 +73,8 @@ function searchChip(id: string, nameOf: SearchName | undefined): string {
 }
 
 /** The chips in the order of the Filters panel: the words typed in the search box first, then the
- * search that added the postings, place, work mode, contract, criteria, website, published, pay,
- * fit, application, status, found, company, and the run that added them. */
+ * search that added the postings, place, work mode, contract, criteria, listing, website,
+ * published, pay, fit, application, status, found, company, and the run that added them. */
 export function activeFilterChips(
   filters: JobFilters,
   nameOf?: SearchName,
@@ -105,6 +106,12 @@ export function activeFilterChips(
       key: "criteria",
       text: CRITERIA_CHOICE_LABELS[filters.criteria],
       without: { ...filters, criteria: null },
+    });
+  if (filters.listing)
+    chips.push({
+      key: "listing",
+      text: LISTING_CHOICE_LABELS[filters.listing],
+      without: { ...filters, listing: null },
     });
   chips.push(
     ...each(filters, "sources", (source) => `Website: ${websiteName(source)}`),

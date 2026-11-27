@@ -8,9 +8,10 @@
  * fit_max, found_from, found_to, place, work_mode, source and application (repeated),
  * published_within, published_from, published_undated, pay, pay_min with pay_period, sweep,
  * search (main or a saved search's id), criteria (within or outside; all, the default, is
- * omitted), and sort (omitted when it is the default).
+ * omitted), listing (only or without, the same), and sort (omitted when it is the default).
  */
 import { CRITERIA_CHOICES, type CriteriaChoice } from "./criteria-words";
+import { LISTING_CHOICES, type ListingChoice } from "./listed-words";
 import {
   APPLICATION_CHOICES,
   CONTRACT_TYPES,
@@ -70,6 +71,8 @@ export interface JobFilters {
   search: string | null;
   /** Jobs J30: the postings within the criteria of their search, or outside them (a badge). */
   criteria: CriteriaChoice | null;
+  /** Jobs J31: the postings seen only in a list (their own page not read), or those read. */
+  listing: ListingChoice | null;
   sort: JobSort;
 }
 
@@ -101,6 +104,7 @@ export const EMPTY_FILTERS: JobFilters = {
   sweep: null,
   search: null,
   criteria: null,
+  listing: null,
   sort: DEFAULT_SORT,
 };
 
@@ -184,6 +188,7 @@ function parseMore(params: URLSearchParams) {
   const sweep = params.get("sweep")?.trim() ?? "";
   const search = params.get("search")?.trim() ?? "";
   const criteria = params.get("criteria") ?? "";
+  const listing = params.get("listing") ?? "";
   return {
     places: texts(params.getAll("place"), cleanPlace),
     workModes: pick(
@@ -215,6 +220,7 @@ function parseMore(params: URLSearchParams) {
           ? search.toLowerCase()
           : null,
     criteria: isIn(CRITERIA_CHOICES)(criteria) ? criteria : null,
+    listing: isIn(LISTING_CHOICES)(listing) ? listing : null,
   } satisfies Partial<JobFilters>;
 }
 
@@ -286,6 +292,7 @@ export function toSearchParams(
   if (filters.sweep) params.set("sweep", filters.sweep);
   if (filters.search) params.set("search", filters.search);
   if (filters.criteria) params.set("criteria", filters.criteria);
+  if (filters.listing) params.set("listing", filters.listing);
   if (withSort && filters.sort !== DEFAULT_SORT)
     params.set("sort", filters.sort);
   return params;
@@ -299,7 +306,7 @@ export function hasFilters(filters: JobFilters): boolean {
 /** How many filters narrow the list, counted as the filter bar's chips are: one per status,
  * type, place, work mode, website and application, one for the search, the company, the fit
  * range, the found dates, the published dates, the pay, the run and the search that added them
- * and the criteria each. */
+ * and the criteria and the listing each. */
 export function activeFilterCount(filters: JobFilters): number {
   return (
     filters.statuses.length +
@@ -316,7 +323,8 @@ export function activeFilterCount(filters: JobFilters): number {
     (filters.pay !== null || filters.payMin !== null ? 1 : 0) +
     (filters.sweep ? 1 : 0) +
     (filters.search ? 1 : 0) +
-    (filters.criteria ? 1 : 0)
+    (filters.criteria ? 1 : 0) +
+    (filters.listing ? 1 : 0)
   );
 }
 

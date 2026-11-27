@@ -48,6 +48,7 @@ export function makeJob(
     created_at: "2026-10-09T08:00:00Z",
     updated_at: "2026-10-09T08:00:00Z",
     outside_criteria: [],
+    list_url: null,
     ...overrides,
   };
 }
@@ -96,8 +97,9 @@ function histogram(rows: JobListItem[]) {
 
 /**
  * A fake GET /api/jobs over `rows`: status, type, q (substring of company or title), company,
- * fit range, found dates and criteria (within: no badge, outside: a badge) filter; the cursor is
- * the offset. Every request's query is recorded.
+ * fit range, found dates, criteria (within: no badge, outside: a badge) and listing (only: seen
+ * in a list, without: its page read) filter; the cursor is the offset. Every request's query is
+ * recorded.
  */
 export function fakeJobsApi(
   rows: JobListItem[],
@@ -126,8 +128,11 @@ export function fakeJobsApi(
       const to = params.get("found_to");
       const places = params.getAll("place").map((p) => p.toLowerCase());
       const criteria = params.get("criteria");
+      const listing = params.get("listing");
       const base = state.rows.filter(
         (row) =>
+          (listing !== "only" || row.list_url !== null) &&
+          (listing !== "without" || row.list_url === null) &&
           (criteria !== "within" || !row.outside_criteria.length) &&
           (criteria !== "outside" || row.outside_criteria.length > 0) &&
           (!places.length ||
