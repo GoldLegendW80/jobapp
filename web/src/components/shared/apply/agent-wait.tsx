@@ -1,6 +1,7 @@
 import { Hourglass, MessageCircleQuestionMark } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
+import { LoadError } from "@/components/blocks/load-error";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -45,6 +46,12 @@ export function AgentWait({ application }: { application: Application }) {
   const detail = wait.detail.data;
   const question = isAsk(detail?.question) ? detail?.question : null;
   const chat = detail?.chat ?? [];
+  if (!detail && wait.detail.isError)
+    return (
+      <LoadError query={wait.detail}>
+        What the assistant asks could not be loaded.
+      </LoadError>
+    );
   if (!detail || !question) return null;
   const live = question.live === true && agentWaits(detail);
   return (
@@ -162,7 +169,8 @@ function AnswerBox({
       }}
     >
       <Label htmlFor={`${id}-answer`}>Your answer to the assistant</Label>
-      {/* In the page's flow, never fixed: a phone scrolls it above its keyboard and the tab bar. */}
+      {/* In the page's flow, not fixed, so the browser scrolls it into view when focused; the
+          scroll margin is the phone's tab bar. */}
       <Textarea
         id={`${id}-answer`}
         className="min-h-20 scroll-mb-(--bottom-bar)"

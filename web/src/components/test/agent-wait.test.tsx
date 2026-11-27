@@ -111,6 +111,20 @@ describe("the apply agent waits for the person (A25)", () => {
     expect(section.textContent).not.toMatch(SEPARATOR);
   });
 
+  it("says when the assistant's ask could not be read, with Retry", async () => {
+    waiting();
+    server.use(
+      http.get("*/api/applications/:id", () =>
+        HttpResponse.json({ detail: "Boom" }, { status: 500 }),
+      ),
+    );
+    renderApp(`/jobs/${JOB_ID}`);
+    expect(
+      await screen.findByText(/What the assistant asks could not be loaded\./),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
   it("opens the browser only on a click", async () => {
     waiting();
     const { user, wait } = await openSection();
@@ -186,6 +200,7 @@ describe("the apply agent waits for the person (A25)", () => {
     });
     expect(within(chat).getByText(STEERED_ASK.sentence)).toBeInTheDocument();
     expect(within(chat).queryByRole("link")).toBeNull();
+    expect(within(chat).queryByRole("button")).toBeNull();
     expect(chat.querySelector("a, strong, em, b")).toBeNull();
   });
 

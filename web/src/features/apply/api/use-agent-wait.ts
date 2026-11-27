@@ -14,7 +14,8 @@ import { queueKey } from "./queue-api";
 import { agentWaits, LATE_ANSWER, showsAsk } from "../helpers/agent-wait";
 import { serverOffset } from "../helpers/full-auto-state";
 
-/** While the run waits, its ask is read again this often (the run reads an answer within 2 s). */
+/** While the run waits, its ask is read again this often (the run looks for an answer every 2 s,
+ * api applier.ASK_POLL_S). */
 export const WAIT_POLL_MS = 3000;
 
 /**
