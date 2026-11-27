@@ -18,17 +18,24 @@
   page's countdown never reads the page's clock. A25: `question` is the apply agent's ask
   (`said_by` assistant, its kind, its sentence, `until`, `live` while the run waits) and `chat`
   the asks and the person's answers in order, each with who said it.
-- POST /api/applications/{id}/question `{answer}` answers the ask the run waits on (A25; never a
-  code: 409 with the sentence to type it in the browser), or an A19 question left from before.
+- POST /api/applications/{id}/question `{answer}` answers the ask the run waits on (A25), or an
+  A19 question left from before; `{code}` gives the code an ask of kind code waits for, which
+  browserd keeps on the run's lease and types for the agent (`applier.answer_code`); words to such
+  an ask hold no code (422).
+- POST /api/applications/{id}/messages `{text}` is the person's message to the apply agent at
+  work (A25, `applier.post_message`): 201 with its chat line, 409 when no run works on it, 429
+  past the rate, 422 not plain text.
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 posting or application answers 404, as a missing one. Every answer is `Cache-Control: no-store`.
 """
 
+import contextlib
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
+import anyio.from_thread
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -37,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, likes, service
 from app.apply.models import Application, ApplicationAnswer, ApplicationEvent, Mode, State
+from app.browser.client import BrowserdClient, BrowserError
 from app.db import get_session
 from app.documents import store
 from app.identity import deps
@@ -132,6 +140,8 @@ class ChatOut(BaseModel):
     text: str
     # An ask's end: answer, browser, person_late, run_ended, interrupted or cancelled.
     end: str | None = None
+    # A person's message: whether the assistant got it (with the answer of a tool call).
+    read: bool | None = None
 
 
 class QuestionIn(BaseModel):
@@ -139,6 +149,20 @@ class QuestionIn(BaseModel):
 
     answer: str = Field(default="", max_length=5000)
     remember: bool = False
+    # A25: the code an ask of kind code waits for; never with an answer.
+    code: str | None = Field(default=None, max_length=64)
+
+    @model_validator(mode="after")
+    def _a_code_alone(self) -> "QuestionIn":
+        if self.code is not None and (self.answer or self.remember):
+            raise ValueError("A code comes alone.")
+        return self
+
+
+class MessageIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=1000)  # applier.MESSAGE_MAX
 
 
 class StartedOut(ApplicationOut):
@@ -375,29 +399,83 @@ def _agent(db: Session, application: Application) -> bool:
     return application.mode is Mode.direct and applier.ran_agent(db, application)
 
 
+def browserd_client(request: Request) -> BrowserdClient:
+    """A25: browserd's client for the code the person gives in the app."""
+    settings = request.app.state.settings
+    secret = settings.browser_control_secret
+    value = secret.get_secret_value() if secret is not None else None
+    return BrowserdClient(settings.browser_url, value)
+
+
+def _code_calls(browserd: BrowserdClient, user: User) -> tuple[Any, Any]:
+    """browserd's calls of `applier.answer_code`, run on the app's event loop from this route's
+    worker thread."""
+
+    def give(lease_id: str, ask_id: str, code: str) -> bool:
+        return anyio.from_thread.run(browserd.give_code, lease_id, str(user.id), ask_id, code)
+
+    def erase(lease_id: str) -> None:
+        with contextlib.suppress(BrowserError):
+            anyio.from_thread.run(browserd.erase_code, lease_id, str(user.id))
+
+    return give, erase
+
+
 @router.post(
     "/api/applications/{application_id}/question",
     response_model=ApplicationOut,
     responses={**_404, 409: {"model": ErrorOut, "description": "No question waits"}},
 )
 def answer_question(
-    application_id: str, body: QuestionIn, request: Request, user: CurrentUser, db: Db
+    application_id: str,
+    body: QuestionIn,
+    request: Request,
+    user: CurrentUser,
+    db: Db,
+    browserd: Annotated[BrowserdClient, Depends(browserd_client)],
 ) -> dict[str, Any]:
-    """The person's answer to One click Apply's question (A19): the application goes on."""
+    """The person's answer to One click Apply's question (A19): the application goes on. A25:
+    a code goes to the lease of the run that waits for it, never to a row or the model."""
     from app.apply import applier
 
+    found = _uuid_or_404(application_id, NO_APPLICATION)
     try:
-        application = applier.answer_question(
-            db,
-            user.id,
-            _uuid_or_404(application_id, NO_APPLICATION),
-            body.answer,
-            body.remember,
-            deps.clock(request),
-        )
+        if body.code is not None:
+            application = applier.answer_code(
+                db, user.id, found, body.code, deps.clock(request), *_code_calls(browserd, user)
+            )
+        else:
+            application = applier.answer_question(
+                db, user.id, found, body.answer, body.remember, deps.clock(request)
+            )
     except applier.QuestionError as exc:
         db.rollback()
         detail = NO_APPLICATION if exc.status == 404 else exc.detail
         raise HTTPException(status_code=exc.status, detail=detail) from None
     db.commit()
     return _out(application)
+
+
+@router.post(
+    "/api/applications/{application_id}/messages",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ChatOut,
+    responses={**_404, 409: {"model": ErrorOut, "description": "No run of the assistant works"}},
+)
+def post_message(
+    application_id: str, body: MessageIn, request: Request, user: CurrentUser, db: Db
+) -> ChatOut:
+    """A25: the person's message to the apply agent while it works on their application."""
+    from app.apply import applier
+
+    try:
+        line = applier.post_message(
+            db, user.id, _uuid_or_404(application_id, NO_APPLICATION), body.text,
+            deps.clock(request),
+        )  # fmt: skip
+    except applier.QuestionError as exc:
+        db.rollback()
+        detail = NO_APPLICATION if exc.status == 404 else exc.detail
+        raise HTTPException(status_code=exc.status, detail=detail) from None
+    db.commit()
+    return ChatOut.model_validate(line)

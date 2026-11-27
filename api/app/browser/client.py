@@ -14,6 +14,8 @@ network, behind BROWSER_CONTROL_SECRET. Nothing else of the application speaks t
     put_file()  PUT /leases/{id}/files/{name}    a PDF placed on the lease for browser_file_upload
     gate_click(...)  browser_click with the gate's capability: the apply gate's code only
     handoff(id, action)  POST /leases/{id}/handoff/{done|cancel}   the sign in hand off (B12a)
+    give_code(...)  POST /leases/{id}/code   the code the person gave in the app (apply A25)
+    erase_code(...)  POST /leases/{id}/code/erase   that code dropped
 
 A tool's refusal (a submit element, a host outside the list) is a result with `ok` false, never
 an error. The gate's capability comes back from `start` for the gate's purposes (`apply_submit`,
@@ -310,21 +312,51 @@ class BrowserdClient:
         raise self._tool_failure(status, payload)
 
     async def agent_ask(
-        self, lease_id: str, token: str, action: str, left_s: int | None = None
+        self,
+        lease_id: str,
+        token: str,
+        action: str,
+        left_s: int | None = None,
+        ask: str = "",
+        code: bool = False,
     ) -> dict[str, Any]:
-        """A25: the apply agent's wait for the person, code owned, absent from the tool API."""
+        """A25: the apply agent's wait for the person, code owned, absent from the tool API.
+        A begin names its ask, and whether a code the person gives in the app may answer it."""
         if action not in {"begin", "resume"}:
             raise ValueError(action)
+        body = {"left_s": left_s, "ask": ask, "code": code} if action == "begin" else {}
         status, payload = await self._call(
             "POST",
             f"/leases/{lease_id}/ask/{action}",
             TIMEOUT_S,
-            {"left_s": left_s} if action == "begin" else {},
+            body,
             headers={"X-Lease-Token": token},
         )
         if status == 200 and isinstance(payload, dict):
             return payload
         raise self._tool_failure(status, payload)
+
+    async def give_code(self, lease_id: str, user_id: str, ask: str, code: str) -> bool:
+        """A25: the code the person gave in the app, kept on their apply agent's lease for its
+        ask (browserd `give_code`), for the api's answer route only. False when no such ask waits
+        for one there (the ask ended, another lease or person). The code goes in the body only:
+        never a path, a log line or an error's text."""
+        body = {"user_id": user_id, "ask": ask, "code": code}
+        status, _ = await self._call("POST", f"/leases/{lease_id}/code", TIMEOUT_S, body)
+        if status == 200:
+            return True
+        if status in (403, 404, 409, 410):
+            return False
+        raise self._failure(status, None)
+
+    async def erase_code(self, lease_id: str, user_id: str) -> None:
+        """A25: drops a code the person gave from the lease, if one is there; a lease gone is
+        gone with it."""
+        body = {"user_id": user_id}
+        path = f"/leases/{lease_id}/code/erase"
+        status, _ = await self._call("POST", path, TIMEOUT_S, body)
+        if status not in (200, 404, 410):
+            raise self._failure(status, None)
 
     async def put_file(self, lease_id: str, token: str, name: str, data: bytes) -> dict[str, Any]:
         # The name goes into the path: one browserd accepts, checked here too, so a "../x.pdf"
