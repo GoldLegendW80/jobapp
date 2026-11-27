@@ -211,6 +211,10 @@ def test_the_store_and_the_session_read_one_rule() -> None:
             assert slug.posting_url_key(a) == slug.posting_url_key(b), (seen, reported)
     stored = {slug.posting_url_key(url) for url in CORPUS}
     assert len(stored) == len(CORPUS)
+    # A reader of the store's keys (LinkedIn's guest search, `_known_ids`) reads a board's id.
+    for url in CORPUS:
+        named = same_posting.posting_of_key(slug.posting_url_key(url) or "")
+        assert named == same_posting.posting_id(finder.canonical(url)), url
 
 
 @pytest.mark.parametrize(

@@ -174,6 +174,13 @@ def posting_key(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}{path}?{query}"
 
 
+def posting_of_key(key: str) -> tuple[str, str] | None:
+    """The board's domain and the posting id a key of `posting_key` names; None for the key of an
+    address (it holds a `/` before any space, or no space)."""
+    domain, space, posting = key.partition(" ")
+    return (domain, posting) if space and posting and "/" not in domain else None
+
+
 def board_address(url: str, posting: str) -> str:
     """The board's own address of a posting id, on the scheme and host of `url`, a board's
     canonical address (so the address is canonical too); "" for an address of no board or an
