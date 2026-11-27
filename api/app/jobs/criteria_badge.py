@@ -234,11 +234,23 @@ def on_sections(
     db: Session, user_id: uuid.UUID, sections: frozenset[str], revision: int, now: datetime
 ) -> None:
     """The profile's callback: a change of the main search's section computes its badges again,
-    a change of the identity section (the person's languages) those of every search."""
-    if "identity" in sections:
+    a change of the person's languages (identity section) those of every search."""
+    if "identity" in sections and _languages_changed(db, user_id):
         refresh_every(db, user_id)
     elif "search" in sections:
         refresh(db, user_id, None, criteria_for(db, user_id, None))
+
+
+def _languages_changed(db: Session, user_id: uuid.UUID) -> bool:
+    """Whether the identity section just saved holds other languages than the one saved before
+    it (a name, a phone or a photo alone changes no badge); with no revision to compare, yes."""
+    saved = profile_service.list_revisions(db, user_id, "identity", limit=2).items
+    if not saved:
+        return True
+    before = saved[1].data if len(saved) > 1 else None
+    return tongues.spoken_from({"identity": saved[0].data}) != tongues.spoken_from(
+        {"identity": before}
+    )
 
 
 def refresh_every(db: Session, user_id: uuid.UUID) -> int:

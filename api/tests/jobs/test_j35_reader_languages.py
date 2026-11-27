@@ -18,7 +18,7 @@ from app.agents import failures, runs
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, RunStatus
 from app.agents.runner import RunContext
-from app.jobs import criteria_badge, notices, reader, sweep
+from app.jobs import criteria_badge, languages, notices, reader, sweep
 from app.jobs.criteria_badge import LANGUAGE
 from app.jobs.models import Job, JobStatus
 from app.profile import service as profile_service
@@ -127,8 +127,13 @@ def test_a_posting_that_asks_for_no_language_is_read_as_none(
 ) -> None:
     user = new_user(factory, "e2e-languages-none@example.org")
     job_id = posting(factory, user)
+    before = reading.job_of(factory, job_id).updated_at
     assert read(factory, user, job_id).read
-    assert reading.job_of(factory, job_id).languages == {"written_in": None, "asked": []}
+    job = reading.job_of(factory, job_id)
+    assert job.languages == {"written_in": None, "asked": []}
+    # Nothing to tell: History holds no event, and the posting did not change for the person.
+    assert reading.reader_events(factory, job_id) == []
+    assert job.updated_at == before
 
 
 @pytest.mark.parametrize(
@@ -157,12 +162,18 @@ def test_a_language_whose_quote_does_not_hold_it_is_dropped_and_counted(
     ]
 
 
-def test_more_than_eight_languages_is_a_call_to_fix(factory: sessionmaker[Session]) -> None:
+def test_past_eight_languages_the_first_eight_are_kept_and_the_rest_counted(
+    factory: sessionmaker[Session],
+) -> None:
     user = new_user(factory, "e2e-languages-many@example.org")
     job_id = posting(factory, user)
-    done = read(factory, user, job_id, languages=[ENGLISH] * 9)
-    assert (done.read, done.error) == (False, True)
-    assert reading.job_of(factory, job_id).languages is None
+    location = {"value": "Berlin", "quote": "Example Robotics GmbH, Berlin"}
+    done = read(factory, user, job_id, languages=[ENGLISH] * 8 + [GERMAN] * 3, location=location)
+    assert (done.read, done.error, done.refused) == (True, False, 3)
+    assert "Dropped, past the first 8 languages: languages, languages, languages." in done.text
+    job = reading.job_of(factory, job_id)
+    assert [one["name"] for one in job.languages["asked"]] == ["English"] * 8
+    assert job.location == "Berlin"
 
 
 def test_the_ads_language_needs_its_quote(factory: sessionmaker[Session]) -> None:
@@ -369,6 +380,7 @@ def test_the_backlog_reads_the_open_postings_read_before_again(
     with factory() as db:
         run_row = db.get(AgentRun, again)
         assert run_row is not None
+        assert run_row.input["languages_only"] is True
         first_id = uuid.UUID(run_row.input["job_ids"][0])
     assert execute(rc, again) is RunStatus.done  # the fake saves its posting 0
     job = reading.job_of(factory, first_id)
@@ -390,7 +402,19 @@ def test_a_reread_that_cannot_start_leaves_its_postings_read(
 ) -> None:
     user = new_user(factory, "e2e-languages-nokey@example.org")
     stale(factory, user, 2)
-    assert reading.backlog(factory) == []
+    statements: list[str] = []
+
+    def seen(_conn: Any, _cursor: Any, statement: str, *_: Any) -> None:
+        statements.append(statement)
+
+    engine = factory.kw["bind"]
+    sa.event.listen(engine, "before_cursor_execute", seen)
+    try:
+        assert reading.backlog(factory) == []
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", seen)
+    # No credential: skipped before any work, no posting changed and rolled back.
+    assert not [one for one in statements if one.lstrip().upper().startswith("UPDATE JOBS")]
     with factory() as db:
         reads = db.scalars(sa.select(Job.read_at).where(Job.user_id == user)).all()
     assert reads == [NOW - timedelta(days=3)] * 2
@@ -415,6 +439,94 @@ def test_six_hundred_open_postings_are_read_again_in_ten_hours_and_sixty_runs_a_
     assert started[-1] - started[0] < timedelta(hours=10)
     assert all(b - a >= reader.REREAD_EVERY for a, b in itertools.pairwise(started))
     assert reading.backlog(factory, NOW + timedelta(hours=24)) != []
+
+
+def only_languages(factory: sessionmaker[Session], user: uuid.UUID, job_id: uuid.UUID):
+    """The binding of a reading made only for the languages, as the backlog's second reading."""
+    with factory() as db:
+        run = AgentRun(user_id=user, input={"job_ids": [str(job_id)], "languages_only": True})
+        binding = reader.bind_postings(db, run)
+    assert binding is not None
+    return binding
+
+
+def test_a_reading_for_the_languages_changes_nothing_else(
+    factory: sessionmaker[Session],
+) -> None:
+    user = new_user(factory, "e2e-languages-only@example.org")
+    person(factory, user, *ME)
+    job_id, empty = posting(factory, user), posting(factory, user, text=TEXT + "Wien.\n")
+    earlier = NOW - timedelta(days=2)
+    with factory() as db, db.begin():
+        db.execute(
+            sa.update(Job)
+            .where(Job.id.in_([job_id, empty]))
+            .values(fit=77, updated_at=earlier, read_at=earlier, outside_criteria=[])
+        )
+    everything = {
+        "location": {"value": "Berlin", "quote": "Example Robotics GmbH, Berlin"},
+        "company": {"value": "Example Robotics GmbH", "quote": "Example Robotics GmbH, Berlin"},
+        "description": {
+            "start": "Example Robotics GmbH, Berlin",
+            "end": "Gute Italienisch- oder Spanischkenntnisse",
+        },
+    }
+    binding = only_languages(factory, user, job_id)
+    assert '"read_only": ["languages", "written_in"]' in reader.postings(
+        factory, user, binding, lambda value: value
+    )
+    done = reader.save(
+        factory, user, binding, {"index": 0, **everything, "languages": [GERMAN]}, NOW
+    )
+    assert (done.read, done.error) == (True, False)
+    job = reading.job_of(factory, job_id)
+    assert (job.posting_text, job.location, job.company) == (TEXT, "", "Employer not stated")
+    assert (job.fit, job.updated_at, job.read_at) == (77, earlier, NOW)
+    assert job.languages["asked"][0]["quote"] == GERMAN["quote"]
+    assert job.outside_criteria == [LANGUAGE]
+    [event] = reading.reader_events(factory, job_id)
+    assert set(event["changes"]) == {"languages"}  # type: ignore[arg-type]
+    # None found: stored, and nothing else at all.
+    binding = only_languages(factory, user, empty)
+    assert reader.save(factory, user, binding, {"index": 0, **everything}, NOW).read
+    job = reading.job_of(factory, empty)
+    assert (job.languages, job.updated_at, job.fit) == (languages.EMPTY, earlier, 77)
+    assert reading.reader_events(factory, empty) == []
+    # The same facts in a full reading change the posting, as before.
+    full = reader.save(
+        factory, user, reading.bound(factory, user, empty), {"index": 0, **everything}, NOW
+    )
+    assert "description" in full.text
+    assert reading.job_of(factory, empty).posting_text != TEXT
+
+
+def test_the_badge_follows_her_languages_not_every_identity_save(
+    factory: sessionmaker[Session],
+) -> None:
+    user = new_user(factory, "e2e-languages-identity@example.org")
+    person(factory, user, *ME)
+    job_id = posting(factory, user)
+    read(factory, user, job_id, languages=[GERMAN])
+    assert badge(factory, job_id) == [LANGUAGE]
+    with factory() as db, db.begin():
+        db.execute(sa.update(Job).where(Job.id == job_id).values(outside_criteria=["older"]))
+    # A name and a phone change no badge: the open postings are not computed again.
+    with factory() as db:
+        revision = profile_service.get_profile(db, user, NOW).revision
+        data = validate_section(
+            "identity",
+            {
+                "full_name": "E2e Languages",
+                "phone": "+33 6 00 00 00 00",
+                "languages": [{"name": name, "level": level} for name, level in ME],
+            },
+        )
+        profile_service.save_section(db, user, "identity", data, revision, NOW)
+        db.commit()
+    assert badge(factory, job_id) == ["older"]
+    # Her languages change: every open posting follows.
+    set_languages(factory, user, *ME, ("Allemand", "C1"))
+    assert badge(factory, job_id) == []
 
 
 # --- the list and the detail --------------------------------------------------------------------
