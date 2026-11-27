@@ -59,7 +59,7 @@ from app.jobs.models import (
     PayPeriod,
     WorkMode,
 )
-from app.profile.schemas import CURRENCIES, Text
+from app.profile.schemas import CURRENCIES, SCHEDULE_TIMES_MAX, Text
 
 IMPORT_FORMAT = "jobapp-jobs"
 IMPORT_VERSION = 1
@@ -1008,6 +1008,15 @@ class SweepConflictOut(BaseModel):
 # --- saved searches (jobs J32, app/jobs/searches.py) --------------------------------------------
 
 
+class SavedScheduleIn(searches.SavedSchedule):
+    """A saved search's schedule as the api takes it: each time is HH:MM, 5 characters."""
+
+    times: Annotated[
+        list[Annotated[str, StringConstraints(max_length=5)]],
+        Field(min_length=1, max_length=SCHEDULE_TIMES_MAX),
+    ] = Field(default_factory=lambda: ["06:17"])
+
+
 class SavedSearchIn(BaseModel):
     """A new saved search: its name (1 to 60 characters, unique among the person's, case aside),
     the keys of one search (searches.CRITERIA, checked by the profile's search schema) and its
@@ -1016,8 +1025,9 @@ class SavedSearchIn(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: Text(SAVED_SEARCH_NAME_MAX)
+    # Bounded by the profile's search schema, past the 1 MiB class (test_body_limit_api.py).
     criteria: dict[str, Any] = Field(default_factory=dict)
-    schedule: searches.SavedSchedule = Field(default_factory=searches.SavedSchedule)
+    schedule: SavedScheduleIn = Field(default_factory=SavedScheduleIn)
 
     @field_validator("criteria")
     @classmethod
