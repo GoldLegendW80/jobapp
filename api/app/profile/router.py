@@ -38,6 +38,7 @@ from app.db import get_session
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
+from app.jobs import languages as tongues
 from app.profile import photo as photos
 from app.profile import service
 from app.profile.models import Profile
@@ -100,6 +101,7 @@ def _out(profile: Profile, db: Session) -> ProfileOut:
         completeness=completeness({k: v for k, v in sections.items() if v is not None}),
         has_photo=state is not None,
         photo_etag=state.etag if state else None,
+        languages_unread=tongues.unread(tongues.spoken_from(sections)),
     )
 
 

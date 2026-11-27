@@ -52,6 +52,8 @@ export function makeJob(
     page_given_up: false,
     page_walled: false,
     page_elsewhere: false,
+    languages: null,
+    languages_missing: [],
     ...overrides,
   };
 }

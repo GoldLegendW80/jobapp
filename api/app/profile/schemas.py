@@ -1419,6 +1419,9 @@ class ProfileOut(BaseModel):
     # The ETag of GET /api/profile/photo, null without a photo: a client can tell the photo
     # changed (and bust its cache) without downloading it.
     photo_etag: str | None
+    # The identity's languages the jobs' language rule cannot read (jobs J35, `languages.unread`):
+    # each turns the badge of a required language into a notice, so the form names them.
+    languages_unread: list[str]
 
 
 class PhotoOut(BaseModel):

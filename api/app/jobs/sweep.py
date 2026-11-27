@@ -82,6 +82,7 @@ import asyncio
 import contextlib
 import contextvars
 import copy
+import dataclasses
 import hashlib
 import json
 import logging
@@ -103,7 +104,16 @@ from sqlalchemy.orm import Session, sessionmaker, undefer
 from app import queue as queues
 from app.agents.runs import WorkflowRef
 from app.identity.models import User
-from app.jobs import criteria_badge, posting_titles, schedule, scoring, searches, service, signals
+from app.jobs import (
+    criteria_badge,
+    languages,
+    posting_titles,
+    schedule,
+    scoring,
+    searches,
+    service,
+    signals,
+)
 from app.jobs import slug as slugs
 from app.jobs.boards import catalog as boards
 from app.jobs.importer import kind
@@ -707,10 +717,14 @@ class Plan:
     # of the search on one host never both open one.
     listed_tried: set[uuid.UUID] = field(default_factory=set)
 
+    # Jobs J35: the person's languages when the sweep was claimed, what the badge's `language`
+    # code of a posting found again reads.
+    spoken: tuple[languages.Spoken, ...] | None = None
+
     @property
     def criteria(self) -> criteria_badge.Criteria:
         """The frozen criteria of the search the sweep ran, what a posting's badge reads (J30)."""
-        return criteria_badge.Criteria.of(self.search)
+        return dataclasses.replace(criteria_badge.Criteria.of(self.search), spoken=self.spoken)
 
     @property
     def criteria_search_id(self) -> uuid.UUID | None:
@@ -975,6 +989,7 @@ def claim(sessions: sessionmaker[Session], sweep_id: uuid.UUID, now: datetime) -
             schedule_slot=stats.schedule_slot,
             search=search,
             search_scope=copy.deepcopy(scope),
+            spoken=languages.spoken_of(db, sweep.user_id),
         )
         db.commit()
     return plan
@@ -2050,6 +2065,7 @@ def _badge_again(db: Session, plan: Plan, job_id: uuid.UUID) -> None:
             Job.published_on,
             Job.found_on,
             Job.source,
+            Job.languages,
         ).where(Job.id == job_id, Job.user_id == plan.user_id)
     ).one_or_none()
     if row is None:

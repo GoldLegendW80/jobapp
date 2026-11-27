@@ -46,7 +46,7 @@ from pydantic import (
     model_validator,
 )
 
-from app.jobs import searches
+from app.jobs import languages, searches
 from app.jobs import slug as slugs
 from app.jobs.models import (
     PAY_MAX,
@@ -368,6 +368,23 @@ class FacetsOut(BaseModel):
     sources: list[FacetOut]
 
 
+class AskedLanguageOut(BaseModel):
+    """One language a posting asks for, as the posting reader read it (app/jobs/languages.py)."""
+
+    name: str
+    level: str | None = None
+    required: bool
+    alternatives: list[str] = Field(default_factory=list)
+    quote: str
+
+
+class LanguagesOut(BaseModel):
+    """Jobs J35: the language the ad is written in and the languages it asks for."""
+
+    written_in: str | None = None
+    asked: list[AskedLanguageOut] = Field(default_factory=list)
+
+
 class JobListItem(BaseModel):
     """One row of the list: everything but the posting text, the legacy columns and the files."""
 
@@ -411,11 +428,24 @@ class JobListItem(BaseModel):
     list_url: str | None = None
     # Jobs J36: seen only in a list, and the app failed to read its page on 3 different days: it
     # no longer tries (the person may paste its text); `page_walled` when the latest of them met
-    # a sign in or check page. `page_elsewhere`: seen only in a list, on none of the websites'
-    # own hosts that found it, so no reading of theirs opens it.
+    # a wall (a sign in, a check, or a request to slow down). `page_elsewhere`: seen only in a
+    # list, on none of the websites' own hosts that found it, so no reading of theirs opens it.
     page_given_up: bool = False
     page_walled: bool = False
     page_elsewhere: bool = False
+    # Jobs J35: the languages the posting asks for, as the posting reader read them (null: not
+    # read since), and those it requires that the person's profile does not list, as the app
+    # names them ("German", "German or Dutch"), read against her current languages.
+    languages: LanguagesOut | None = None
+    languages_missing: list[str] = Field(default_factory=list)
+
+    @field_validator("languages", mode="before")
+    @classmethod
+    def _stored_languages(cls, value: Any) -> Any:
+        if isinstance(value, LanguagesOut):
+            return value
+        read = languages.read_stored(value)
+        return None if read is None else languages.as_stored(read.written_in, read.asked)
 
     @field_validator("outside_criteria", mode="before")
     @classmethod

@@ -146,7 +146,7 @@ def test_after_three_days_of_failed_readings_it_is_no_longer_tried_and_says_so(
         assert service.pages_given_up(db, alice, [job.id]) == {job.id: ""}
         user = SimpleNamespace(id=alice)
         stored = db.get(Job, job.id)
-        item = jobs_router._item(stored, 0, jobs_router._given_up(db, user, [stored]))
+        item = jobs_router._item(stored, 0, (), jobs_router._given_up(db, user, [stored]))
         assert item.page_given_up is True
         assert item.list_url == LIST
     opened = len(board.opened())
@@ -421,7 +421,7 @@ def test_a_wall_on_its_page_is_a_failed_reading_and_its_mention_says_so(
         assert service.pages_given_up(db, alice, [walled.id]) == {walled.id: "walled"}
         stored = db.get(Job, walled.id)
         user = SimpleNamespace(id=alice)
-        item = jobs_router._item(stored, 0, jobs_router._given_up(db, user, [stored]))
+        item = jobs_router._item(stored, 0, (), jobs_router._given_up(db, user, [stored]))
     assert (item.page_given_up, item.page_walled, item.page_elsewhere) == (True, True, False)
 
 
@@ -444,7 +444,7 @@ def test_a_card_on_another_host_says_no_reading_opens_it_and_www_is_the_same_hos
     with factory() as db:
         user = SimpleNamespace(id=alice)
         stored = db.get(Job, jobs["AI engineer"].id)
-        item = jobs_router._item(stored, 0, jobs_router._given_up(db, user, [stored]))
+        item = jobs_router._item(stored, 0, (), jobs_router._given_up(db, user, [stored]))
     assert (item.list_url, item.page_given_up, item.page_elsewhere) == (LIST, False, True)
     assert jobs["GenAI engineer"].list_url is None
 

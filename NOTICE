@@ -93,6 +93,12 @@ its "echo traps" (.claude/skills/job-application-assistant/10-echo-traps.md: fiv
 of the posting is a lift, its hard terms aside); the check of a finished PDF's text layer
 (api/app/documents/pdf_text.py) follows what its tools/verify_pdf.py checks. Both are written
 anew in this app's own shape; no code of it is copied.
+The comparison of the languages a posting requires with the person's (api/app/jobs/languages.py,
+the `language` code of api/app/jobs/criteria_badge.py and the language notices of
+api/app/jobs/notices.py) follows the rule of its Language Gate
+(.claude/skills/job-application-assistant/04-job-evaluation.md): the role's own requirements count,
+not the language the ad is written in; a required language not declared fails; a declared one
+asked at a level that may be higher is flagged, never passed in silence; anything else passes.
 
 MIT License
 

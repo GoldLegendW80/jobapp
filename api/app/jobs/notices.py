@@ -6,6 +6,10 @@ card and the Apply confirmation:
   authorisation of `answers` for the posting's country (its location, through the gazetteer) or
   the place it names, and the pay the person aims for (`search.compensation`, compared only in
   the same currency and period);
+- the languages it asks for read against the profile's (jobs J35, app/jobs/languages.py): a
+  required one she does not list, a required one she may list under a name the app cannot read,
+  one that may be required, one asked at a level that may be above hers (both levels quoted), and
+  the ad's own language when it asks for none;
 - its closing date;
 - a posting of another company with nearly the same text (`signals.same_text`);
 - the person's applications to the same company (folded as `guardrails.company_key` folds).
@@ -27,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.apply.answers import EU, EU_MEMBERS, posting_countries
 from app.apply.guardrails import company_key
+from app.jobs import languages as tongues
 from app.jobs import signals as texts
 from app.jobs.models import ContractType, Job, JobStatus
 from app.jobs.sweep import SWEEP_TZ
@@ -73,6 +78,7 @@ class Person:
     work: tuple[WorkAuthorization, ...] = ()
     salary: PayRange | None = None
     daily_rate: PayRange | None = None
+    languages: tuple[tongues.Spoken, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -131,7 +137,9 @@ def person_of(db: Session, user_id: uuid.UUID) -> Person:
     with contextlib.suppress(ValueError):
         pay = SearchSection.model_validate(sections.get("search") or {}).compensation
         salary, daily_rate = pay.salary, pay.daily_rate
-    return Person(work=work, salary=salary, daily_rate=daily_rate)
+    return Person(
+        work=work, salary=salary, daily_rate=daily_rate, languages=tongues.spoken_from(sections)
+    )
 
 
 def rows_of(db: Session, user_id: uuid.UUID) -> list[Row]:
@@ -240,6 +248,45 @@ def _pay_below(job: Job, person: Person) -> Notice | None:
         f"The stated pay tops out at {top}, under the {aim} you aim for.",
         level="warning",
     )
+
+
+def _level_text(gap: tongues.Gap) -> str:
+    mine = gap.spoken
+    theirs = (
+        "your profile lists no language"
+        if mine is None
+        else f"your profile lists {mine.name} at \u201c{mine.level}\u201d"
+        if mine.level
+        else f"your profile lists {mine.name} without a level"
+    )
+    return f"This posting asks for {gap.language} at \u201c{gap.asked_level}\u201d; {theirs}."
+
+
+def language_notices(job: Job, person: Person) -> list[Notice]:
+    """The posting's languages against the profile's (app/jobs/languages.py, `compare`)."""
+    found: list[Notice] = []
+    for gap in tongues.compare(job.languages, person.languages):
+        if gap.kind == "missing":
+            text = f"This posting requires {gap.language}, which your profile does not list."
+            found.append(Notice("signal", "language_missing", text, gap.quote, "warning"))
+        elif gap.kind == "unread":
+            text = (
+                f"This posting requires {gap.language}; your profile lists "
+                f"“{gap.unread}”, which the app cannot read as a language."
+            )
+            found.append(Notice("signal", "language_unread", text, gap.quote, "warning"))
+        elif gap.kind == "unsure":
+            text = f"This posting may ask for {gap.language}, which your profile does not list."
+            found.append(Notice("signal", "language_unsure", text, gap.quote, "warning"))
+        elif gap.kind == "level":
+            found.append(Notice("signal", "language_level", _level_text(gap), gap.quote, "warning"))
+        else:
+            text = (
+                f"This posting is written in {gap.language}, which your profile does not list; "
+                "it asks for no language."
+            )
+            found.append(Notice("signal", "language_written_in", text))
+    return found
 
 
 def closing_notice(closes_on: date, quote: str | None, today: date) -> Notice:
@@ -375,6 +422,7 @@ def notices_for(job: Job, person: Person, rows: Sequence[Row], today: date) -> l
     """Every notice of one posting, the warnings first."""
     said, fingerprint = _reading(job)
     found = signal_notices(job, said, person)
+    found.extend(language_notices(job, person))
     closes = next((s for s in said if s.code == "closing" and s.value), None)
     if closes is not None:
         found.append(closing_notice(date.fromisoformat(str(closes.value)), closes.quote, today))

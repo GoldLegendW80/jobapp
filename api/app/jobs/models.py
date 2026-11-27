@@ -261,6 +261,9 @@ class Job(Base):
     # Jobs J31 (migration 0052): seen only as a card of a list, its own page not read, the
     # list's address; null once its page was read or the person set its text, and for any other.
     list_url: Mapped[str | None] = mapped_column(sa.Text)
+    # Jobs J35 (migration 0053, app/jobs/languages.py): the languages the posting asks for, as the
+    # posting reader read them, `{"written_in", "asked"}`; null until the reader read it since.
+    languages: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
     search: Mapped[Any] = mapped_column(
         pg.TSVECTOR, sa.Computed(SEARCH_EXPRESSION, persisted=True), deferred=True
     )

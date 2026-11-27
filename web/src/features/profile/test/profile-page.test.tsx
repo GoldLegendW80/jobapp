@@ -382,6 +382,26 @@ describe("contact and links", () => {
     ]);
   });
 
+  it("names the languages the app cannot read, until a save reads them all", async () => {
+    fakeSession(admin);
+    const state = fakeProfile();
+    state.languagesUnread = ["UK", "Klingon"];
+    const { user } = await openProfile("/profile/contact");
+    const line =
+      'The app cannot read "UK" and "Klingon" as a language, so it cannot tell which postings require a language you do not list. Write each language by its name, in English, French or German.';
+    expect(await screen.findByText(line)).toBeInTheDocument();
+    state.languagesUnread = [];
+    await user.type(screen.getByLabelText("Language 1"), "!");
+    await user.click(saveButton("identity"));
+    await waitFor(() => {
+      expect(state.saves).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(line)).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText(/cannot read/)).not.toBeInTheDocument();
+  });
+
   it("puts a 422 from the server under the field it names", async () => {
     fakeSession(admin);
     fakeProfile();
