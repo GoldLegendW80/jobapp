@@ -633,27 +633,43 @@ def code_box(facts: Any) -> str | None:
     name of `code` alone), with no word of CODE_DENY. Else `credential` for a password box, a
     user name box of a sign in form or a passkey box, and `not_code_box` for anything else,
     facts that cannot be read included (fail closed)."""
+    no, found, otp = _box(facts)
+    if no is not None:
+        return no
+    said = found["said"]
+    if otp or found["words"] & CODE_WORDS_STRONG or ["code"] in said:
+        return None
+    return None if "code" in found["words"] and found["words"] & CODE_QUALIFIERS else "not_code_box"
+
+
+def key_box(facts: Any) -> bool:
+    """A box the page moved the focus to while browserd typed a code (a form of one character
+    per box): `code_box`'s rules but the words that say a code, since such a box is often named
+    by its place alone ("Digit 2 of 6")."""
+    return _box(facts)[0] is None
+
+
+def _box(facts: Any) -> tuple[str | None, dict[str, Any], bool]:
+    """`code_box`'s refusal of what is no box for a code, else None with the box's words."""
     if not isinstance(facts, dict):
-        return "not_code_box"
+        return "not_code_box", {}, False
     names, tokens = facts.get("names"), facts.get("autocomplete")
     if not isinstance(names, list) or not isinstance(tokens, list):
-        return "not_code_box"
+        return "not_code_box", {}, False
     tokens = [t for t in tokens if isinstance(t, str)]
     if facts.get("type") == "password" or PASSWORD_TOKENS.intersection(tokens):
-        return "credential"
+        return "credential", {}, False
     otp = "one-time-code" in tokens
     if facts.get("credential") is not False and not (facts.get("credential") is True and otp):
-        return "credential" if facts.get("credential") is True else "not_code_box"
+        return ("credential" if facts.get("credential") is True else "not_code_box"), {}, False
     if facts.get("tag") != "input" or facts.get("type") not in CODE_TYPES:
-        return "not_code_box"
+        return "not_code_box", {}, False
     if (facts.get("readonly"), facts.get("disabled"), facts.get("top")) != (False, False, True):
-        return "not_code_box"
+        return "not_code_box", {}, False
     if any(t not in QUIET_TOKENS and not t.startswith("section-") for t in tokens):
-        return "not_code_box"
+        return "not_code_box", {}, False
     said = [match_words(n[:NAME_MAX]) for n in names[:10] if isinstance(n, str)]
     found = {w for ws in said for w in ws} | {"".join(ws) for ws in said}
     if found & CODE_DENY:
-        return "not_code_box"
-    if otp or found & CODE_WORDS_STRONG or ["code"] in said:
-        return None
-    return None if "code" in found and found & CODE_QUALIFIERS else "not_code_box"
+        return "not_code_box", {}, False
+    return None, {"said": said, "words": found}, otp

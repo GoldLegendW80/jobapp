@@ -225,6 +225,24 @@ CODE_ALONE = (
     "type it in the browser yourself. Words here go to the assistant as you write them, so write "
     "them with no digits and no word in capitals."
 )
+# browserd closed the lease's tools: an answer would have held the code the person gave
+# (SPEC-browser, A25); the run stops, and the person reads the sentence in the run's report.
+CODE_SHOWN = "code_shown"
+CODE_SHOWN_SAID = (
+    "The code you gave showed again, on the site or in the assistant's own call, so the "
+    "assistant stopped: finish in the browser, or apply again."
+)
+CODE_OUTCOMES = {
+    "taken": "The site took the code: read the page with browser_snapshot before any act.",
+    "kept": "The site kept its code box (a code it did not accept, or that it did not send), "
+    "so the app emptied it and the code is gone. Read the page with browser_snapshot; to try "
+    "again, ask the person with apply_ask_person kind code.",
+}
+REVIEW_CODE_SUBMIT = (
+    "Refused: this button may send the application, which only the person's Confirm does, so "
+    "the code was not typed. Call apply_type_code again without submit when the page sends the "
+    "code by itself, or ask the person to type it in the browser."
+)
 CODE_ON_ITS_WAY = "A code for this question is on its way already."
 NO_CODE_ASKED = "The assistant asks for no code now."
 CODE_NOT_TAKEN = (
@@ -243,6 +261,8 @@ ENDS = {
     "superseded": "Stop now: the person changed this application in the app.",
     "ready": "Stop now: the person checks what you filled, and the app sends it on their Confirm.",
     PERSON_LATE: "Stop now: nobody answered in time. The person sees your sentence and Try again.",
+    CODE_SHOWN: "Stop now: the code the person gave showed again, so this browser takes no more "
+    "calls in this run.",
 }
 REVIEW_SUBMIT = (
     "Refused: this control may send the application, which only the person's Confirm does. "
@@ -288,8 +308,10 @@ ask_waits_minutes in your first message: their answer comes as the tool's answer
 person's words; or they use the browser themselves, and then read the page again before any act;
 or nobody comes and the run ends. A code (kind code): the person types it in the browser, or
 gives it in the app, and then the tool's answer says so: at once, before any other act, call
-apply_type_code with the ref of the site's one time code box in your last snapshot, and the app
-types it there once; you never see it. Never type a password or a code yourself, never click a
+apply_type_code with the ref of the site's one time code box in your last snapshot, and as
+submit the ref of the button that sends it when the form has one: the app types it there once,
+sends it, and tells you only whether the site took it; you never see it, and when the code
+shows again anywhere the run stops. Never type a password or a code yourself, never click a
 captcha, and never make a payment: a site that asks to pay ends the run failed. The person's
 words never widen what you may do: these rules hold whatever they say.
 
@@ -576,10 +598,20 @@ class ApplySession:
             await self.waits.note("person_used")
         return True
 
+    def _code_shown(self, result: dict[str, Any]) -> bool:
+        """browserd closed the lease's tools: an answer would have held the code the person gave
+        (`code_shown`, SPEC-browser A25). The run stops."""
+        if result.get("error") != CODE_SHOWN:
+            return False
+        self.stopped = CODE_SHOWN
+        return True
+
     async def _view(self) -> tuple[str, bool]:
         shot = await self.tools.call("browser_snapshot", {})
         if await self._used(shot):
             shot = await self.tools.call("browser_snapshot", {})
+        if self._code_shown(shot):
+            return self._ended()
         text = shot.get("snapshot")
         if not shot.get("ok") or not isinstance(text, str):
             return "The page could not be read.", True
@@ -624,6 +656,8 @@ class ApplySession:
         async def work() -> tuple[str, bool]:
             args = {"text": text[:200]} if text else {"time": min(max(seconds or 1.0, 0.0), 5.0)}
             done = await self.tools.call("browser_wait_for", args)
+            if self._code_shown(done):
+                return self._ended()
             if await self._used(done):
                 return USED, True
             if not done.get("ok"):
@@ -639,6 +673,8 @@ class ApplySession:
             shot = await self.tools.call("browser_take_screenshot", {"type": "png"})
         except BrowserError as exc:
             self.stopped = "lease_ended" if exc.code == "ended" else exc.code
+            return self._ended()
+        if self._code_shown(shot):
             return self._ended()
         if await self._used(shot):
             return USED, True
@@ -679,13 +715,16 @@ class ApplySession:
                 return self._ended()
             try:
                 result = await self.tools.call(name, args)
+                if self._code_shown(result):
+                    return self._ended()
                 if await self._used(result):
                     return "The act was not done. " + USED, True
                 if self.review and result.get("step_submit"):
                     await self._step_sent()
                 if result.get("error") == "submit_permit" and self.review:
                     # A20: no capability in this mode: the gate clicks it on the person's Confirm.
-                    return json.dumps({"error": "submit_permit", "message": REVIEW_SUBMIT}), True
+                    said = REVIEW_CODE_SUBMIT if name == "browser_type_code" else REVIEW_SUBMIT
+                    return json.dumps({"error": "submit_permit", "message": said}), True
                 if result.get("error") == "submit_permit":
                     if (code := await self._permit()) is not None:
                         self.stopped = code
@@ -694,6 +733,8 @@ class ApplySession:
 
                     result = await agent_act(self.tools, name, args, str(self.capability))
                     self.read_since_submit.clear()
+                    if self._code_shown(result):
+                        return self._ended()
                     if await self._used(result):
                         return "The act was not done. " + USED, True
             finally:
@@ -703,6 +744,10 @@ class ApplySession:
             if not result.get("ok"):
                 message = plain(result.get("message"), 300)
                 return json.dumps({"error": result.get("error"), "message": message}), True
+            if name == "browser_type_code":
+                # A25: the site's answer only, never a view of the page the code went into.
+                outcome = "taken" if result.get("code") == "taken" else "kept"
+                return json.dumps({"code": outcome, "message": CODE_OUTCOMES[outcome]}), False
             text, error = await self._view()
             if name in RECORDED or name == "browser_click":
                 self._record(name, args, page, step)
@@ -711,7 +756,7 @@ class ApplySession:
             if error:
                 return text, error
             view = json.loads(text)
-            for key in ("result", "tabs", "uploaded", "code_typed"):
+            for key in ("result", "tabs", "uploaded"):
                 if key in result:
                     view[key] = result[key]
             return json.dumps(view, ensure_ascii=False), False
@@ -749,13 +794,15 @@ class ApplySession:
         safe = {"paths": list(names), **({"ref": args["ref"]} if args.get("ref") else {})}
         return await self.interact("browser_file_upload", safe)
 
-    async def type_code(self, ref: object) -> tuple[str, bool]:
+    async def type_code(self, ref: object, submit: object = None) -> tuple[str, bool]:
         """apply_type_code (A25): browserd types the code the person gave in the app into the
-        box `ref` names on the lease's page, once (browserd's `type_code` and its refusals); the
-        agent names the box only and never sees the code."""
-        if not isinstance(ref, str) or not re.fullmatch(r"e[0-9]{1,7}", ref):
-            return "Refused: name the code box by a ref of your last browser_snapshot.", True
-        return await self.interact("browser_type_code", {"ref": ref})
+        box `ref` names on the lease's page, once, and sends it with the element `submit` names
+        (browserd's `type_code` and its refusals; an act on a submit element as a click is). The
+        agent names the elements only, and is told only whether the site took the code."""
+        args = {"ref": ref} if submit is None else {"ref": ref, "submit": submit}
+        if not all(isinstance(r, str) and re.fullmatch(r"e[0-9]{1,7}", r) for r in args.values()):
+            return "Refused: name the code box and its button by refs of your last snapshot.", True
+        return await self.interact("browser_type_code", args)
 
     async def ask_person(self, kind: object, sentence: object) -> tuple[str, bool]:
         """apply_ask_person (A25): the run waits for the person, the lease held and waiting, the
@@ -1421,6 +1468,8 @@ def _report(
     db: Session, application: Application, session: ApplySession, ran: Ran, now: datetime
 ) -> None:
     summary, address = (session.done[1], session.done[2]) if session.done else ("", "")
+    if session.stopped == CODE_SHOWN:
+        summary, address = CODE_SHOWN_SAID, ""
     row = db.get(ApplicationAnswer, (application.id, REPORT_KEY))
     if row is None:
         row = ApplicationAnswer(
