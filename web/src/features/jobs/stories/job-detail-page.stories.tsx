@@ -177,6 +177,21 @@ export const AssessAPosting: Story = {
   },
 };
 
+/** As a job seeker, I want a posting the search kept outside my criteria to say what is outside, so that I know before I apply that it is no match of my search. */
+export const SeeWhatIsOutsideMyCriteria: Story = {
+  beforeEach: () => {
+    fakePostingDetails([
+      {
+        ...first,
+        contract_type: "Stage",
+        outside_criteria: ["contract", "older"],
+        published_on: "2026-10-01",
+        found_on: "2026-11-26",
+      },
+    ]);
+  },
+};
+
 /** As a job seeker, I want to see when a posting's own page may say it is closed, with its words, so that I close it in one click before writing anything. */
 export const SeeThatAPostingMayBeClosed: Story = {
   beforeEach: () => {

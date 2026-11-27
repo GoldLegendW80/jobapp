@@ -355,12 +355,12 @@ test("the websites end in words, the company page is neither kept nor searched, 
     await expect(line).not.toContainText("needs your permission");
   }
   // Searched: the refused click on the posting's button is counted, never the website's end
-  // (2026-10-28), so its line says what was found and nothing else.
+  // (2026-10-28), so its line says what was found and kept and nothing else.
   const ownLine = sites
     .getByRole("listitem")
     .filter({ hasText: `${SITE_HOST}:` });
   await expect(ownLine).toContainText(
-    "1 search ran: engineer in Paris. 1 posting found, 1 new.",
+    "1 search ran: engineer in Paris. 1 posting found: 1 new posting kept.",
   );
   await expect(ownLine).not.toContainText("The website asked for something");
   await expect(summary).not.toContainText(/[–—]| - /);

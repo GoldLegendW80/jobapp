@@ -70,6 +70,23 @@ describe("search tab: terms and preferences", () => {
     expect(screen.getByLabelText("Rule 1")).toHaveValue(
       "No cybersecurity roles.",
     );
+    // Jobs J30: the titles are where the search starts, and what is outside the criteria is kept.
+    expect(
+      screen.getByText(
+        "Where the search starts: it searches these titles, and its assistants also keep other roles that fit your profile.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/A posting is kept when its title/)).toBeNull();
+    expect(
+      screen.getByText(
+        /The search assistants keep a posting of another work mode or contract too, with a badge in Jobs\./,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText("Posting age window (days)"),
+    ).toHaveAccessibleDescription(
+      "The search assistants keep a posting published earlier too, with a badge in Jobs.",
+    );
   });
 
   it("edits terms, contract types, stance, fit and days, then saves", async () => {

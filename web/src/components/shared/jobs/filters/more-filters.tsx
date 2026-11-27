@@ -1,6 +1,7 @@
 /**
  * The filters of the Filters panel beyond status, contract, fit, found and company (jobs J29):
- * place, work mode, website, published, pay, application, and the two presets.
+ * place, work mode, website, published, pay, application, and the two presets; and the criteria
+ * of the search that found a posting (jobs J30).
  */
 import { useId, useState } from "react";
 
@@ -18,6 +19,11 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 
 import type { Facet } from "@/features/jobs/api/jobs-api";
+import {
+  CRITERIA_CHOICE_LABELS,
+  CRITERIA_CHOICES,
+  type CriteriaChoice,
+} from "@/features/jobs/helpers/criteria-words";
 import {
   cleanPlace,
   foundToday,
@@ -164,6 +170,31 @@ export function WebsiteMenu({
         onChange({ ...filters, sources });
       }}
     />
+  );
+}
+
+/** Jobs J30: every posting (the default), those within the criteria of their search, or those
+ * kept outside them with a badge. */
+export function CriteriaFilter({ filters, onChange }: FilterProps) {
+  return (
+    <FieldSet className="gap-2">
+      <FieldLegend variant="label">Criteria</FieldLegend>
+      <NativeSelect
+        aria-label="Criteria"
+        value={filters.criteria ?? ""}
+        onChange={(event) => {
+          const value = event.target.value as CriteriaChoice | "";
+          onChange({ ...filters, criteria: value === "" ? null : value });
+        }}
+      >
+        <option value="">All postings</option>
+        {CRITERIA_CHOICES.map((value) => (
+          <option key={value} value={value}>
+            {CRITERIA_CHOICE_LABELS[value]}
+          </option>
+        ))}
+      </NativeSelect>
+    </FieldSet>
   );
 }
 

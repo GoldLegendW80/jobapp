@@ -3,6 +3,7 @@ import { userEvent, within } from "storybook/test";
 
 import {
   ApplicationMenu,
+  CriteriaFilter,
   FilterPresets,
   PayFilter,
   PlaceFilter,
@@ -21,7 +22,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The filters of the Filters panel beyond status, contract, fit, found and company: two presets, the place, the work mode, the website, the published date, the pay and the application. Each one is in the address and has its chip.",
+          "The filters of the Filters panel beyond status, contract, fit, found and company: two presets, the place, the work mode, the criteria of the search, the website, the published date, the pay and the application. Each one is in the address and has its chip.",
       },
       story: { inline: false, height: "420px" },
     },
@@ -97,6 +98,16 @@ export const Published: Story = {
       initial={{ ...EMPTY_FILTERS, publishedWithin: 7, publishedUndated: true }}
     >
       {(props) => <PublishedFilter {...props} />}
+    </WithFilters>
+  ),
+};
+
+/** Every posting by default; those within the criteria of their search, or those kept outside
+ * them with a badge. */
+export const Criteria: Story = {
+  render: () => (
+    <WithFilters initial={{ ...EMPTY_FILTERS, criteria: "outside" }}>
+      {(props) => <CriteriaFilter {...props} />}
     </WithFilters>
   ),
 };

@@ -429,6 +429,22 @@ it("saves the contract types ticked under More options, in the order shown, and 
   const { profile, starts, user, dialog } = await open();
   await openMore(user, dialog);
   const types = within(dialog).getByRole("group", { name: "Contract types" });
+  // Jobs J30: what is outside the criteria is kept with a badge, and each criterion says so.
+  expect(types).toHaveTextContent(
+    "The search assistants keep a posting of another contract too, with a badge.",
+  );
+  expect(
+    within(dialog).getByRole("combobox", { name: "Remote preference" }),
+  ).toHaveAccessibleDescription(
+    "The search assistants keep a posting of another work mode too, with a badge.",
+  );
+  expect(
+    within(dialog).getByRole("spinbutton", {
+      name: "Posted within the last days",
+    }),
+  ).toHaveAccessibleDescription(
+    "The search assistants keep an older posting too, with a badge.",
+  );
   for (const name of ["Freelance mission", "Permanent", "Fixed term"])
     await user.click(within(types).getByRole("checkbox", { name }));
   await user.click(within(types).getByText("Fixed term"));

@@ -4,6 +4,7 @@ import type { UseFormReturn } from "react-hook-form";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Field,
+  FieldDescription,
   FieldGroup,
   FieldLabel,
   FieldLegend,
@@ -11,6 +12,7 @@ import {
 } from "@/components/ui/field";
 import {
   FormControl,
+  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -32,7 +34,9 @@ const REMOTE_STANCE_WORDS: Record<(typeof REMOTE_STANCES)[number], string> = {
   any: "Any",
 };
 
-/** Under More options: the remote preference, the contract types and how recent a posting. */
+/** Under More options: the remote preference, the contract types and how recent a posting. A
+ * posting outside them that a search assistant finds is kept with a badge (jobs J30; the feeds,
+ * the company boards and LinkedIn's age filter still leave some out), and each says so. */
 export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
   const id = useId();
   return (
@@ -53,6 +57,10 @@ export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
                 ))}
               </NativeSelect>
             </FormControl>
+            <FormDescription>
+              The search assistants keep a posting of another work mode too,
+              with a badge.
+            </FormDescription>
             <FormMessage />
           </FormItem>
         )}
@@ -99,6 +107,10 @@ export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
                 </Field>
               ))}
             </FieldGroup>
+            <FieldDescription>
+              The search assistants keep a posting of another contract too, with
+              a badge.
+            </FieldDescription>
           </FieldSet>
         )}
       />
@@ -117,6 +129,9 @@ export function CriteriaFields({ form }: { form: UseFormReturn<SearchForm> }) {
                 className="max-w-32"
               />
             </FormControl>
+            <FormDescription>
+              The search assistants keep an older posting too, with a badge.
+            </FormDescription>
             <FormMessage />
           </FormItem>
         )}

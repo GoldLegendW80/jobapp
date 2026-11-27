@@ -207,6 +207,10 @@ export const handlers = [
   // No workflow run yet (Activity).
   http.get("*/api/activity/workflows", () => HttpResponse.json({ items: [] })),
   http.get("*/api/activity/runs", () => HttpResponse.json({ items: [] })),
+  // A sweep's run in Activity (the search summary reads its assistants' words, jobs J30): none.
+  http.get("*/api/activity/runs/:id", () =>
+    HttpResponse.json({ detail: "Not found" }, { status: 404 }),
+  ),
   http.get("*/api/activity/count", () =>
     HttpResponse.json({ under_way: 0, ended: [] }),
   ),
