@@ -258,9 +258,8 @@ describe("Find jobs", () => {
       name: "2 new postings found",
     });
     expect(dialog).toHaveTextContent(
-      "3 websites searched, 120 postings seen, 4 matched your search, 2 new postings.",
+      "3 websites searched. 2 new postings kept; 2 already in your list.",
     );
-    expect(dialog).toHaveTextContent("2 matches already in your list.");
     const links = within(
       within(dialog).getByRole("region", { name: "New postings" }),
     ).getAllByRole("link");
@@ -366,10 +365,10 @@ describe("Find jobs", () => {
       .getAllByRole("listitem")
       .map((li) => li.textContent);
     expect(lines).toEqual([
-      "Google Careers, ai engineer, Paris: 3 postings found, 2 new.",
-      "Google Careers, agents: 0 postings found, 0 new. The page looked different from what the app knows, so nothing was kept from it.",
-      "Business France VIE, data: 0 postings found, 0 new. Your browser was in use, so this site waits for the next search.",
-      "Business France VIE, ml: 1 posting found, 1 new. You took your browser back, so this site stopped. What was read is kept, the rest comes at the next search.",
+      "Google Careers, ai engineer, Paris: 3 postings found: 2 new postings kept.",
+      "Google Careers, agents: No posting kept. The page looked different from what the app knows, so nothing was kept from it.",
+      "Business France VIE, data: No posting kept. Your browser was in use, so this site waits for the next search.",
+      "Business France VIE, ml: 1 posting found: 1 new posting kept. You took your browser back, so this site stopped. What was read is kept, the rest comes at the next search.",
       "Business France VIE, cv: not read this time, it comes at the next search.",
     ]);
   });
@@ -483,19 +482,21 @@ describe("Find jobs", () => {
         .getAllByRole("listitem")
         .map((li) => li.textContent),
     ).toEqual([
-      "Google Careers, ai: 0 postings found, 0 new.",
+      "Google Careers, ai: No posting kept.",
       "LinkedIn, pending: not searched this time.",
       "LinkedIn, not attempted: not searched this time.",
       "LinkedIn, waiting: not searched this time.",
-      "LinkedIn, searched: 0 postings found, 0 new.",
-      "Indeed: 3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot. 2 postings found, 0 new. Postings were read on this website, but saving them came with a later update.",
-      "LinkedIn: 2 searches ran: robot engineer in Paris; drone pilot in Paris. 20 saved titles and 1 saved place were left out: a website's search types plain words, the first ones that fit. 1 posting found, 0 new. The app read as many pages of this website as it may this time. What was read is kept.",
-      "LinkedIn: 11 of 21 searches ran. 4 postings found, 4 new. LinkedIn is read slowly, about one request every 10 seconds, so its time in this search ran out. What was read is kept.",
+      "LinkedIn, searched: No posting kept.",
+      "Indeed: 3 searches ran: robot engineer in Paris; robot engineer in Lyon; drone pilot. 2 postings found, none kept. Postings were read on this website, but saving them came with a later update.",
+      "LinkedIn: 2 searches ran: robot engineer in Paris; drone pilot in Paris. 20 saved titles and 1 saved place were left out: a website's search types plain words, the first ones that fit. 1 posting found, none kept. The app read as many pages of this website as it may this time. What was read is kept.",
+      "LinkedIn: 11 of 21 searches ran. 4 postings found: 4 new postings kept. LinkedIn is read slowly, about one request every 10 seconds, so its time in this search ran out. What was read is kept.",
     ]);
     expect(dialog).not.toHaveTextContent(
       /api_board|api_failed|interactive_executor_pending|It stopped early/,
     );
-    expect(dialog).toHaveTextContent("2 boards read, 120 postings seen");
+    expect(dialog).toHaveTextContent(
+      "2 boards read. 2 new postings kept; 2 already in your list.",
+    );
     const failed = within(dialog).getByRole("region", {
       name: "Failed boards",
     });
@@ -919,7 +920,7 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
       name: "2 new postings found",
     });
     expect(summary).toHaveTextContent(
-      "2 websites searched, 120 postings seen, 4 matched your search, 2 new postings.",
+      "2 websites searched. 2 new postings kept; 2 already in your list.",
     );
     expect(summary).not.toHaveTextContent("boards read");
     expect(summary).not.toHaveTextContent(/[–—]| - /);
@@ -934,8 +935,76 @@ describe("Every search runs the websites alone (owner, 2026-10-28)", () => {
     const summary = await screen.findByRole("dialog", {
       name: "2 new postings found",
     });
-    expect(summary).toHaveTextContent("2 boards read, 120 postings seen");
+    expect(summary).toHaveTextContent(
+      "2 boards read. 2 new postings kept; 2 already in your list.",
+    );
     expect(summary).not.toHaveTextContent("websites searched");
+  });
+
+  // The audit behind jobs J30: "seen" and "matched" counted only what was kept, older sweeps too.
+  it("says what an older sweep kept, never seen or matched", async () => {
+    const older = (overrides: Partial<SweepSource>): SweepSource => ({
+      kind: "custom",
+      query: "",
+      location: null,
+      mode: "llm_browser",
+      host: "jobs.example.org",
+      result_pages: 1,
+      found: 3,
+      new: 1,
+      skipped_by_rule: 0,
+      items_skipped: 0,
+      error: null,
+      ...overrides,
+    });
+    fakeSweeps({
+      states: [
+        finished({
+          seen: 120,
+          matched: 4,
+          new: 2,
+          duplicates: 2,
+          sources: [
+            older({}),
+            older({
+              kind: "board",
+              mode: "api",
+              host: null,
+              query: "greenhouse:example-robotics",
+              company: "Example Robotics",
+              found: 4,
+            }),
+            older({ host: "careers.example.net", found: 2, new: 0 }),
+          ],
+        }),
+      ],
+    });
+    await openJobs();
+    await startSearch();
+    const summary = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(summary).toHaveTextContent(
+      "2 boards read, 1 company board read. 2 new postings kept; 2 already in your list.",
+    );
+    expect(summary).toHaveTextContent(
+      "Example Robotics: 4 postings found: 1 new posting kept.",
+    );
+    expect(summary).toHaveTextContent("2 postings found, none kept.");
+    expect(summary).not.toHaveTextContent(/seen|matched/);
+  });
+
+  it("says when a search kept no new posting", async () => {
+    fakeSweeps({
+      states: [finished({ seen: 30, matched: 0, new: 0, duplicates: 0 })],
+    });
+    await openJobs();
+    await startSearch();
+    const summary = await screen.findByRole("dialog", {
+      name: "No new posting",
+    });
+    expect(summary).toHaveTextContent("2 boards read. No new posting kept.");
+    expect(summary).not.toHaveTextContent(/seen|matched/);
   });
 
   // Jobs J30: the true numbers in sentences, and what each assistant said, one click away.
@@ -1168,7 +1237,7 @@ describe("Find jobs with job feeds", () => {
       name: "2 new postings found",
     });
     expect(dialog).toHaveTextContent(
-      "1 website searched, 2 job feeds read, 120 postings seen",
+      "1 website searched, 2 job feeds read. 2 new postings kept; 2 already in your list.",
     );
     const feeds = within(dialog).getByRole("region", { name: "Job feeds" });
     expect(feeds).toHaveTextContent("Arbeitnow: 3 postings kept, 2 new.");

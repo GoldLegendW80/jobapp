@@ -43,7 +43,7 @@ it("lists LinkedIn's public job search with its searches and leaves a deleted bo
   const items = screen.getAllByRole("listitem");
   expect(items).toHaveLength(1);
   expect(items[0]).toHaveTextContent(
-    "LinkedIn: 1 search ran: GenAI Engineer. 3 postings found, 2 new. 2 postings of a contract you did not choose left out.",
+    "LinkedIn: 1 search ran: GenAI Engineer. 3 postings found: 2 new postings kept. 2 postings of a contract you did not choose left out.",
   );
 });
 
@@ -126,9 +126,11 @@ it("keeps LinkedIn's public job search among the job sites beside boards and fee
   expect(sites).toHaveTextContent("LinkedIn: ");
   expect(sites).not.toHaveTextContent("Example Labs");
   expect(sites).not.toHaveTextContent("Arbeitnow");
-  expect(
-    screen.getByRole("region", { name: "Company job boards" }),
-  ).toHaveTextContent("Example Labs: 4 postings matched, 1 new.");
+  const boards = screen.getByRole("region", { name: "Company job boards" });
+  expect(boards).toHaveTextContent(
+    "Example Labs: 4 postings found: 1 new posting kept.",
+  );
+  expect(boards).not.toHaveTextContent(/matched|read/);
   expect(screen.getByRole("region", { name: "Job feeds" })).toHaveTextContent(
     "Arbeitnow",
   );

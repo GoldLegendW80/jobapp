@@ -11,7 +11,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "In the summary of a search (Find jobs, Past searches): each source searched, what it found, and why one ended early, in words.",
+          "In the summary of a search (Find jobs, Past searches): each source searched, what it found and kept, and why one ended early, in words.",
       },
     },
   },
@@ -37,7 +37,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Three websites: one found postings, one found none that matched, one stopped on a check. */
+/** Three websites: one kept postings, one kept none, one stopped on a check. */
 export const ThreeWebsites: Story = { name: "Three websites" };
 
 /** Jobs J30: what a website's reports became, in sentences: kept, outside the criteria, already
