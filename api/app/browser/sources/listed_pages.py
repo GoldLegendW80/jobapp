@@ -47,6 +47,9 @@ logger = logging.getLogger("app.browser.sources.listed_pages")
 READ, GONE, WALLED, UNREAD = "read", "gone", "walled", "unread"
 WALLED_STATUSES = frozenset({401, 403, 429})
 WALLED_READS = frozenset({"bot_check", "sign_in"})  # liveness.judge's reasons of a wall
+# The rules of `finder.title_on` that show the posting's own title: B21's loose primary heading
+# (one meaningful word shared) is the agent's reading's, never code's alone.
+TITLE_RULES = frozenset({"heading", "page_text"})
 NO_BROWSER = frozenset({"lease_ended", "browser_unavailable", "guard_failed"})
 NO_RUN = frozenset({"cancelled", "no_credential"})
 PERMISSIONS = frozenset({"permission_revoked", "permission_unavailable", "permission_checkpoint"})
@@ -78,7 +81,8 @@ def verdict(
     judged = liveness.judge(opened.status or 200, text, requested, opened.landed)
     if judged.verdict == liveness.CLOSED:
         return GONE, judged
-    if page is not None and finder.title_on(page, title) is not None:
+    shown = finder.title_on(page, title) if page is not None else None
+    if shown is not None and shown[1] in TITLE_RULES:
         return READ, None
     walled = platform_policy.wall(platform, opened.landed, snapshot, base_url)
     if judged.reason in WALLED_READS or walled:

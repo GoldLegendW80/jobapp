@@ -3219,6 +3219,7 @@ class FinderSession:
                 await self._read_off_loop(landed, self.pages.last_text)
                 read = True
         except SourceError as exc:
+            self._closed(result, agent=False)  # B29: a close its navigate names, counted once
             # As `navigate`: a page that did not load, or an address browserd refused, leaves
             # the posting to the agent; browserd's guard_failed and every other code stop.
             if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
