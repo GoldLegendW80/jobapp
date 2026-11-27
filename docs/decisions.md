@@ -293,6 +293,10 @@ choice made by the build that stands until the owner says otherwise.
   reverses the consent of D9 and its text version 2 of D29. The table `document_consents` and the
   wait reason `consent` stay until a contract migration; a generation stored waiting with
   `consent` is started by the next tick. Ingestion's consent of Fill my profile is not part of it.
+- 2026-11-27 (D32, issue #862): asked which length a letter should have (the app's letters had
+  a median of about 590 words on one page), the owner answered: "Environ 350 mots". A letter's
+  body aims at about 350 words, a default the person can change; a body far from it is noted,
+  never refused.
 - 2026-11-10 (D31, issue #778): asked whether the offer letter reader should stop asking for
   ingestion's consent, the owner answered: "yes". Reading an offer letter and the chat of its
   notes never ask for or wait for a consent; the model credential is still required. Fill my

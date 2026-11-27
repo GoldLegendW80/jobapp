@@ -268,6 +268,9 @@ const NOTES: Record<string, string> = {
   over_soft_length: "Longer than this template suggests",
   required_empty: "The page needs this field",
   unknown_employer: "An employer of neither your profile nor the base CV",
+  copied_from_posting: "A run of words copied from the posting",
+  letter_under_length: "A letter shorter than about 350 words",
+  letter_over_length: "A letter longer than about 350 words",
 };
 
 const legacySchema = z.object({ legacy_path: z.string(), reason: z.string() });

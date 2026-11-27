@@ -44,6 +44,11 @@ DECADE = "decade_not_in_profile"
 SENIORITY = "seniority_not_in_profile"
 # A date said of one of the person's organisations that is not its stored date.
 DATE_AT_EMPLOYER = "date_not_in_profile"
+# Five or more consecutive words of the posting's text (`copied_runs`).
+COPIED_RUN = "copied_from_posting"
+# A letter's body far from the length the writer is asked for (`letter_length`).
+LETTER_OVER_LENGTH = "letter_over_length"
+LETTER_UNDER_LENGTH = "letter_under_length"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +99,8 @@ POLICY: dict[str, str] = {
     "year_not_in_sources": NEEDS_REWRITE,
     "date_not_in_sources": NEEDS_REWRITE,
     DATE_AT_EMPLOYER: NEEDS_REWRITE,
+    # A copied run is said again in the person's words, never cut: its sentence holds facts.
+    COPIED_RUN: NEEDS_REWRITE,
     # Names.
     "title_not_in_profile": NAME,
     "employer_not_in_profile": NAME,
@@ -173,6 +180,31 @@ def soft_lengths(content: BaseModel, limits: SoftLimits) -> list[Issue]:
         if limit is not None and len(text) > limit:
             out.append(Issue(path, limit, len(text), OVER_SOFT_LENGTH, "note"))
     return out
+
+
+def letter_words(content: c.LetterContent) -> int:
+    """The words of a letter's body, its paragraphs, counted as a person counts them: what
+    stands between spaces."""
+    return sum(len(paragraph.split()) for paragraph in content.paragraphs)
+
+
+def letter_bounds(target: int) -> tuple[int, int]:
+    """The lengths of a letter's body past which a note is shown: 250 and 420 for 350."""
+    return round(target * 5 / 7), round(target * 6 / 5)
+
+
+def letter_length(content: BaseModel, target: int = c.LETTER_WORDS) -> list[Issue]:
+    """A note on a letter whose body is under or over `letter_bounds(target)`; none for a
+    letter with no paragraph (`required_empty` notes it) or any other content."""
+    if type(content) is not c.LetterContent or not content.paragraphs:
+        return []
+    count = letter_words(content)
+    under, over = letter_bounds(target)
+    if count > over:
+        return [Issue("paragraphs", 0, 0, LETTER_OVER_LENGTH, "note")]
+    if count < under:
+        return [Issue("paragraphs", 0, 0, LETTER_UNDER_LENGTH, "note")]
+    return []
 
 
 def required_empty(content: BaseModel) -> list[Issue]:

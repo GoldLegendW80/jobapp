@@ -32,7 +32,10 @@ a `DocumentSources` that carries what the documents' own rules read besides:
 - `own_cv`: the text of the person's own CV (the base CV's content and the file it was converted
   from), which keeps a phrase of the starter list from being banned (`settings.banned_phrases`);
 - `years_experience`: the person's total, which sources any whole number of years at or below
-  it ("8 years" for 8.5: rounded down is true, rounded up a claim).
+  it ("8 years" for 8.5: rounded down is true, rounded up a claim);
+- `posting_text` and `posting_names`, a CV's and a letter's: the posting's text and its title
+  and company, which source nothing and are read only by the check of copied runs
+  (`copied_runs`), the title and the company as the posting's own terms.
 
 `instructions` and `thread` stay empty: neither the posting nor a chat message makes a claim
 true ("5 years of Python required" in a posting does not make "5 years of Python" pass).
@@ -55,10 +58,12 @@ from app.profile.schemas import format_period
 
 @dataclass(frozen=True, slots=True)
 class PostingView:
-    """What the checks read of a posting: its company and its title, never its text."""
+    """What the checks read of a posting: its company and its title; its text only for the
+    check of copied runs, never as a source."""
 
     company: str = ""
     title: str = ""
+    text: str = ""
 
 
 # The words of each question of the answers section: a number of an answer sources a sentence
@@ -94,6 +99,9 @@ class DocumentSources(Sources):
     # The person's total ("8.5"), the one entry: a whole number of years at or under it is true.
     years_experience: tuple[str, ...] = ()
     own_cv: tuple[str, ...] = ()
+    # A stranger's text, the one entry, read as words by `copied_runs` only.
+    posting_text: tuple[str, ...] = ()
+    posting_names: tuple[str, ...] = ()  # the posting's title and company
 
 
 def _unique(texts: Iterable[str]) -> tuple[str, ...]:
@@ -211,6 +219,7 @@ def sources_for(
     own_titles = [*titles, *(e.title for e in base.fixed.employers)] if base else list(titles)
     participants: list[str] = []
     posting_titles: list[str] = []
+    copied_from = posting if posting is not None and kind in ("cv", "letter") else None
     if posting is not None and kind in ("letter", "proposal"):
         titles.append(posting.title)
         posting_titles.append(posting.title)
@@ -236,4 +245,6 @@ def sources_for(
             (f"{view.years_experience:g}",) if view.years_experience is not None else ()
         ),
         own_cv=_unique(own_cv),
+        posting_text=_unique((copied_from.text,)) if copied_from is not None else (),
+        posting_names=_unique((copied_from.title, copied_from.company)) if copied_from else (),
     )
