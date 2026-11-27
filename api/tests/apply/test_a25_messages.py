@@ -842,3 +842,53 @@ def test_a_failed_read_of_the_messages_leaves_the_act_s_answer_whole_and_them_un
     assert [r.msg for r in caplog.records].count("apply.messages_not_read") == 1
     for record in caplog.records:
         assert planted not in json.dumps(record.__dict__, default=str)
+
+
+def test_a_second_job_while_the_code_waits_neither_runs_nor_clears_it(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    code = f"K{secrets.randbelow(10**9):09d}"
+
+    async def then(session: applier.ApplySession, go: Any) -> None:
+        with factory() as s:  # another worker took the same job: one run per application
+            go.second = applier.prepare(s, app_id, AT)
+            s.commit()
+        go.pending = pending(factory, app_id)
+        post(factory, person_a, app_id, "Still there?")
+        go.read = await session.snapshot()
+
+    site = CodeSite({1: gives_the_code(factory, person_a, app_id, code)})
+    script = asks_the_code(then)
+    go_apply(svc(factory, site, script), app_id)
+    assert script.second == "not_queued"
+    assert script.pending == (True, None)
+    assert "person_messages" not in script.read[0]
+
+
+def test_a_failed_write_of_the_code_s_end_keeps_the_answer_and_refuses_code_words_till_the_end(
+    db: Session, factory: sessionmaker[Session], person_a: Person, monkeypatch: Any
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    code = f"K{secrets.randbelow(10**9):09d}"
+
+    def fails(*_: Any) -> None:
+        raise OperationalError("UPDATE", {}, Exception("the database went away"))
+
+    monkeypatch.setattr(applier, "code_gone", fails)
+
+    async def then(session: applier.ApplySession, go: Any) -> None:
+        go.typed = await session.type_code(BOX)
+        go.waits, go.pending = session.code_waits, pending(factory, app_id)
+        go.refused = refused_message(factory, person_a, app_id, "It was K7Q-2X9")
+        post(factory, person_a, app_id, "Did it work?")
+        go.next = await session.snapshot()
+
+    site = CodeSite({1: gives_the_code(factory, person_a, app_id, code)})
+    script = asks_the_code(then)
+    go_apply(svc(factory, site, script), app_id)
+    assert json.loads(script.typed[0])["code"] == "taken"
+    assert (script.waits, script.pending) == (False, (True, None))
+    assert script.refused == (422, applier.CODE_ALONE)
+    assert "person_messages" in script.next[0]
+    assert pending(factory, app_id) == (False, "run_ended")
