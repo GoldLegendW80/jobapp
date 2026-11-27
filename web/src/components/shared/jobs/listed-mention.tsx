@@ -3,8 +3,10 @@ import type { MouseEvent } from "react";
 import { cn } from "@/lib/utils";
 
 import {
+  LISTED_ELSEWHERE,
   LISTED_GIVEN_UP,
   LISTED_MENTION,
+  LISTED_WALLED,
 } from "@/features/jobs/helpers/listed-words";
 import { safeHttpUrl } from "@/features/jobs/helpers/text";
 
@@ -27,6 +29,8 @@ export function ListedMention({
     list_url?: string | null;
     url: string | null;
     page_given_up?: boolean;
+    page_walled?: boolean;
+    page_elsewhere?: boolean;
   };
   /** In a row of the list, its links are tab stops only while the row has the focus. */
   focusable?: boolean;
@@ -67,7 +71,11 @@ export function ListedMention({
           .
         </>
       ) : null}
-      {job.page_given_up ? <> {LISTED_GIVEN_UP}</> : null}
+      {job.page_given_up ? (
+        <> {job.page_walled ? LISTED_WALLED : LISTED_GIVEN_UP}</>
+      ) : job.page_elsewhere ? (
+        <> {LISTED_ELSEWHERE}</>
+      ) : null}
     </p>
   );
 }

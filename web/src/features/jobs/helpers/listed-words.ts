@@ -75,6 +75,14 @@ export const countedCards = total;
 export const LISTED_GIVEN_UP =
   "The app tried to read its own page on 3 different days and no longer tries: paste its text to use it.";
 
+/** Jobs J36: the same, when its page last asked to sign in or to pass a check (`page_walled`). */
+export const LISTED_WALLED =
+  "The app tried to read its own page on 3 different days and no longer tries: the page asks to sign in or to pass a check. Open its own page to read it, or paste its text to use it.";
+
+/** Jobs J36: on a posting whose page no search opens by itself (`page_elsewhere`). */
+export const LISTED_ELSEWHERE =
+  "Its own page is on another website than the one that listed it, so the app does not open it by itself: open its own page to read it, or paste its text to use it.";
+
 /** Why the app's reading of the pages of postings seen in a list ended (api's listed_pages.ENDS),
  * said of the postings still waiting for their page. */
 export const LISTED_PAGES_ENDS: Record<string, string> = {
@@ -87,6 +95,7 @@ export const LISTED_PAGES_ENDS: Record<string, string> = {
   store_failed: "the search ended",
   browser_lost: "the browser was no longer available",
   no_tab: "the browser could not open a tab for the app",
+  no_page: "the website's pages did not load",
   failed: "the app met a problem",
 };
 

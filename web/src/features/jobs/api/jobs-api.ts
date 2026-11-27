@@ -60,6 +60,8 @@ export const jobListItemSchema = z.object({
   // Jobs J36: seen only in a list, and the app failed to read its own page on 3 different days:
   // it no longer tries. Absent from an older api.
   page_given_up: z.boolean().default(false),
+  page_walled: z.boolean().default(false),
+  page_elsewhere: z.boolean().default(false),
 });
 export type JobListItem = z.infer<typeof jobListItemSchema>;
 

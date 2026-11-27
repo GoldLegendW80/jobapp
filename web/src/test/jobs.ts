@@ -50,6 +50,8 @@ export function makeJob(
     outside_criteria: [],
     list_url: null,
     page_given_up: false,
+    page_walled: false,
+    page_elsewhere: false,
     ...overrides,
   };
 }

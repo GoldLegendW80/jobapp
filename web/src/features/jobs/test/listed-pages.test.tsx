@@ -3,8 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import { ListedMention } from "@/components/shared/jobs/listed-mention";
 import {
+  LISTED_ELSEWHERE,
   LISTED_GIVEN_UP,
   LISTED_PAGES_ENDS,
+  LISTED_WALLED,
   listedPagesSentence,
 } from "@/features/jobs/helpers/listed-words";
 import { renderWithQuery } from "@/test/render";
@@ -44,6 +46,9 @@ describe("Jobs J36: the pages of the postings seen in a list, read after the sea
     expect(listedPagesSentence(pages({ left: 2, ended: "no_tab" }))).toBe(
       "2 postings seen only in a list still wait for their page: the browser could not open a tab for the app.",
     );
+    expect(listedPagesSentence(pages({ left: 4, ended: "no_page" }))).toBe(
+      "4 postings seen only in a list still wait for their page: the website's pages did not load.",
+    );
   });
 
   it("says nothing when nothing was there, and reads an end it does not know as a problem", () => {
@@ -58,6 +63,8 @@ describe("Jobs J36: the pages of the postings seen in a list, read after the sea
   it("has no dash as a separator in any of its words", () => {
     for (const words of [
       LISTED_GIVEN_UP,
+      LISTED_WALLED,
+      LISTED_ELSEWHERE,
       ...Object.values(LISTED_PAGES_ENDS),
     ]) {
       expect(words).not.toMatch(/ - |–|—/);
@@ -75,5 +82,32 @@ describe("Jobs J36: the pages of the postings seen in a list, read after the sea
     expect(screen.getByTestId("listed-mention")).toHaveTextContent(
       LISTED_GIVEN_UP,
     );
+  });
+
+  it("the mention says when its page asks to sign in or to pass a check", () => {
+    const job = {
+      list_url: "https://jobs.example.org/search?q=robot",
+      url: "https://jobs.example.org/jobs/1",
+      page_given_up: true,
+      page_walled: true,
+    };
+    renderWithQuery(<ListedMention job={job} />);
+    const mention = screen.getByTestId("listed-mention");
+    expect(mention).toHaveTextContent(LISTED_WALLED);
+    expect(mention).not.toHaveTextContent(LISTED_GIVEN_UP);
+  });
+
+  it("the mention says when no search opens its page by itself", () => {
+    const job = {
+      list_url: "https://jobs.example.org/search?q=robot",
+      url: "https://ats.example.org/jobs/1",
+      page_elsewhere: true,
+    };
+    const { rerender } = renderWithQuery(<ListedMention job={job} />);
+    expect(screen.getByTestId("listed-mention")).toHaveTextContent(
+      LISTED_ELSEWHERE,
+    );
+    rerender(<ListedMention job={{ ...job, page_elsewhere: false }} />);
+    expect(screen.queryByText(LISTED_ELSEWHERE, { exact: false })).toBeNull();
   });
 });
