@@ -73,6 +73,14 @@ def bind_generation(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     return writer_cv.bind_for(db, run, Kind.letter)
 
 
+# Told in the message, not in prompts/letter.md, whose size the plan's estimates pin.
+LENGTH_AND_VOICE = (
+    "The paragraphs together: about {words} words. Use the posting's hard terms as it writes "
+    "them (tools, methods, certifications, the role's title), never its sentences: no run of "
+    "five or more words copied from the posting."
+)
+
+
 @dataclass(frozen=True)
 class LetterWriter(definitions.AgentDefinition):
     """The definition, with a first message built from the run's input."""
@@ -80,7 +88,7 @@ class LetterWriter(definitions.AgentDefinition):
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         language = writer_cv.LANGUAGES.get(str(data.get("language")), "English")
         limits = writer_cv.limits_line(data.get("limits") or {})
-        limits = f"{limits} The paragraphs together: about {c.LETTER_WORDS} words.".strip()
+        limits = f"{limits} {LENGTH_AND_VOICE.format(words=c.LETTER_WORDS)}".strip()
         if data.get("mode") == "panel":
             text = (
                 f"{panel_hold.read(data.get('panel'))}\n\n"

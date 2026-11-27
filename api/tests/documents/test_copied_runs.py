@@ -332,4 +332,4 @@ def test_the_letter_writer_is_told_the_length() -> None:
     definition = writer_letter._definition()
     message = definition.prompt({"language": "en", "limits": {}}, None)
     assert f"about {c.LETTER_WORDS} words" in message
-    assert "five or more words copied from the posting" in definition.system_prompt
+    assert "five or more words copied from the posting" in message
