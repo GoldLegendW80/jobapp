@@ -34,10 +34,42 @@ const FAILED: WorkflowRunDetail = {
   reason: "Answer writer: The run reached its limit of 40 turns.",
 };
 
-/** Answers the count with each answer in turn, the last one again; serves the run summaries. */
-function fakeActivity(answers: ActivityCount[], runs: WorkflowRunDetail[]) {
+/** Answers the count with each answer in turn, the last one again; serves the run summaries,
+ * and the search each job search's sweep ran (the main search unless `searches` names one). */
+function fakeActivity(
+  answers: ActivityCount[],
+  runs: WorkflowRunDetail[],
+  searches: Record<string, { id: string | null; name: string }> = {},
+) {
   const calls = { count: 0, summaries: [] as string[] };
   server.use(
+    http.get("*/api/jobs/sweeps/:id", ({ params }) =>
+      HttpResponse.json({
+        id: String(params.id),
+        trigger: "manual",
+        status: "done",
+        started_at: "2026-11-10T08:30:00Z",
+        finished_at: "2026-11-10T09:00:00Z",
+        error: null,
+        boards_total: 0,
+        boards_done: 0,
+        boards_ok: 0,
+        boards_failed: [],
+        current_board: null,
+        seen: 0,
+        matched: 0,
+        new: 12,
+        duplicates: 0,
+        skipped_by_rule: 0,
+        duration: 60,
+        sources: [],
+        search: searches[String(params.id)] ?? {
+          id: "main",
+          name: "Main search",
+        },
+        new_jobs: [],
+      }),
+    ),
     http.get("*/api/activity/count", () => {
       const answer = answers[Math.min(calls.count, answers.length - 1)];
       calls.count += 1;
@@ -141,6 +173,63 @@ describe("the toast of a run's end", () => {
     await readCount(app);
     expect(toasts()).toHaveLength(1);
     expect(calls.summaries).toEqual(["5d0c1f6e-2b7a-4c1e-9a8b-3f2e1d0c9b8a"]);
+  });
+
+  it("names the saved search a finished search ran, a deleted one too (jobs J33b)", async () => {
+    const GONE: WorkflowRunDetail = { ...SEARCH, id: "gone-run" };
+    fakeActivity(
+      [
+        { under_way: 2, ended: [OLD] },
+        {
+          under_way: 0,
+          ended: [
+            { id: GONE.id, finished_at: "2026-11-10T09:30:00Z" },
+            ENDED_SEARCH,
+            OLD,
+          ],
+        },
+      ],
+      [SEARCH, GONE],
+      {
+        [SEARCH.id]: {
+          id: "00000000-0000-4000-8000-000000000001",
+          name: "Remote roles",
+        },
+        [GONE.id]: { id: null, name: "Internships in Grenoble" },
+      },
+    );
+    const app = await openAt("/jobs");
+    await firstCountRead(app);
+    await readCount(app);
+    expect(
+      await screen.findByText("Remote roles: Robotics engineer in Lyon."),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Internships in Grenoble: Robotics engineer in Lyon.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the words of before when the search's sweep cannot be read", async () => {
+    fakeActivity(
+      [
+        { under_way: 1, ended: [OLD] },
+        { under_way: 0, ended: [ENDED_SEARCH, OLD] },
+      ],
+      [SEARCH],
+    );
+    server.use(
+      http.get("*/api/jobs/sweeps/:id", () =>
+        HttpResponse.json({ detail: "Server error" }, { status: 500 }),
+      ),
+    );
+    const app = await openAt("/jobs");
+    await firstCountRead(app);
+    await readCount(app);
+    expect(
+      await screen.findByText("Robotics engineer in Lyon."),
+    ).toBeInTheDocument();
   });
 
   it("says why a run failed, with no postings link", async () => {

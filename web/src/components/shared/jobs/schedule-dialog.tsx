@@ -1,9 +1,12 @@
 /**
- * "Automatic search" in the Jobs page's More actions menu: turn the automatic search on or off,
- * pick its days and times (one to four) and its time zone, and see when it runs next. Saved as
- * `search.sweep_schedule` of the profile (PUT /api/profile/search with the base revision; a
- * change made meanwhile is merged once, see saveSchedule). Off by default: nothing runs until the
- * user turns it on.
+ * The schedule of one search: on or off, its days and times (one to four), and when it runs next.
+ * Off by default: nothing runs until the person turns it on.
+ *
+ * The main search's ("Automatic search" in the Jobs page's More actions menu, and its row in Find
+ * jobs) is `search.sweep_schedule` of the profile, with the time zone every search shares (PUT
+ * /api/profile/search with the base revision; a change made meanwhile is merged once, see
+ * saveSchedule). A saved search's (its row in Find jobs, jobs J33) is written with the rest of it,
+ * on the revision its row showed (PUT /api/jobs/searches/{id}); its time zone is the person's.
  */
 import { CircleAlert, Plus, X } from "lucide-react";
 import { useId, useState, type FormEvent } from "react";
@@ -50,8 +53,17 @@ import {
   WEEKDAYS,
   type SweepSchedule,
 } from "@/features/jobs/helpers/schedule";
+import type { SavedSearch } from "@/features/jobs/api/searches-api";
 import { type ScheduleState } from "@/features/jobs/api/sweeps-api";
+import {
+  useReadSearches,
+  useScheduleSearch,
+} from "@/features/jobs/api/use-saved-searches";
 import { scheduleOf, useSaveSchedule } from "@/features/jobs/api/use-schedule";
+import {
+  SEARCH_GONE,
+  scheduleFailure,
+} from "@/features/jobs/helpers/saved-searches";
 
 const CLOCK = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -61,23 +73,39 @@ function initial(state: ScheduleState | undefined): SweepSchedule {
 
 export function ScheduleDialog({
   state,
+  search,
   onClose,
 }: {
+  /** The main search's schedule; a saved search's is its own `schedule`. */
   state: ScheduleState | undefined;
+  /** A saved search, as its row shows it now; absent for the main search. */
+  search?: SavedSearch;
   onClose: () => void;
 }) {
   const id = useId();
-  const [draft, setDraft] = useState<SweepSchedule>(() => initial(state));
+  const [draft, setDraft] = useState<SweepSchedule>(() =>
+    initial(search ? search.schedule : state),
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false);
   const [zones] = useState(() =>
     timeZonesOwnFirst(ownTimeZone(), draft.timezone),
   );
-  const save = useSaveSchedule({
+  // A saved search read again after a conflict: the next save goes on its stored revision.
+  const [fresh, setFresh] = useState<SavedSearch | null>(null);
+  const readSearches = useReadSearches();
+  const target =
+    search && fresh && fresh.revision > search.revision ? fresh : search;
+  const shown = target ? target.schedule : state;
+  const done = (title: string, sent: SweepSchedule) => {
+    setSaving(false);
+    toast.success(`${title}: ${describeSchedule(sent)}.`);
+    onClose();
+  };
+  const saveMain = useSaveSchedule({
     onSuccess: (_saved, sent) => {
-      setSaving(false);
-      toast.success(`Automatic search: ${describeSchedule(sent)}.`);
-      onClose();
+      done("Automatic search", sent);
     },
     onError: (failure) => {
       setSaving(false);
@@ -88,6 +116,35 @@ export function ScheduleDialog({
             ? `Not saved: ${errorDetail(failure) ?? "the schedule is not valid"}.`
             : `Not saved. ${describeError(failure)}`,
       );
+    },
+  });
+  const saveSaved = useScheduleSearch({
+    onSuccess: (saved) => {
+      done(`Automatic search of ${saved.name}`, scheduleOf(saved.schedule));
+    },
+    onError: (failure) => {
+      const words = scheduleFailure(failure);
+      setGone(words.gone);
+      setError(words.text);
+      if (!words.moved || !search) {
+        setSaving(false);
+        return;
+      }
+      readSearches()
+        .then(
+          (list) => {
+            const found = list.items.find((item) => item.id === search.id);
+            if (found) setFresh(found);
+            else {
+              setGone(true);
+              setError(SEARCH_GONE);
+            }
+          },
+          () => undefined,
+        )
+        .finally(() => {
+          setSaving(false);
+        });
     },
   });
 
@@ -112,7 +169,12 @@ export function ScheduleDialog({
       invalid && !draft.enabled
         ? { ...DEFAULT_SCHEDULE, timezone: draft.timezone }
         : { ...draft, times: [...new Set(draft.times)].sort() };
-    save.mutate(sent);
+    if (target)
+      saveSaved.mutate({
+        search: target,
+        schedule: { enabled: sent.enabled, days: sent.days, times: sent.times },
+      });
+    else saveMain.mutate(sent);
   };
 
   return (
@@ -124,10 +186,12 @@ export function ScheduleDialog({
     >
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg [&>*]:min-w-0">
         <DialogHeader>
-          <DialogTitle>Automatic search</DialogTitle>
+          <DialogTitle>
+            {search ? `Automatic search of ${search.name}` : "Automatic search"}
+          </DialogTitle>
           <DialogDescription>
-            The app searches the job websites ticked in Find jobs by itself at
-            these times, as Find jobs does. It is off until you turn it on.
+            The app runs {search ? search.name : "your main search"} by itself
+            at these times, as Run now does. It is off until you turn it on.
           </DialogDescription>
         </DialogHeader>
         <form id={`${id}-form`} onSubmit={submit} className="grid gap-4">
@@ -246,24 +310,33 @@ export function ScheduleDialog({
             ) : null}
           </FieldSet>
 
-          <Field className="gap-1.5">
-            <FieldLabel htmlFor={`${id}-zone`}>Time zone</FieldLabel>
-            <NativeSelect
-              id={`${id}-zone`}
-              value={draft.timezone}
-              disabled={!draft.enabled}
-              onChange={(event) => {
-                const timezone = event.target.value;
-                setDraft((old) => ({ ...old, timezone }));
-              }}
-            >
-              {zones.map((zone) => (
-                <option key={zone} value={zone}>
-                  {zone}
-                </option>
-              ))}
-            </NativeSelect>
-          </Field>
+          {search ? (
+            <p className="text-sm text-muted-foreground">
+              The times are in your time zone, {draft.timezone}, which all your
+              searches share: change it in the schedule of Main search. When two
+              of your searches are due at the same time, the second waits in
+              line and starts when the first ends.
+            </p>
+          ) : (
+            <Field className="gap-1.5">
+              <FieldLabel htmlFor={`${id}-zone`}>Time zone</FieldLabel>
+              <NativeSelect
+                id={`${id}-zone`}
+                value={draft.timezone}
+                disabled={!draft.enabled}
+                onChange={(event) => {
+                  const timezone = event.target.value;
+                  setDraft((old) => ({ ...old, timezone }));
+                }}
+              >
+                {zones.map((zone) => (
+                  <option key={zone} value={zone}>
+                    {zone}
+                  </option>
+                ))}
+              </NativeSelect>
+            </Field>
+          )}
 
           <p role="status" aria-live="polite" className="text-sm">
             {!draft.enabled
@@ -272,10 +345,11 @@ export function ScheduleDialog({
                 ? `Next automatic search: ${formatInZone(next, draft.timezone)}.`
                 : "Pick at least one day and one time."}
           </p>
-          {draft.enabled && state && !state.active && state.enabled ? (
+          {draft.enabled && shown && !shown.active && shown.enabled ? (
             <p className="text-xs text-muted-foreground">
-              No job website is ticked in Find jobs yet: nothing runs until one
-              is.
+              {search
+                ? "This search has no job website, company board or job feed to search yet: nothing runs until it has one."
+                : "No job website is ticked in Find jobs yet: nothing runs until one is."}
             </p>
           ) : null}
 
@@ -293,7 +367,7 @@ export function ScheduleDialog({
           <Button
             type="submit"
             form={`${id}-form`}
-            disabled={saving || (draft.enabled && invalid)}
+            disabled={saving || gone || (draft.enabled && invalid)}
           >
             {saving ? "Saving" : "Save"}
           </Button>

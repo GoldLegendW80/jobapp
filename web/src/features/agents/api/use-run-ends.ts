@@ -1,12 +1,15 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
 
+import { getSweep } from "@/features/jobs/api/sweeps-api";
+
 import {
   claimRun,
   firstSight,
   newlyEnded,
   releaseRun,
   type Baseline,
+  type RunEnd,
 } from "../helpers/run-ends";
 import {
   ACTIVE_FLOW_STATUSES,
@@ -16,12 +19,26 @@ import {
 } from "./activity-api";
 import { useActivityCount } from "./use-activity";
 
+/** A job search's run is named by its sweep: the saved search that sweep ran, or nothing for the
+ * main search or when the sweep cannot be read (the toast then keeps its words). */
+async function withSearch(run: WorkflowRunDetail): Promise<RunEnd> {
+  if (run.workflow !== "job_search") return run;
+  try {
+    const search = (await getSweep(run.id)).search;
+    return search && search.id !== "main"
+      ? { ...run, search: search.name }
+      : run;
+  } catch {
+    return run;
+  }
+}
+
 /**
  * Calls `onEnd` once with the summary of each of the person's workflow runs that ends while the
  * page is open, read from the Activity tab's count (no read of its own on an interval): a run
  * that ended before the first count, or that another tab of this browser announced, is left out.
  */
-export function useRunEnds(onEnd: (run: WorkflowRunDetail) => void) {
+export function useRunEnds(onEnd: (run: RunEnd) => void) {
   const client = useQueryClient();
   const count = useActivityCount();
   const baseline = useRef<Baseline | null>(null);
@@ -56,7 +73,10 @@ export function useRunEnds(onEnd: (run: WorkflowRunDetail) => void) {
           (summary) => {
             // Started again since (a rebuild joins its run): its next end is announced.
             if (ACTIVE_FLOW_STATUSES.has(summary.status)) giveBack(run.id);
-            else announce.current(summary);
+            else
+              void withSearch(summary).then((ended) => {
+                announce.current(ended);
+              });
           },
           () => {
             giveBack(run.id);

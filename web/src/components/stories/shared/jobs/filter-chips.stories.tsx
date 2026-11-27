@@ -3,11 +3,15 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { FilterChips } from "@/components/shared/jobs/filters/filter-chips";
 import { SOME_FILTERS } from "@/design-system/fixtures/job-filters";
 import { WithFilters } from "@/design-system/fixtures/job-harnesses";
+import { REMOTE_SEARCH } from "@/design-system/fixtures/saved-searches";
+import { withApp } from "@/design-system/with-app";
 import { EMPTY_FILTERS } from "@/features/jobs/helpers/filters";
+import { fakeSearches } from "@/test/searches";
 
 const meta = {
   title: "Shared/Jobs/Filter chips",
   tags: ["autodocs"],
+  decorators: [withApp],
   parameters: {
     docs: {
       description: {
@@ -56,4 +60,26 @@ export const OnAPhone: Story = {
       </WithFilters>
     </div>
   ),
+};
+
+/** The postings one saved search added: the chip names it (jobs J33b). */
+export const BySearch: Story = {
+  name: "Added by one saved search",
+  beforeEach: () => {
+    fakeSearches({ saved: [REMOTE_SEARCH] });
+  },
+  render: () => (
+    <WithFilters initial={{ ...EMPTY_FILTERS, search: REMOTE_SEARCH.id }}>
+      {(props) => <FilterChips {...props} />}
+    </WithFilters>
+  ),
+};
+
+/** A search deleted since the address was made: the chip says so and can be removed. */
+export const ByDeletedSearch: Story = {
+  name: "Added by a deleted search",
+  beforeEach: () => {
+    fakeSearches({ saved: [] });
+  },
+  render: BySearch.render,
 };

@@ -58,16 +58,38 @@ function payText(filters: JobFilters): string {
   return filters.pay === "not_stated" ? "Pay: not stated" : "Pay: stated";
 }
 
-/** The chips in the order of the Filters panel: the search first, then place, work mode,
- * contract, criteria, website, published, pay, fit, application, status, found, company, and the
- * search that added the postings. */
-export function activeFilterChips(filters: JobFilters): FilterChip[] {
+/** The name of the search a filter names: a name, `null` for a search the person no longer has,
+ * `undefined` while her searches are not known. */
+export type SearchName = (id: string) => string | null | undefined;
+
+function searchChip(id: string, nameOf: SearchName | undefined): string {
+  const name = id === "main" ? "Main search" : nameOf?.(id);
+  return name === null
+    ? "Added by a deleted search"
+    : name === undefined
+      ? "Added by one of your searches"
+      : `Added by ${name}`;
+}
+
+/** The chips in the order of the Filters panel: the words typed in the search box first, then the
+ * search that added the postings, place, work mode, contract, criteria, website, published, pay,
+ * fit, application, status, found, company, and the run that added them. */
+export function activeFilterChips(
+  filters: JobFilters,
+  nameOf?: SearchName,
+): FilterChip[] {
   const chips: FilterChip[] = [];
   if (filters.q)
     chips.push({
       key: "q",
       text: `Search: ${filters.q}`,
       without: { ...filters, q: "" },
+    });
+  if (filters.search)
+    chips.push({
+      key: "search",
+      text: searchChip(filters.search, nameOf),
+      without: { ...filters, search: null },
     });
   chips.push(
     ...each(filters, "places", (place) => `Place: ${place}`),

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { admin, fakeSession } from "@/test/auth";
 import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { renderApp } from "@/test/render";
+import { fakeSearches, makeSearch } from "@/test/searches";
 import { server } from "@/test/server";
 
 const SWEEP = "0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa";
@@ -238,5 +239,62 @@ describe("the Filters panel of jobs J29", () => {
     const chips = await screen.findByRole("list", { name: "Active filters" });
     expect(within(chips).getByText("Added by one search")).toBeInTheDocument();
     expect(api.requests.at(-1)?.get("sweep")).toBe(SWEEP);
+  });
+});
+
+describe("the Search entry of the Filters panel (jobs J33b)", () => {
+  const REMOTE = "00000000-0000-4000-8000-000000000001";
+
+  it("is offered only once the person has a saved search", async () => {
+    setUp();
+    const { sheet } = await openSheet();
+    expect(within(sheet).queryByLabelText("Search")).toBeNull();
+  });
+
+  it("keeps one search's postings in the address, as a chip named after it, through a reload", async () => {
+    const { api, facets } = setUp();
+    fakeSearches({ saved: [makeSearch(REMOTE, "Remote roles")] });
+    const { app, user, sheet } = await openSheet();
+    const search = await within(sheet).findByLabelText("Search");
+    expect(search).toHaveDisplayValue("Every search");
+    await user.selectOptions(search, "Remote roles");
+    expect(app.location()).toBe(`/jobs?search=${REMOTE}`);
+    expect(api.requests.at(-1)?.get("search")).toBe(REMOTE);
+    await user.selectOptions(search, "Main search");
+    expect(app.location()).toBe("/jobs?search=main");
+    expect(facets.at(-1)?.get("search")).toBe("main");
+    app.unmount();
+
+    // A reload, or a shared link: the chip names the search.
+    renderApp(`/jobs?search=${REMOTE}`);
+    const chips = await screen.findByRole("list", { name: "Active filters" });
+    expect(
+      await within(chips).findByText("Added by Remote roles"),
+    ).toBeInTheDocument();
+    expect(api.requests.at(-1)?.get("search")).toBe(REMOTE);
+  });
+
+  it("says a search deleted meanwhile is gone, lets the chip go, and shows no error page", async () => {
+    setUp();
+    fakeSearches({ saved: [] });
+    const app = renderApp(`/jobs?search=${REMOTE}`);
+    const user = userEvent.setup();
+    const chips = await screen.findByRole("list", { name: "Active filters" });
+    expect(
+      await within(chips).findByText("Added by a deleted search"),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await user.click(await screen.findByRole("button", { name: /^Filters/ }));
+    const sheet = await screen.findByRole("dialog", { name: "Filters" });
+    expect(within(sheet).getByLabelText("Search")).toHaveDisplayValue(
+      "A deleted search",
+    );
+    await user.keyboard("{Escape}");
+    await user.click(
+      screen.getByRole("button", {
+        name: "Remove filter Added by a deleted search",
+      }),
+    );
+    expect(app.location()).toBe("/jobs");
   });
 });

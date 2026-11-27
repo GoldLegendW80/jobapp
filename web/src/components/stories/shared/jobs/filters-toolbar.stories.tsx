@@ -14,6 +14,10 @@ import {
   type JobFilters,
 } from "@/features/jobs/helpers/filters";
 
+import { REMOTE_SEARCH } from "@/design-system/fixtures/saved-searches";
+import { phoneScreen } from "@/design-system/fixtures/phone-screen";
+import { fakeSearches } from "@/test/searches";
+
 const meta = {
   title: "Shared/Jobs/Filters toolbar",
   tags: ["autodocs"],
@@ -103,4 +107,17 @@ export const OnAPhone: Story = {
       <Toolbar initial={{ ...EMPTY_FILTERS, statuses: ["shortlisted"] }} />
     </div>
   ),
+};
+
+/** With a saved search, the panel offers Search after the presets: on a phone too, its field on
+ * the edge of the others (jobs J33b). */
+export const BySearchOnAPhone: Story = {
+  name: "Search entry on a phone",
+  beforeEach: () => {
+    fakeFacets();
+    fakeSearches({ saved: [REMOTE_SEARCH] });
+    return phoneScreen();
+  },
+  render: () => <Toolbar initial={{ ...EMPTY_FILTERS, search: "main" }} />,
+  play: OpenTheFilters.play,
 };
