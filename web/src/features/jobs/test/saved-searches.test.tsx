@@ -9,7 +9,7 @@ import {
   copyName,
   criteriaLine,
   halfSavedWords,
-  lastRunOf,
+  searchOf,
   nameProblem,
   runWords,
 } from "@/features/jobs/helpers/saved-searches";
@@ -18,10 +18,11 @@ import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { fakeSearches, makeSearch } from "@/test/searches";
-import { emptySweeps, server } from "@/test/server";
+import { server } from "@/test/server";
 
 const REMOTE = "00000000-0000-4000-8000-000000000001";
 const LYON = "00000000-0000-4000-8000-000000000002";
+const OLD_RUN = "0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa";
 const TERMS = (terms: string[]) => ({ advanced_regex: false, terms });
 
 function sweep(
@@ -64,12 +65,12 @@ beforeEach(() => {
 });
 
 async function openFindJobs() {
-  renderApp("/jobs");
+  const app = renderApp("/jobs");
   await screen.findByRole("list", { name: "Postings" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
   const list = await screen.findByRole("list", { name: "Your searches" });
-  return { user, list };
+  return { user, list, app };
 }
 
 function rowOf(list: HTMLElement, name: string) {
@@ -81,30 +82,35 @@ describe("Your searches (jobs J33)", () => {
     fakeSearches({
       main: () => ({ title_include: TERMS(["Data engineer"]) }),
       saved: [
-        makeSearch(REMOTE, "Remote roles", {
-          title_include: TERMS(["ML engineer"]),
-          location: TERMS(["Lyon"]),
-          web_search: false,
-          interactive_sites: [
-            {
-              platform: "indeed",
-              url: "https://www.indeed.com/",
-              enabled: true,
-              mode: "llm_browser",
+        makeSearch(
+          REMOTE,
+          "Remote roles",
+          {
+            title_include: TERMS(["ML engineer"]),
+            location: TERMS(["Lyon"]),
+            web_search: false,
+            interactive_sites: [
+              {
+                platform: "indeed",
+                url: "https://www.indeed.com/",
+                enabled: true,
+                mode: "llm_browser",
+              },
+            ],
+          },
+          {
+            last_run: {
+              sweep_id: OLD_RUN,
+              status: "done",
+              started_at: "2026-09-02T08:00:00Z",
+              finished_at: "2026-09-02T08:10:00Z",
+              new: 3,
             },
-          ],
-        }),
+          },
+        ),
       ],
     });
-    server.use(
-      http.get("*/api/jobs/sweeps", () =>
-        HttpResponse.json({
-          ...emptySweeps,
-          items: [sweep("s1", { id: REMOTE, name: "Remote roles" })],
-        }),
-      ),
-    );
-    const { list } = await openFindJobs();
+    const { list, user, app } = await openFindJobs();
     const rows = within(list).getAllByRole("listitem");
     expect(
       rows.map((row) => within(row).getByRole("heading").textContent),
@@ -112,11 +118,20 @@ describe("Your searches (jobs J33)", () => {
     const remote = rowOf(list, "Remote roles");
     expect(remote).toHaveTextContent("ML engineer; Lyon; on Indeed");
     expect(remote).toHaveTextContent("Runs when you start it.");
+    // Its last run is the api's, older than the last 20 sweeps (none listed here).
     expect(remote).toHaveTextContent(/Last run .*, 3 new postings\./);
     expect(rowOf(list, "Main search")).toHaveTextContent("Not run yet.");
     expect(
       screen.getByRole("link", { name: "Settings, Search" }),
     ).toHaveAttribute("href", "/settings/search");
+    // "3 new postings" opens the list on that run's postings, and Find jobs closes.
+    await user.click(
+      within(remote).getByRole("link", { name: "3 new postings" }),
+    );
+    expect(app.location()).toBe(`/jobs?sweep=${OLD_RUN}`);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Find jobs" })).toBeNull();
+    });
   });
 
   it("starts the main search in two clicks, Find jobs then Run now, and follows it", async () => {
@@ -511,8 +526,10 @@ describe("The words of a saved search", () => {
 
   it("says what a search looks for, and reads an old sweep as the main search's", () => {
     expect(criteriaLine({})).toBe("Any title; Anywhere; on the web");
-    expect(lastRunOf("main", [sweep("old", undefined)])?.id).toBe("old");
-    expect(lastRunOf(REMOTE, [sweep("old", undefined)])).toBeUndefined();
+    expect(searchOf(sweep("old", undefined))).toBe("main");
+    expect(searchOf(sweep("new", { id: REMOTE, name: "Remote roles" }))).toBe(
+      REMOTE,
+    );
   });
 
   it("says a run waits in line only when the api kept it in the line", () => {

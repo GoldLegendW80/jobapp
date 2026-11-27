@@ -1,5 +1,6 @@
 import { EllipsisVertical, Play } from "lucide-react";
-import { useId, useState, type FormEvent } from "react";
+import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { Link } from "react-router";
 
 import {
   AlertDialog,
@@ -20,7 +21,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import type { SavedSearch } from "@/features/jobs/api/searches-api";
-import type { Sweep } from "@/features/jobs/api/sweeps-api";
 import { formatDateTime } from "@/features/jobs/helpers/format";
 import {
   NAME_MAX,
@@ -30,21 +30,38 @@ import {
 } from "@/features/jobs/helpers/saved-searches";
 import { plural } from "@/features/jobs/helpers/selection";
 
-/** Where a search stands: running, waiting in the line, or its last run among those listed. */
-function stateLine(
-  search: SavedSearch,
-  running: boolean,
-  last: Sweep | undefined,
-  complete: boolean,
-): string {
-  if (running) return "Running now";
+/** Where a search stands: running, waiting in the line, or its last run, however old, whose new
+ * postings open in the Jobs list. */
+function StateLine({
+  search,
+  running,
+  onOpenPostings,
+}: {
+  search: SavedSearch;
+  running: boolean;
+  onOpenPostings: () => void;
+}): ReactNode {
+  const last = search.last_run;
+  if (running || last?.status === "running") return "Running now.";
   if (search.request)
-    return `Waits in line: number ${String(search.request.place)}`;
-  if (!last) return complete ? "Not run yet" : "No recent run";
+    return `Waits in line: number ${String(search.request.place)}.`;
+  if (!last) return "Not run yet.";
   const when = `Last run ${formatDateTime(last.started_at)}`;
-  return last.status === "failed"
-    ? `${when}, it stopped`
-    : `${when}, ${plural(last.new, "new posting")}`;
+  if (last.status === "failed") return `${when}, it stopped.`;
+  if (!last.new) return `${when}, no new posting.`;
+  return (
+    <>
+      {when},{" "}
+      <Link
+        to={`/jobs?sweep=${encodeURIComponent(last.sweep_id)}`}
+        onClick={onOpenPostings}
+        className="font-medium text-foreground underline underline-offset-4"
+      >
+        {plural(last.new, "new posting")}
+      </Link>
+      .
+    </>
+  );
 }
 
 /**
@@ -55,8 +72,6 @@ function stateLine(
  */
 export function SearchRow({
   search,
-  last,
-  complete,
   running,
   names,
   disabled,
@@ -67,11 +82,9 @@ export function SearchRow({
   onRename,
   onDelete,
   onTakeBack,
+  onOpenPostings,
 }: {
   search: SavedSearch;
-  last: Sweep | undefined;
-  /** Every sweep of the person is listed: a search without one never ran. */
-  complete: boolean;
   running: boolean;
   /** The names of the other saved searches. */
   names: readonly string[];
@@ -84,6 +97,8 @@ export function SearchRow({
   onRename: (name: string) => Promise<string | null>;
   onDelete: () => void;
   onTakeBack: () => void;
+  /** Its new postings open in the Jobs list: Find jobs closes. */
+  onOpenPostings: () => void;
 }) {
   const id = useId();
   const [renaming, setRenaming] = useState(false);
@@ -167,7 +182,11 @@ export function SearchRow({
           </p>
           <p className="text-xs text-muted-foreground">
             {scheduleWords(search.schedule)}.{" "}
-            {stateLine(search, running, last, complete)}.
+            <StateLine
+              search={search}
+              running={running}
+              onOpenPostings={onOpenPostings}
+            />
           </p>
         </div>
         <Button

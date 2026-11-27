@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 
+import { withApp } from "@/design-system/with-app";
 import { SearchRow } from "@/components/shared/jobs/search-setup/search-row";
 import {
   MAIN_SEARCH,
@@ -20,6 +21,7 @@ const meta = {
     },
   },
   decorators: [
+    withApp,
     (Story) => (
       <ul className="max-w-2xl divide-y">
         <Story />
@@ -28,8 +30,6 @@ const meta = {
   ],
   args: {
     search: REMOTE_SEARCH,
-    last: undefined,
-    complete: true,
     running: false,
     names: [],
     disabled: false,
@@ -40,6 +40,7 @@ const meta = {
     onRename: () => Promise.resolve(null),
     onDelete: () => undefined,
     onTakeBack: () => undefined,
+    onOpenPostings: () => undefined,
   },
 } satisfies Meta<typeof SearchRow>;
 
@@ -65,4 +66,22 @@ export const Waiting: Story = {
 export const Running: Story = {
   name: "Running now",
   args: { running: true },
+};
+
+/** Its last run weeks ago, older than the last 20 searches: the date, and its new postings open in
+ * the Jobs list. */
+export const OldLastRun: Story = {
+  name: "A last run weeks ago",
+  args: {
+    search: {
+      ...REMOTE_SEARCH,
+      last_run: {
+        sweep_id: "0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa",
+        status: "done",
+        started_at: "2026-09-02T08:00:00Z",
+        finished_at: "2026-09-02T08:10:00Z",
+        new: 12,
+      },
+    },
+  },
 };

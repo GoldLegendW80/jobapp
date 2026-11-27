@@ -76,14 +76,6 @@ export function searchNameOf(
       : undefined;
 }
 
-/** The newest sweep of a search among the last ones listed. */
-export function lastRunOf(
-  id: string,
-  sweeps: readonly Sweep[],
-): Sweep | undefined {
-  return sweeps.find((sweep) => searchOf(sweep) === id);
-}
-
 /** A free name for a copy: "Name copy", then "Name copy 2", within the 60 characters. */
 export function copyName(name: string, names: readonly string[]): string {
   const taken = new Set([MAIN_NAME, ...names.map((one) => one.toLowerCase())]);

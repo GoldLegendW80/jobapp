@@ -21,6 +21,7 @@ export function makeSearch(
     criteria,
     schedule: { ...emptySweeps.schedule },
     request: null,
+    last_run: null,
     ...overrides,
   };
 }

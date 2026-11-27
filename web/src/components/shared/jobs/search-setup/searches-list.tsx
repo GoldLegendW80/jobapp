@@ -16,12 +16,7 @@ import {
   useTakeBack,
 } from "@/features/jobs/api/use-saved-searches";
 import type { SweepRunner } from "@/features/jobs/api/use-sweep-runner";
-import { useSweeps } from "@/features/jobs/api/use-sweeps";
-import {
-  lastRunOf,
-  runWords,
-  searchOf,
-} from "@/features/jobs/helpers/saved-searches";
+import { runWords, searchOf } from "@/features/jobs/helpers/saved-searches";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -68,12 +63,11 @@ export function SearchesList({
   runner: SweepRunner;
   onEdit: (id: string) => void;
   onNew: () => void;
-  /** A search started: Find jobs closes so its progress shows on the page. */
+  /** A search started, or its new postings open in the list: Find jobs closes, so they show on
+   * the page. */
   onStarted: () => void;
 }) {
   const searches = useSavedSearches();
-  const history = useSweeps();
-  const sweeps = history.data?.items ?? [];
   const items = searches.data?.items ?? [];
   const names = items.filter((item) => !item.main).map((item) => item.name);
   const running = runner.running?.search ? searchOf(runner.running) : null;
@@ -206,8 +200,6 @@ export function SearchesList({
               <SearchRow
                 key={search.id}
                 search={search}
-                last={lastRunOf(search.id, sweeps)}
-                complete={history.isSuccess && sweeps.length < 20}
                 running={running === search.id}
                 names={names.filter((one) => one !== search.name)}
                 disabled={busy}
@@ -230,6 +222,7 @@ export function SearchesList({
                 onTakeBack={() => {
                   takeBack.mutate(search.id);
                 }}
+                onOpenPostings={onStarted}
               />
             ))}
           </ul>
