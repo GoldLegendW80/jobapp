@@ -35,6 +35,7 @@ class Fitted:
     pdf: bytes
     fit: bool  # one page; False is an overflow at the tightest step
     renders: int  # renders this fit made
+    text: str | None = None  # the kept PDF's text layer (Rendered.text)
 
 
 async def fit[Step](
@@ -65,6 +66,7 @@ async def fit[Step](
             pdf=seen[index].pdf,
             fit=seen[index].pages == 1,
             renders=len(seen),
+            text=seen[index].text,
         )
         logger.info(
             "documents.fit.done",

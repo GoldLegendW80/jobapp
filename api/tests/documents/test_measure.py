@@ -565,7 +565,7 @@ def test_both_writes_the_letter_from_the_cv_with_what_the_cv_left_of_the_ceiling
     cv, letter = measure.run_pair(env, ALEX, "both", 0)
     assert (cv.writer, cv.status, letter.writer, letter.status) == ("cv", "done", "letter", "done")
     assert letter.figures["first_claims"] == 2
-    assert letter.first_codes == {"employer_not_in_profile": 2}
+    assert letter.first_codes == {"employer_not_in_profile": 2, "letter_under_length": 1}
     with factory() as session:
         ceilings = dict(
             session.execute(

@@ -70,7 +70,7 @@ from sqlalchemy.orm import Session, undefer
 from app.config import get_settings
 from app.documents import checks as doc_checks
 from app.documents import content as c
-from app.documents import templates
+from app.documents import pdf_text, templates
 from app.documents.corrections import Correction
 from app.documents.models import (
     OPEN_GENERATION,
@@ -967,8 +967,11 @@ def attach_pdf(
     fit_step: int | None,
     pages: int,
     max_bytes: int | None = None,
+    checked: list[Correction] | None = None,
 ) -> DocumentVersion:
-    """Store a render's PDF on a version, with its SHA-256 and its fit. Never on a frozen one."""
+    """Store a render's PDF on a version, with its SHA-256 and its fit. Never on a frozen one.
+    `checked`, the records of the check of its text layer (`pdf_text.records`), replace those of
+    an earlier PDF of the version among its corrections; None leaves them as they are."""
     if len(pdf) > _limit(max_bytes, "documents_max_pdf_bytes"):
         raise PdfTooLargeError(len(pdf))
     document = lock_document(db, user_id, document_id)
@@ -979,6 +982,9 @@ def attach_pdf(
     found.pdf_sha256 = hashlib.sha256(pdf).digest()
     found.legacy_file_id = None
     found.fit, found.fit_step, found.pages = fit, fit_step, pages
+    if checked is not None:
+        kept = pdf_text.split(found.corrections or [])[0]
+        found.corrections = [*kept, *(record.as_dict() for record in checked)]
     db.flush()
     return found
 

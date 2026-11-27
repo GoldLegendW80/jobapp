@@ -88,6 +88,11 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ai-job-search (https://github.com/ai-job-search-dev/ai-job-search)
+The check of runs copied from the posting (api/app/documents/copied_runs.py) follows the rule of
+its "echo traps" (.claude/skills/job-application-assistant/10-echo-traps.md: five or more words
+of the posting is a lift, its hard terms aside); the check of a finished PDF's text layer
+(api/app/documents/pdf_text.py) follows what its tools/verify_pdf.py checks. Both are written
+anew in this app's own shape; no code of it is copied.
 The comparison of the languages a posting requires with the person's (api/app/jobs/languages.py,
 the `language` code of api/app/jobs/criteria_badge.py and the language notices of
 api/app/jobs/notices.py) follows the rule of its Language Gate

@@ -9,9 +9,12 @@ api (the notes on a hand edit) and the chat all call it. It finds, in this order
    code}`, with what `DocumentSources` adds (below); the credentials, change words and decades
    the person's texts do not state (`rules.credentials`, `rules.changes`, `rules.decades`); and
    the person's banned phrases with the starter list when it is on (`banned_phrase`,
-   `settings.banned_phrases`);
+   `settings.banned_phrases`); and each run of five or more words copied from the posting's
+   text, the posting's own terms aside (`copied_from_posting`, `copied_runs`), in the fields of
+   `copied_fields`, a `needs_rewrite` claim: said again in the person's words, never cut;
 3. `separator`: with the person's dash rule on, each dash used as a separator;
-4. `note`: the template's soft lengths, given `soft_limits`, and an empty required field.
+4. `note`: the template's soft lengths, given `soft_limits`, an empty required field, and a
+   letter's body far from the length its writer is asked for (`rules.letter_length`).
 
 Nothing here refuses a render, a download or a send: `invalid` is answered to a writer at
 submit, everything else is corrected (`corrections`) or shown. Each claim carries `rewrite`
@@ -64,7 +67,7 @@ from datetime import date
 from pydantic import BaseModel
 
 from app.documents import content as c
-from app.documents import rules
+from app.documents import copied_runs, rules
 from app.documents.rules import Issue
 from app.documents.settings import DocumentSettings, banned_phrases
 from app.documents.sources import DocumentSources
@@ -1120,6 +1123,35 @@ def _classify(issues: list[Issue], texts: dict[str, str], sources: Sources) -> l
     return out
 
 
+# A CV's free sentences: its competencies and skills are terms, which a posting names as well.
+_CV_SENTENCES = frozenset(("headline", "summary", "highlights", "experience"))
+# A letter's fields but the recipient ("Hiring team, " and the company) and the unprinted target.
+_LETTER_LINES = frozenset(("recipient", "target"))
+
+
+def copied_fields(kind: c.Kind, fields: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """The fields the check of copied runs reads: a letter's printed text but its recipient, a
+    CV's free sentences; nothing of a base CV or a proposal, which no posting text reaches."""
+    if kind == "letter":
+        return [(path, text) for path, text in fields if path.split(".")[0] not in _LETTER_LINES]
+    if kind == "cv":
+        return [(path, text) for path, text in fields if path.split(".")[0] in _CV_SENTENCES]
+    return []
+
+
+def copied_issues(kind: c.Kind, fields: list[tuple[str, str]], sources: Sources) -> list[Issue]:
+    """A `copied_from_posting` claim per copied run of the posting's text (`copied_runs`)."""
+    if not isinstance(sources, DocumentSources) or not sources.posting_text:
+        return []
+    text = "\n".join(sources.posting_text)
+    against = copied_runs.posting(text, (*sources.posting_names, *sources.terms))
+    return [
+        Issue(path, start, end, rules.COPIED_RUN, "claim")
+        for path, text in copied_fields(kind, fields)
+        for start, end in copied_runs.runs(text, against)
+    ]
+
+
 def _sorted(issues: Iterable[Issue], order: dict[str, int]) -> list[Issue]:
     level = {name: i for i, name in enumerate(rules.LEVELS)}
     return sorted(
@@ -1181,9 +1213,11 @@ def run(
                 Issue(path, sep.start, sep.end, rules.DASH_SEPARATOR, "separator")
                 for sep in rules.separators(text)
             ]
+    issues += copied_issues(kind, fields, sources)
     if soft_limits is not None:
         issues += rules.soft_lengths(model, soft_limits)
     issues += rules.required_empty(model)
+    issues += rules.letter_length(model)
     issues = _classify(issues, dict(fields), sources)
     terms = sources.terms if isinstance(sources, DocumentSources) else ()
     return Checks(kind, model, tuple(_sorted(issues, order)), terms or sources.known_terms)
