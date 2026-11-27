@@ -6,6 +6,7 @@
  * No dashes as separators.
  */
 import type { Approval, CancelResult } from "../api/apply-api";
+import { agentAsked, agentWaits, showsAsk } from "./agent-wait";
 import { cancelKindOf } from "./apply-section-rules";
 import { blockingFields, documentLine } from "./apply-state";
 import { DECISIONS, type Confirmation } from "./decisions";
@@ -31,6 +32,7 @@ const WAITING = new Set([
 /** The item waits for the person (a Full auto rehearsal waits for its answer); the api lists these first. */
 export const isWaiting = (item: QueueItem) =>
   (WAITING.has(item.state) && !isDeciding(item)) ||
+  agentWaits(item) ||
   item.rehearsal === true ||
   (item.mode === "manual" && item.needs === "session_ended");
 
@@ -70,10 +72,10 @@ export function queuePoll(
   return Number.isFinite(next) ? next : false;
 }
 
-/** The form is filled and its answers can be read and corrected. */
+/** The form is filled and its answers can be read and corrected (not the apply agent's wait, A25). */
 export const isReviewable = (item: QueueItem) =>
   (item.state === "ready" && !isDeciding(item)) ||
-  item.state === "needs_person";
+  (item.state === "needs_person" && !showsAsk(item));
 
 /**
  * An item "Approve all ready" may name (owner, 2026-11-05): a Review first form filled and
@@ -139,8 +141,10 @@ const CANCEL: Confirmation = {
 };
 
 /** What the card's Cancel asks: once the assistant acted on a send button, that it may be sent. */
-export const cancelAsk = (item: QueueItem): Confirmation =>
-  cancelKindOf(item) === "cancelAfterSend" ? DECISIONS.cancelAfterSend : CANCEL;
+export const cancelAsk = (item: QueueItem, afterSend = false): Confirmation =>
+  cancelKindOf(item, afterSend) === "cancelAfterSend"
+    ? DECISIONS.cancelAfterSend
+    : CANCEL;
 
 /** Cancel all on the Under way section (A24): each item there that its own Cancel stops. */
 export const cancelAllOf = (items: readonly QueueItem[]) =>
@@ -180,9 +184,12 @@ export const needsPostingPage = (item: QueueItem) =>
 export const canConfirmSubmitted = (item: QueueItem) =>
   item.state === "submit_unknown";
 
-/** "Try again" after the click, as on the posting's page: a new approval, never the same one. */
+/** "Try again" after the click, as on the posting's page: a new approval, never the same one; and
+ * once the assistant stopped waiting for the person (A25). */
 export const canRetry = (item: QueueItem) =>
-  item.state === "submit_unknown" || item.state === "refused_by_site";
+  item.state === "submit_unknown" ||
+  item.state === "refused_by_site" ||
+  agentAsked(item);
 
 const FITS: Record<string, string> = {
   one_page: "fits on one page",

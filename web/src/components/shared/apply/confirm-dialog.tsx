@@ -12,7 +12,7 @@ import { Spinner } from "@/components/ui/spinner";
 import type { Confirmation } from "@/features/apply/helpers/decisions";
 
 /**
- * One confirmation for Reject, Cancel application, "It was submitted" and "Try again": none of
+ * One confirmation for Reject, Cancel application, "It was sent" and "Try again": none of
  * them acts on the first click. The real call is made only by the confirm button; "Not yet" and
  * Escape send nothing.
  */

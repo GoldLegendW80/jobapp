@@ -13,7 +13,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The decisions on an application that ask first, in Your application: It was submitted, It was not sent and Try again after a click the app could not confirm, Try again after the site refused it, and Cancel application at any moment before an end.",
+          "The decisions on an application that ask first, in Your application: It was sent, It was not sent and Try again after a click the app could not confirm, Try again after the site refused it, and Cancel application at any moment before an end.",
       },
     },
   },

@@ -1,4 +1,9 @@
-import type { Application, ApplicationDetail } from "../api/apply-api";
+import type {
+  Application,
+  ApplicationDetail,
+  Question,
+} from "../api/apply-api";
+import { agentAsked, agentWaits } from "./agent-wait";
 import type { DecisionKind } from "./decisions";
 
 /** Where the person settles what the documents of an application wait for. */
@@ -36,23 +41,28 @@ export type CancelKind = "cancel" | "cancelAfterSend" | "notSent";
  */
 export function cancelKindOf(
   application: Application | null | undefined,
+  afterSend = false,
 ): CancelKind | null {
   if (!application || application.mode === "manual") return null;
   const email = application.ats === "email";
   if (application.state === "submit_unknown") return email ? null : "notSent";
   if (application.state === "submitting")
     return email ? null : "cancelAfterSend";
-  return CANCELLABLE.has(application.state) ? "cancel" : null;
+  if (!CANCELLABLE.has(application.state)) return null;
+  // A25: the assistant asked after a send button (a step Review first traced): it may be sent.
+  return afterSend && !email ? "cancelAfterSend" : "cancel";
 }
 
 /**
  * This application's submit lease among the person's leases: the one the api names for it, as the
- * person may have several applications approved or held; null in a state without one.
+ * person may have several applications approved or held; null in a state without one, and while
+ * the apply agent waits for the person (its card shows that browser behind Watch the browser).
  */
 export function submitLeaseOf(
   application: Application | null,
 ): { application: string } | null {
-  if (!application || application.ats === "email") return null;
+  if (!application || application.ats === "email" || agentWaits(application))
+    return null;
   return ["approved", "held", "submitting"].includes(application.state)
     ? { application: application.id }
     : null;
@@ -64,4 +74,16 @@ export function retryKindOf(
 ): DecisionKind {
   if (detail?.review_agent) return "retryReview";
   return detail?.agent ? "retryAgent" : "retry";
+}
+
+/**
+ * Try again after the assistant stopped waiting for the person (A25, `agent_asked`): one more run
+ * with the earlier asks and answers, saying so when a send button had been clicked before.
+ */
+export function askRetryOf(
+  application: Application | null | undefined,
+  question: Question | null | undefined,
+): "retryAsked" | "retryAskedAfterSend" | null {
+  if (!agentAsked(application)) return null;
+  return question?.after_send ? "retryAskedAfterSend" : "retryAsked";
 }

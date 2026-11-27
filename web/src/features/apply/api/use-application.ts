@@ -27,6 +27,7 @@ import {
   pollInterval,
   reviewReason,
 } from "../helpers/apply-state";
+import { isAsk, showsAsk } from "../helpers/agent-wait";
 import { submitLeaseOf } from "../helpers/apply-section-rules";
 import { serverOffset } from "../helpers/full-auto-state";
 import { ON_PAGE, waitOf } from "../helpers/needs-person-state";
@@ -97,6 +98,8 @@ export function useApplication(job: JobDetail) {
     enabled:
       id !== undefined &&
       hasForm(application) &&
+      // A25: the apply agent's wait has no filled form to read; its card reads the detail.
+      !showsAsk(application) &&
       !reviewAgentOf(queryClient, id) &&
       !(reviewReady && !queryClient.getQueryData(applicationKey(id))),
     refetchInterval: pollInterval(application),
@@ -111,7 +114,7 @@ export function useApplication(job: JobDetail) {
     ON_PAGE.has(application.needs ?? "");
   const retrying =
     application?.state === "queued" && application.needs === "retry";
-  // One click Apply's question (A19): the detail holds its sentence.
+  // One click Apply's question (A19): the detail holds its sentence (A25's ask: AgentWait).
   const asked =
     application?.state === "needs_person" &&
     application.needs === "agent_question";
@@ -127,7 +130,8 @@ export function useApplication(job: JobDetail) {
         application?.state === "held" ||
         onPage ||
         retrying ||
-        asked),
+        asked ||
+        showsAsk(application)),
     refetchInterval: (current) => {
       const events = current.state.data?.events;
       const wait = onPage && events ? waitOf(events) : null;
@@ -178,7 +182,8 @@ export function useApplication(job: JobDetail) {
     // person's Try again, in place of the plain button.
     afterSend:
       application?.state === "submit_unknown" &&
-      detail.data?.question?.after_send
+      detail.data?.question?.after_send &&
+      !isAsk(detail.data.question)
         ? detail.data.question
         : null,
     holdUntil:
