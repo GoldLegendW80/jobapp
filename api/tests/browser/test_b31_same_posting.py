@@ -670,3 +670,13 @@ def test_the_production_run_keeps_what_it_saw() -> None:
     assert [url for url in navigated if "viewjob" in url] == [
         f"{INDEED}viewjob?jk={k}" for k in keys(20)
     ]
+
+
+def test_the_report_tool_says_the_cap_the_cards_past_it_and_the_ids() -> None:
+    from app.browser import finder_tools
+
+    said = finder_tools.DESCRIPTIONS["report_postings"]
+    assert f"at most {finder.APP_OPENS_MAX} a report" in said
+    assert "card of a list" in said
+    assert "Indeed's jk, LinkedIn's job id" in said
+    assert " - " not in said
