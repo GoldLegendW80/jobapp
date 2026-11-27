@@ -57,6 +57,9 @@ export const jobListItemSchema = z.object({
   // Jobs J31: the address of the list it was seen in, its own page not read; null for any other
   // posting and once its page was read. Absent from an older api.
   list_url: z.string().nullable().default(null),
+  // Jobs J36: seen only in a list, and the app failed to read its own page on 3 different days:
+  // it no longer tries. Absent from an older api.
+  page_given_up: z.boolean().default(false),
 });
 export type JobListItem = z.infer<typeof jobListItemSchema>;
 

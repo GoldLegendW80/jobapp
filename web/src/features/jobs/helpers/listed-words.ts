@@ -70,3 +70,56 @@ export function listedReadSentence(count?: number): string {
 }
 
 export const countedCards = total;
+
+/** Jobs J36: on a posting whose own page the app failed to read on 3 different days. */
+export const LISTED_GIVEN_UP =
+  "The app tried to read its own page on 3 different days and no longer tries: paste its text to use it.";
+
+/** Why the app's reading of the pages of postings seen in a list ended (api's listed_pages.ENDS),
+ * said of the postings still waiting for their page. */
+export const LISTED_PAGES_ENDS: Record<string, string> = {
+  done: "the next search tries again",
+  time_bound: "the time set for reading them ran out",
+  browser_wanted: "an application needed the browser",
+  walled: "the website showed a sign in page or a security check",
+  memory: "the browser ran short of memory",
+  permission: "the website's permission was taken back",
+  store_failed: "the search ended",
+  browser_lost: "the browser was no longer available",
+  failed: "the app met a problem",
+};
+
+export interface ListedPages {
+  read: number;
+  closed: number;
+  unread: number;
+  given_up: number;
+  left: number | null;
+  ended: string;
+}
+
+/** Jobs J36: what the app read by itself after a website's agent, and what still waits, or "". */
+export function listedPagesSentence(pages?: ListedPages | null): string {
+  if (!pages) return "";
+  const opened = pages.read + pages.closed + pages.unread;
+  const left = pages.left ?? 0;
+  if (opened <= 0 && left <= 0) return "";
+  const figure = (n: number) => n.toLocaleString("en-GB");
+  const given =
+    pages.given_up > 0 ? ` (${figure(pages.given_up)} no longer tried)` : "";
+  const parts = [
+    pages.read > 0 ? `${figure(pages.read)} read` : "",
+    pages.closed > 0 ? `${figure(pages.closed)} closed, as gone` : "",
+    pages.unread > 0 ? `${figure(pages.unread)} could not be read${given}` : "",
+  ].filter((part) => part !== "");
+  const done = opened
+    ? `After the search, the app opened the pages of ${plural(opened, "posting")} seen only in a list: ${parts.join(", ")}.`
+    : "";
+  const why = Object.hasOwn(LISTED_PAGES_ENDS, pages.ended)
+    ? LISTED_PAGES_ENDS[pages.ended]
+    : LISTED_PAGES_ENDS.failed;
+  const wait = left
+    ? `${plural(left, "posting")} seen only in a list still ${left === 1 ? "waits" : "wait"} for ${left === 1 ? "its" : "their"} page: ${why ?? ""}.`
+    : "";
+  return [done, wait].filter((part) => part !== "").join(" ");
+}
