@@ -1898,8 +1898,8 @@ class ListedPage:
     """Jobs J36: what the app's read of the page of a posting kept from a card found, for that
     posting (`job_id`, at the address it opened, `url`): `read` (the page's `finding`, with the
     person's exclusion that set it aside, `excluded`), `gone` (the liveness `closed` finding
-    that closes it), else `unread` (with its `reason`: `walled` for a sign in or check page,
-    else ""). Set by the store once it committed: what it did (`done`:
+    that closes it), else `unread` (with its `reason`: `walled` for a wall, a sign in, a check
+    or a request to slow down, else ""). Set by the store once it committed: what it did (`done`:
     `read`, `closed`, `unread`, or "" when it left the posting as it was) and whether that
     failed reading was the posting's last try (`given_up`, service.PAGE_TRIES_DAYS)."""
 
@@ -1949,6 +1949,12 @@ def _listed_rows(user_id: uuid.UUID, host: str) -> sa.Select[Any]:
 LISTED_ROWS_AT_ONCE = 500  # the rows streamed at a time while the exact filters pick them
 
 
+def listed_key(day: date) -> Any:
+    """Jobs J36: a posting's place among the older ones on `day` (in SWEEP_TZ): the md5 of the
+    day and its id, the same all day long and another each day."""
+    return sa.func.md5(sa.func.concat(day.isoformat(), sa.cast(Job.id, sa.Text)))
+
+
 def _listed(row: Any, host: str, on_site: Callable[[str], bool]) -> bool:
     """A row of `_listed_rows` the website's reading opens: its source names `host` (not only a
     host that holds it) and its address is on the website's own hosts (`on_site`)."""
@@ -1961,12 +1967,17 @@ def listed_postings(
     host: str,
     on_site: Callable[[str], bool],
     first: set[uuid.UUID],
+    day: date,
 ) -> list[Listed]:
     """Jobs J36: the postings a website's reading of pages tries (`_listed`), in order: those of
-    `first` (the jobs this search stored or found again from a card, Known.carded), then the
-    others, the oldest first; at most LISTED_MAX of them."""
-    mine = sa.case((Job.id.in_(sorted(first)), 0), else_=1) if first else sa.literal(1)
-    statement = _listed_rows(user_id, host).order_by(mine, Job.created_at, Job.id)
+    `first` (the jobs this search stored or found again from a card, Known.carded), the oldest
+    first, then the others by `listed_key` of `day`, so the postings a reading holds at its end
+    (stored never) are not first again on every day; at most LISTED_MAX of them."""
+    order: list[Any] = []
+    if first:
+        mine = Job.id.in_(sorted(first))
+        order += [sa.case((mine, 0), else_=1), sa.case((mine, Job.created_at))]
+    statement = _listed_rows(user_id, host).order_by(*order, listed_key(day), Job.id)
     picked: list[Listed] = []
     with sessions() as db:
         rows = db.execute(statement.execution_options(yield_per=LISTED_ROWS_AT_ONCE))

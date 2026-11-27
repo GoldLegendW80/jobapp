@@ -9,6 +9,7 @@ import math
 import random
 import re
 import uuid
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -23,6 +24,7 @@ from tests.browser.test_b20_agent import HOME, START
 from tests.browser.test_b27_code_first import TabSite
 
 HOST = "jobs.example.test"
+TODAY = datetime(2026, 11, 27, 23, 30, tzinfo=UTC)  # 28 November in Europe/Paris
 
 
 def job(n: int) -> str:
@@ -92,7 +94,8 @@ SIGNIN = '- heading "Sign in" [level=1]\n- textbox "Email" [ref=e1]'
 CHECK = '- heading "Just a moment" [level=1]\n- paragraph: Checking your browser'
 CLOSED = '- heading "Robot Welder" [level=1]\n- paragraph: This job is no longer available.'
 HINTED = f'- heading "Robot Welder" [level=1]\n- paragraph: Applications closed\n{BODY}'
-ELSEWHERE = '- heading "Robot jobs" [level=1]\n- paragraph: 12 jobs found'
+# A page of the website that is not the posting's, with as much text as one.
+ELSEWHERE = f'- heading "Example jobs near Paris" [level=1]\n- paragraph: 12 jobs found\n{BODY}'
 SHORT = '- heading "Robot Welder" [level=1]\n- paragraph: Build invented robot arms in Paris.'
 # A wall whose own heading holds the posting's title (review of PR 864, item 4).
 TITLED_SIGNIN = f'- heading "Robot Welder" [level=1]\n{SIGNIN.replace("level=1", "level=2")}'
@@ -129,6 +132,126 @@ HEADED_LIST = (
         6, snippet="Build invented robot arms with Python for Example Robotics, two days on site."
     )
 )
+
+
+def indent(text: str, by: int) -> str:
+    return "\n".join(" " * by + line for line in text.split("\n"))
+
+
+# Posting pages as websites lay them out (review of PR 864, round 3), each with the header and
+# footer of `posting()`: every one is the posting's own page and must read. Invented.
+COMPANY = '- link "Example Robotics" [ref=t1]:\n  - /url: /companies/example-robotics'
+# The posting wrapped in an article that holds its company's link.
+ARTICLE = "\n".join(
+    [HEADER, "- main:", "  - article:", '    - heading "Robot Welder" [level=1]',
+     indent(COMPANY, 4), "    - paragraph: Paris, France", indent(BODY, 4), FOOTER]
+)  # fmt: skip
+# Sibling sections: a top card, the description, about the company, apply.
+SECTIONS = "\n".join(
+    [HEADER, "- main:",
+     '  - region "Robot Welder":', '    - heading "Robot Welder" [level=1]', indent(COMPANY, 4),
+     "    - paragraph: Paris, France",
+     '  - region "Description":', '    - heading "Description" [level=2]', indent(BODY, 4),
+     '  - region "About the company":', '    - heading "About Example Robotics" [level=2]',
+     "    - paragraph: Example Robotics builds invented robot arms for invented factories.",
+     '    - link "Visit the website" [ref=t2]:', "      - /url: https://example-robotics.test/",
+     '  - region "Apply":', '    - heading "Apply" [level=2]',
+     '    - link "Apply on the employer site" [ref=t3]:',
+     "      - /url: https://ats.example-hire.test/jobs/1",
+     FOOTER]
+)  # fmt: skip
+ABOUT = (
+    "- paragraph: Example Robotics is an invented maker of robot arms for invented factories. "
+    "As a Robot Welder you design the welding cells of a new line, write the control software "
+    "that drives them in Python, test it on the bench with the team and ship it to the line. "
+    "You plan the cells with the process engineers, read the drawings of the parts, set the "
+    "paths of the torches, tune the speeds and the currents, and check every seam with the "
+    "quality team before a batch leaves the cell. You keep the safety rules of the workshop, "
+    "train the operators on each new cell and write down what you changed. We ask for three "
+    "years of welding automation, Python, a robot framework and good written English. The "
+    "role is full time, hybrid with two days a week on site in Paris, with a yearly bonus, "
+    "a meal card and five weeks of paid leave. Interviews are held in two rounds."
+)
+
+
+# LinkedIn like: a top card (the company's link, the title), an "About the job" article holding
+# one link, the hiring team with a profile's link.
+def linkedin(title: str) -> str:
+    return LINKEDIN.replace('- heading "Robot Welder" [level=1]', f'- heading "{title}" [level=1]')
+
+
+LINKEDIN = "\n".join(
+    [HEADER, "- main:",
+     "  - generic:", indent(COMPANY, 4), '    - heading "Robot Welder" [level=1]',
+     "    - paragraph: Paris, France, 2 weeks ago, 40 applicants",
+     '    - button "Easy Apply" [ref=l0]', '    - button "Save" [ref=l9]',
+     "  - article:", '    - heading "About the job" [level=2]', indent(ABOUT, 4),
+     '    - link "example-robotics.test/careers" [ref=l2]:',
+     "      - /url: https://example-robotics.test/careers",
+     '  - region "Meet the hiring team":', '    - heading "Meet the hiring team" [level=2]',
+     '    - link "Alex Example" [ref=l3]:', "      - /url: /in/alex-example/",
+     "    - paragraph: Hiring manager at Example Robotics",
+     FOOTER]
+)  # fmt: skip
+# No `main`: the posting in nested blocks.
+NO_MAIN = "\n".join(
+    [HEADER, "- generic:", "  - generic:", "    - generic:",
+     '      - heading "Robot Welder" [level=1]', "      - generic:", indent(BODY, 8), FOOTER]
+)  # fmt: skip
+# The posting's text as a bulleted list.
+BULLETS = "\n".join(
+    [HEADER, "- main:", '  - heading "Robot Welder" [level=1]', "  - paragraph: What you will do",
+     "  - list:"]
+    + [f"    - listitem: {item}" for item in (
+        "Design the welding cells of an invented factory line",
+        "Write the control software of the cells in Python",
+        "Test it on the bench with the team every week",
+        "Ship it to the line and train the operators",
+        "Keep the safety rules of the workshop at all times",
+        "Three years of welding automation and a robot framework",
+    )]
+    + [FOOTER]
+)  # fmt: skip
+SHORT_LINES = (
+    "- paragraph: Example Robotics, Paris, France. Full time, hybrid, two days a week on site.",
+    "- paragraph: You weld the frames of invented robot arms on a cell you set up and tune.",
+    "- paragraph: You read the drawings, check every seam and keep the safety rules of the shop.",
+    "- paragraph: Three years of welding, a robot framework and Python. Start in January.",
+)
+SIMILAR_EIGHT = "\n".join(
+    ['  - region "Similar jobs":', '    - heading "Similar jobs" [level=2]', "    - list:"]
+    + [
+        f'      - listitem:\n        - link "Robot Job {chr(65 + i)}" [ref=s{i}]:\n'
+        f"          - /url: /jobs/{60 + i}\n        - paragraph: Example Robotics, Lyon"
+        for i in range(8)
+    ]
+)
+
+
+def short_posting(banner: str) -> str:
+    """A short posting (a title and four lines) with 8 similar postings and a cookie banner as
+    a `region` or a `dialog`."""
+    cookies = "\n".join(
+        [f'- {banner} "Cookies":', "  - paragraph: This invented site uses cookies to run.",
+         '  - button "Accept all" [ref=k1]', '  - button "Refuse all" [ref=k2]']
+    )  # fmt: skip
+    return "\n".join(
+        [cookies, HEADER, "- main:", '  - heading "Robot Welder" [level=1]',
+         indent("\n".join(SHORT_LINES), 2), SIMILAR_EIGHT, FOOTER]
+    )  # fmt: skip
+
+
+LAYOUTS = {
+    "posting": posting("Robot Welder"),
+    "article": ARTICLE,
+    "sections": SECTIONS,
+    "linkedin": LINKEDIN,
+    "no_main": NO_MAIN,
+    "bullets": BULLETS,
+    "short_region": short_posting("region"),
+    "short_dialog": short_posting("dialog"),
+}
+HOME_PAGE = '- heading "Example jobs" [level=1]\n- paragraph: Find your next invented job.'
 
 
 class NoTools:
@@ -176,15 +299,20 @@ VERDICTS = [
         "unread",
     ),
     (200, A, HINTED, "Robot Welder", "custom", "read"),  # a closure naming nothing: read
+    (200, A, posting("Robot Welder", HINTED_BODY), "Robot Welder", "custom", "read"),
     # A wall is never read, whatever its headings or its text hold (review, item 4).
     (200, A, TITLED_SIGNIN, "Robot Welder", "custom", "walled"),
     (200, A, TITLED_SIGNIN + "\n" + BODY, "Robot Welder", "custom", "walled"),
     (200, A, TITLED_CHECK, "Robot Welder", "custom", "walled"),
     (200, A, GUEST, "Robot Welder", "linkedin", "walled"),
     (403, A, GUEST, "Robot Welder", "custom", "walled"),
-    # Under service.TEXT_MIN_CHARS of text, the title alone is no posting's page.
-    (200, A, SHORT, "Robot Welder", "custom", "unread"),
-    (200, A, '- heading "Robot Welder" [level=1]', "Robot Welder", "custom", "unread"),
+    # Under service.TEXT_MIN_CHARS of text on its own address: a shell whose content was not
+    # there yet, held as a page that did not load (round 3, item 4).
+    (200, A, SHORT, "Robot Welder", "custom", "no_page"),
+    (200, A, '- heading "Robot Welder" [level=1]', "Robot Welder", "custom", "no_page"),
+    (200, A, "- paragraph: Loading", "Robot Welder", "custom", "no_page"),
+    (200, A, posting("Robot Welder", SHORT_BODY), "Robot Welder", "custom", "no_page"),
+    (200, A, f"{HEADER}\n{FOOTER}", "Robot Welder", "custom", "no_page"),  # the chrome alone
     (401, A, posting("Robot Welder"), "Robot Welder", "custom", "walled"),
     (403, A, posting("Robot Welder"), "Robot Welder", "custom", "walled"),
     (429, A, posting("Robot Welder"), "Robot Welder", "custom", "walled"),
@@ -218,22 +346,34 @@ VERDICTS = [
     (200, A, "", "Robot Welder", "custom", "no_page"),  # a page of no text
     (200, A, '- link "Home" [ref=e1]:\n  - /url: /', "Robot Welder", "custom", "no_page"),
     (400, A, "", "Robot Welder", "custom", "unread"),  # an error that is no wall nor gone
-    (200, A, posting("Robot Arm Engineer"), "Robot Welder", "custom", "unread"),  # another one
-    (200, A, posting("Robot"), "Robot Welder", "custom", "unread"),  # a piece of the title
-    (200, A, posting("Robot Welders Guild"), "Robot Welder", "custom", "unread"),  # longer word
-    (200, A, "- paragraph: Loading", "Robot Welder", "custom", "unread"),
+    # On its own address, its one primary heading sharing a meaningful word with the title is
+    # B21's rule for a report (`primary_heading`): read, as B27 reads it (declared, round 3).
+    (200, A, posting("Robot Arm Engineer"), "Robot Welder", "custom", "read"),
+    (200, A, posting("Robot"), "Robot Welder", "custom", "read"),
+    (200, A, posting("Robot Welders Guild"), "Robot Welder", "custom", "read"),
+    # No heading or line of it holds the title, and no primary heading shares a word with it.
+    (200, A, posting("Example Painter"), "Robot Welder", "custom", "unread"),
+    (200, A, bare("Example Painter"), "Robot Welder", "custom", "unread"),
+    (200, A, posting("Welder", BODY), "Robot Painter", "custom", "unread"),
     (200, "", "", "Robot Welder", "custom", "no_page"),  # the page did not load
-    # A page holding links (round 2, item 1): the posting's page with its header, sign in link
-    # and button, similar postings and footer is read on every platform; a list at its own
-    # address is not, and a page `shape` cannot tell writes nothing.
-    (200, A, posting("Robot Welder"), "Robot Welder", "linkedin", "read"),
+    # Its own address redirects to the home page, a search page or another posting's page.
+    (200, START, HOME_PAGE, "Robot Welder", "custom", "unread"),
+    (200, START + "search?q=robot+welder", HEADED_LIST, "Robot Welder", "custom", "unread"),
+    (200, job(2), ARTICLE, "Robot Welder", "custom", "unread"),
+    # Posting pages as websites lay them out, with their header, links and footer (round 3):
+    # read on every platform, as B27 reads them for a report.
+    *[(200, A, layout, "Robot Welder", "custom", "read") for layout in LAYOUTS.values()],
+    (200, A, LINKEDIN, "Robot Welder", "linkedin", "read"),
     (200, A, posting("Robot Welder"), "Robot Welder", "indeed", "read"),
     (200, A, bare("Robot Welder"), "Robot Welder", "custom", "read"),
-    (200, A, LIST_PAGE, "Robot Welder", "custom", "unread"),
-    (200, A, HEADED_LIST, "Robot Welder", "custom", "unsure"),
-    (200, A, posting("Robot Welder", HINTED_BODY), "Robot Welder", "custom", "unsure"),
-    # A short page whose cards' text is longer than its own: `shape` cannot tell.
-    (200, A, posting("Robot Welder", SHORT_BODY), "Robot Welder", "custom", "unsure"),
+    (200, A, posting("ROBOT  WELDER"), "Robot Welder H/F", "custom", "read"),  # a gender marker
+    (200, A, posting("Développeur Robot"), "developpeur robot", "custom", "read"),  # accents
+    (200, A, posting("Robot", f"- paragraph: Welder.\n{BODY}"), "Robot Welder", "custom", "read"),
+    # Nothing reads the page's shape: a list at the posting's own address whose heading holds
+    # its title is read as the posting (declared, round 3, item 2); under TEXT_MIN_CHARS of
+    # its own text, one is held.
+    (200, A, HEADED_LIST, "Robot Welder", "custom", "read"),
+    (200, A, LIST_PAGE, "Robot Welder", "custom", "no_page"),
 ]
 
 
@@ -252,7 +392,7 @@ def test_what_a_page_answers(status, landed, snapshot, title, platform, expected
 def test_a_list_the_session_read_is_never_read_as_the_posting() -> None:
     """Round 2, item 1: another address the session read before as a list is never the
     posting's page; its own address, which the session counts a list for its header and footer
-    links alone, is told by the page as it is now (`shape`)."""
+    links alone, is read."""
     snapshot = posting("Robot Welder")
     opened = finder.AppOpen(A, 200, True, True, True)
     page = page_of(A, snapshot)
@@ -276,104 +416,6 @@ def test_a_status_that_is_no_http_status_is_a_page_that_did_not_load() -> None:
         odd, A, page_of(A, snapshot), snapshot, "Robot Welder", "custom"
     )
     assert found == "no_page"
-
-
-# Whether a page holding links is the posting's (None), a list (unread), or one `shape` cannot
-# tell (unsure): (snapshot, title, expected). The landed address is A.
-SHAPES = [
-    (posting("Robot Welder"), "Robot Welder", None),
-    (posting("Senior Robot Welder (Stage)"), "Robot Welder", None),
-    (posting("ROBOT  WELDER"), "Robot Welder", None),  # case, spacing
-    (posting("Développeur Robot"), "developpeur robot", None),  # accents
-    (posting("Robot Welder"), "Robot Welder H/F", None),  # a gender marker
-    (posting("Robot Welder"), "Robot Welder (H/F)", None),
-    (bare("Robot Welder"), "Robot Welder", None),  # fewer than LIST_CARDS_MIN links
-    ("", "Robot Welder", None),
-    (
-        posting("Robot Welder", f"{BODY}\n- paragraph: Example Robotics site\n" + cards(1)),
-        "Robot Welder",
-        None,
-    ),
-    (posting("Robot Welder", f"{BODY}\n" + cards(2, "paragraph")), "Robot Welder", None),
-    (f"{HEADER}\n{FOOTER}\n{bare('Robot Welder')}", "Robot Welder", None),  # links in chrome only
-    # The similar postings in a side block: never counted against the posting's text.
-    (
-        f"{HEADER}\n- main:\n  {bare('Robot Welder')}\n- complementary:\n"
-        + "\n".join(f"  {line}" for line in cards(20).split("\n")),
-        "Robot Welder",
-        None,
-    ),
-    # The title across two lines of the posting's own text.
-    (posting("Robot", "- paragraph: Welder for invented cells.\n" + BODY), "Robot Welder", None),
-    # Its title in a paragraph of its own text, no heading of it.
-    (posting("Careers", f"- paragraph: Robot Welder\n{BODY}"), "Robot Welder", None),
-    # Links that are no cards: to the page itself, or with no words.
-    (
-        bare("Robot Welder")
-        + "\n"
-        + "\n".join(f'- link "#{i}" [ref=a{i}]:\n  - /url: {A}' for i in range(6)),
-        "Robot Welder",
-        None,
-    ),
-    (
-        bare("Robot Welder")
-        + "\n"
-        + "\n".join(f"- link [ref=a{i}]:\n  - /url: /jobs/{80 + i}" for i in range(6)),
-        "Robot Welder",
-        None,
-    ),
-    # A list: its title in a card only, or nowhere outside the header.
-    (LIST_PAGE, "Robot Welder", "unread"),
-    ('- heading "Robot jobs" [level=1]\n' + cards(6, "generic"), "Robot Job B", "unread"),
-    ('- heading "Robot jobs" [level=1]\n' + cards(6, "article"), "Robot Job B", "unread"),
-    ('- heading "Robot jobs" [level=1]\n- table:\n' + cards(6, "row"), "Robot Job B", "unread"),
-    ('- heading "Robot jobs" [level=1]\n' + cards(6, "generic"), "Robot Welder", "unread"),
-    (posting("Robot Arm Engineer"), "Robot Welder", "unread"),  # another posting's page
-    (posting("Robot Painter"), "Robot Arm Engineer", "unread"),  # its title in a card only
-    (
-        f'- banner:\n  - heading "Robot Welder" [level=1]\n{posting("Robot jobs")}',
-        "Robot Welder",
-        "unread",
-    ),
-    (
-        posting("Robot jobs", '- heading "Robot Welder" [level=2] [aria-hidden]\n' + BODY),
-        "Robot Welder",
-        "unread",
-    ),
-    (posting("Robot jobs", '- button "Robot Welder" [ref=b1]\n' + BODY), "Robot Welder", "unread"),
-    (
-        f"{posting('Robot jobs')}\n- complementary:\n  - paragraph: Robot Welder",
-        "Robot Welder",
-        "unread",
-    ),
-    # Its own text shorter than its cards': a list headed with its words, a long similar block.
-    (HEADED_LIST, "Robot Welder", "unsure"),
-    (
-        '- heading "Robot Welder" [level=1]\n'
-        + cards(6, "generic", "Build invented robot arms with Python for Example Robotics."),
-        "Robot Welder",
-        "unsure",
-    ),
-    (posting("Robot Welder", f"{BODY}\n" + cards(20)), "Robot Welder", "unsure"),
-    (
-        '- heading "Robot Welder" [level=1]\n' + cards(5),
-        "Robot Welder",
-        "unsure",
-    ),  # exactly LIST_CARDS_MIN
-    ('- heading "Robot Welder" [level=1]\n' + cards(4), "Robot Welder", None),  # one fewer
-]
-
-
-@pytest.mark.parametrize(("snapshot", "title", "expected"), SHAPES)
-def test_a_posting_page_that_holds_links_or_a_list(snapshot: str, title: str, expected) -> None:
-    assert listed_pages.posting_or_list(A, snapshot, title) == expected
-
-
-def test_a_hint_that_it_may_be_closed_on_a_page_holding_links_is_unsure() -> None:
-    assert (
-        listed_pages.posting_or_list(A, posting("Robot Welder"), "Robot Welder", True) == "unsure"
-    )
-    assert listed_pages.posting_or_list(A, bare("Robot Welder"), "Robot Welder", True) is None
 
 
 LI = "http://www.linkedin.test:8080/jobs/view/1234567890/"
@@ -523,6 +565,7 @@ class Commits:
         self.unsettled = False
         self.sessions = None
         self.after: Any = None
+        self.clock = lambda: TODAY
 
     async def save(self, source_id, source, batch, set_aside=(), listed=None) -> None:
         assert (source_id, source, batch, set_aside) == ("src", HOST, None, ())
@@ -571,8 +614,8 @@ def phase(
     clock = [0.0]
     asked: dict[str, Any] = {}
 
-    def postings(sessions, user_id, host, on_site, first):
-        asked.update(host=host, first=set(first), on_site=on_site)
+    def postings(sessions, user_id, host, on_site, first, day):
+        asked.update(host=host, first=set(first), on_site=on_site, day=day)
         return list(held)
 
     def left(sessions, user_id, host, on_site):
@@ -622,9 +665,9 @@ def phase(
 
 def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
     """Acceptance 1 to 3: one page at a time in a tab of its own, 2 to 4 s apart, the agent's
-    tab selected again; read, gone and failed stored; a wall is a failed reading of its posting
-    with its reason (round 2, follow up 1), and the second wall in a row ends the reading with
-    that one left as it is."""
+    tab selected again; read, gone and failed stored; a wall is held as a page that did not
+    load is (round 3, item 3), and the second wall in a row ends the reading with neither
+    stored."""
     board = Board(
         {
             job(1): posting("Robot Welder"),
@@ -641,13 +684,13 @@ def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
     assert done == {
         "read": 1,
         "closed": 1,
-        "unread": 2,
+        "unread": 1,
         "given_up": 0,
         "ended": "walled",
         "left": 7,
     }
     assert [(p.job_id.int, p.outcome, p.reason) for p in commits.saved] == [
-        (1, "read", ""), (2, "gone", ""), (3, "unread", ""), (4, "unread", "walled"),
+        (1, "read", ""), (2, "gone", ""), (3, "unread", ""),
     ]  # fmt: skip
     assert board.opened() == [job(n) for n in range(1, 6)]  # never the one after the walls
     pauses = asked["pauses"]  # B20: no page pause of the website's own (pause_for: none)
@@ -663,6 +706,7 @@ def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
     assert commits.saved[1].closed.verdict == "closed"
     assert asked["host"] == HOST
     assert asked["first"] == {uuid.UUID(int=3)}
+    assert asked["day"] == date(2026, 11, 28)  # the day of the order, in Europe/Paris
     for on_site in (asked["on_site"], asked["left_on_site"]):  # the website's own hosts only
         assert on_site(job(1)) is True
         assert on_site("https://www.other-board.test/viewjob?jk=1") is False
@@ -671,8 +715,9 @@ def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
 
 
 def test_a_wall_then_a_page_that_loads_then_a_wall_go_on(monkeypatch) -> None:
-    """Round 2, follow up 1: walls apart are each a failed reading with its reason; a wall on
-    one posting's page (or a false wall) never blocks the later ones."""
+    """Round 2, follow up 1 and round 3, item 3: walls apart are each a failed reading with
+    its reason, stored once a later page answers otherwise; a wall on one posting's page (or a
+    false wall) never blocks the later ones."""
     board = Board(
         {job(1): SIGNIN, job(2): ELSEWHERE, job(3): CHECK, job(4): posting("Robot Welder")}
     )
@@ -750,11 +795,79 @@ def test_a_redirect_to_a_list_the_session_read_before_stays_unread(monkeypatch) 
     assert done["ended"] == "done"
 
 
-def test_a_page_the_app_cannot_tell_from_a_list_writes_nothing(monkeypatch) -> None:
-    board = Board({job(1): HEADED_LIST, job(2): posting("Robot Welder")})
+def test_a_list_at_its_own_address_headed_with_its_title_is_read_as_declared(monkeypatch) -> None:
+    """Round 3, item 2, declared: nothing reads the page's shape, so a list of results served
+    at the posting's own address whose heading holds its title is read as the posting, as B27
+    reads such a page for a report; served at another address, it is a failed reading."""
+    search = START + "search?q=robot+welder"
+    board = Board({job(1): HEADED_LIST, search: HEADED_LIST}, redirects={job(2): search})
     done, commits, _ = phase(monkeypatch, board, [listed(1), listed(2)])
-    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [(2, "read")]
-    assert (done["read"], done["unread"], done["ended"]) == (1, 0, "done")
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [(1, "read"), (2, "unread")]
+    assert commits.saved[0].finding.title == "Robot Welder jobs in Paris"
+    assert (done["read"], done["unread"], done["ended"]) == (1, 1, "done")
+
+
+def test_the_layouts_of_real_posting_pages_read(monkeypatch) -> None:
+    """Round 3: the posting pages as websites lay them out (an article with its company's link,
+    sibling sections, LinkedIn like, no `main`, bullets, a short posting with 8 similar postings
+    and a cookie banner) are read through the reading, each its own posting."""
+    names = list(LAYOUTS)
+    board = Board({job(n): LAYOUTS[name] for n, name in enumerate(names, 1)})
+    done, commits, _ = phase(monkeypatch, board, [listed(n) for n in range(1, len(names) + 1)])
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [
+        (n, "read") for n in range(1, len(names) + 1)
+    ]
+    assert {p.finding.title for p in commits.saved} == {"Robot Welder"}
+    assert (done["read"], done["unread"], done["ended"]) == (len(names), 0, "done")
+
+
+def test_a_website_walled_from_its_first_page_gives_up_nothing(monkeypatch) -> None:
+    """Round 3, item 3: walls are held as pages that did not load: two in a row end the reading
+    `walled` with neither stored, whatever their headings hold, so no posting takes a failed
+    reading for the website's wall."""
+    board = Board({job(n): SIGNIN if n % 2 else TITLED_CHECK for n in range(1, 6)})
+    done, commits, _ = phase(monkeypatch, board, [listed(n) for n in range(1, 6)])
+    assert commits.saved == []
+    assert board.opened() == [job(1), job(2)]
+    assert done == {
+        "read": 0, "closed": 0, "unread": 0, "given_up": 0, "ended": "walled", "left": 7,
+    }  # fmt: skip
+    statuses = Board({job(n): posting("Robot Welder") for n in (1, 2, 3)},
+                     statuses={job(1): 429, job(2): 403})  # fmt: skip
+    done, commits, _ = phase(monkeypatch, statuses, [listed(n) for n in (1, 2, 3)])
+    assert (commits.saved, done["ended"]) == ([], "walled")
+
+
+def test_a_page_that_did_not_load_between_two_walls_ends_the_reading(monkeypatch) -> None:
+    """Round 3, item 3: a page that did not load says nothing of the website's wall, so a wall,
+    such a page and a wall end the reading `walled`, none of the three stored; a wall and pages
+    that did not load are stored, in order, once a later page answers otherwise."""
+    board = Board({job(1): SIGNIN, job(3): CHECK, job(4): posting("Robot Welder")})
+    done, commits, _ = phase(monkeypatch, board, [listed(n) for n in range(1, 5)])
+    assert (commits.saved, done["ended"]) == ([], "walled")
+    assert board.opened() == [job(1), job(2), job(3)]
+    board = Board({job(1): SIGNIN, job(4): posting("Robot Welder")})
+    done, commits, _ = phase(monkeypatch, board, [listed(n) for n in range(1, 5)])
+    assert [(p.job_id.int, p.outcome, p.reason) for p in commits.saved] == [
+        (1, "unread", "walled"), (2, "unread", ""), (3, "unread", ""), (4, "read", ""),
+    ]  # fmt: skip
+    assert (done["unread"], done["ended"]) == (3, "done")
+
+
+def test_a_page_of_too_little_text_is_held_as_an_empty_page_is(monkeypatch) -> None:
+    """Round 3, item 4: on its own address, under service.TEXT_MIN_CHARS characters of text (a
+    shell whose content was not there yet) is held: stored as a failed reading only once a
+    later page answers, never when it is the last, and three in a row end the reading."""
+    board = Board({job(1): SHORT, job(2): posting("Robot Welder")})
+    _, commits, _ = phase(monkeypatch, board, [listed(1), listed(2)])
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [(1, "unread"), (2, "read")]
+    board = Board({job(1): posting("Robot Welder"), job(2): f"{HEADER}\n{FOOTER}"})
+    done, commits, _ = phase(monkeypatch, board, [listed(1), listed(2)])
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [(1, "read")]
+    assert done["ended"] == "done"
+    board = Board({job(n): SHORT for n in (1, 2, 3, 4)})
+    done, commits, _ = phase(monkeypatch, board, [listed(n) for n in (1, 2, 3, 4)])
+    assert (commits.saved, done["ended"]) == ([], "no_page")
 
 
 def test_what_redirects_and_soft_errors_store(monkeypatch) -> None:

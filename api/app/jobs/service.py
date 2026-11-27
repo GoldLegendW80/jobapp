@@ -162,8 +162,8 @@ def pages_given_up(
     db: Session, user_id: uuid.UUID, ids: Iterable[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
     """Which of these postings the app no longer tries to read (J36, `given_up`), each with the
-    reason of its latest failed reading (`walled`: its page asked to sign in or to pass a
-    check; else "")."""
+    reason of its latest failed reading (`walled`: its page asked to sign in, to pass a check
+    or to slow down; else "")."""
     wanted = list(ids)
     if not wanted:
         return {}

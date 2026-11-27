@@ -12,24 +12,27 @@ each page as the app opens a reported posting (B27, `FinderSession.open_page`: a
 2 to 4 s apart, browserd's navigate under the same line, egress and request floor, the tab
 closed and the agent's selected again), one at a time, only the postings whose address is on the
 website's own hosts (finder.on_lease_hosts), those this search kept from a card first, then the
-older ones, the oldest first (sweep.listed_postings), each once a search whatever website of it
-opens it (sweep.Plan.listed_tried).
+older ones in an order that changes each day (sweep.listed_postings), each once a search
+whatever website of it opens it (sweep.Plan.listed_tried).
 
 What a page answers (`verdict`, accept and refuse table: tests/browser/test_j36_listed_pages.py):
-a page that did not load (no page, a status of 500 or more or outside 100 to 599, no text) is
-held, stored as a failed reading only once a later page of the reading loads, and HELD_MAX of
-them in a row end the reading (`no_page`) with none stored; a wall (401, 403, 429, a sign in or
-check address, a security check or sign in page, whatever its headings hold) is a failed reading
-of its posting with its reason (`walled`), and WALLS_MAX in a row end the reading, the last one
-not stored; a gone page (the liveness rule's `closed`: 404 or 410 on its own address, or its page
-says it is closed) closes it as the liveness check does; the posting's own page (`own_page`:
-never a list the session read before, another posting or a search; on a page of LIST_CARDS_MIN
-links or more, `shape` tells the posting's page from a list) that shows its title and at least
-service.TEXT_MIN_CHARS characters of text replaces the card's text through the search's own
-store (sweep._page_read, service.page_text), the person's exclusions and never apply rules met
-as there; a page `shape` cannot tell (UNSURE) writes nothing; anything else is a failed reading,
-written once a day, and after service.PAGE_TRIES_DAYS such days the posting is no longer tried.
-When no tab of its own could be made, nothing is stored and the reading ends (`no_tab`).
+a page that did not load (no page, a status of 500 or more or outside 100 to 599, or under
+service.TEXT_MIN_CHARS characters of text on its own address: a shell whose content was not
+there yet) and a wall (401, 403, 429, a sign in or check address, a security check or sign in
+page, whatever its headings hold) are held: stored as a failed reading of their posting (a
+wall's with its reason, `walled`) only once a later page of the reading answers otherwise;
+HELD_MAX pages in a row that did not load end the reading (`no_page`), WALLS_MAX walls with no
+other answer between them end it (`walled`), none of the held stored. A gone page (the liveness
+rule's `closed`: 404 or 410 on its own address, or its page says it is closed) closes it as the
+liveness check does. The posting's own page (`own_page`: never a list the session read before,
+another posting or a search) that shows its title as B21 judges a page it opens for a report
+(`finder.title_on`, the rule of FinderSession.page_finding) replaces the card's text through the
+search's own store (sweep._page_read, service.page_text), the person's exclusions and never apply
+rules met as there. Nothing reads the page's shape: a list of results served at the posting's own
+address whose heading holds its title is read as the posting, as B27 reads it for a report.
+Anything else is a failed reading, written once a day, and after service.PAGE_TRIES_DAYS such
+days the posting is no longer tried. When no tab of its own could be made, nothing is stored and
+the reading ends (`no_tab`).
 
 Its ends (ENDS), each said in the summary: `done`, `time_bound` (Runner.listed_pages_s, a
 page never started past it), `browser_wanted` (an application, or the person's own session,
@@ -39,7 +42,8 @@ before each page, was taken back), `store_failed` (the store refused, or the swe
 `browser_lost` (the lease ended or the agent's tab could not be selected again), `no_tab`
 (browserd made no tab of its own: its tabs full, the person holding the input, a refusal),
 `no_page` (the website's pages did not load), `failed`. Its counts are what the store did
-(sweep.ListedPage.done), never what a page answered.
+(sweep.ListedPage.done), never what a page answered. The pages held when it ends are not
+stored: the day's order of the older postings keeps the same ones from standing first for good.
 """
 
 from __future__ import annotations
@@ -50,24 +54,20 @@ import functools
 import logging
 from collections.abc import Callable, Collection
 from typing import Any
-from urllib.parse import urljoin
 
 from app.browser import finder, platform_policy, same_posting
 from app.browser.leases import StoreUnavailableError
-from app.browser.sources import PAGE_LOAD_S, SKIPPED_ROLES, parse_snapshot
+from app.browser.sources import PAGE_LOAD_S
 from app.jobs import liveness, service, sweep
 
 logger = logging.getLogger("app.browser.sources.listed_pages")
 
 READ, GONE, WALLED, UNREAD = "read", "gone", "walled", "unread"
-NO_PAGE, UNSURE = "no_page", "unsure"  # a page that did not load (held); one `shape` cannot tell
+NO_PAGE = "no_page"  # a page that did not load: held
 HELD_MAX = 3  # pages in a row that did not load: the website's pages do not load
-WALLS_MAX = 2  # walls in a row: the website itself is walled
+WALLS_MAX = 2  # walls with no other answer between them: the website itself is walled
 WALLED_STATUSES = frozenset({401, 403, 429})
 WALLED_READS = frozenset({"bot_check", "sign_in"})  # liveness.judge's reasons of a wall
-# The rules of `finder.title_on` that show the posting's own title: B21's loose primary heading
-# (one meaningful word shared) is the agent's reading's, never code's alone.
-TITLE_RULES = frozenset({"heading", "page_text"})
 NO_BROWSER = frozenset({"lease_ended", "browser_unavailable", "guard_failed"})
 NO_RUN = frozenset({"cancelled", "no_credential"})
 PERMISSIONS = frozenset({"permission_revoked", "permission_unavailable", "permission_checkpoint"})
@@ -75,102 +75,14 @@ ENDS = frozenset(
     {"done", "time_bound", "browser_wanted", "walled", "memory", "permission", "store_failed",
      "browser_lost", "no_tab", "no_page", "failed"}
 )  # fmt: skip
-# The header, navigation, footer and side blocks of a page (B21's `_detail` leaves them out too),
-# and the blocks that hold one item of a list.
-CHROME = frozenset(
-    {"banner", "navigation", "contentinfo", "complementary", "menu", "menubar", "dialog"}
-)
-ITEMS = frozenset({"listitem", "article", "row", "link"})
-REPEATED_MIN = 3  # sibling blocks each holding one card: the items of a list
-_MANY = "\n"  # a block holding links to two addresses or more (no address holds a new line)
-
-
-@dataclasses.dataclass(frozen=True)
-class Shape:
-    """What a page holding links is made of (`shape`): how many addresses its links with words
-    lead to (FinderSession._note_cards counts a list so, its header and footer too); outside its
-    header, navigation, footer and side blocks (CHROME), the characters of its own text and its
-    folded words, and the characters of its cards (a link to another address, or a block holding
-    one: a list item, an article, a row, or one of REPEATED_MIN sibling blocks or more that each
-    hold one)."""
-
-    cards: int
-    own: int
-    carded: int
-    words: str
-
-
-def shape(landed: str, snapshot: str) -> Shape:
-    """The page's Shape (above). Pure; linear in the snapshot's nodes."""
-    root = parse_snapshot(snapshot[: finder.PAGE_MAX])
-    nodes = root.walk()
-    held: dict[int, str] = {}
-    addresses: set[str] = set()
-    for node in reversed(nodes):
-        one = ""
-        if node.url and not node.hidden:
-            address = finder.canonical(urljoin(landed, node.url))
-            if address and address != landed and finder._words(_text(node)):
-                one = address
-                addresses.add(address)
-        for child in node.children:
-            got = held[id(child)]
-            one = got if not one else one if not got or got == one else _MANY
-        held[id(node)] = "" if node.hidden else one
-    single = {id(n) for n in nodes if held[id(n)] not in ("", _MANY)}
-    repeated = {
-        id(child)
-        for node in nodes
-        if sum(id(c) in single for c in node.children) >= REPEATED_MIN
-        for child in node.children
-        if id(child) in single
-    }
-    own, carded, words = 0, 0, []
-    stack: list[tuple[Any, bool]] = [(root, False)]
-    while stack:
-        node, card = stack.pop()
-        if node.hidden or node.role in CHROME or node.role in SKIPPED_ROLES:
-            continue
-        card = card or (id(node) in single and (node.role in ITEMS or id(node) in repeated))
-        text = " ".join(_text(node).split())
-        if card:
-            carded += len(text)
-        elif not node.url:
-            own += len(text)
-            words.append(finder._words(text))
-        if node.role not in ("heading", "link"):
-            stack.extend((child, card) for child in reversed(node.children))
-    return Shape(len(addresses), own, carded, f" {' '.join(w for w in words if w)} ")
-
-
-def _text(node: Any) -> str:
-    """A node's own text: a heading's or a link's whole text (`finder._whole`), else its label."""
-    if node.role in ("heading", "link"):
-        return finder._whole(node) or node.label()
-    return node.label()
-
-
-def posting_or_list(landed: str, snapshot: str, title: str, hinted: bool = False) -> str | None:
-    """Whether a page of LIST_CARDS_MIN links or more is the posting's (None: `verdict` goes on)
-    or not: its title outside its own text (in its cards, its header or nowhere) makes it a list
-    (UNREAD); its own text shorter than its cards' (a list headed with the posting's words, or a
-    posting page with a long block of similar postings), or the liveness rule's hint that it may
-    be closed (`hinted`), makes it UNSURE. Fails closed."""
-    seen = shape(landed, snapshot)
-    if seen.cards < finder.LIST_CARDS_MIN:
-        return None
-    keys = {finder._words(title), finder._words(finder._bare(title))} - {""}
-    if not any(f" {key} " in seen.words for key in keys):
-        return UNREAD
-    return UNSURE if hinted or seen.own < seen.carded else None
 
 
 def own_page(requested: str, landed: str, lists: Collection[str] = ()) -> bool:
     """Whether the page the app landed on is the posting's own (canonical addresses): the
     liveness rule's (`liveness.own_page`), on a board the board's page of the same posting id
     (`same_posting`), and never another address that is a list the session read before
-    (`lists`: any page of LIST_CARDS_MIN links counts, so its own address is told by `shape`).
-    Fails closed."""
+    (`lists`; the posting's own address is never refused for it, since any page of
+    LIST_CARDS_MIN links, its header and footer included, counts as one). Fails closed."""
     if (landed != requested and landed in lists) or not liveness.own_page(requested, landed):
         return False
     if same_posting.board_of(requested) is None:
@@ -194,10 +106,11 @@ def verdict(
     lists: Collection[str] = (),
 ) -> tuple[str, liveness.Finding | None]:
     """What the app's open of a posting's own address (`requested`) answered: NO_PAGE (it did
-    not load), READ, GONE (with the liveness finding that closes it), WALLED, UNSURE or UNREAD.
-    Fail closed: a wall is never read as the posting whatever its headings hold, a page that is
-    not the posting's own (`own_page`, `lists` the session's before the open; `posting_or_list`)
-    is never read, and only the liveness rule's `closed` closes it."""
+    not load, or holds under service.TEXT_MIN_CHARS characters of text), READ, GONE (with the
+    liveness finding that closes it), WALLED or UNREAD. READ only on the posting's own page
+    (`own_page`, `lists` the session's before the open), no wall whatever its headings hold, and
+    with its title on it as B21 judges a page it opens for a report (`finder.title_on`, the rule
+    of FinderSession.page_finding); only the liveness rule's `closed` closes it. Fails closed."""
     if not opened.landed or opened.odd_status or (opened.status or 0) >= 500:
         return NO_PAGE, None
     if opened.status in WALLED_STATUSES or platform_policy.wall(
@@ -213,19 +126,11 @@ def verdict(
         return WALLED, None
     if page is None:
         return UNREAD, None  # an error status that is no wall nor gone
-    if not any(ch.isalpha() for ch in text):
-        return NO_PAGE, None
     if not own_page(requested, opened.landed, lists):
         return UNREAD, None
-    hinted = judged.verdict == liveness.MAY_BE_CLOSED
-    told = posting_or_list(opened.landed, snapshot, title, hinted)
-    if told is not None:
-        return told, None
-    shown = finder.title_on(page, title)
-    long_enough = len(" ".join(page.text.split())) >= service.TEXT_MIN_CHARS
-    if shown is not None and shown[1] in TITLE_RULES and long_enough:
-        return READ, None
-    return UNREAD, None
+    if len(" ".join(page.text.split())) < service.TEXT_MIN_CHARS:
+        return NO_PAGE, None
+    return (READ if finder.title_on(page, title) is not None else UNREAD), None
 
 
 async def _wanted(leases: Any) -> bool:
@@ -286,9 +191,10 @@ async def _pages(
     counts: dict[str, int],
 ) -> str:
     started = runner.monotonic()
+    today = commits.clock().astimezone(sweep.SWEEP_TZ).date()
     postings = await asyncio.to_thread(
         sweep.listed_postings, commits.sessions, plan.user_id, site.host, _on_site(session),
-        set(plan.known.carded),
+        set(plan.known.carded), today,
     )  # fmt: skip
     tried: set[Any] = plan.listed_tried
     context = getattr(session.pages.tools, "context", None)
@@ -297,8 +203,8 @@ async def _pages(
         if context is not None
         else platform_policy.platform_of(session.start)
     )
-    held: list[sweep.ListedPage] = []  # the pages in a row that did not load (NO_PAGE)
-    walls = 0  # the walls in a row
+    held: list[sweep.ListedPage] = []  # the walls and the pages that did not load, not stored yet
+    unloaded = walls = 0  # of them: the pages in a row that did not load, the walls
     for posting in postings:
         if sweep.abandoned(plan):
             return "store_failed"
@@ -330,20 +236,19 @@ async def _pages(
                 verdict, opened, url, page, session.pages.last_text, posting.title, platform,
                 runner.base_url, lists,
             )  # fmt: skip
-            if found == NO_PAGE:
-                held.append(sweep.ListedPage(posting.id, posting.url, UNREAD))
-                if len(held) >= HELD_MAX:
+            one = _stored(session, site, posting, opened, page, found, closed)
+            if found in (NO_PAGE, WALLED):
+                held.append(one)
+                unloaded = unloaded + 1 if found == NO_PAGE else 0
+                walls += found == WALLED
+                if unloaded >= HELD_MAX:
                     return "no_page"  # none of them stored: the website's pages do not load
-            elif found == WALLED and walls + 1 >= WALLS_MAX:
-                return "walled"  # the website itself is walled: this one is not stored
+                if walls >= WALLS_MAX:
+                    return "walled"  # none of them stored: the website itself is walled
             else:
-                walls = walls + 1 if found == WALLED else 0
-                one = _stored(session, site, posting, opened, page, found, closed)
-                if not await _saved(
-                    commits, site, [*held, *([] if found == UNSURE else [one])], counts
-                ):
+                if not await _saved(commits, site, [*held, one], counts):
                     return "store_failed"
-                held = []
+                held, unloaded, walls = [], 0, 0
         if lost:
             return "memory"
         if stop:
