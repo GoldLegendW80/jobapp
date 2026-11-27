@@ -931,6 +931,22 @@ def test_a_posting_that_answered_an_error_to_a_fetch_is_no_card(status, landed) 
     assert finder.canonical(JOB + "101") not in one.error_pages
 
 
+@pytest.mark.parametrize(
+    ("status", "cleared"),
+    [(200, True), (304, True), (399, True), (None, False), ("200", False), (200.0, False),
+     (True, False), (400, False), (-1, False), (99, False), (600, False)],
+)  # fmt: skip
+def test_a_recorded_error_is_cleared_only_by_a_status_below_400(status, cleared) -> None:
+    one, _ = listed((LIST, LIST_PAGE))
+    one.error_pages[finder.canonical(JOB + "101")] = 404
+    fetching(one, {"ok": True, "url": JOB + "101", "snapshot": CHECK_PAGE, "status": status})
+    asyncio.run(one.web_fetch(JOB + "101"))
+    kept = one.error_pages.get(finder.canonical(JOB + "101"))
+    assert kept == (None if cleared else 400 if status == 400 else 404)
+    answer = cards(one, {"title": "Data Scientist", "url": JOB + "101"})
+    assert answer["kept"] == int(cleared)
+
+
 @pytest.mark.parametrize("status", [404, 410, 500, 403, 503])
 def test_a_posting_redirected_to_an_error_page_is_no_card(status) -> None:
     """The agent's own navigate to the posting landed on another address with an error status:

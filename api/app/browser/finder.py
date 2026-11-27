@@ -1952,10 +1952,13 @@ class FinderSession:
     def _statuses(self, addresses: set[str], status: object) -> None:
         """The HTTP status of a page read (J31), under the address asked for and the one it
         landed on (a redirect to a 404 page is that posting's error): an error status (4xx,
-        5xx) recorded, a success clearing an earlier one."""
+        5xx) recorded, a success (an integer from 100 to 399) clearing an earlier one; no
+        status, or one that is not an HTTP status, changes nothing."""
+        if type(status) is not int or not 100 <= status <= 599:
+            return
         for address in addresses - {""}:
             self.error_pages.pop(address, None)
-            if isinstance(status, int) and status >= 400:
+            if status >= 400:
                 self._error_page(address, status)
 
     def _stop_with(self, code: str) -> None:
