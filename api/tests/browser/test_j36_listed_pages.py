@@ -38,7 +38,53 @@ BODY = (
 )
 
 
-def posting(title: str) -> str:
+# A posting's page as a website serves it (review of PR 864, round 2): a header with a logo link,
+# a navigation of several links, a sign in link and button, the posting, a block of similar
+# postings with their own links, and a footer of links. Invented.
+HEADER = "\n".join(
+    [
+        "- banner:",
+        '  - link "Example Robotics careers" [ref=h0]:',
+        "    - /url: /",
+        "  - navigation:",
+    ]
+    + [
+        f'    - link "{word}" [ref=h{i}]:\n      - /url: /{word.lower()}'
+        for i, word in enumerate(("Jobs", "Companies", "Salaries", "Blog"), 1)
+    ]
+    + ['  - link "Sign in" [ref=h5]:', "    - /url: /login", '  - button "Sign in" [ref=h6]']
+)
+SIMILAR_TITLES = (
+    "Robot Painter",
+    "Robot Arm Engineer",
+    "Robot Tester",
+    "Robot Pilot",
+    "Robot Fitter",
+)
+SIMILAR = "\n".join(
+    ['  - region "Similar jobs":', '    - heading "Similar jobs" [level=2]', "    - list:"]
+    + [
+        f'      - listitem:\n        - link "{t}" [ref=s{i}]:\n          - /url: /jobs/{60 + i}\n'
+        "        - paragraph: Example Robotics, Lyon"
+        for i, t in enumerate(SIMILAR_TITLES)
+    ]
+)
+FOOTER = "\n".join(
+    ["- contentinfo:"]
+    + [
+        f'  - link "{word}" [ref=f{i}]:\n    - /url: /{word.lower()}'
+        for i, word in enumerate(("About", "Privacy", "Terms", "Cookies", "Contact"))
+    ]
+)
+
+
+def posting(title: str, body: str = BODY) -> str:
+    inside = "\n".join(f"  {line}" for line in body.split("\n"))
+    return f'{HEADER}\n- main:\n  - heading "{title}" [level=1]\n{inside}\n{SIMILAR}\n{FOOTER}'
+
+
+def bare(title: str) -> str:
+    """A posting's page with no link at all (the fakes of round 1)."""
     return f'- heading "{title}" [level=1]\n{BODY}'
 
 
@@ -54,6 +100,8 @@ TITLED_CHECK = f'- heading "Robot Welder" [level=2]\n{CHECK}\n{BODY}'
 GUEST = f'- heading "Robot Welder" [level=1]\n- heading "Join LinkedIn" [level=2]\n{BODY}'
 TITLES = ("Robot Welder", "Robot Painter", "Robot Arm Engineer", "Robot Tester", "Robot Pilot",
           "Robot Fitter")  # fmt: skip
+HINTED_BODY = f"- paragraph: Applications closed\n{BODY}"
+SHORT_BODY = "- paragraph: Build invented robot arms in Paris."
 # The website's search page listing the posting's title among six cards (review, item 3).
 LIST_PAGE = "\n".join(
     ['- heading "Robot jobs near Paris" [level=1]', "- list:"]
@@ -62,6 +110,24 @@ LIST_PAGE = "\n".join(
         f"      - /url: /jobs/{40 + i}"
         for i, t in enumerate(TITLES)
     ]
+)
+
+
+def cards(count: int, role: str = "listitem", snippet: str = "Example Robotics, Paris") -> str:
+    """`count` cards of other postings, each a block of `role` with a link and a line of text."""
+    return "\n".join(
+        f'- {role}:\n  - link "Robot Job {chr(65 + i)}" [ref=c{i}]:\n    - /url: /jobs/{70 + i}\n'
+        f"  - paragraph: {snippet}"
+        for i in range(count)
+    )
+
+
+# A list whose heading holds the posting's title (a search for it), served at its own address.
+HEADED_LIST = (
+    '- heading "Robot Welder jobs in Paris" [level=1]\n- paragraph: 6 jobs found\n'
+    + cards(
+        6, snippet="Build invented robot arms with Python for Example Robotics, two days on site."
+    )
 )
 
 
@@ -146,13 +212,28 @@ VERDICTS = [
     (200, A, CLOSED, "Robot Welder", "custom", "gone"),  # its page says it is closed
     (404, START + "search?q=robot", "", "Robot Welder", "custom", "unread"),  # not its own page
     (200, START + "search?q=robot", ELSEWHERE, "Robot Welder", "custom", "unread"),
-    (500, A, "", "Robot Welder", "custom", "unread"),
-    (503, A, "", "Robot Welder", "custom", "unread"),
+    # A page that did not load: held (review of PR 864, round 2, item 2).
+    (500, A, "", "Robot Welder", "custom", "no_page"),
+    (503, A, posting("Robot Welder"), "Robot Welder", "custom", "no_page"),
+    (200, A, "", "Robot Welder", "custom", "no_page"),  # a page of no text
+    (200, A, '- link "Home" [ref=e1]:\n  - /url: /', "Robot Welder", "custom", "no_page"),
+    (400, A, "", "Robot Welder", "custom", "unread"),  # an error that is no wall nor gone
     (200, A, posting("Robot Arm Engineer"), "Robot Welder", "custom", "unread"),  # another one
     (200, A, posting("Robot"), "Robot Welder", "custom", "unread"),  # a piece of the title
     (200, A, posting("Robot Welders Guild"), "Robot Welder", "custom", "unread"),  # longer word
     (200, A, "- paragraph: Loading", "Robot Welder", "custom", "unread"),
-    (200, "", "", "Robot Welder", "custom", "unread"),  # the page did not load
+    (200, "", "", "Robot Welder", "custom", "no_page"),  # the page did not load
+    # A page holding links (round 2, item 1): the posting's page with its header, sign in link
+    # and button, similar postings and footer is read on every platform; a list at its own
+    # address is not, and a page `shape` cannot tell writes nothing.
+    (200, A, posting("Robot Welder"), "Robot Welder", "linkedin", "read"),
+    (200, A, posting("Robot Welder"), "Robot Welder", "indeed", "read"),
+    (200, A, bare("Robot Welder"), "Robot Welder", "custom", "read"),
+    (200, A, LIST_PAGE, "Robot Welder", "custom", "unread"),
+    (200, A, HEADED_LIST, "Robot Welder", "custom", "unsure"),
+    (200, A, posting("Robot Welder", HINTED_BODY), "Robot Welder", "custom", "unsure"),
+    # A short page whose cards' text is longer than its own: `shape` cannot tell.
+    (200, A, posting("Robot Welder", SHORT_BODY), "Robot Welder", "custom", "unsure"),
 ]
 
 
@@ -169,12 +250,130 @@ def test_what_a_page_answers(status, landed, snapshot, title, platform, expected
 
 
 def test_a_list_the_session_read_is_never_read_as_the_posting() -> None:
-    page = page_of(A, posting("Robot Welder"))
-    opened = finder.AppOpen(A, 200, True, True, True)
+    """Round 2, item 1: another address the session read before as a list is never the
+    posting's page; its own address, which the session counts a list for its header and footer
+    links alone, is told by the page as it is now (`shape`)."""
     snapshot = posting("Robot Welder")
-    assert listed_pages.verdict(opened, A, page, snapshot, "Robot Welder", "custom")[0] == "read"
+    opened = finder.AppOpen(A, 200, True, True, True)
+    page = page_of(A, snapshot)
     found, _ = listed_pages.verdict(opened, A, page, snapshot, "Robot Welder", "custom", lists={A})
+    assert found == "read"
+    view = A + "?view=list"
+    moved = finder.AppOpen(view, 200, True, True, True)
+    found, _ = listed_pages.verdict(
+        moved, A, page_of(view, snapshot), snapshot, "Robot Welder", "custom", lists={view}
+    )
     assert found == "unread"
+    found, _ = listed_pages.verdict(moved, A, page_of(view, snapshot), snapshot, "Robot Welder",
+                                    "custom")  # fmt: skip
+    assert found == "read"
+
+
+def test_a_status_that_is_no_http_status_is_a_page_that_did_not_load() -> None:
+    snapshot = posting("Robot Welder")
+    odd = finder.AppOpen(A, None, True, True, True, odd_status=True)
+    found, _ = listed_pages.verdict(
+        odd, A, page_of(A, snapshot), snapshot, "Robot Welder", "custom"
+    )
+    assert found == "no_page"
+
+
+# Whether a page holding links is the posting's (None), a list (unread), or one `shape` cannot
+# tell (unsure): (snapshot, title, expected). The landed address is A.
+SHAPES = [
+    (posting("Robot Welder"), "Robot Welder", None),
+    (posting("Senior Robot Welder (Stage)"), "Robot Welder", None),
+    (posting("ROBOT  WELDER"), "Robot Welder", None),  # case, spacing
+    (posting("Développeur Robot"), "developpeur robot", None),  # accents
+    (posting("Robot Welder"), "Robot Welder H/F", None),  # a gender marker
+    (posting("Robot Welder"), "Robot Welder (H/F)", None),
+    (bare("Robot Welder"), "Robot Welder", None),  # fewer than LIST_CARDS_MIN links
+    ("", "Robot Welder", None),
+    (
+        posting("Robot Welder", f"{BODY}\n- paragraph: Example Robotics site\n" + cards(1)),
+        "Robot Welder",
+        None,
+    ),
+    (posting("Robot Welder", f"{BODY}\n" + cards(2, "paragraph")), "Robot Welder", None),
+    (f"{HEADER}\n{FOOTER}\n{bare('Robot Welder')}", "Robot Welder", None),  # links in chrome only
+    # The similar postings in a side block: never counted against the posting's text.
+    (
+        f"{HEADER}\n- main:\n  {bare('Robot Welder')}\n- complementary:\n"
+        + "\n".join(f"  {line}" for line in cards(20).split("\n")),
+        "Robot Welder",
+        None,
+    ),
+    # The title across two lines of the posting's own text.
+    (posting("Robot", "- paragraph: Welder for invented cells.\n" + BODY), "Robot Welder", None),
+    # Its title in a paragraph of its own text, no heading of it.
+    (posting("Careers", f"- paragraph: Robot Welder\n{BODY}"), "Robot Welder", None),
+    # Links that are no cards: to the page itself, or with no words.
+    (
+        bare("Robot Welder")
+        + "\n"
+        + "\n".join(f'- link "#{i}" [ref=a{i}]:\n  - /url: {A}' for i in range(6)),
+        "Robot Welder",
+        None,
+    ),
+    (
+        bare("Robot Welder")
+        + "\n"
+        + "\n".join(f"- link [ref=a{i}]:\n  - /url: /jobs/{80 + i}" for i in range(6)),
+        "Robot Welder",
+        None,
+    ),
+    # A list: its title in a card only, or nowhere outside the header.
+    (LIST_PAGE, "Robot Welder", "unread"),
+    ('- heading "Robot jobs" [level=1]\n' + cards(6, "generic"), "Robot Job B", "unread"),
+    ('- heading "Robot jobs" [level=1]\n' + cards(6, "article"), "Robot Job B", "unread"),
+    ('- heading "Robot jobs" [level=1]\n- table:\n' + cards(6, "row"), "Robot Job B", "unread"),
+    ('- heading "Robot jobs" [level=1]\n' + cards(6, "generic"), "Robot Welder", "unread"),
+    (posting("Robot Arm Engineer"), "Robot Welder", "unread"),  # another posting's page
+    (posting("Robot Painter"), "Robot Arm Engineer", "unread"),  # its title in a card only
+    (
+        f'- banner:\n  - heading "Robot Welder" [level=1]\n{posting("Robot jobs")}',
+        "Robot Welder",
+        "unread",
+    ),
+    (
+        posting("Robot jobs", '- heading "Robot Welder" [level=2] [aria-hidden]\n' + BODY),
+        "Robot Welder",
+        "unread",
+    ),
+    (posting("Robot jobs", '- button "Robot Welder" [ref=b1]\n' + BODY), "Robot Welder", "unread"),
+    (
+        f"{posting('Robot jobs')}\n- complementary:\n  - paragraph: Robot Welder",
+        "Robot Welder",
+        "unread",
+    ),
+    # Its own text shorter than its cards': a list headed with its words, a long similar block.
+    (HEADED_LIST, "Robot Welder", "unsure"),
+    (
+        '- heading "Robot Welder" [level=1]\n'
+        + cards(6, "generic", "Build invented robot arms with Python for Example Robotics."),
+        "Robot Welder",
+        "unsure",
+    ),
+    (posting("Robot Welder", f"{BODY}\n" + cards(20)), "Robot Welder", "unsure"),
+    (
+        '- heading "Robot Welder" [level=1]\n' + cards(5),
+        "Robot Welder",
+        "unsure",
+    ),  # exactly LIST_CARDS_MIN
+    ('- heading "Robot Welder" [level=1]\n' + cards(4), "Robot Welder", None),  # one fewer
+]
+
+
+@pytest.mark.parametrize(("snapshot", "title", "expected"), SHAPES)
+def test_a_posting_page_that_holds_links_or_a_list(snapshot: str, title: str, expected) -> None:
+    assert listed_pages.posting_or_list(A, snapshot, title) == expected
+
+
+def test_a_hint_that_it_may_be_closed_on_a_page_holding_links_is_unsure() -> None:
+    assert (
+        listed_pages.posting_or_list(A, posting("Robot Welder"), "Robot Welder", True) == "unsure"
+    )
+    assert listed_pages.posting_or_list(A, bare("Robot Welder"), "Robot Welder", True) is None
 
 
 LI = "http://www.linkedin.test:8080/jobs/view/1234567890/"
@@ -357,6 +556,7 @@ def phase(
     carded: tuple[int, ...] = (),
     step_s: float = 0.0,
     tried: set[uuid.UUID] | None = None,
+    lists: tuple[str, ...] = (),
 ) -> tuple[dict[str, Any] | None, Commits, dict[str, Any]]:
     """The website's reading of pages after its agent, on `board`, for the postings `held`."""
     clock = [0.0]
@@ -390,6 +590,7 @@ def phase(
     scope = finder.InteractiveScope(START, ("robot",), (), ())
     one = finder.FinderSession(pages, START, HOME, "e2e-person", interactive=scope)
     one.stopped = stopped
+    one.lists.update(dict.fromkeys(lists))  # the lists the agent's session read
     site = interactive._Site(
         interactive.Searches(scope, unwanted_titles=re.compile(r"\bstage\b", re.IGNORECASE)),
         source_id="src",
@@ -412,35 +613,44 @@ def phase(
 
 def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
     """Acceptance 1 to 3: one page at a time in a tab of its own, 2 to 4 s apart, the agent's
-    tab selected again; read, gone and failed stored; a wall ends the reading and its posting
-    stays as it is."""
+    tab selected again; read, gone and failed stored; a wall is a failed reading of its posting
+    with its reason (round 2, follow up 1), and the second wall in a row ends the reading with
+    that one left as it is."""
     board = Board(
-        {job(1): posting("Robot Welder"), job(2): "", job(3): ELSEWHERE, job(4): SIGNIN},
+        {
+            job(1): posting("Robot Welder"),
+            job(2): "",
+            job(3): ELSEWHERE,
+            job(4): SIGNIN,
+            job(5): CHECK,
+            job(6): posting("Robot Welder"),
+        },
         statuses={job(2): 404},
     )
-    held = [listed(1), listed(2), listed(3), listed(4), listed(5)]
+    held = [listed(n) for n in range(1, 7)]
     done, commits, asked = phase(monkeypatch, board, held, carded=(3,))
     assert done == {
         "read": 1,
         "closed": 1,
-        "unread": 1,
+        "unread": 2,
         "given_up": 0,
         "ended": "walled",
         "left": 7,
     }
-    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [
-        (1, "read"), (2, "gone"), (3, "unread"),
+    assert [(p.job_id.int, p.outcome, p.reason) for p in commits.saved] == [
+        (1, "read", ""), (2, "gone", ""), (3, "unread", ""), (4, "unread", "walled"),
     ]  # fmt: skip
-    assert board.opened() == [job(1), job(2), job(3), job(4)]  # never the one after the wall
+    assert board.opened() == [job(n) for n in range(1, 6)]  # never the one after the walls
     pauses = asked["pauses"]  # B20: no page pause of the website's own (pause_for: none)
-    assert len(pauses) == 4
+    assert len(pauses) == 5
     assert all(2.0 <= p <= 4.0 for p in pauses)
     tabs = [a["action"] for n, a in board.calls if n == "browser_tabs"]
-    assert tabs == ["new", "close", "select"] * 4
+    assert tabs == ["new", "close", "select"] * 5
     assert board.tabs == [""]  # the agent's tab alone, selected
     read = commits.saved[0].finding
     assert (read.title, read.url, read.list_url) == ("Robot Welder", job(1), None)
     assert "invented robot arms" in read.text
+    assert "Privacy" not in read.text  # the footer is no part of the posting
     assert commits.saved[1].closed.verdict == "closed"
     assert asked["host"] == HOST
     assert asked["first"] == {uuid.UUID(int=3)}
@@ -448,6 +658,121 @@ def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
         assert on_site(job(1)) is True
         assert on_site("https://www.other-board.test/viewjob?jk=1") is False
     assert asked["session"].opened_by_app == 0  # B27's counter counts the agent's reports only
+    assert job(1) in asked["session"].lists  # its header and footer links alone make it one
+
+
+def test_a_wall_then_a_page_that_loads_then_a_wall_go_on(monkeypatch) -> None:
+    """Round 2, follow up 1: walls apart are each a failed reading with its reason; a wall on
+    one posting's page (or a false wall) never blocks the later ones."""
+    board = Board(
+        {job(1): SIGNIN, job(2): ELSEWHERE, job(3): CHECK, job(4): posting("Robot Welder")}
+    )
+    done, commits, _ = phase(monkeypatch, board, [listed(n) for n in range(1, 5)])
+    assert [(p.outcome, p.reason) for p in commits.saved] == [
+        ("unread", "walled"), ("unread", ""), ("unread", "walled"), ("read", ""),
+    ]  # fmt: skip
+    assert (done["read"], done["unread"], done["ended"]) == (1, 3, "done")
+
+
+def test_a_website_whose_pages_do_not_load_stores_nothing(monkeypatch) -> None:
+    """Round 2, item 2: a network or an egress down (browserd's navigation_failed) for the
+    whole reading: three pages in a row, none stored, the reading ends `no_page`."""
+    board = Board({})
+    done, commits, asked = phase(monkeypatch, board, [listed(n) for n in range(1, 8)])
+    assert commits.saved == []
+    assert board.opened() == [job(1), job(2), job(3)]
+    assert done == {
+        "read": 0, "closed": 0, "unread": 0, "given_up": 0, "ended": "no_page", "left": 7,
+    }  # fmt: skip
+    assert len(asked["pauses"]) == 3
+
+
+def test_a_server_error_an_odd_status_and_an_empty_page_are_held_too(monkeypatch) -> None:
+    board = Board(
+        {job(1): posting("Robot Welder"), job(2): posting("Robot Welder"), job(3): ""},
+        statuses={job(1): 503, job(2): 999},
+    )
+    done, commits, _ = phase(monkeypatch, board, [listed(n) for n in range(1, 5)])
+    assert commits.saved == []
+    assert done["ended"] == "no_page"
+    assert board.opened() == [job(1), job(2), job(3)]
+
+
+def test_a_page_that_did_not_load_is_stored_once_a_later_one_loads(monkeypatch) -> None:
+    """Round 2, item 2: a page that does not load between two that read: three stored, in
+    order, the middle one a failed reading; two in a row before a page that loads, too."""
+    board = Board({job(1): posting("Robot Welder"), job(3): posting("Robot Welder")})
+    done, commits, _ = phase(monkeypatch, board, [listed(1), listed(2), listed(3)])
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [
+        (1, "read"), (2, "unread"), (3, "read"),
+    ]  # fmt: skip
+    assert (done["read"], done["unread"], done["ended"]) == (2, 1, "done")
+    board = Board({job(3): ELSEWHERE})
+    _, commits, _ = phase(monkeypatch, board, [listed(1), listed(2), listed(3)])
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [
+        (1, "unread"), (2, "unread"), (3, "unread"),
+    ]  # fmt: skip
+
+
+@pytest.mark.parametrize("last", ["done", "walled", "time_bound"])
+def test_pages_held_when_the_reading_ends_another_way_are_not_stored(monkeypatch, last) -> None:
+    board = Board({job(1): posting("Robot Welder"), job(3): SIGNIN, job(4): SIGNIN})
+    held = {
+        "done": [listed(1), listed(2)],
+        "walled": [listed(1), listed(3), listed(2), listed(4)],
+        "time_bound": [listed(1), listed(2), listed(5)],
+    }[last]
+    done, commits, _ = phase(
+        monkeypatch, board, held, bound_s=20.0 if last == "time_bound" else 600.0, step_s=1.0
+    )
+    assert done["ended"] == last
+    assert listed(2).id not in [p.job_id for p in commits.saved]
+
+
+def test_a_redirect_to_a_list_the_session_read_before_stays_unread(monkeypatch) -> None:
+    """Round 2, item 1: the posting's address redirects to an address the agent's session read
+    as a list before the reading, whatever that page now shows; the posting's own address,
+    read before by the agent, is read."""
+    view = job(1) + "?view=list"
+    board = Board({view: posting("Robot Welder"), job(2): posting("Robot Welder")},
+                  redirects={job(1): view})  # fmt: skip
+    done, commits, _ = phase(monkeypatch, board, [listed(1), listed(2)], lists=(view, job(2)))
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [(1, "unread"), (2, "read")]
+    assert done["ended"] == "done"
+
+
+def test_a_page_the_app_cannot_tell_from_a_list_writes_nothing(monkeypatch) -> None:
+    board = Board({job(1): HEADED_LIST, job(2): posting("Robot Welder")})
+    done, commits, _ = phase(monkeypatch, board, [listed(1), listed(2)])
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [(2, "read")]
+    assert (done["read"], done["unread"], done["ended"]) == (1, 0, "done")
+
+
+def test_what_redirects_and_soft_errors_store(monkeypatch) -> None:
+    """Round 2's attacks on item 3 of round 1, on posting pages that hold links: another
+    posting, the home page, a list at its own address, two soft 404s; the same path with
+    another short query id and the same title is read (declared)."""
+    other, same_path = START + "jobs/12346", START + "job?id=34"
+    soft = posting("Robot Welder", f"- paragraph: This job is no longer available.\n{BODY}")
+    board = Board(
+        {
+            other: posting("Robot Welder"),
+            same_path: posting("Robot Welder"),
+            job(4): LIST_PAGE,
+            job(5): soft,
+            job(6): '- heading "Page not found" [level=1]\n- paragraph: Sorry.',
+        },
+        redirects={job(1): other, job(2): START, START + "job?id=12": same_path},
+    )
+    short_id = sweep.Listed(
+        uuid.UUID(int=3), START + "job?id=12", "Robot Welder", "Example Robotics", "Paris, France"
+    )
+    held = [listed(1), listed(2), short_id, listed(4), listed(5), listed(6)]
+    _, commits, _ = phase(monkeypatch, board, held)
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [
+        (1, "unread"), (2, "unread"), (3, "read"), (4, "unread"), (5, "gone"), (6, "gone"),
+    ]  # fmt: skip
+    assert commits.saved[2].finding.url == same_path
 
 
 def test_a_read_page_meets_the_persons_exclusions(monkeypatch) -> None:
@@ -657,6 +982,19 @@ def test_the_counts_are_what_the_store_did(monkeypatch) -> None:
     )
     assert [p.outcome for p in commits.saved] == ["read", "gone", "unread"]
     assert (done["read"], done["closed"], done["unread"], done["ended"]) == (0, 0, 0, "done")
+
+
+def test_a_posting_no_tab_was_made_for_is_opened_by_the_next_website(monkeypatch) -> None:
+    """Round 2, follow up 2: a posting counts as tried once a navigate was called for it."""
+    tried: set[uuid.UUID] = set()
+    first = Board({job(1): posting("Robot Welder")}, no_tab={"ok": False, "error": "too_many_tabs"})
+    done, _, _ = phase(monkeypatch, first, [listed(1)], tried=tried)
+    assert (done["ended"], tried) == ("no_tab", set())
+    second = Board({job(1): posting("Robot Welder")})
+    done, commits, _ = phase(monkeypatch, second, [listed(1)], tried=tried)
+    assert second.opened() == [job(1)]
+    assert [p.outcome for p in commits.saved] == ["read"]
+    assert tried == {uuid.UUID(int=1)}
 
 
 def test_two_websites_of_one_search_on_one_host_open_a_posting_once(monkeypatch) -> None:

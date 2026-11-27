@@ -162,17 +162,25 @@ def _invalid(field: str, message: str) -> RequestValidationError:
     )
 
 
-COMPUTED = ("file_count", "page_given_up")  # JobListItem's fields that are no Job column
+# JobListItem's fields that are no Job column
+COMPUTED = ("file_count", "page_given_up", "page_walled", "page_elsewhere")
 
 
-def _item(job: Job, file_count: int, given_up: set[uuid.UUID] | None = None) -> JobListItem:
+def _item(job: Job, file_count: int, given_up: dict[uuid.UUID, str] | None = None) -> JobListItem:
     data = {name: getattr(job, name) for name in JobListItem.model_fields if name not in COMPUTED}
-    return JobListItem(**data, file_count=file_count, page_given_up=job.id in (given_up or set()))
+    reason = (given_up or {}).get(job.id)
+    return JobListItem(
+        **data,
+        file_count=file_count,
+        page_given_up=reason is not None,
+        page_walled=reason == "walled",
+        page_elsewhere=job.list_url is not None and service.page_elsewhere(job.url, job.source),
+    )
 
 
-def _given_up(db: Session, user: User, jobs: list[Job]) -> set[uuid.UUID]:
+def _given_up(db: Session, user: User, jobs: list[Job]) -> dict[uuid.UUID, str]:
     """Jobs J36: of these postings seen only in a list, those whose page the app no longer
-    tries to read."""
+    tries to read, with the reason of the latest failed reading."""
     return service.pages_given_up(db, user.id, [job.id for job in jobs if job.list_url])
 
 

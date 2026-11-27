@@ -775,9 +775,9 @@ def lease_hosts(start: str) -> list[str]:
 
 
 def on_lease_hosts(url: str, start: str) -> bool:
-    """Whether an address is on the hosts a website's lease opens (`lease_hosts`), as browserd
-    matches them: a family's when the start is on one (its `*.` names narrowed to the family,
-    `family_of`), else the start's host alone (jobs J36)."""
+    """Whether an address is on a website's own hosts (jobs J36): its family's when the start is
+    on one (its `*.` names narrowed to the family, `family_of`), else the start's host (as
+    `lease_hosts`) with or without its `www.`."""
     address = canonical(url)
     host = urlsplit(address).hostname if address else None
     if not host:
@@ -785,7 +785,7 @@ def on_lease_hosts(url: str, start: str) -> bool:
     family = family_of(canonical(start))
     if family is not None:
         return family_of(address) == family
-    return host in lease_hosts(start)
+    return host.removeprefix("www.") in {own.removeprefix("www.") for own in lease_hosts(start)}
 
 
 def _item_ids(one: dict[str, Any], board: Board) -> dict[str, str]:
@@ -839,13 +839,15 @@ class AppOpen:
     """What the app's own open of an address answered (`FinderSession.open_page`): where it
     landed ("" when the page did not load or browserd refused it), browserd's HTTP status, whether
     its page was read (a status that is no error), whether the agent's tab was selected again,
-    and whether browserd's navigate was called (`tried`: False when no tab of its own was made)."""
+    whether browserd's navigate was called (`tried`: False when no tab of its own was made), and
+    whether browserd gave a status outside 100 to 599 (`odd_status`: LinkedIn's 999)."""
 
     landed: str = ""
     status: int | None = None
     read: bool = False
     restored: bool = False
     tried: bool = False
+    odd_status: bool = False
 
 
 @dataclass(frozen=True)
@@ -3224,13 +3226,14 @@ class FinderSession:
             result = await tools.call("browser_navigate", {"url": url, **scope})
             return result
 
-        landed, status, read = "", None, False
+        landed, status, read, odd = "", None, False, False
         try:
             await self.pages.sleep(self.pages.rng.uniform(*APP_OPEN_PAUSE_S))
             await self.pages._act(go)
             landed = canonical(self.pages.last_url)
             given = result.get("status")
             status = given if type(given) is int and 100 <= given <= 599 else None
+            odd = type(given) is int and status is None
             self._statuses({url, landed}, status)
             if landed and not (status is not None and status >= 400):
                 await self._read_off_loop(landed, self.pages.last_text)
@@ -3245,7 +3248,7 @@ class FinderSession:
         finally:
             self._closed(result, agent=False)  # B29: a close its navigate names, counted once
             restored = await self._restore_tab(made_tab)
-        return AppOpen(landed, status, read, restored, tried)
+        return AppOpen(landed, status, read, restored, tried, odd)
 
     async def _restore_tab(self, made: int | None) -> bool:
         """Close the tab `_open_for_report` made (`made`, never the agent's) and select the

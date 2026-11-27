@@ -142,7 +142,7 @@ def test_after_three_days_of_failed_readings_it_is_no_longer_tried_and_says_so(
     [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
     assert (entry["listed_pages"]["given_up"], entry["listed_pages"]["left"]) == (1, 0)
     with factory() as db:
-        assert service.pages_given_up(db, alice, [job.id]) == {job.id}
+        assert service.pages_given_up(db, alice, [job.id]) == {job.id: ""}
         user = SimpleNamespace(id=alice)
         stored = db.get(Job, job.id)
         item = jobs_router._item(stored, 0, jobs_router._given_up(db, user, [stored]))

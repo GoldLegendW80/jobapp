@@ -1883,7 +1883,8 @@ class ListedPage:
     """Jobs J36: what the app's read of the page of a posting kept from a card found, for that
     posting (`job_id`, at the address it opened, `url`): `read` (the page's `finding`, with the
     person's exclusion that set it aside, `excluded`), `gone` (the liveness `closed` finding
-    that closes it), else `unread`. Set by the store once it committed: what it did (`done`:
+    that closes it), else `unread` (with its `reason`: `walled` for a sign in or check page,
+    else ""). Set by the store once it committed: what it did (`done`:
     `read`, `closed`, `unread`, or "" when it left the posting as it was) and whether that
     failed reading was the posting's last try (`given_up`, service.PAGE_TRIES_DAYS)."""
 
@@ -1893,6 +1894,7 @@ class ListedPage:
     finding: Any = None
     excluded: str = ""
     closed: Any = None
+    reason: str = ""
     done: str = ""
     given_up: bool = False
 
@@ -2014,6 +2016,8 @@ def _listed_page(
     if today in days:
         return "unread", False  # today's failed reading is written already
     unread = {"list_url": job.list_url, "tries": len(days) + 1}
+    if page.reason:
+        unread["reason"] = page.reason
     data = {"sweep_id": str(plan.sweep_id), "board": source, service.PAGE_UNREAD: unread}
     service.add_event(db, job, JobEventKind.sweep, data, now)
     return "unread", len(days) + 1 >= service.PAGE_TRIES_DAYS

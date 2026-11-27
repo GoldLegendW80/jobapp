@@ -96,7 +96,7 @@ TAB_CLOSED_REASONS = frozenset({"memory", "crash", "other"})
 # listed_pages.ENDS).
 LISTED_ENDS = frozenset(
     {"done", "time_bound", "browser_wanted", "walled", "memory", "permission", "store_failed",
-     "browser_lost", "no_tab", "failed"}
+     "browser_lost", "no_tab", "no_page", "failed"}
 )  # fmt: skip
 
 

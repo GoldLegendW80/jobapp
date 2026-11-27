@@ -410,8 +410,12 @@ class JobListItem(BaseModel):
     # page was read or its text set by the person, and for any other posting.
     list_url: str | None = None
     # Jobs J36: seen only in a list, and the app failed to read its page on 3 different days: it
-    # no longer tries (the person may paste its text).
+    # no longer tries (the person may paste its text); `page_walled` when the latest of them met
+    # a sign in or check page. `page_elsewhere`: seen only in a list, on none of the websites'
+    # own hosts that found it, so no reading of theirs opens it.
     page_given_up: bool = False
+    page_walled: bool = False
+    page_elsewhere: bool = False
 
     @field_validator("outside_criteria", mode="before")
     @classmethod
