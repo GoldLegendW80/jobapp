@@ -209,6 +209,17 @@ describe("the person's Cancel at any moment (A24)", () => {
       "no_confirmation",
       "We could not confirm this application. Look for a confirmation mail or on the site.",
     ],
+    // A25: a page showed the code the person gave again, so browserd closed the tools.
+    [
+      "failed",
+      "code_shown",
+      "The last attempt failed: the code you gave showed again, so the assistant stopped. Nothing was sent.",
+    ],
+    [
+      "submit_unknown",
+      "code_shown",
+      "The code you gave showed again, so the assistant stopped, and the site may already have the application. Look for a confirmation mail or on the site.",
+    ],
     [
       "cancelled",
       "rejected",

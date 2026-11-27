@@ -71,3 +71,49 @@ export const chatWith = (ask: Question, end: string | null = null) => [
     end,
   },
 ];
+
+/** The api's line of a code the person gave (applier.CODE_SAID): never the code itself. */
+export const CODE_GIVEN: ChatLine = {
+  at: "2026-11-26T10:01:30Z",
+  who: "person",
+  kind: "code",
+  text: "The code you gave, typed by the app on the site and never shown to the assistant.",
+  end: null,
+};
+
+/** A message of the person to the assistant at work, read by its run or not yet. */
+export const messageLine = (
+  text: string,
+  read: boolean,
+  at = "2026-11-26T10:02:00Z",
+): ChatLine => ({ at, who: "person", kind: "message", text, end: null, read });
+
+/** A code given to an earlier ask, then the same kind asked again: the site may not have taken it. */
+export const CODE_ASKED_TWICE: ChatLine[] = [
+  {
+    at: "2026-11-26T10:00:00Z",
+    who: "assistant",
+    kind: "code",
+    text: CODE_ASK.sentence,
+    end: "answer",
+  },
+  CODE_GIVEN,
+  {
+    at: "2026-11-26T10:02:30Z",
+    who: "assistant",
+    kind: "code",
+    text: "The site says the code is wrong or too old and sent a new one to your e-mail address.",
+    end: null,
+  },
+];
+
+/** The chat of a run at work: an earlier ask and answer, then the person's messages in place. */
+export const AT_WORK_CHAT: ChatLine[] = [
+  ...EARLIER_CHAT,
+  messageLine("Please use my second phone number on this form.", true),
+  messageLine(
+    "And skip the optional survey at the end.",
+    false,
+    "2026-11-26T10:06:00Z",
+  ),
+];
