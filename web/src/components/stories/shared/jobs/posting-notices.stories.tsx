@@ -2,7 +2,10 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { MemoryRouter } from "react-router";
 
 import { PostingNotices } from "@/components/shared/jobs/posting/posting-notices";
-import { NOTICES } from "@/design-system/fixtures/posting-notices";
+import {
+  LANGUAGE_NOTICES,
+  NOTICES,
+} from "@/design-system/fixtures/posting-notices";
 
 const meta = {
   title: "Shared/Jobs/Posting notices",
@@ -68,4 +71,11 @@ export const OneNotice: Story = {
 export const Nothing: Story = {
   name: "Nothing to know",
   args: { notices: [] },
+};
+
+/** Jobs J35: a required language the profile does not list, and one asked at a level that may be
+ * above hers, each with the posting's words and a link to the profile's languages. */
+export const Languages: Story = {
+  name: "The languages it asks for",
+  args: { notices: LANGUAGE_NOTICES },
 };

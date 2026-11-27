@@ -10,8 +10,13 @@ import { cn } from "@/lib/utils";
  * same text, and the person's applications to the company. Facts, never a block: nothing here
  * disables or hides an action. In full (the posting page, under its header) each notice keeps
  * the posting's own words and a link to the other posting it names; `compact` (the Discover
- * card, the Apply confirmation) shows the first `max` sentences alone, the warnings first.
+ * card, the Apply confirmation) shows the first `max` sentences alone, the warnings first. A notice
+ * on the posting's languages (jobs J35) leads to the languages of the profile.
  */
+const LANGUAGE_NOTICE = "language_";
+/** The page of the profile that holds the person's languages (Contact, Languages). */
+export const PROFILE_LANGUAGES = "/profile/contact";
+
 export function PostingNotices({
   notices,
   compact = false,
@@ -59,6 +64,14 @@ export function PostingNotices({
                 {notice.kind === "history"
                   ? "Open that application"
                   : "Open the other posting"}
+              </Link>
+            ) : null}
+            {!compact && notice.code.startsWith(LANGUAGE_NOTICE) ? (
+              <Link
+                to={PROFILE_LANGUAGES}
+                className="w-fit text-muted-foreground underline underline-offset-4 hover:text-foreground"
+              >
+                Your languages in your profile
               </Link>
             ) : null}
           </div>

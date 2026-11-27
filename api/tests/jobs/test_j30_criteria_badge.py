@@ -156,7 +156,7 @@ def test_the_codes_come_in_one_order_and_together() -> None:
     every = facts("Freelance", "remote", FOUND - timedelta(days=60))
     assert codes(every, WITHIN) == [CONTRACT, WORK_MODE, OLDER]
     assert codes(facts("CDI", "office", FOUND - timedelta(days=3)), WITHIN) == []
-    assert criteria_badge.CODES == (CONTRACT, WORK_MODE, OLDER)
+    assert criteria_badge.CODES == (CONTRACT, WORK_MODE, OLDER, criteria_badge.LANGUAGE)
 
 
 @pytest.mark.parametrize(

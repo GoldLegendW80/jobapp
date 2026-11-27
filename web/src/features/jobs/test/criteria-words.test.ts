@@ -110,3 +110,45 @@ describe("the badge of a posting outside its search's criteria (J30)", () => {
     expect(sharedWindow(undefined)).toBeNull();
   });
 });
+
+describe("the badge of a posting that requires a language the profile does not list (J35)", () => {
+  it("says the language alone", () => {
+    expect(
+      outsideCriteriaWords(
+        posting({
+          outside_criteria: ["language"],
+          languages_missing: ["German"],
+        }),
+        30,
+      ),
+    ).toBe("Requires German, which your profile does not list");
+  });
+
+  it("joins several languages and an alternative, after the other criteria", () => {
+    const words = outsideCriteriaWords(
+      posting({
+        outside_criteria: ["contract", "language"],
+        contract_type: "Freelance",
+        languages_missing: ["German", "Italian or Spanish", "German"],
+      }),
+      30,
+    );
+    expect(words).toBe(
+      "Outside your criteria: freelance mission. Requires German and Italian or Spanish, which your profile does not list",
+    );
+    expect(words).not.toMatch(SEPARATOR);
+    expect(words).not.toContain("another criterion");
+  });
+
+  it("still reads as a sentence when the api names no language", () => {
+    expect(
+      outsideCriteriaWords(posting({ outside_criteria: ["language"] }), 30),
+    ).toBe("Requires a language your profile does not list");
+  });
+
+  it("says nothing of the languages without the code", () => {
+    expect(
+      outsideCriteriaWords(posting({ languages_missing: ["German"] }), 30),
+    ).toBeNull();
+  });
+});

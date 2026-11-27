@@ -61,6 +61,7 @@ const FIELD_LABELS: Record<string, string> = {
   pay_period: "pay",
   published_on: "published date",
   description: "description",
+  languages: "languages",
 };
 
 /** A search's event; jobs J23: how the posting it found is dated, when it is not exactly; jobs

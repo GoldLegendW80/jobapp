@@ -377,7 +377,7 @@ def _declared(names: Iterable[str], spoken: Sequence[Spoken]) -> list[Spoken]:
     return [one for one in spoken if keys_of(one.name) & wanted]
 
 
-def _level_gap(item: Asked, mine: list[Spoken]) -> Gap | None:
+def _level_gap(item: Asked, mine: list[Spoken], language: str) -> Gap | None:
     """The person's best declared reading against the asked level; a gap when unsure."""
     asked = level_of(item.level, "high")
     if asked is None:
@@ -389,7 +389,7 @@ def _level_gap(item: Asked, mine: list[Spoken]) -> Gap | None:
     if asked != "unknown" and known and max(point for point, _ in known) >= asked:
         return None
     best = max(known, key=lambda pair: pair[0])[1] if known else mine[0]
-    return Gap("level", display(best.name), item.quote, item.level, best)
+    return Gap("level", language, item.quote, item.level, best)
 
 
 def compare(stored: object, spoken: Sequence[Spoken]) -> list[Gap]:
@@ -410,7 +410,7 @@ def compare(stored: object, spoken: Sequence[Spoken]) -> list[Gap]:
         if not mine:
             gaps.append(Gap("missing" if status == "required" else "unsure", language, item.quote))
             continue
-        gap = _level_gap(item, mine)
+        gap = _level_gap(item, mine, language)
         if gap is not None:
             gaps.append(gap)
     if not asks and read.written_in and not _declared([read.written_in], spoken):

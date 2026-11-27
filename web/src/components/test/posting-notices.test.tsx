@@ -7,8 +7,14 @@ import { renderWithQuery } from "@/test/render";
 import { server } from "@/test/server";
 
 import { BulkApplyDialog } from "@/components/shared/apply/bulk-apply";
-import { PostingNotices } from "@/components/shared/jobs/posting/posting-notices";
-import { NOTICES } from "@/design-system/fixtures/posting-notices";
+import {
+  PostingNotices,
+  PROFILE_LANGUAGES,
+} from "@/components/shared/jobs/posting/posting-notices";
+import {
+  LANGUAGE_NOTICES,
+  NOTICES,
+} from "@/design-system/fixtures/posting-notices";
 import type { BulkPreview } from "@/features/apply/api/bulk-apply-api";
 import { noticesSchema } from "@/features/jobs/api/notices-api";
 import { SwipeCard } from "@/features/opportunities/components/deck/swipe-card";
@@ -20,6 +26,33 @@ function show(node: React.ReactNode) {
 }
 
 describe("PostingNotices", () => {
+  it("leads a notice on the posting's languages to the profile's languages", () => {
+    show(<PostingNotices notices={LANGUAGE_NOTICES} />);
+    const items = within(
+      screen.getByRole("list", { name: "Before you apply" }),
+    ).getAllByRole("listitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent(
+      "This posting requires German, which your profile does not list.",
+    );
+    expect(items[0]).toHaveTextContent(
+      "“Verhandlungssichere Deutschkenntnisse”",
+    );
+    for (const item of items)
+      expect(
+        within(item).getByRole("link", {
+          name: "Your languages in your profile",
+        }),
+      ).toHaveAttribute("href", PROFILE_LANGUAGES);
+  });
+
+  it("shows no link to the profile's languages in a compact list", () => {
+    show(<PostingNotices notices={LANGUAGE_NOTICES} compact />);
+    expect(
+      screen.queryByRole("link", { name: "Your languages in your profile" }),
+    ).toBeNull();
+  });
+
   it("says each notice in full, with the posting's own words and the other posting", () => {
     show(<PostingNotices notices={NOTICES} />);
     const list = screen.getByRole("list", { name: "Before you apply" });

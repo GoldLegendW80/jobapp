@@ -967,7 +967,9 @@ def test_the_backlog_leaves_a_person_alone_for_a_pause_after_such_a_failure(
     second = timedelta(seconds=1)
     [theirs] = backlog(factory, NOW + second)  # another person is not paused
     with factory() as db:
-        db.execute(sa.update(Job).where(Job.user_id == other).values(read_at=NOW))
+        # Read, the languages included (jobs J35), so the backlog has nothing of theirs left.
+        read = {"read_at": NOW, "languages": {"written_in": None, "asked": []}}
+        db.execute(sa.update(Job).where(Job.user_id == other).values(**read))
         db.commit()
     end_run(factory, theirs, failures.NO_RESULT)
     assert backlog(factory, NOW + reader.BACKLOG_PAUSE - second) == []
