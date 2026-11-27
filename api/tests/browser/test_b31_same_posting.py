@@ -553,6 +553,12 @@ def test_past_the_opens_a_posting_with_no_card_is_refused_with_what_to_do() -> N
     assert one.refused == {"app_opens_max": 1}
 
 
+def bare_links(*bare: str) -> tuple[str, str]:
+    """A page of links to postings with no words of their own: no card stands in for them."""
+    rows = "\n".join(f"- link [ref=e{n}]:\n  - /url: /rc/clk?jk={k}" for n, k in enumerate(bare))
+    return INDEED + "jobs?q=data&start=90", rows
+
+
 def served_list(count: int) -> tuple[finder.FinderSession, list, list[str]]:
     """A session that read a list of `count` cards, every posting's page served."""
     one, batches, opened, served = board_session(INDEED, indeed_list(keys(count)))
@@ -589,10 +595,7 @@ def test_a_posting_named_twice_in_one_report_takes_one_open() -> None:
     """15 postings with a card, 5 with none, then the same 5 under another spelling: the 5 take
     5 opens, not 10, so the 15 with a card are opened too."""
     bare = keys(5, 100)
-    rows = "\n".join(f"- link [ref=e{n}]:\n  - /url: /rc/clk?jk={k}" for n, k in enumerate(bare))
-    one, _, opened, served = board_session(
-        INDEED, indeed_list(keys(15)), (INDEED + "jobs?q=data&start=90", rows)
-    )
+    one, _, opened, served = board_session(INDEED, indeed_list(keys(15)), bare_links(*bare))
     for k in keys(15) + bare:
         served[f"{INDEED}viewjob?jk={k}"] = posting(f"Data Role {k[-4:]}")
     again = [item(k, f"http://fr.indeed.test:8080/m/viewjob?jk={k}") for k in bare]
@@ -604,14 +607,49 @@ def test_a_posting_named_twice_in_one_report_takes_one_open() -> None:
 
 
 def test_a_page_that_did_not_load_is_opened_once_a_report() -> None:
-    """A posting reported twice whose page did not load: one open, then its card stands in."""
-    k = keys(1)[0]
-    one, batches, opened, _ = board_session(INDEED, indeed_list([k]))
+    """A posting with no card reported twice, its page not loading: one open, both refused."""
+    k = keys(1, 100)[0]
+    one, batches, opened, _ = board_session(INDEED, bare_links(k))
     answer = reported(one, item(k), item(k, f"{INDEED}rc/clk?jk={k}"))
     assert opened == [f"{INDEED}viewjob?jk={k}"]
-    assert answer["kept"] == 1
-    assert [r["reason"] for r in answer["refused"]] == ["duplicate"]
-    assert batches[0].findings[0].list_url == INDEED + "jobs?q=data&l=bern&start=0"
+    assert [r["reason"] for r in answer["refused"]] == ["detail_not_opened"] * 2
+    assert (answer["kept"], batches) == (0, [])
+
+
+def test_the_opens_are_planned_again_after_each_open() -> None:
+    """An open may change what the next postings need: the first posting's page moved to the
+    last one's (a redirect), so the last needs no open, and the 19 postings with a card between
+    them are all opened."""
+    first, last = keys(2, 100)
+    one, batches, opened, served = board_session(
+        INDEED, indeed_list(keys(19)), bare_links(first, last)
+    )
+    for k in keys(19):
+        served[f"{INDEED}viewjob?jk={k}"] = posting(f"Data Role {k[-4:]}")
+    opens = one._open_for_report
+    moved = f"{INDEED}viewjob?jk={last}&from=moved"
+
+    async def redirected(url: str) -> str:
+        if url != f"{INDEED}viewjob?jk={first}":
+            return await opens(url)
+        opened.append(url)
+        one._read(moved, posting("Robot Welder"))
+        return moved
+
+    one._open_for_report = redirected  # type: ignore[method-assign]
+    answer = reported(
+        one, item(first), *(item(k) for k in keys(19)), item(last, title="Robot Welder")
+    )
+    assert len(opened) == finder.APP_OPENS_MAX
+    assert "from_card" not in answer
+    assert answer["refused"] == [
+        {
+            "index": 0,
+            "reason": "not_on_opened_page",
+            "do": finder.REPORT_ADVICE["not_on_opened_page"],
+        }
+    ]
+    assert [f.url for b in batches for f in b.findings][-1] == moved
 
 
 def drawn_reports(seed: int) -> list[tuple[int, bool]]:
