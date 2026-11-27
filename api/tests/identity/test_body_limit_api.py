@@ -238,6 +238,10 @@ UNBOUNDED_SCHEMAS = {
         "prompt at most 100,000 characters); the 1 MiB default class bounds it"
     ),
     ("POST", "/api/agents/runs"): "input is free JSON, at most 16 KiB (runs_router)",
+    ("POST", "/api/applications/{application_id}/messages"): (
+        "text is bounded by applier.post_message (1,000 characters), whose refusal never "
+        "repeats it as a schema's would; the 1 MiB default class bounds it"
+    ),
     ("POST", "/api/proposals/{proposal_id}/accept"): "the edited fields are free JSON",
     ("PUT", "/api/documents/settings"): (
         "free JSON validated as DocumentSettings (at most 50 phrases of 100 characters) for its "
