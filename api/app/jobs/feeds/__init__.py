@@ -1,10 +1,11 @@
 """Job feeds: official job APIs a sweep reads beside the ticked job websites (owner, 2026-10-30:
 Arbeitnow, Himalayas and Adzuna, in place of Indeed, whose Cloudflare check blocks any automated
-access and which has no official search API). SPEC-jobs.md, "Job feeds".
+access and which has no official search API; jobs J34 added freehire, an open aggregator of
+application systems). SPEC-jobs.md, "Job feeds".
 
-A feed is a `FeedSource` (arbeitnow.py, himalayas.py, adzuna.py): a name, the host it reads,
-whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of the API through
-`Http` and returns normalised `Finding`s. Everything else is shared here:
+A feed is a `FeedSource` (arbeitnow.py, himalayas.py, adzuna.py, freehire.py): a name, the host
+it reads, whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of the API
+through `Http` and returns normalised `Finding`s. Everything else is shared here:
 
 - What a sweep reads. The person ticks feeds in Find jobs (`search.job_feeds`); the sweep freezes
   them with the websites (`sweep.freeze_scope`, one `stats.sources` entry each, mode "api") and
@@ -12,11 +13,12 @@ whether it needs a key, and `fetch(ctx, criteria)`, which reads a few pages of t
   sources that make no browser call (alert e-mails, company boards, LinkedIn's public job
   search), before the websites. An answer is decoded off the event loop, one parse at a time
   with those sources (sweep.parse_one).
-- Politeness. One request at a time per feed, PAUSE_S apart, at most the feed's own request
-  budget per sweep (a few), a User-Agent naming the app, FEED_TIME_S per feed and FEEDS_TIME_S
-  for all the ticked feeds together, so the websites read after them keep most of the sweep's
-  time. A 429 stops that feed for this sweep (`rate_limited`), whatever Retry-After says: the
-  next sweep reads it again. Once the run let go of its row (a commit of any source that did
+- Politeness. One request at a time per feed, PAUSE_S apart (or the feed's own `pause_s`), at
+  most the feed's own request budget per sweep (a few), a User-Agent naming the app, FEED_TIME_S
+  per feed (or the feed's own shorter `time_s`) and FEEDS_TIME_S for all the ticked feeds
+  together, so the websites read after them keep most of the sweep's time. A 429 stops that
+  feed for this sweep (`rate_limited`), whatever Retry-After says: the next sweep reads it
+  again. Once the run let go of its row (a commit of any source that did
   not settle, `sweep.abandoned`), no further request is sent (`store_failed`) and no later feed
   starts. Requests go straight to the transport, never through httpx's
   Client, whose INFO log line would carry the address, and Adzuna's key is in its query; they
@@ -132,6 +134,9 @@ class Finding:
     remote: bool | None = None
     contract: ContractType | None = None
     read_at: datetime | None = None
+    # The feed's own request asked for the person's places (freehire's countries and cities):
+    # the server placed it, so the saved places' words are not matched against its location.
+    placed: bool = False
 
     @property
     def published_on(self) -> str | None:
@@ -388,6 +393,11 @@ class Criteria:
     unwanted_places: re.Pattern[str] | None
     contracts: frozenset[str]
     days: int
+    # Every saved title's plain words and place words, in saved order, and the remote stance:
+    # what a feed that searches several titles and places in one request asks for (freehire).
+    titles: tuple[str, ...] = ()
+    places: tuple[str, ...] = ()
+    remote_stance: str | None = None
 
     @classmethod
     def of(cls, search: SearchSection) -> "Criteria":
@@ -408,6 +418,9 @@ class Criteria:
             unwanted_places=_pattern(search.location_exclude),
             contracts=frozenset(search.contract_types),
             days=search.days,
+            titles=tuple(words),
+            places=tuple(typed_words(search.location)[0]),
+            remote_stance=search.remote_stance,
         )
 
     def left_out(self, finding: Finding, now: datetime, *, place_filter: bool) -> str | None:
@@ -453,7 +466,9 @@ class FeedSource(Protocol):
     host: str
     budget: int  # requests per sweep
     needs_key: bool
-    place_filter: bool  # False when the feed is already scoped to a place (Himalayas: France)
+    # False when the feed is already scoped to a place (Himalayas: France); a finding the feed
+    # marks `placed` skips it too.
+    place_filter: bool
 
     async def fetch(self, ctx: FeedContext, criteria: Criteria) -> Fetched: ...
 
@@ -462,12 +477,13 @@ def feeds() -> dict[str, FeedSource]:
     """The feeds in the order a sweep reads them."""
     from app.jobs.feeds.adzuna import Adzuna
     from app.jobs.feeds.arbeitnow import Arbeitnow
+    from app.jobs.feeds.freehire import Freehire
     from app.jobs.feeds.himalayas import Himalayas
 
-    return {feed.name: feed for feed in (Arbeitnow(), Himalayas(), Adzuna())}
+    return {feed.name: feed for feed in (Arbeitnow(), Himalayas(), Adzuna(), Freehire())}
 
 
-FEED_NAMES = ("arbeitnow", "himalayas", "adzuna")
+FEED_NAMES = ("arbeitnow", "himalayas", "adzuna", "freehire")
 
 
 def scope_entry(name: str) -> dict[str, Any]:
@@ -617,11 +633,13 @@ class FeedRunner:
             transport,
             budget=source.budget,
             sleep=self.sleep,
+            pause_s=getattr(source, "pause_s", PAUSE_S),
             parsing=getattr(plan, "parsing", None),
             stopped=lambda: sweep.abandoned(plan),
         )
         ctx = FeedContext(http, now, key, cursor)
-        left = min(self.feed_time_s, deadline - self.monotonic() - DEADLINE_MARGIN_S)
+        own = getattr(source, "time_s", self.feed_time_s)
+        left = min(self.feed_time_s, own, deadline - self.monotonic() - DEADLINE_MARGIN_S)
         if left <= 0:
             return "time_budget", None
         try:
@@ -645,7 +663,8 @@ class FeedRunner:
             if finding.external_id in seen:
                 continue  # one posting on two pages or under two searches
             seen.add(finding.external_id)
-            reason = criteria.left_out(finding, now, place_filter=source.place_filter)
+            placed = source.place_filter and not finding.placed
+            reason = criteria.left_out(finding, now, place_filter=placed)
             if reason is None:
                 kept.append(finding)
             else:

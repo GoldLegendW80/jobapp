@@ -109,7 +109,7 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 from redis.exceptions import RedisError
 
-from app.browser import finder
+from app.browser import finder, same_posting
 from app.browser.leases import StoreUnavailableError
 from app.browser.sources import PACE_POLL_S, linkedin, linkedin_places
 from app.jobs import sweep
@@ -757,10 +757,15 @@ def on_linkedin(name: str, host: str) -> bool:
 
 
 def _known_ids(plan: Any, host: str) -> set[str]:
-    """The LinkedIn ids of the person's postings (sweep.Known's addresses)."""
+    """The LinkedIn ids of the person's postings (sweep.Known's addresses, a LinkedIn posting's
+    by its board and id since browser B31: `same_posting.posting_of_key`)."""
     known = getattr(plan, "known", None)
     ids: set[str] = set()
     for url in getattr(known, "urls", ()) or ():
+        if (named := same_posting.posting_of_key(url)) is not None:
+            if named[0].rsplit(".", 1)[0] == "linkedin":
+                ids.add(named[1])
+            continue
         parts = urlsplit(url)
         if not on_linkedin(parts.hostname or "", host):
             continue

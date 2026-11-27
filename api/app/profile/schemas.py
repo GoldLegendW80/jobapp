@@ -820,7 +820,7 @@ INTERACTIVE_FIELDS = ("interactive_sites", "interactive_instructions")
 # Search fields an older editor or import leaves out: the stored value is kept (service).
 # The job feeds a sweep reads beside the websites (owner, 2026-10-30, app/jobs/feeds), ticked in
 # Find jobs: an editor that does not know the field keeps the stored value.
-JobFeed = Literal["arbeitnow", "himalayas", "adzuna"]
+JobFeed = Literal["arbeitnow", "himalayas", "adzuna", "freehire"]
 KEPT_WHEN_OMITTED = (
     *INTERACTIVE_FIELDS,
     "location_exclude",
@@ -1044,7 +1044,7 @@ class SearchSection(_Section):
     )
     # Job alert e-mails read from the connected mailbox (owner, 2026-10-30); off when absent.
     alert_emails: AlertEmails = Field(default_factory=lambda: AlertEmails())
-    job_feeds: Annotated[list[JobFeed], Field(max_length=3)] = Field(default_factory=list)
+    job_feeds: Annotated[list[JobFeed], Field(max_length=4)] = Field(default_factory=list)
     # When the job websites are searched automatically (jobs J5 schedules it and edits it next
     # to Find jobs). Off unless the user turns it on; a section saved before this field existed
     # reads as off.

@@ -42,6 +42,7 @@ it("lists each job feed of a sweep with its counts and why it stopped", () => {
           error: "rate_limited",
         }),
         entry("adzuna", { error: "no_key", reason: "no_key" }),
+        entry("freehire", { found: 31, new: 12, searches: 2, duplicates: 4 }),
       ]}
     />,
   );
@@ -51,6 +52,7 @@ it("lists each job feed of a sweep with its counts and why it stopped", () => {
     "Arbeitnow: 3 postings kept, 2 new.",
     "Himalayas: 2 searches. 1 posting kept, 1 new. The site asked the app to slow down, so it is read again at the next search. What was read is kept.",
     "Adzuna: Skipped: no Adzuna key is stored. Add your free key in Account to search Adzuna.",
+    "freehire: 2 searches. 31 postings kept, 12 new.",
   ]);
 });
 

@@ -1508,6 +1508,25 @@ it("lists job feeds like any address and saves them with the search", async () =
   expect(sent.job_feeds).toEqual(["arbeitnow", "adzuna"]);
 });
 
+it("offers freehire unticked, with its line once added, and saves it with the search", async () => {
+  const { profile, starts, user, dialog } = await open({
+    ...structuredClone(EMPTY.search),
+    job_feeds: ["himalayas"],
+  });
+  // Off until the person adds it: offered, not in the list.
+  expect(inList(dialog, "freehire")).toBe(false);
+  await toggle(user, dialog, "freehire");
+  expect(rowOf(dialog, "freehire")).toHaveTextContent(
+    "Jobs gathered from company application systems worldwide, read through its official feed",
+  );
+  await saveAndStart(user, dialog);
+  await waitFor(() => {
+    expect(starts).toEqual([{ profile_revision: 7 }]);
+  });
+  const sent = profile.saves[0]!.body.data as Record<string, unknown>;
+  expect(sent.job_feeds).toEqual(["himalayas", "freehire"]);
+});
+
 it("says nothing about the key once the Adzuna key is stored", async () => {
   server.use(
     http.get("*/api/jobs/feeds", () =>

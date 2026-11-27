@@ -28,7 +28,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "What each job feed (Arbeitnow, Himalayas, Adzuna) gave a search, or why it gave nothing: in the summary of a search, after Find jobs.",
+          "What each job feed (Arbeitnow, Himalayas, Adzuna, freehire) gave a search, or why it gave nothing: in the summary of a search, after Find jobs.",
       },
     },
   },
@@ -37,6 +37,14 @@ const meta = {
       feed("arbeitnow", { searches: 2, found: 14, new: 6 }),
       feed("himalayas", { searches: 1, found: 3, new: 1 }),
       feed("adzuna", { searches: 2, found: 22, new: 9 }),
+      feed("freehire", {
+        searches: 2,
+        result_pages: 3,
+        found: 31,
+        new: 12,
+        duplicates: 4,
+        outside: 2,
+      }),
     ],
   },
 } satisfies Meta<typeof SweepJobFeeds>;
@@ -44,8 +52,8 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** Three feeds read: their searches, the postings kept and the new ones. */
-export const Typical: Story = { name: "Three feeds read" };
+/** Four feeds read: their searches, the postings kept and the new ones. */
+export const Typical: Story = { name: "Four feeds read" };
 
 /** Adzuna skipped for want of a key, with where to add one. */
 export const NoKey: Story = {

@@ -63,6 +63,34 @@ describe("an address the person types", () => {
     expect(feedOf("https://www.adzuna.fr/")).toBe("adzuna");
     expect(feedOf("https://www.adzuna.co.uk/jobs")).toBe("adzuna");
     expect(feedOf("https://careers.example.org/")).toBeNull();
+    expect(feedOf("https://freehire.me/")).toBe("freehire");
+    expect(feedOf("freehire.me/jobs/ai-engineer-x1")).toBeNull(); // no scheme yet
+    expect(feedOf("https://www.freehire.me/jobs/ai-engineer-x1")).toBe(
+      "freehire",
+    );
+    expect(feedOf("https://freehire.me.example.org/")).toBeNull();
+    expect(feedOf("https://notfreehire.me/")).toBeNull();
+  });
+
+  it("lists freehire as a feed with one line that says what it is", () => {
+    const draft: SourcesDraft = {
+      sites: [],
+      boards: null,
+      feeds: withFeed(["arbeitnow"], "freehire"),
+      web: false,
+    };
+    expect(draft.feeds).toEqual(["arbeitnow", "freehire"]);
+    expect(listed(draft, "https://freehire.me/")).toBe(true);
+    const row = rowsOf(draft).find((line) => line.feed === "freehire");
+    expect(row).toMatchObject({
+      kind: "feed",
+      name: "freehire",
+      url: "https://freehire.me/",
+      how: "Jobs gathered from company application systems worldwide, read through its official feed",
+      enabled: true,
+    });
+    expect(row?.how).not.toMatch(/[–—]| - /);
+    expect(sourceCount(draft)).toBe(2);
   });
 
   it("is a website of her own unless an example names its platform", () => {
@@ -191,6 +219,7 @@ describe("the list", () => {
       "Free-Work",
       "Arbeitnow",
       "Himalayas",
+      "freehire",
       "Doctolib on Ashby",
       "Datadog on Greenhouse",
     ]);
@@ -200,7 +229,7 @@ describe("the list", () => {
 });
 
 describe("the recommended places", () => {
-  it("are the four job websites and the two feeds, never a company board", () => {
+  it("are the four job websites and the two feeds, never a company board nor freehire", () => {
     expect(RECOMMENDED.map((example) => example.label)).toEqual([
       "LinkedIn",
       "Welcome to the Jungle",

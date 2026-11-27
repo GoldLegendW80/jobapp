@@ -1,12 +1,18 @@
 /**
  * The job feeds a search reads beside the job websites (api app/jobs/feeds, owner 2026-10-30):
- * Arbeitnow, Himalayas and Adzuna, official job APIs. Their names and labels, what each code of
+ * Arbeitnow, Himalayas and Adzuna, official job APIs, and freehire (jobs J34), an open
+ * aggregator of application systems. Their names and labels, what each code of
  * a feed's entry in a sweep's `sources` means, and where Adzuna's key is stored (its requests:
  * api/job-feeds-api.ts).
  */
 import type { FeedState, FeedsState } from "../api/job-feeds-api";
 
-export const JOB_FEEDS = ["arbeitnow", "himalayas", "adzuna"] as const;
+export const JOB_FEEDS = [
+  "arbeitnow",
+  "himalayas",
+  "adzuna",
+  "freehire",
+] as const;
 export type JobFeed = (typeof JOB_FEEDS)[number];
 
 export const isJobFeed = (kind: string): kind is JobFeed =>
@@ -17,6 +23,7 @@ export const FEED_NAMES: Record<JobFeed, string> = {
   arbeitnow: "Arbeitnow",
   himalayas: "Himalayas",
   adzuna: "Adzuna",
+  freehire: "freehire",
 };
 
 export const ADZUNA_SIGNUP = "https://developer.adzuna.com/signup";
