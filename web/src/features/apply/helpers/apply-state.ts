@@ -110,6 +110,7 @@ const FAILURES: Record<string, string> = {
   interrupted: "it was interrupted",
   internal_error: "something went wrong on our side",
   form_changed: "the form changed while it was being filled",
+  code_shown: "the code you gave showed again, so the assistant stopped",
 };
 
 const BLOCKED_BY_RULE =

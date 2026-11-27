@@ -15,8 +15,9 @@ import { WAIT_POLL_MS } from "@/features/apply/api/use-agent-wait";
 import {
   AFTER_SEND_WAIT,
   ASK_NOT_SHOWN,
-  CODE_IN_BROWSER,
+  CODE_BY_HAND,
   NO_CODE_HERE,
+  WORDS_NOT_CODE,
   NO_PASSWORD,
   SAID_NOTHING_SENT,
 } from "@/features/apply/helpers/agent-wait";
@@ -190,15 +191,25 @@ describe("the apply agent waits for the person (A25)", () => {
         { timeout: WAIT_POLL_MS * 3 },
       ),
     ).toBeInTheDocument();
-    expect(within(section).queryByTestId("agent-wait")).toBeNull();
+    // The ask is over; the chat stays, with the box to write to the assistant at work.
+    const work = within(within(section).getByTestId("agent-wait"));
+    expect(work.queryByLabelText(BOX)).toBeNull();
+    expect(work.queryByText("The assistant needs you")).toBeNull();
+    expect(work.getByLabelText("Write to the assistant")).toBeInTheDocument();
   });
 
-  it("asks a code in the browser, with no box", async () => {
+  it("asks a code in a code box the app types from, keeps the box for words, and the browser's way beside it", async () => {
     waiting(CODE_ASK);
     const { wait } = await openSection();
     expect(wait.getByText("It asks for a code.")).toBeInTheDocument();
-    expect(wait.getByText(CODE_IN_BROWSER)).toBeInTheDocument();
+    expect(
+      wait.getByLabelText("The code the site sent you"),
+    ).toBeInTheDocument();
+    expect(
+      wait.getByLabelText("Or words to the assistant"),
+    ).toHaveAccessibleDescription(WORDS_NOT_CODE);
     expect(wait.queryByLabelText(BOX)).toBeNull();
+    expect(wait.getByText(CODE_BY_HAND)).toBeInTheDocument();
     expect(
       wait.getByRole("button", { name: "Watch the browser" }),
     ).toBeInTheDocument();

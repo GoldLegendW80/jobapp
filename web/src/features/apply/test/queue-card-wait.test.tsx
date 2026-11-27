@@ -12,7 +12,7 @@ import { fakeQueue, queueItem } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
 
-import { ASK_NOT_SHOWN, CODE_IN_BROWSER } from "../helpers/agent-wait";
+import { ASK_NOT_SHOWN, CODE_BY_HAND } from "../helpers/agent-wait";
 import { DECISIONS } from "../helpers/decisions";
 
 beforeEach(() => {
@@ -60,7 +60,10 @@ describe("the apply agent's wait on the Applications page (A25)", () => {
     ).toBeInTheDocument();
 
     const second = await card(/Drone Pilot/);
-    expect(await second.findByText(CODE_IN_BROWSER)).toBeInTheDocument();
+    expect(
+      await second.findByLabelText("The code the site sent you"),
+    ).toBeInTheDocument();
+    expect(second.getByText(CODE_BY_HAND)).toBeInTheDocument();
     // Both wait for the person: the api lists them first, and so does the page.
     const waiting = screen
       .getByRole("heading", { name: "Waiting for you (2)" })

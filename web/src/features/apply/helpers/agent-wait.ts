@@ -49,34 +49,101 @@ const KINDS: Record<string, string> = {
 export const kindWords = (kind: string) =>
   Object.hasOwn(KINDS, kind) ? KINDS[kind] : KINDS.other;
 
-/**
- * The kinds the app's box refuses (api applier.CODE_IN_BROWSER): the person types them in the
- * browser. The api's next slice lets the app type a code given here: remove it from this set then.
- */
-export const TYPED_IN_BROWSER: ReadonlySet<string> = new Set(["code"]);
+/** The kind of an ask whose answer is a code: the app types it on the site (api applier.answer_code). */
+export const CODE = "code";
 
-/** Under the box: an answer goes to the model, so a code too until the api's next slice types it. */
+/** Under the words box of any other ask: its words go to the model, so no code and no password. */
 export const NO_CODE_HERE =
   "Type codes and passwords in the browser yourself, never in this box.";
 
-export const CODE_IN_BROWSER =
-  "Type the code in the browser yourself: open the browser below, choose Use the browser myself, type it, then choose Let the assistant continue.";
+/** Under the words box of a code question: the code has its own box. */
+export const WORDS_NOT_CODE =
+  "Words here go to the assistant as you write them: give the code in the code box, never here.";
 
-/** The person's answer to the ask is in, and the run has not read it yet: no second box. */
+/** Beside the code box: what becomes of the code. */
+export const CODE_TYPED_BY_APP =
+  "A code of 6 to 16 letters or digits. The app types it on the site for you, and the assistant never sees it.";
+
+/** The other way, for a shorter code or when the person prefers. */
+export const CODE_BY_HAND =
+  "For a shorter code, or if you prefer: open the browser, choose Use the browser myself, type the code there, then choose Let the assistant continue.";
+
+/** A code question after a code the person gave in this chat. */
+export const CODE_ASKED_AGAIN =
+  "You gave a code before, and the assistant asks again: the site may not have taken it. Give the newest code the site sent you.";
+
+/** The person's message to the run at work (A25, api applier.post_message), not an answer to an ask. */
+export const isMessage = (line: ChatLine) =>
+  line.who === "person" && line.kind === "message";
+
+/** The asks and answers of the chat, the person's messages left out. */
+const exchange = (chat: readonly ChatLine[] | undefined) =>
+  (chat ?? []).filter((line) => !isMessage(line));
+
+/** The person's answer to the ask is in (words or a code), and the run has not read it yet. */
 export function answered(chat: readonly ChatLine[] | undefined): boolean {
-  const last = chat?.at(-1);
+  const last = exchange(chat).at(-1);
   return last?.who === "person" && !last.end;
 }
 
-/** What the box offers while the run waits: an answer, the browser for a code, or nothing more to say. */
+/**
+ * What the boxes offer while the run waits: words, a code (with the words box beside it), nothing
+ * more since words or a code are in, or nothing at all once the wait is over.
+ */
 export function boxOf(
   question: Question,
   chat: readonly ChatLine[] | undefined,
-): "answer" | "browser" | "sent" | null {
+): "answer" | "code" | "sent" | "code_sent" | null {
   if (question.live !== true) return null;
-  if (answered(chat)) return "sent";
-  return TYPED_IN_BROWSER.has(question.kind) ? "browser" : "answer";
+  if (answered(chat))
+    return exchange(chat).at(-1)?.kind === CODE ? "code_sent" : "sent";
+  return question.kind === CODE ? "code" : "answer";
 }
+
+/** The open ask is a code, and the person gave a code to an earlier ask of this chat. */
+export function codeAskedAgain(chat: readonly ChatLine[] | undefined): boolean {
+  const lines = exchange(chat);
+  const asks = lines.flatMap((line, index) =>
+    line.who === "assistant" ? [index] : [],
+  );
+  const last = asks.at(-1);
+  if (last === undefined || lines.at(last)?.kind !== CODE) return false;
+  return lines
+    .slice(0, last)
+    .some((line) => line.who === "person" && line.kind === CODE);
+}
+
+type Working = Run & Pick<Application, "mode" | "dry_run" | "ats">;
+
+/**
+ * The apply agent works on the application now, so a message reaches it (api applier.under_way):
+ * One click Apply, or Review first by the agent (`reviewAgent`), filling, sending or waiting for
+ * the person; never a rehearsal or an e-mail application. The api decides: its 409 says so.
+ */
+export const assistantWorks = (
+  run: Working | null | undefined,
+  reviewAgent: boolean,
+) =>
+  !!run &&
+  !run.dry_run &&
+  run.ats !== "email" &&
+  (run.mode === "direct" || (run.mode === "review" && reviewAgent)) &&
+  (run.state === "filling" || run.state === "submitting" || agentWaits(run));
+
+/** A message of the person the run has not read yet, as the api says (`read` false). */
+export const unread = (chat: readonly ChatLine[] | undefined) =>
+  (chat ?? []).some((line) => isMessage(line) && line.read === false);
+
+/** Under a message of the person: whether the assistant read it, only as the api says it. */
+export function readLine(line: ChatLine): string | null {
+  if (!isMessage(line)) return null;
+  if (line.read === true) return "The assistant has read it.";
+  if (line.read === false) return "The assistant has not read it yet.";
+  return null;
+}
+
+/** At most this many characters of a message on screen (the api takes 1,000). */
+export const MESSAGE_SHOWN_MAX = 1000;
 
 /** At most this many characters of one line of the chat on screen (the api keeps an ask to 300). */
 export const SHOWN_MAX = 600;
@@ -175,6 +242,8 @@ const UNCONFIRMED: Record<string, string> = {
     "The assistant says it clicked a send button, but it could not confirm the application. Look for a confirmation mail or on the site.",
   send_unsure:
     "The assistant is not sure whether it clicked a send button, and it could not confirm the application. Look for a confirmation mail or on the site.",
+  code_shown:
+    "The code you gave showed again, so the assistant stopped, and the site may already have the application. Look for a confirmation mail or on the site.",
 };
 
 export const SAID_NOTHING_SENT =

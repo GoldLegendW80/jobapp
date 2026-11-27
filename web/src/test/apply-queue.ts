@@ -3,6 +3,7 @@ import { http, HttpResponse } from "msw";
 import type { Answer } from "@/features/apply/api/apply-api";
 import type { QueueItem, Summary } from "@/features/apply/api/queue-api";
 
+import { agentWaitRoutes, agentWaitState } from "./agent-wait";
 import { fakeApplication } from "./apply";
 import { server } from "./server";
 
@@ -81,6 +82,8 @@ export function fakeQueue(
     rehearsals: [] as { id: string; answer: string }[],
     /** What an item's detail adds (A25: the assistant's `question`, the `chat`, the `events`). */
     details: {} as Record<string, Record<string, unknown>>,
+    /** A25: what the question and messages routes received, and their switches. */
+    agent: agentWaitState(),
     hash: (id: string) => `hash-${id}-${state.versions[id] ?? 1}`,
     waiting: () =>
       state.items.filter(
@@ -144,6 +147,12 @@ export function fakeQueue(
     });
   };
   server.use(
+    ...agentWaitRoutes((id) => {
+      const item = state.items.find((one) => one.id === id);
+      if (!item) return null;
+      state.details[id] ??= {};
+      return { application: item, detail: state.details[id] };
+    }, state.agent),
     http.get("*/api/apply/queue", () =>
       HttpResponse.json({
         items: state.items,
