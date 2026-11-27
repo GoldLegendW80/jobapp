@@ -19,6 +19,7 @@ function profileOf(sections: FakeProfile["sections"], photo = false) {
         revision: 6,
         sections,
         photoEtag: photo ? '"etag"' : null,
+        languagesUnread: [],
         saves: [],
         uploads: [],
         deletes: 0,

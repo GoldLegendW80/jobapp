@@ -562,6 +562,30 @@ def test_the_badge_follows_her_languages_not_every_identity_save(
 # --- the list and the detail --------------------------------------------------------------------
 
 
+def test_the_profile_names_the_languages_the_app_cannot_read(
+    api: Api, factory: sessionmaker[Session]
+) -> None:
+    signed = sign_in(factory, api, "e2e-languages-unread@example.org")
+    assert api.get("/api/profile", token=signed.token).json()["languages_unread"] == []
+    person(
+        factory, signed.id, ("Français", "natif"), ("Klingon", "C1"), ("N/A", None), ("UK", None)
+    )
+    body = api.get("/api/profile", token=signed.token).json()
+    assert body["languages_unread"] == ["Klingon", "UK"]
+    saved = api.request(
+        "PUT",
+        "/api/profile/identity",
+        token=signed.token,
+        json={
+            "base_revision": body["revision"],
+            "data": {"languages": [{"name": "Français"}, {"name": "Latin"}, {"name": "none"}]},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["languages_unread"] == []
+    assert api.get("/api/profile", token=signed.token).json()["languages_unread"] == []
+
+
 def test_the_list_and_the_detail_serve_the_languages_and_the_badges_words(
     api: Api, factory: sessionmaker[Session]
 ) -> None:
