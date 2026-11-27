@@ -13,6 +13,7 @@ import { useAgentWait } from "@/features/apply/api/use-agent-wait";
 import {
   AFTER_SEND_WAIT,
   agentWaits,
+  ASK_NOT_SHOWN,
   boxOf,
   CODE_IN_BROWSER,
   isAsk,
@@ -40,7 +41,8 @@ const ANSWER_MAX = 5000;
  * the server's clock), a box to answer (none for a code, typed in the browser), and the browser
  * behind Watch the browser, opened only on a click, with Use the browser myself and Let the
  * assistant continue. Once the wait ended without the person it says why; Try again and Cancel
- * are the page's own buttons. Follows the run without a reload.
+ * are the page's own buttons. A wait whose detail carries no ask says so in one sentence. Follows
+ * the run without a reload.
  */
 export function AgentWait({ application }: { application: Application }) {
   const wait = useAgentWait(application);
@@ -53,7 +55,13 @@ export function AgentWait({ application }: { application: Application }) {
         What the assistant asks could not be loaded.
       </LoadError>
     );
-  if (!detail || !question) return null;
+  if (!detail) return null;
+  if (!question)
+    return agentWaits(detail) ? (
+      <p data-testid="agent-wait" className="text-sm">
+        {ASK_NOT_SHOWN}
+      </p>
+    ) : null;
   const live = question.live === true && agentWaits(detail);
   return (
     <section

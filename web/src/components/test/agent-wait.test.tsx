@@ -14,6 +14,7 @@ import type { Application, Question } from "@/features/apply/api/apply-api";
 import { WAIT_POLL_MS } from "@/features/apply/api/use-agent-wait";
 import {
   AFTER_SEND_WAIT,
+  ASK_NOT_SHOWN,
   CODE_IN_BROWSER,
   NO_CODE_HERE,
   NO_PASSWORD,
@@ -124,6 +125,16 @@ describe("the apply agent waits for the person (A25)", () => {
       await screen.findByText(/What the assistant asks could not be loaded\./),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("says in one sentence when the run waits and the detail carries no ask, with Cancel", async () => {
+    const fake = waiting();
+    fake.detail = { question: null, chat: [], now: WAIT_NOW };
+    const { section, wait } = await openSection();
+    expect(wait.getByText(ASK_NOT_SHOWN)).toBeInTheDocument();
+    expect(wait.queryByLabelText(BOX)).toBeNull();
+    expect(buttons(section)).toEqual(["Cancel application"]);
+    expect(ASK_NOT_SHOWN).not.toMatch(SEPARATOR);
   });
 
   it("opens the browser only on a click", async () => {

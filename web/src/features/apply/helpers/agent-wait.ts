@@ -140,6 +140,10 @@ export function stoppedLine(chat: readonly ChatLine[] | undefined): string {
 export const AFTER_SEND_WAIT =
   "A send button had been clicked before it asked, so the site may already have the application.";
 
+/** The run waits, and the detail carries no ask of the assistant's to show. */
+export const ASK_NOT_SHOWN =
+  "What the assistant asks could not be shown here. Cancel the application, or let it stop waiting by itself.";
+
 export const NO_PASSWORD =
   "The assistant never needs your password. Type passwords only in the browser yourself.";
 
