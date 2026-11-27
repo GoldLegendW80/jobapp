@@ -42,16 +42,33 @@ const eventSchema = z.object({
 });
 export type ApplicationEvent = z.infer<typeof eventSchema>;
 
-// One click Apply's open question (A19): a fixed sentence with the field's label and the host.
+// One click Apply's open question (A19): a fixed sentence with the field's label and the host,
+// `kind` fact or action. A25: the apply agent's ask (`said_by` assistant), its sentence the
+// assistant's own words, `kind` what it asks for, `until` the end of the wait, `live` while the
+// run waits.
 const questionSchema = z.object({
   sentence: z.string(),
   label: z.string(),
   host: z.string(),
-  kind: z.enum(["fact", "action"]),
+  kind: z.string(),
   // Asked after a control that may have sent the form: the answer is a Try again.
   after_send: z.boolean().optional(),
+  said_by: z.string().optional(),
+  until: z.string().nullable().optional(),
+  live: z.boolean().optional(),
 });
 export type Question = z.infer<typeof questionSchema>;
+
+// A25: the asks of the application's runs and the person's answers, in order, with who said each.
+const chatLineSchema = z.object({
+  at: z.string().nullable(),
+  who: z.string(),
+  kind: z.string(),
+  text: z.string(),
+  // How an ask ended: answer, browser, person_late, run_ended, interrupted or cancelled.
+  end: z.string().nullable().optional(),
+});
+export type ChatLine = z.infer<typeof chatLineSchema>;
 
 // Review first with the apply agent (A20): every field it filled, by step, as its acts recorded.
 const filledFieldSchema = z.object({
@@ -82,6 +99,7 @@ const detailSchema = applicationSchema.extend({
   chosen: z.array(chosenSchema).optional(),
   summary: z.string().nullable().optional(),
   question: questionSchema.nullable().optional(),
+  chat: z.array(chatLineSchema).optional(),
   // One click Apply's agent may have sent it: Try again runs the agent once more.
   agent: z.boolean().optional(),
   // The end of a Full auto hold and the server's time, for the countdown.
