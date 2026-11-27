@@ -234,7 +234,9 @@ SCRIPT_URL = BASE + "search?q=robot"
 )
 def test_the_cards_of_a_script_result(result, code: str, found: list) -> None:
     raw = json.dumps(result)
-    assert finder._script_cards(SCRIPT_URL, raw, code) == found
+    cards = finder._script_cards(SCRIPT_URL, raw, code)
+    assert [(link, text) for link, text, _ in cards] == found
+    assert all(units == tuple(text.split("\n")) for _, text, units in cards)
 
 
 def test_a_cut_script_result_gives_no_card_of_two_postings() -> None:
@@ -474,8 +476,10 @@ TITLES_PAGE = "\n".join(
         (JOB + "301", "Senior Data Engineer (Stage)", "Senior Data Engineer (Stage)"),
         (JOB + "301", "Engineer", "Senior Data Engineer (Stage)"),
         (JOB + "302", "Data Engineer", "Senior Data Engineer (Stage)"),  # its own heading
-        (JOB + "302", "Robotics Paris", "Example Robotics Paris"),  # a label of the card
-        (JOB + "303", "Data Engineer", "Stage: Data Engineer"),  # the heading that holds it
+        # A piece of the link is no unit of its own: the link's whole text is.
+        (JOB + "302", "Robotics Paris", "Senior Data Engineer (Stage) Example Robotics Paris"),
+        # The heading that holds the link, whole, its link's text in it.
+        (JOB + "303", "Data Engineer", "Stage: Data Engineer Voir l'offre"),
         (JOB + "303", "Data Engineer Voir l'offre", "Stage: Data Engineer Voir l'offre"),
         (JOB + "304", "Data Engineer", None),  # its one line is longer than a title
         (JOB + "305", "Data Scientist", "Data Scientist H/F"),
@@ -494,6 +498,9 @@ def test_a_card_is_stored_with_its_own_words_never_shorter(url, reported, stored
     assert (finding.title, finding.evidence["title"]) == (stored, stored)
 
 
+WHOLE = "Senior Data Engineer (Stage)"
+
+
 @pytest.mark.parametrize(
     ("item", "reported", "stored"),
     [
@@ -509,14 +516,364 @@ def test_a_card_is_stored_with_its_own_words_never_shorter(url, reported, stored
         ),
         ({"title": "Data Engineer", "tag": "Stage"}, "Data Engineer Stage", "Data Engineer Stage"),
         ({"title": "Stage Data Engineer"}, "data engineer", "Stage Data Engineer"),
+        (  # the highlighted piece first: of two strings that hold it, the longer
+            {"hit": "Data Engineer", "title": "Senior Data Engineer (Stage)"},
+            "Data Engineer",
+            "Senior Data Engineer (Stage)",
+        ),
+        (  # the card's whole text beside its title: the longer, never the shorter
+            {"title": "Data Engineer", "card": "Data Engineer, Example Robotics, Paris"},
+            "Data Engineer",
+            "Data Engineer, Example Robotics, Paris",
+        ),
+        (  # the longest string that holds it is longer than a title: never cut
+            {"title": "Data Engineer", "about": "Our Data Engineer builds pipelines. " * 9},
+            "Data Engineer",
+            None,
+        ),
+        (  # a first string longer than a card's text, cut: it may hold it further on
+            {"about": "Invented pipelines. " * 60, "title": "Data Engineer"},
+            "Data Engineer",
+            None,
+        ),
+        ({"title": WHOLE}, "Senior Data Engineer", WHOLE),
+        ({"title": "Data Engineer", "level": "Senior"}, "Engineer Senior", "Data Engineer Senior"),
+        ({"title": "Data Engineer"}, "Data Scientist", None),
+        # The script chose a piece of the card (`querySelector('mark')`, `.split('(')[0]`): its
+        # string is what the card is (declared residue of the evidence rule).
+        ({"title": "Data Engineer"}, "Data Engineer", "Data Engineer"),
+        ({"title": "Senior Data Engineer"}, "Data Engineer", "Senior Data Engineer"),
     ],
 )
 def test_a_script_card_is_stored_with_the_string_that_holds_the_title(item, reported, stored):
     one, batches = listed()
     raw = json.dumps([{**item, "link": "/jobs/7002"}])
     asyncio.run(one._keep_script(SCRIPT_URL, raw, False, "() => readCards()"))
-    assert cards(one, {"title": reported, "url": JOB + "7002"})["kept"] == 1
+    answer = cards(one, {"title": reported, "url": JOB + "7002"})
+    if stored is None:
+        assert answer["refused"][0]["reason"] == "card_not_seen"
+        assert batches == []
+        return
+    assert answer["kept"] == 1
     assert batches[0].findings[0].title == stored
+
+
+def card_page(*card: str) -> str:
+    """A list page holding one card, its lines as Playwright's AI snapshot writes them."""
+    return "\n".join(
+        ['- heading "Data jobs" [level=1]', "- list:", "  - listitem:"]
+        + [f"    {line}" for line in card]
+    )
+
+
+# The card "Senior <highlight>Data Engineer</highlight> (Stage)" of a results page, in the shapes
+# Playwright's AI snapshot writes it: 1.55 (pinned by browser/Dockerfile) names a link or a
+# heading and lists its inline pieces too; 1.64 leaves the name out when its pieces spell it.
+# Each probed in a headless Chromium from the HTML in its comment.
+SHAPES = {
+    # <a href>Senior <strong>Data Engineer</strong> (Stage)</a>, 1.64
+    "link_unnamed_strong": [
+        "- link [ref=e2] [cursor=pointer]:",
+        "  - /url: /jobs/401",
+        "  - text: Senior",
+        "  - strong [ref=e3]: Data Engineer",
+        "  - text: (Stage)",
+    ],
+    # <a href>Senior <mark>Data Engineer</mark> (Stage)</a>, 1.55: a name its pieces repeat
+    "link_named_mark": [
+        f'- link "{WHOLE}" [ref=e5] [cursor=pointer]:',
+        "  - /url: /jobs/401",
+        "  - text: Senior",
+        "  - mark [ref=e6] [cursor=pointer]: Data Engineer",
+        "  - text: (Stage)",
+    ],
+    # <h3>Senior <em>Data Engineer</em> (Stage) <a href>the same</a></h3>, 1.55
+    "heading_named_link_named": [
+        f'- heading "{WHOLE} {WHOLE}" [level=3] [ref=e8]:',
+        "  - text: Senior",
+        "  - emphasis [ref=e9]: Data Engineer",
+        "  - text: (Stage)",
+        f'  - link "{WHOLE}" [ref=e10] [cursor=pointer]:',
+        "    - /url: /jobs/401",
+        "    - text: Senior",
+        "    - emphasis [ref=e11] [cursor=pointer]: Data Engineer",
+        "    - text: (Stage)",
+    ],
+    # <a href><h3>Senior <mark>Data Engineer</mark> (Stage)</h3>Example Robotics, Paris</a>, 1.64
+    "card_link_heading_unnamed": [
+        "- link [ref=e13] [cursor=pointer]:",
+        "  - /url: /jobs/401",
+        "  - heading [level=3] [ref=e14]:",
+        "    - text: Senior",
+        "    - mark [ref=e15]: Data Engineer",
+        "    - text: (Stage)",
+        "  - text: Example Robotics, Paris",
+    ],
+    # the same card, 1.55
+    "card_link_heading_named": [
+        f'- link "{WHOLE} Example Robotics, Paris" [ref=e13] [cursor=pointer]:',
+        "  - /url: /jobs/401",
+        f'  - heading "{WHOLE}" [level=3] [ref=e14] [cursor=pointer]:',
+        "    - text: Senior",
+        "    - mark [ref=e15] [cursor=pointer]: Data Engineer",
+        "    - text: (Stage)",
+        "  - generic [ref=e16] [cursor=pointer]: Example Robotics, Paris",
+    ],
+    # <h3>Senior <a href>Data Engineer</a> (Stage)</h3>, 1.64
+    "link_in_heading_unnamed": [
+        "- heading [level=3] [ref=e17]:",
+        "  - text: Senior",
+        '  - link "Data Engineer" [ref=e18] [cursor=pointer]:',
+        "    - /url: /jobs/401",
+        "  - text: (Stage)",
+    ],
+    # the same heading, 1.55
+    "link_in_heading_named": [
+        f'- heading "{WHOLE}" [level=3] [ref=e18]:',
+        "  - text: Senior",
+        '  - link "Data Engineer" [ref=e19] [cursor=pointer]:',
+        "    - /url: /jobs/401",
+        "  - text: (Stage)",
+    ],
+    # <a href>Senior <strong>Data <mark>Engineer</mark></strong> (Stage)</a>: nested pieces, 1.64
+    "nested_pieces_unnamed": [
+        "- link [ref=e20] [cursor=pointer]:",
+        "  - /url: /jobs/401",
+        "  - text: Senior",
+        "  - strong [ref=e21]:",
+        "    - text: Data",
+        "    - mark [ref=e22]: Engineer",
+        "  - text: (Stage)",
+    ],
+    # the same link, 1.55
+    "nested_pieces_named": [
+        f'- link "{WHOLE}" [ref=e21] [cursor=pointer]:',
+        "  - /url: /jobs/401",
+        "  - text: Senior",
+        "  - strong [ref=e22] [cursor=pointer]:",
+        "    - text: Data",
+        "    - mark [ref=e23] [cursor=pointer]: Engineer",
+        "  - text: (Stage)",
+    ],
+    # <a href aria-label="Data Engineer">Senior Data Engineer (Stage)</a>: a name shorter than
+    # what the link reads, both versions
+    "link_named_shorter": [
+        '- link "Data Engineer" [ref=e34] [cursor=pointer]:',
+        "  - /url: /jobs/401",
+        f"  - text: {WHOLE}",
+    ],
+    # <h3>Senior <a href><mark>Data Engineer</mark></a> (Stage)</h3>: a link of the highlighted
+    # term alone, in a heading, 1.64
+    "highlight_link_in_heading_unnamed": [
+        "- heading [level=3] [ref=e2]:",
+        "  - text: Senior",
+        "  - link [ref=e3] [cursor=pointer]:",
+        "    - /url: /jobs/401",
+        "    - mark [ref=e4]: Data Engineer",
+        "  - text: (Stage)",
+    ],
+    # the same heading, 1.55
+    "highlight_link_in_heading_named": [
+        f'- heading "{WHOLE}" [level=3] [ref=e2]:',
+        "  - text: Senior",
+        '  - link "Data Engineer" [ref=e3] [cursor=pointer]:',
+        "    - /url: /jobs/401",
+        "    - mark [ref=e4] [cursor=pointer]: Data Engineer",
+        "  - text: (Stage)",
+    ],
+    # <h3><a href>Senior <em>Data Engineer</em> (Stage)</a></h3>, 1.64
+    "heading_wraps_link_unnamed": [
+        "- heading [level=3] [ref=e13]:",
+        "  - link [ref=e14] [cursor=pointer]:",
+        "    - /url: /jobs/401",
+        "    - text: Senior",
+        "    - emphasis [ref=e15]: Data Engineer",
+        "    - text: (Stage)",
+    ],
+    # the same heading, 1.55
+    "heading_wraps_link_named": [
+        f'- heading "{WHOLE}" [level=3] [ref=e15]:',
+        f'  - link "{WHOLE}" [ref=e16] [cursor=pointer]:',
+        "    - /url: /jobs/401",
+        "    - text: Senior",
+        "    - emphasis [ref=e17] [cursor=pointer]: Data Engineer",
+        "    - text: (Stage)",
+    ],
+    # <a href><div>Senior <b>Data Engineer</b> (Stage)</div><div>Example Robotics</div></a>: a
+    # card with no heading, 1.64
+    "card_no_heading_unnamed_pieces": [
+        f'- link "{WHOLE} Example Robotics" [ref=e45] [cursor=pointer]:',
+        "  - /url: /jobs/401",
+        f"  - generic [ref=e46]: {WHOLE}",
+        "  - generic [ref=e47]: Example Robotics",
+    ],
+    # the same card, 1.55
+    "card_no_heading_named_pieces": [
+        f'- link "{WHOLE} Example Robotics" [ref=e47] [cursor=pointer]:',
+        "  - /url: /jobs/401",
+        "  - generic [ref=e48] [cursor=pointer]:",
+        "    - text: Senior",
+        "    - generic [ref=e49] [cursor=pointer]: Data Engineer",
+        "    - text: (Stage)",
+        "  - generic [ref=e50] [cursor=pointer]: Example Robotics",
+    ],
+}
+STORED = {
+    "heading_named_link_named": f"{WHOLE} {WHOLE}",  # the heading that holds it, whole
+    "card_no_heading_unnamed_pieces": f"{WHOLE} Example Robotics",  # the link, whole
+    "card_no_heading_named_pieces": f"{WHOLE} Example Robotics",
+}
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+@pytest.mark.parametrize("reported", ["Data Engineer", "Engineer", "senior data engineer", WHOLE])
+def test_a_card_title_is_a_whole_unit_of_the_card_never_a_piece(shape, reported) -> None:
+    """A highlighted search term splits a title on a results page: the title stored is the
+    heading that holds the reported words, whole, else the link's whole text, never one of
+    their pieces, whatever words the agent reported and whichever Playwright wrote the page."""
+    one, batches = listed((LIST, card_page(*SHAPES[shape])))
+    assert cards(one, {"title": reported, "url": JOB + "401"})["kept"] == 1
+    [finding] = batches[0].findings
+    assert finding.title == finding.evidence["title"] == STORED.get(shape, WHOLE)
+
+
+@pytest.mark.parametrize(
+    ("card", "reported", "stored"),
+    [
+        (  # a heading that holds two links: the heading, whole, for its posting's link
+            [
+                '- heading "Data Engineer Example Robotics" [level=3] [ref=e25]:',
+                '  - link "Data Engineer" [ref=e26] [cursor=pointer]:',
+                "    - /url: /jobs/401",
+                '  - link "Example Robotics" [ref=e27] [cursor=pointer]:',
+                "    - /url: /company/9",
+            ],
+            "Data Engineer",
+            "Data Engineer Example Robotics",
+        ),
+        (  # the same heading, 1.64
+            [
+                "- heading [level=3] [ref=e24]:",
+                '  - link "Data Engineer" [ref=e25] [cursor=pointer]:',
+                "    - /url: /jobs/401",
+                '  - link "Example Robotics" [ref=e26] [cursor=pointer]:',
+                "    - /url: /company/9",
+            ],
+            "Data Engineer",
+            "Data Engineer Example Robotics",
+        ),
+        (  # a link of the highlighted term alone, in a paragraph: the link (declared residue)
+            [
+                "- paragraph [ref=e28]:",
+                "  - text: Senior",
+                "  - link [ref=e29] [cursor=pointer]:",
+                "    - /url: /jobs/401",
+                "    - mark [ref=e30]: Data Engineer",
+                "  - text: (Stage)",
+            ],
+            "Data Engineer",
+            "Data Engineer",
+        ),
+        (  # words around the link, outside any heading, are not its card's
+            [
+                "- paragraph [ref=e28]:",
+                "  - text: Senior",
+                '  - link "Data Engineer" [ref=e29] [cursor=pointer]:',
+                "    - /url: /jobs/401",
+                "  - text: (Stage)",
+            ],
+            "Senior Data Engineer",
+            None,
+        ),
+        (  # the heading that holds the link is longer than a title: never cut, never the link
+            [
+                f'- heading "{"Senior " * 50}Data Engineer (Stage)" [level=3]:',
+                '  - link "Data Engineer" [ref=e2]:',
+                "    - /url: /jobs/401",
+            ],
+            "Data Engineer",
+            None,
+        ),
+        (  # a heading in a link too long to read whole: the heading, whole
+            [
+                "- link [ref=e2]:",
+                "  - /url: /jobs/401",
+                f'  - heading "{WHOLE}" [level=3]',
+                "  - paragraph: " + "Build invented pipelines. " * 50,
+            ],
+            "Data Engineer",
+            WHOLE,
+        ),
+        (  # a link too long to read whole, no heading in it: refused
+            [
+                "- link [ref=e2]:",
+                "  - /url: /jobs/401",
+                f"  - text: {WHOLE} " + "Build invented pipelines. " * 50,
+            ],
+            "Data Engineer",
+            None,
+        ),
+        (  # a link of more pieces than are read: refused, never its first pieces
+            ["- link [ref=e2]:", "  - /url: /jobs/401", "  - text: Data Engineer"]
+            + ["  - text: (Stage)"] * finder.CARD_NODES_MAX,
+            "Data Engineer",
+            None,
+        ),
+        (  # a hidden piece is not shown: no word of the card
+            [
+                '- link "Data Engineer" [ref=e2]:',
+                "  - /url: /jobs/401",
+                "  - generic [aria-hidden]: Stage",
+            ],
+            "Data Engineer Stage",
+            None,
+        ),
+        (  # an unnamed heading that holds only the link: its whole text is the link's
+            ["- heading [level=3]:", '  - link "Data Engineer" [ref=e2]:', "    - /url: /jobs/401"],
+            "Data Engineer",
+            "Data Engineer",
+        ),
+    ],
+)
+def test_the_units_of_a_card_accept_and_refuse(card, reported, stored) -> None:
+    one, batches = listed((LIST, card_page(*card)))
+    answer = cards(one, {"title": reported, "url": JOB + "401"})
+    if stored is None:
+        assert answer["refused"][0]["reason"] == "card_not_seen"
+        assert batches == []
+        return
+    assert batches[0].findings[0].title == stored
+
+
+def excluded_and_skipped(finding: finder.VerifiedFinding) -> tuple[bool, bool]:
+    """Whether the unwanted title "stage" leaves the finding out before the store (the website's
+    `_Site.verified`), and whether the never apply rule "senior" skips it (`matching_rule`)."""
+    from app.browser.sources import interactive
+    from app.jobs import never_apply
+    from tests.browser.test_b21_vie import Commits, saved
+
+    rule = never_apply.NeverApplyRule.parse("No senior roles: senior")
+    planned = interactive.searches_for(saved(BASE, title_exclude={"terms": ["stage"]}), BASE)
+    site = interactive._Site(planned, commits=Commits(), source_id="s", host="example")
+    asyncio.run(site.verified(finder.VerifiedBatch((finding,))))
+    left_out = (site.commits.stored, site.unwanted) == ([], {finding.url})
+    return left_out, never_apply.matching_rule([rule], finding.company or "", finding.title) is rule
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_each_shape_meets_the_persons_exclusions_and_rules_on_both_paths(shape) -> None:
+    one, batches = listed((LIST, card_page(*SHAPES[shape])))
+    assert cards(one, {"title": "Data Engineer", "url": JOB + "401"})["kept"] == 1
+
+    async def failed(url: str) -> str:
+        return ""  # the app could not open it: its card stands in
+
+    fallback, stored = listed((LIST, card_page(*SHAPES[shape])))
+    fallback._open_for_report = failed
+    item = {"title": "Data Engineer", "url": JOB + "401", "text": "x"}
+    assert json.loads(asyncio.run(fallback.report_verified([item]))[0])["kept"] == 1
+    for finding in (batches[0].findings[0], stored[0].findings[0]):
+        assert excluded_and_skipped(finding) == (True, True)
 
 
 def test_a_shortened_card_title_still_meets_the_persons_exclusions_and_rules() -> None:

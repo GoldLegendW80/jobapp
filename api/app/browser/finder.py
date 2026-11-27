@@ -799,22 +799,28 @@ class VerifiedFinding:
     list_url: str | None = None
 
 
+# A card's title units (J31): each a whole text of the card, None for one too long to read whole.
+Units = tuple[str | None, ...]
+
+
 @dataclass(frozen=True)
 class Card:
     """A link of a list the session read (J31): the list's address, how it was read (CARD_KINDS),
-    the card's text as shown, one line per piece (`_card_text`), and its words folded (`_words`,
-    one space at each end)."""
+    the card's text as shown, its words folded (`_words`, one space at each end), and the units
+    its title may be (`_held`): for a page, the heading that holds the link, the headings in it,
+    then the link, each whole (`_whole`); for a script's item, its strings."""
 
     list_url: str
     kind: str
     text: str
     words: str
+    units: Units = ()
 
 
-def _card_text(pieces: Iterable[str]) -> str:
-    """A card's text, one line per piece (a heading, a label, a script's string), each piece's
-    spacing folded: whole pieces only, CARD_TEXT_MAX characters at most, a first piece longer
-    than that cut (no title then: `_held`)."""
+def _lines(pieces: Iterable[str]) -> tuple[list[str], bool]:
+    """A card's pieces (a heading, a label, a script's string), each one's spacing folded:
+    whole pieces only, CARD_TEXT_MAX characters at most, a first piece longer than that cut;
+    and whether it was."""
     lines: list[str] = []
     size = -1
     for piece in pieces:
@@ -823,20 +829,42 @@ def _card_text(pieces: Iterable[str]) -> str:
             continue
         if size + 1 + len(line) > CARD_TEXT_MAX:
             if not lines:
-                lines.append(line[:CARD_TEXT_MAX])
+                return [line[:CARD_TEXT_MAX]], True
             break
         lines.append(line)
         size += 1 + len(line)
-    return "\n".join(lines)
+    return lines, False
+
+
+def _card_text(pieces: Iterable[str]) -> str:
+    """A card's text, one line per piece (`_lines`)."""
+    return "\n".join(_lines(pieces)[0])
+
+
+def _holds(text: str, keys: Sequence[str]) -> bool:
+    words = f" {_words(text)} "
+    return any(f" {key} " in words for key in keys)
 
 
 def _held(card: Card, keys: Iterable[str]) -> str:
-    """The card's own words that hold a reported title (J31, as B21's `title_on` for a page): the
-    smallest run of its lines (a heading, a link's labels, a script item's strings) whose words
-    hold one of `keys` (folded) as a sequence of whole words, as the card shows it; "" when none
-    fits in TITLE_MAX characters. Never shorter than the card says, so the person's unwanted
-    titles and never apply rules read the card's words, never the model's choice of them."""
-    lines = card.text.split("\n")
+    """The title a card is kept with: a whole unit of it that holds a reported title (`keys`,
+    folded), never a piece of one, so the person's exclusions read the card's words. A page's
+    card: its first unit that does, in the order of `Card.units` (a heading wins over a smaller
+    unit, as in `title_on`). A script's item: its longest string that does, else its smallest
+    run of strings in a row. "" (`card_not_seen`) when none does, when a unit not read whole
+    comes first, or when the unit is over TITLE_MAX (never cut). Table: test_j31_listing.py."""
+    keys = tuple(keys)
+    if card.kind != "script":
+        for unit in card.units:
+            if unit is None or _holds(unit, keys):
+                return unit if unit is not None and len(unit) <= TITLE_MAX else ""
+        return ""
+    if None in card.units:
+        return ""  # a string cut at CARD_TEXT_MAX may hold them further on
+    lines = [unit for unit in card.units if unit is not None]
+    whole = max((line for line in lines if _holds(line, keys)), key=len, default="")
+    if whole:
+        return whole if len(whole) <= TITLE_MAX else ""
     starts: list[int] = []
     parts: list[str] = []
     at = 1
@@ -862,9 +890,58 @@ def _held(card: Card, keys: Iterable[str]) -> str:
     return best
 
 
+def _named(name: str, inner: str) -> str:
+    """A node's whole text from its name and the text of what is under it, joined: the name when
+    it holds the joined words (the pieces repeat it), the joined text when it holds the name's
+    (a name shorter than what the node reads, an aria-label), else both."""
+    if not name or not inner:
+        return name or inner
+    said, read = _words(name), _words(inner)
+    if not read or f" {read} " in f" {said} ":
+        return name
+    if not said or f" {said} " in f" {read} ":
+        return inner
+    return f"{name} {inner}"
+
+
+def _whole(node: Any, headings: list[str | None] | None = None) -> str | None:
+    """A node's whole text, never a piece of it: its name and the text of every visible node
+    under it, joined in document order (`_named`); Playwright's AI snapshot names a link or a
+    heading and lists its inline pieces (1.55), or leaves the name out (1.64). None past
+    CARD_NODES_MAX nodes or CARD_TEXT_MAX characters. `headings` gets the whole text of each
+    heading under it, in document order. Iterative."""
+    done: dict[int, str | None] = {}
+    slots: dict[int, int] = {}
+    stack: list[tuple[Any, bool]] = [(node, False)]
+    count = 0
+    while stack:
+        one, after = stack.pop()
+        if not after:
+            count += 1
+            if count > CARD_NODES_MAX:
+                return None
+            if headings is not None and one is not node and one.role == "heading":
+                slots[id(one)] = len(headings)
+                headings.append(None)
+            stack.append((one, True))
+            stack.extend((child, False) for child in reversed(one.children) if not child.hidden)
+            continue
+        parts = [one.text, *(done.pop(id(child)) for child in one.children if not child.hidden)]
+        whole: str | None = None
+        if None not in parts:
+            inner = " ".join(" ".join(part for part in parts if part).split())
+            whole = _named(" ".join(one.name.split()), inner)
+            whole = whole if len(whole) <= CARD_TEXT_MAX else None
+        done[id(one)] = whole
+        if headings is not None and id(one) in slots:
+            headings[slots[id(one)]] = whole
+    return done[id(node)]
+
+
 def _own_text(node: Any) -> str:
-    """A link's own text: its label and its visible descendants', one line each (`_card_text`),
-    the first CARD_NODES_MAX nodes, CARD_TEXT_MAX characters at most."""
+    """A link's text when it is too long to read whole (`_whole`): its label and its visible
+    descendants', one line each (`_card_text`), the first CARD_NODES_MAX nodes, CARD_TEXT_MAX
+    characters at most. A text, never a title."""
     parts: list[str] = []
     size, stack, nodes = 0, [node], 0
     while stack and size <= CARD_TEXT_MAX and nodes < CARD_NODES_MAX:
@@ -880,22 +957,24 @@ def _own_text(node: Any) -> str:
     return _card_text(parts)
 
 
-def _page_cards(url: str, root: Any) -> list[tuple[str, str]]:
-    """The cards of a page read or fetched (J31): each visible link's address and its text, its
-    own text with the heading that holds it. Never the text around it: a title of another card
-    of the list is no evidence for this one. Linear but for links nested in links."""
-    cards: list[tuple[str, str]] = []
-    stack: list[tuple[Any, str]] = [(root, "")]
+def _page_cards(url: str, root: Any) -> list[tuple[str, str, Units]]:
+    """The cards of a page read or fetched (J31): each visible link's address, its text (the
+    heading that holds it, else its own, whole; `_own_text` for one too long) and its title
+    units (`Card`). Never the text around it: a title of another card of the list is no
+    evidence for this one. Linear but for links nested in links and headings in headings."""
+    cards: list[tuple[str, str, Units]] = []
+    stack: list[tuple[Any, Units]] = [(root, ())]
     while stack:
         node, heading = stack.pop()
         if node.hidden:
             continue
         if node.role == "heading":
-            heading = " ".join(node.label().split())[:CARD_TEXT_MAX]
+            heading = (_whole(node),)
         if node.url and (link := canonical(urljoin(url, node.url))):
-            own = _own_text(node)
-            text = own if heading in ("", own) else _card_text([heading, *own.split("\n")])
-            cards.append((link, text))
+            inner: list[str | None] = []
+            own = _whole(node, inner)
+            text = next((unit for unit in (*heading, own) if unit), None) or _own_text(node)
+            cards.append((link, text, (*heading, *inner, own)))
         stack.extend((child, heading) for child in reversed(node.children))
     return cards
 
@@ -940,12 +1019,13 @@ def _written(given: str, link: str, code: str) -> bool:
     )
 
 
-def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str]]:
+def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str, Units]]:
     """The cards of a script's result (J31): each object in it, its own addresses (`_own_links`)
-    with its strings and its nested objects' as text; each text of a list, else each
-    line of a text result, naming one address. A text naming several (a cut JSON, a joined list)
-    gives none: its words cannot be told apart. A string the code writes is no card's word, and
-    an address it writes (`_written`) no card. Pure; linear in the result."""
+    with its strings and its nested objects' as text and title units (a cut one None); each
+    text of a list, else each line of a text result, naming one address. A text naming several
+    (a cut JSON, a joined list) gives none: its words cannot be told apart. A string the code
+    writes is no card's word, and an address it writes (`_written`) no card. Pure; linear in
+    the result."""
     text = raw if isinstance(raw, str) else ""
     try:
         value: Any = json.loads(text)
@@ -971,13 +1051,14 @@ def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str]]:
             found.append(([line], []))
         elif len(links := {m.group(0) for m in SCRIPT_LINK.finditer(line)}) == 1:
             found.append((list(links), [SCRIPT_LINK.sub(" ", line)]))
-    cards: list[tuple[str, str]] = []
+    cards: list[tuple[str, str, Units]] = []
     for links, strings in found:
-        words = _card_text(s for s in strings if s not in code)
-        for given in links if words else ():
+        lines, cut = _lines(s for s in strings if s not in code)
+        units: Units = (None, *lines[1:]) if cut else tuple(lines)
+        for given in links if lines else ():
             link = canonical(urljoin(url, given))
             if link and not _written(given, link, code):
-                cards.append((link, words))
+                cards.append((link, "\n".join(lines), units))
     return cards
 
 
@@ -1120,8 +1201,9 @@ class PageRead:
 
 def _seen_text(root: Any) -> tuple[list[str], list[str]]:
     """A page as a person reads it (B21): its visible lines and its headings, without hidden
-    elements, buttons, images and links. A heading that wraps a link keeps its own name, so the
-    title of another posting a page lists in such a heading is a heading here too."""
+    elements, buttons, images and links. A heading is one line, its whole text (`_whole`, the
+    links in it too), so the title of another posting a page lists in such a heading is a
+    heading here too, and its inline pieces are no lines of their own."""
     from app.browser.sources import SKIPPED_ROLES
 
     lines: list[str] = []
@@ -1131,12 +1213,14 @@ def _seen_text(root: Any) -> tuple[list[str], list[str]]:
         node = stack.pop()
         if node.hidden or node.role in SKIPPED_ROLES or node.role == "link":
             continue
-        line = " ".join(node.label().split())
+        whole = _whole(node) if node.role == "heading" else None
+        line = " ".join(node.label().split()) if whole is None else whole
         if line:
             lines.append(line)
             if node.role == "heading" and len(line) <= TITLE_MAX:
                 headings.append(line)
-        stack.extend(reversed(node.children))
+        if whole is None:
+            stack.extend(reversed(node.children))
     return lines, headings
 
 
@@ -1271,7 +1355,7 @@ def _detail(root: Any) -> tuple[str, list[str], dict[str, tuple[str, str]]]:
             node for node in nodes(scope, {"article", "list", "listitem"}) if node.role == "heading"
         ]
     titles = (
-        [node.label().strip() for node in primary or headings]
+        [(_whole(node) or node.label()).strip() for node in primary or headings]
         if len(primary or headings) == 1
         else []
     )
@@ -1572,7 +1656,7 @@ def _record_size(record: PageRead) -> int:
 
 
 Detail = tuple[tuple[str, list[str], dict[str, tuple[str, str]]], tuple[list[str], list[str]]]
-Parsed = tuple[list[str], Detail, list[tuple[str, str]]]
+Parsed = tuple[list[str], Detail, list[tuple[str, str, Units]]]
 
 
 def _parsed(url: str, text: str) -> Parsed:
@@ -1898,7 +1982,7 @@ class FinderSession:
         except Exception:
             self._stop_with("permission_unavailable")
 
-    def _note_cards(self, source: str, kind: str, cards: list[tuple[str, str]]) -> None:
+    def _note_cards(self, source: str, kind: str, cards: list[tuple[str, str, Units]]) -> None:
         """Keep the cards a page, a fetch or a script result showed (J31), each address's
         newest CARD_SOURCES_MAX, CARDS_MAX addresses (the oldest dropped); a link to the source
         itself is none. A source with LIST_CARDS_MIN cards or more is a list."""
@@ -1906,12 +1990,12 @@ class FinderSession:
         if not list_url:
             return
         shown: set[str] = set()
-        for address, text in cards:
+        for address, text, units in cards:
             words = _words(text)
             if address == list_url or not words:
                 continue
             shown.add(address)
-            card = Card(list_url, kind, text, f" {words} ")
+            card = Card(list_url, kind, text, f" {words} ", units)
             held = tuple(c for c in self.cards.pop(address, ()) if c != card)
             self.cards[address] = (*held, card)[-CARD_SOURCES_MAX:]
         while len(self.cards) > CARDS_MAX:
@@ -3093,8 +3177,8 @@ class FinderSession:
         """A posting kept from a card of a list (J31), its own page not read: its address is a
         link the session saw on a page it read or fetched, or an item of a script's result, and
         the reported title's words are in that card's text (case, accents, spacing and
-        punctuation aside, a gender marker at its end aside), stored as the card's own words that
-        hold them, never shorter (`_held`); its company, place and date when
+        punctuation aside, a gender marker at its end aside), stored as a whole unit of the card
+        that holds them, never a piece of one (`_held`); its company, place and date when
         their words are in the card too. Refused `card_not_seen` otherwise: an address another
         run, another card or the model wrote is no evidence. The start page and a list are no
         posting; a page read that shows the title is reported with report_postings."""
@@ -3121,7 +3205,6 @@ class FinderSession:
         if page is not None and title_on(page, title) is not None:
             return None, "page_readable"
         keys = {_words(title), _words(_bare(title))} - {""}
-        # The title stored is the card's own words that hold the reported ones (`_held`).
         card, shown = next(
             (
                 (c, held)

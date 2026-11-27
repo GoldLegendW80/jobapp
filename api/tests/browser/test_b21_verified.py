@@ -482,6 +482,58 @@ def test_a_page_read_holds_no_link_or_button_text():
             "AI Engineer",
             None,
         ),
+        # A heading split by a highlighted term, as Playwright's AI snapshot writes
+        # <h1>Senior <mark>Data Engineer</mark> (Stage)</h1>: 1.64 leaves its name out, 1.55
+        # names it and lists its pieces too; the heading whole, never a piece of it.
+        (
+            [
+                "- main:",
+                "  - heading [level=1] [ref=e37]:",
+                "    - text: Senior",
+                "    - mark [ref=e38]: Data Engineer",
+                "    - text: (Stage)",
+                "  - paragraph: Build invented pipelines.",
+            ],
+            "Data Engineer",
+            ("Senior Data Engineer (Stage)", "heading"),
+        ),
+        (
+            [
+                "- main:",
+                '  - heading "Senior Data Engineer (Stage)" [level=1] [ref=e39]:',
+                "    - text: Senior",
+                "    - mark [ref=e40]: Data Engineer",
+                "    - text: (Stage)",
+                "  - paragraph: Build invented pipelines.",
+            ],
+            "Data Engineer",
+            ("Senior Data Engineer (Stage)", "heading"),
+        ),
+        (  # <h1>Senior <a href>Data Engineer</a> (Stage)</h1>, 1.64: a link in its text
+            [
+                "- main:",
+                "  - heading [level=1] [ref=e9]:",
+                "    - text: Senior",
+                '    - link "Data Engineer" [ref=e10]:',
+                "      - /url: /jobs/1",
+                "    - text: (Stage)",
+                "  - paragraph: Build invented pipelines.",
+            ],
+            "Data Engineer",
+            ("Senior Data Engineer (Stage)", "heading"),
+        ),
+        (  # its pieces are no lines of their own: a title not in the heading is refused
+            [
+                "- heading [level=1]:",
+                "  - text: Senior",
+                "  - mark: Data Engineer",
+                "  - text: (Stage)",
+                "- heading [level=1]:",
+                "  - text: Lead",
+            ],
+            "Data Engineer Lead",
+            None,
+        ),
     ],
 )
 def test_a_shortened_title_stores_what_the_page_shows(lines, title, stored):
