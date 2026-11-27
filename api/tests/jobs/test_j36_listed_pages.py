@@ -14,8 +14,8 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.browser import finder
+from app.jobs import liveness, service, sweep, sweep_router
 from app.jobs import router as jobs_router
-from app.jobs import service, sweep, sweep_router
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
 from tests.browser.fakes import FakeLeases, ScriptedFinder
 from tests.browser.test_j36_listed_pages import ELSEWHERE, Board, posting
@@ -97,6 +97,7 @@ def test_the_pages_of_the_postings_kept_from_a_card_are_read_after_the_agent(
         1, 0, 0, 0,
     )  # fmt: skip
     assert (row.stats["listed_read"], row.stats["new"], row.stats["duplicates"]) == (1, 0, 0)
+    assert entry["result_pages"] == 1  # the agent's start page: never the pages read after it
     [source] = [s for s in sweep_router.sweep_out(row).sources if s.host == HOST]
     assert source.listed_pages is not None
     assert (source.listed_pages.read, source.listed_pages.left, source.listed_pages.ended) == (
@@ -186,14 +187,26 @@ def test_another_persons_and_another_websites_postings_are_never_opened(
     set_profile(factory, bob, search())
     run(factory, new_sweep(factory, bob), card("GenAI engineer"))
     other = dataclasses.replace(card("AI engineer"), url="https://careers.example-labs.test/j/1")
-    run(factory, new_sweep(factory, alice), other)
+    # Review of PR 864, item 2: kept from another board's card, then found here too: its source
+    # names both websites, its address is the other board's.
+    both = dataclasses.replace(card("GenAI engineer"), url="https://www.other-board.test/viewjob")
+    run(factory, new_sweep(factory, alice), other, both)
     with factory() as db, db.begin():  # found by another website: its source names that one
         db.execute(
-            sa.update(Job).where(Job.user_id == alice).values(source="careers.example-labs.test")
+            sa.update(Job)
+            .where(Job.user_id == alice, Job.url == other.url)
+            .values(source="careers.example-labs.test")
+        )
+        db.execute(
+            sa.update(Job)
+            .where(Job.user_id == alice, Job.url == both.url)
+            .values(source=f"www.other-board.test, {HOST}")
         )
     board = Board({}, start=START)
-    search_with_pages(factory, alice, board)
+    row = search_with_pages(factory, alice, board)
     assert set(board.opened()) == {START}  # the agent's start page alone
+    [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
+    assert entry["listed_pages"]["left"] == 0  # neither waits for this website's reading
 
 
 def test_the_store_after_the_sweep_ended_writes_nothing(
@@ -219,3 +232,127 @@ def test_the_store_after_the_sweep_ended_writes_nothing(
     with factory() as db:
         written = sa.exists().where(JobEvent.data.has_key(service.PAGE_UNREAD))
         assert not db.scalar(sa.select(written))
+
+
+def test_a_redirect_to_the_websites_search_page_leaves_the_posting_as_it_was(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """Review of PR 864, item 3: the posting's address redirects to the website's search page,
+    which lists its title among other cards: its address, its text and its mention stay."""
+    set_profile(factory, alice, search())
+    run(factory, new_sweep(factory, alice), card("GenAI engineer"))
+    [before] = jobs_of(factory, alice)
+    results = START + "search?q=genai"
+    listing = "\n".join(
+        ['- heading "GenAI jobs near Paris" [level=1]']
+        + [f'- heading "{t}" [level=3]' for t in ("GenAI engineer", "AI engineer", "ML engineer")]
+        + [posting("GenAI engineer").split("\n", 1)[1]]
+    )
+    board = Board({results: listing}, start=START, redirects={before.url: results})
+    row = search_with_pages(factory, alice, board)
+    [after] = jobs_of(factory, alice)
+    assert (after.url, after.posting_text, after.list_url) == (
+        before.url, before.posting_text, LIST,
+    )  # fmt: skip
+    [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
+    assert (entry["listed_pages"]["read"], entry["listed_pages"]["unread"]) == (0, 1)
+    assert entry["listed_read"] == 0
+
+
+def closed_by_the_app_then_reopened(factory: sessionmaker[Session], job: Job) -> None:
+    """The app closed the posting once (liveness), and the person opened it again."""
+    with factory() as db, db.begin():
+        stored = service.lock_job(db, job.user_id, job.id)
+        assert stored is not None
+        service.set_status(db, stored, JobStatus.closed, now(), via="liveness")
+        service.set_status(db, stored, JobStatus.found, now())
+
+
+def test_a_posting_the_person_reopened_after_the_app_closed_it_is_not_opened_again(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """Review of PR 864, item 5: the person's reopen stands: the reading never opens its page
+    again, never counts it closed, and it no longer waits for this reading."""
+    set_profile(factory, alice, search())
+    run(factory, new_sweep(factory, alice), card("GenAI engineer"))
+    [job] = jobs_of(factory, alice)
+    closed_by_the_app_then_reopened(factory, job)
+    board = Board({}, start=START, statuses={job.url: 404})
+    row = search_with_pages(factory, alice, board)
+    assert set(board.opened()) == {START}  # the agent's start page alone
+    [after] = jobs_of(factory, alice)
+    assert (after.status, after.list_url) == (JobStatus.found, LIST)
+    [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
+    assert (entry["listed_pages"]["closed"], entry["listed_pages"]["left"]) == (0, 0)
+
+
+def test_the_store_says_what_it_did_not_what_the_page_answered(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """Review of PR 864, item 5: a gone page of a posting the app closed before and the person
+    reopened (meanwhile) is not closed and is counted in nothing; a page read for a posting
+    whose own page was read meanwhile writes nothing and is counted in nothing."""
+    set_profile(factory, alice, search())
+    run(factory, new_sweep(factory, alice), card("GenAI engineer"), card("AI engineer"))
+    jobs = {job.title: job for job in jobs_of(factory, alice)}
+    reopened, read = jobs["GenAI engineer"], jobs["AI engineer"]
+    closed_by_the_app_then_reopened(factory, reopened)
+    with factory() as db, db.begin():
+        db.execute(sa.update(Job).where(Job.id == read.id).values(list_url=None))
+    plan = sweep.claim(factory, new_sweep(factory, alice), now())
+    assert plan is not None
+    gone = liveness.Finding(liveness.CLOSED, "http_404")
+    page = dataclasses.replace(finding("AI engineer"), text=posting("AI engineer"))
+    for listed in (
+        sweep.ListedPage(reopened.id, reopened.url, "gone", closed=gone),
+        sweep.ListedPage(read.id, read.url, "read", page),
+    ):
+        stored = sweep.commit_verified(
+            factory, plan, plan.known.copy(), sweep.Stats(), "s", HOST, (), now(), listed=listed
+        )
+        assert stored is not None
+        assert (listed.done, listed.given_up) == ("", False)
+        assert stored.listed_read == 0
+    after = {job.title: job for job in jobs_of(factory, alice)}
+    assert (after["GenAI engineer"].status, after["GenAI engineer"].list_url) == (
+        JobStatus.found, LIST,
+    )  # fmt: skip
+    assert after["AI engineer"].posting_text == read.posting_text
+
+
+def test_at_most_listed_max_postings_after_the_exact_filters(
+    factory: sessionmaker[Session], alice: uuid.UUID, monkeypatch
+) -> None:
+    """Review of PR 864, follow ups 3 and 4: LISTED_MAX counts only the postings the website's
+    reading opens (a source that only holds the host's name aside), and a card of this search
+    found again under another posting's address comes first."""
+    set_profile(factory, alice, search())
+    titles = ("GenAI engineer", "AI engineer", "Forward deployed engineer")
+    run(factory, new_sweep(factory, alice), *(card(t) for t in titles))
+    jobs = {job.title: job for job in jobs_of(factory, alice)}
+    with factory() as db, db.begin():
+        for hours, title in enumerate(titles):
+            db.execute(
+                sa.update(Job)
+                .where(Job.id == jobs[title].id)
+                .values(created_at=now() - timedelta(hours=3 - hours))
+            )
+        db.execute(  # the oldest: a source that holds the host's name, not the host
+            sa.update(Job).where(Job.id == jobs[titles[0]].id).values(source=f"x{HOST}")
+        )
+    monkeypatch.setattr(sweep, "LISTED_MAX", 2)
+
+    def on_site(url: str) -> bool:
+        return finder.on_lease_hosts(url, START)
+
+    picked = sweep.listed_postings(factory, alice, HOST, on_site, set())
+    assert [p.title for p in picked] == [titles[1], titles[2]]
+    assert sweep.listed_left(factory, alice, HOST, on_site) == 2
+    plan = sweep.claim(factory, new_sweep(factory, alice), now())
+    assert plan is not None
+    again = dataclasses.replace(card(titles[2]), url=jobs[titles[2]].url + "?utm_source=list")
+    known = plan.known.copy()
+    sweep.commit_verified(factory, plan, known, sweep.Stats(), "s", HOST, [again], now())
+    assert known.carded == {jobs[titles[2]].id}  # a duplicate, stored under the row's address
+    picked = sweep.listed_postings(factory, alice, HOST, on_site, known.carded)
+    assert [p.title for p in picked] == [titles[2], titles[1]]

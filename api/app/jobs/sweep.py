@@ -1952,11 +1952,15 @@ def listed_postings(
     statement = _listed_rows(user_id, host).order_by(mine, Job.created_at, Job.id)
     picked: list[Listed] = []
     with sessions() as db:
-        for row in db.execute(statement.execution_options(yield_per=LISTED_ROWS_AT_ONCE)):
-            if _listed(row, host, on_site):
-                picked.append(Listed(row.id, row.url, row.title, row.company, row.location))
-                if len(picked) >= LISTED_MAX:
-                    break
+        rows = db.execute(statement.execution_options(yield_per=LISTED_ROWS_AT_ONCE))
+        try:
+            for row in rows:
+                if _listed(row, host, on_site):
+                    picked.append(Listed(row.id, row.url, row.title, row.company, row.location))
+                    if len(picked) >= LISTED_MAX:
+                        break
+        finally:
+            rows.close()  # its server side cursor, left open by the break
     return picked
 
 
