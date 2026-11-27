@@ -1627,10 +1627,12 @@ def commit_verified(
     source: str,
     findings: Sequence[Any],
     now: datetime,
+    set_aside: Sequence[tuple[Any, str]] = (),
 ) -> Stats | None:
     """Store one verified batch (above) with `known`, a copy of the plan's, and `snapshot`, a
-    copy of the run's stats, both updated in place. Returns the counters the batch added, or
-    None when the row is not this run's any more: then nothing is written."""
+    copy of the run's stats, both updated in place, and the page reads the person's exclusions
+    set aside, each with its exclusion (`_store_finding`). Returns the counters the batch added,
+    or None when the row is not this run's any more: then nothing is written."""
     staged = replace(plan, known=known)
     delta = Stats()
     with sessions() as db:
@@ -1639,6 +1641,8 @@ def commit_verified(
             return None
         for finding in findings:
             _store_finding(db, staged, source_id, source, finding, delta, now)
+        for finding, excluded in set_aside:
+            _store_finding(db, staged, source_id, source, finding, delta, now, excluded)
         _counted(snapshot, source_id, delta, len(findings))
         snapshot.heartbeat_at = now.isoformat()
         row.stats = _stats_json(row, snapshot)
@@ -1679,8 +1683,10 @@ def discovery_date(finding: Any) -> str:
 
 def _store_finding(
     db: Session, plan: Plan, source_id: str, source: str, finding: Any, delta: Stats,
-    now: datetime,
+    now: datetime, set_aside: str = "",
 ) -> None:  # fmt: skip
+    """Store one verified finding; with `set_aside` (the exclusion of the person's that set its
+    page aside before the store), only the page read of a posting kept from a card (J31)."""
     # Jobs J25: the title without gender markers, board boilerplate and (J26) contract markers,
     # the company it names when none is stated; the title as shown stays in the posting's text.
     cleaned = posting_titles.clean(finding.title, finding.company, finding.location)
@@ -1692,8 +1698,6 @@ def _store_finding(
     posting = Posting(
         cleaned.title, finding.location, finding.url, finding.published_on or "", text
     )
-    delta.seen += 1
-    delta.matched += 1
     key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
     cross = posting_titles.cross_key(company, posting.title, posting.location)
     today = now.astimezone(SWEEP_TZ).date()
@@ -1712,6 +1716,17 @@ def _store_finding(
         or criteria_badge.stated_contract(posting.title, posting.location, posting.url) is not None
     )
     list_url = getattr(finding, "list_url", None)
+    if set_aside:
+        job_id = plan.known.job_of(key) or plan.known.cross_job(cross, today)
+        if job_id is not None and list_url is None and job_id in plan.known.listed:
+            said = (
+                contract or kind(posting.title, posting.location, posting.url) if stated else None
+            )
+            _page_read(db, plan, job_id, (posting, company, said), source, now, delta, set_aside)
+            _badge_again(db, plan, job_id)
+        return
+    delta.seen += 1
+    delta.matched += 1
     for _ in range(2):
         if plan.known.has(key) or plan.known.cross_job(cross, today) is not None:
             break
@@ -1780,9 +1795,7 @@ def _store_finding(
     if job_id is not None and list_url is None and job_id in plan.known.listed:
         # Jobs J31: the page of a posting kept from a card was read: its text replaces the card's.
         said = contract or kind(posting.title, posting.location, posting.url) if stated else None
-        page = posting, company, said
-        delta.listed_read += _page_read(db, plan, job_id, page, source, now)
-        plan.known.listed.discard(job_id)
+        _page_read(db, plan, job_id, (posting, company, said), source, now, delta)
     if job_id is not None:
         _badge_again(db, plan, job_id)
 
@@ -1794,16 +1807,20 @@ def _page_read(
     page: tuple[Posting, str, ContractType | None],
     source: str,
     now: datetime,
-) -> bool:
+    delta: Stats,
+    excluded: str = "",
+) -> None:
     """Jobs J31: a posting kept from a card of a list whose own page a source read since: the
     page's text replaces the card's, and its address the card's when it was found by the cross
     board key (the page that opens is the one Apply needs); the posting is scored again (a fit
     the person set stays) and read again by the posting reader, its date taken when it had
     none, the contract the page states (`page`: the posting, its company, the contract only when
     stated) taken when none was stated, the person's never apply rules read on the page's own
-    title and company as at any store (a posting still `found` is skipped), and the mention
-    removed, with a `sweep` event naming the list. Its badge follows (`_badge_again`). Whether
-    it wrote: never for a row gone or whose page was read already."""
+    title and company as at any store, else the exclusion that set the page aside (`excluded`):
+    a posting still `found` is skipped with it as its note, and the mention removed, with a
+    `sweep` event naming the list. Its badge follows (`_badge_again`). Counted in `delta` when
+    it wrote (never for a row gone or whose page was read already), its skip by a rule too."""
+    plan.known.listed.discard(job_id)
     posting, company, stated = page
     job = db.execute(
         sa.select(Job)
@@ -1812,7 +1829,7 @@ def _page_read(
         .with_for_update()
     ).scalar_one_or_none()
     if job is None or job.list_url is None:
-        return False
+        return
     text = posting.text[:POSTING_TEXT_MAX]
     read: dict[str, Any] = {"list_url": job.list_url}
     was = job.url
@@ -1825,13 +1842,14 @@ def _page_read(
         )
     ]
     rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
-    if rule is not None and job.status is JobStatus.found:
-        skipped = {"from": "found", "to": "skipped", "via": "never_apply"}
-        events.append((JobEventKind.status, skipped))
+    note, via = (rule.text, "never_apply") if rule is not None else (excluded, "unwanted")
+    if note and job.status is JobStatus.found:
+        events.append((JobEventKind.status, {"from": "found", "to": "skipped", "via": via}))
         job.status = JobStatus.skipped
+        delta.skipped_by_rule += rule is not None
         if not job.notes:
-            events.append((JobEventKind.note, {"from": "", "to": rule.text, "via": "never_apply"}))
-            job.notes = rule.text
+            events.append((JobEventKind.note, {"from": "", "to": note, "via": via}))
+            job.notes = note
     job.list_url = None
     job.posting_text = text or None
     job.description = text[:DESCRIPTION_CHARS] or None
@@ -1861,7 +1879,7 @@ def _page_read(
     for kind_, payload in events:
         db.add(JobEvent(job_id=job.id, user_id=plan.user_id, at=now, kind=kind_, data=payload))
     db.flush()
-    return True
+    delta.listed_read += 1
 
 
 def _moved(db: Session, plan: Plan, job: Job, url: str) -> bool:
@@ -1933,12 +1951,17 @@ class Commits:
         if not self._closed:
             self._admitted.add(source_id)
 
-    async def save(self, source_id: str, source: str, batch: Any) -> None:
-        """Store `batch` for the running source `source_id`; StoreRefusedError when it is not
+    async def save(
+        self, source_id: str, source: str, batch: Any, set_aside: Sequence[tuple[Any, str]] = ()
+    ) -> None:
+        """Store `batch` (None for no finding) for the running source `source_id`, with the page
+        reads its exclusions set aside (`commit_verified`); StoreRefusedError when it is not
         admitted or the row refused it. A cancelled caller leaves the commit running."""
         if self._closed or source_id not in self._admitted:
             raise StoreRefusedError
-        task = asyncio.get_running_loop().create_task(self._commit(source_id, source, batch))
+        findings = () if batch is None else tuple(batch.findings)
+        commit = self._commit(source_id, source, findings, tuple(set_aside))
+        task = asyncio.get_running_loop().create_task(commit)
         self._running[task] = source_id
         task.add_done_callback(self._ended)
         task.add_done_callback(_retrieved)  # a caller cancelled meanwhile never reads it
@@ -1948,8 +1971,16 @@ class Commits:
         self._running.pop(task, None)
         self._writes += 1
 
-    async def _commit(self, source_id: str, source: str, batch: Any) -> None:
+    async def _commit(
+        self,
+        source_id: str,
+        source: str,
+        findings: tuple[Any, ...],
+        set_aside: tuple[tuple[Any, str], ...],
+    ) -> None:
         async with self._lock:
+            if not findings and not self.plan.known.listed:
+                return  # set aside only, and no posting waits for its page: nothing to write
             # Taken under the lock: the Known the commit before published, and every source's
             # counters as they are now.
             snapshot = self.stats.copy()
@@ -1957,7 +1988,7 @@ class Commits:
             try:
                 delta = await asyncio.to_thread(
                     commit_verified, self.sessions, self.plan, known, snapshot, source_id,
-                    source, batch.findings, self.clock(),
+                    source, findings, self.clock(), set_aside,
                 )  # fmt: skip
             except Exception:
                 await self._recover(source_id)
@@ -1967,7 +1998,7 @@ class Commits:
             if self.unsettled:
                 return  # the run let go of the row: nothing more is published
             vars(self.plan.known).update(vars(known))
-            _counted(self.stats, source_id, delta, len(batch.findings))
+            _counted(self.stats, source_id, delta, len(findings))
 
     async def _recover(self, source_id: str) -> None:
         """The failed commit may have landed: take the row's counts and the person's list as

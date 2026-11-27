@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.apply import guardrails
+from app.browser import finder
 from app.jobs import service, sweep
 from app.jobs.models import ContractType, Job, JobEvent, JobEventKind, JobStatus
 from tests.jobs.sweep_helpers import (
@@ -235,7 +236,7 @@ def test_the_page_read_meets_the_never_apply_rules_on_the_pages_own_title(
         db.execute(sa.update(Job).where(Job.id == job.id).values(status=status))
         db.commit()
     page = dataclasses.replace(finding("Senior GenAI engineer"), url=listed.url)
-    _, read = read_later(factory, alice, page)
+    done, read = read_later(factory, alice, page)
     if status is JobStatus.found:
         assert (read.status, read.notes) == (JobStatus.skipped, rule)
         said = events_of(factory, job.id, JobEventKind.status)[-1]
@@ -243,6 +244,10 @@ def test_the_page_read_meets_the_never_apply_rules_on_the_pages_own_title(
     else:
         assert (read.status, read.notes) == (status, "")
     assert read.list_url is None
+    # Counted as a new posting's skip is, by the sweep and by its source.
+    skipped = int(status is JobStatus.found)
+    assert done.stats["skipped_by_rule"] == skipped
+    assert done.stats["sources"][0]["skipped_by_rule"] == skipped
 
 
 def test_listed_read_counts_only_a_page_read_that_wrote(
@@ -266,3 +271,138 @@ def test_listed_read_counts_only_a_page_read_that_wrote(
         db.commit()
     assert (delta.duplicates, delta.listed_read) == (1, 0)
     assert jobs_of(factory, alice)[0].posting_text == listed.text
+
+
+def through_the_site(*found: finder.VerifiedFinding) -> sweep.BrowserHook:
+    """The website search's way to the store: its filter of the person's exclusions
+    (`interactive._Site.verified`) over the run's own commits."""
+    from app.browser.sources import interactive
+
+    async def hook(plan: sweep.Plan, stats: sweep.Stats, progress, deadline: float) -> None:
+        del deadline
+        entry = next(e for e in stats.sources if e.get("host") and e.get("kind") != "board")
+        entry.update(phase="running", outcome=None, reason=None)
+        assert plan.commits is not None
+        assert plan.search is not None
+        plan.commits.admit(entry["source_id"])
+        site = interactive._Site(
+            interactive.searches_for(plan.search),
+            commits=plan.commits,
+            source_id=entry["source_id"],
+            host=entry["host"],
+        )
+        await site.verified(finder.VerifiedBatch(tuple(found)))
+        await plan.commits.settle(entry["source_id"])
+        sweep.finish_source(entry)
+        await progress()
+
+    return hook
+
+
+EXCLUDED = {
+    "title_exclude": {"terms": ["stage"], "advanced_regex": False},
+    "location_exclude": {"terms": ["lyon"], "advanced_regex": False},
+}
+
+
+@pytest.mark.parametrize(
+    ("title", "location", "note"),
+    [
+        ("GenAI engineer (Stage)", "Paris, France", "Unwanted title: Stage"),
+        ("GenAI engineer", "Lyon, France", "Unwanted place: Lyon"),  # the card had no place
+    ],
+)
+def test_a_page_the_persons_exclusions_set_aside_skips_its_posting_kept_from_a_card(
+    factory: sessionmaker[Session], alice: uuid.UUID, title: str, location: str, note: str
+) -> None:
+    """The card "GenAI engineer", no place shown, passed the person's unwanted titles and places;
+    its page, read later, shows "(Stage)" or "Lyon": the posting is set Skipped with the
+    exclusion as its note, its page read, with an event in its history."""
+    set_profile(factory, alice, search(**EXCLUDED))
+    listed = dataclasses.replace(card(), location="")
+    job = stored(factory, alice, listed)
+    page = dataclasses.replace(finding(title, location=location), url=listed.url)
+    done = run(factory, new_sweep(factory, alice), browser=through_the_site(page))
+    [read] = jobs_of(factory, alice)
+    assert (read.id, read.status, read.notes) == (job.id, JobStatus.skipped, note)
+    assert (read.list_url, read.posting_text) == (None, page.text)
+    status = events_of(factory, job.id, JobEventKind.status)
+    noted = events_of(factory, job.id, JobEventKind.note)
+    assert status[-1] == {"from": "found", "to": "skipped", "via": "unwanted"}
+    assert noted[-1] == {"from": "", "to": note, "via": "unwanted"}
+    assert {"page_read": {"list_url": LIST}}.items() <= events_of(
+        factory, job.id, JobEventKind.sweep
+    )[-1].items()
+    assert (done.stats["new"], done.stats["listed_read"], done.stats["skipped_by_rule"]) == (
+        0,
+        1,
+        0,
+    )
+
+
+@pytest.mark.parametrize(
+    "status", [JobStatus.shortlisted, JobStatus.cv_ready, JobStatus.skipped, JobStatus.applied]
+)
+def test_a_status_the_person_set_stays_when_an_exclusion_sets_the_page_aside(
+    factory: sessionmaker[Session], alice: uuid.UUID, status: JobStatus
+) -> None:
+    set_profile(factory, alice, search(**EXCLUDED))
+    listed = card()
+    job = stored(factory, alice, listed)
+    with factory() as db:
+        db.execute(sa.update(Job).where(Job.id == job.id).values(status=status, notes="Mine"))
+        db.commit()
+    page = dataclasses.replace(finding("GenAI engineer (Stage)"), url=listed.url)
+    run(factory, new_sweep(factory, alice), browser=through_the_site(page))
+    [read] = jobs_of(factory, alice)
+    assert (read.status, read.notes, read.list_url) == (status, "Mine", None)
+    assert events_of(factory, job.id, JobEventKind.note) == []
+
+
+def test_a_persons_note_stays_and_a_never_apply_rule_names_the_skip_first(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    rule = "No senior roles: senior"
+    set_profile(factory, alice, search(never_apply=[rule], **EXCLUDED))
+    first, second = card(), card("Applied AI engineer")
+    run(factory, new_sweep(factory, alice), first, second)
+    one, two = sorted(jobs_of(factory, alice), key=lambda job: job.url == second.url)
+    with factory() as db:
+        db.execute(sa.update(Job).where(Job.id == two.id).values(notes="Mine"))
+        db.commit()
+    pages = (
+        dataclasses.replace(finding("Senior GenAI engineer (Stage)"), url=first.url),
+        dataclasses.replace(finding("Applied AI engineer (Stage)"), url=second.url),
+    )
+    done = run(factory, new_sweep(factory, alice), browser=through_the_site(*pages))
+    read = {job.id: job for job in jobs_of(factory, alice)}
+    assert (read[one.id].status, read[one.id].notes) == (JobStatus.skipped, rule)
+    assert (read[two.id].status, read[two.id].notes) == (JobStatus.skipped, "Mine")
+    assert done.stats["skipped_by_rule"] == 1  # the rule's skip, not the exclusion's
+
+
+@pytest.mark.parametrize("kind", ["unknown", "card", "read_already"])
+def test_a_page_set_aside_changes_nothing_but_a_posting_waiting_for_its_page(
+    factory: sessionmaker[Session], alice: uuid.UUID, kind: str
+) -> None:
+    """Set aside, a page of no posting stays out of the list (nothing stored), a card set aside
+    reads no page, and a posting whose page was read already stays as it is."""
+    set_profile(factory, alice, search(**EXCLUDED))
+    listed = card()
+    job = stored(factory, alice, listed)
+    if kind == "read_already":
+        page = dataclasses.replace(finding("GenAI engineer"), url=listed.url)
+        run(factory, new_sweep(factory, alice), page)
+    before = jobs_of(factory, alice)
+    aside = dataclasses.replace(finding("GenAI engineer (Stage)"), url=listed.url)
+    if kind == "unknown":
+        aside = finding("Robot welder (Stage)", company="Example Labs")
+    if kind == "card":
+        aside = dataclasses.replace(card("GenAI engineer (Stage)"), url=listed.url)
+    done = run(factory, new_sweep(factory, alice), browser=through_the_site(aside))
+    after = jobs_of(factory, alice)
+    assert [(j.id, j.status, j.list_url, j.posting_text) for j in after] == [
+        (j.id, j.status, j.list_url, j.posting_text) for j in before
+    ]
+    assert (done.stats["new"], done.stats["listed_read"]) == (0, 0)
+    assert job.id in {j.id for j in after}

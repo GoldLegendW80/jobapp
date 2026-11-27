@@ -394,8 +394,8 @@ def test_a_stored_address_stays_stored_once_whatever_a_later_reading_says(
     stored: list[str] = []
 
     class Commits:
-        async def save(self, source_id, host, batch):
-            stored.extend(finding.title for finding in batch.findings)
+        async def save(self, source_id, host, batch, set_aside=()):
+            stored.extend(finding.title for finding in (batch.findings if batch else ()))
 
     planned = searches_for(selected(title_exclude={"terms": ["sales"]}))
     site = interactive._Site(planned, commits=Commits(), source_id="s", host="jobs.example.test")
