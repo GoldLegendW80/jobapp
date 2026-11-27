@@ -415,6 +415,15 @@ ON_HOSTS = [
     ("https://JOBS.example.test/jobs/1", START, True),
     ("https://sub.jobs.example.test/jobs/1", START, False),
     ("https://example.test/jobs/1", START, False),
+    # Round 2, follow up 3: its `www.` name and its bare name are the same host.
+    ("https://www.jobs.example.test/jobs/1", START, True),
+    ("https://WWW.jobs.example.test/jobs/1", START, True),
+    ("https://example-robotics.test/j/1", "https://www.example-robotics.test/", True),
+    ("https://www.example-robotics.test/j/1", "https://example-robotics.test/", True),
+    ("https://www.www.example-robotics.test/j/1", "https://example-robotics.test/", False),
+    ("https://careers.example-robotics.test/j/1", "https://www.example-robotics.test/", False),
+    ("https://wwwexample-robotics.test/j/1", "https://example-robotics.test/", False),
+    ("https://ats.example-hire.test/j/1", "https://www.example-robotics.test/", False),
     ("https://www.other-board.test/viewjob?jk=1", START, False),
     ("https://jobs.example.test.evil.test/jobs/1", START, False),
     ("", START, False),
@@ -946,8 +955,8 @@ def test_no_tab_of_its_own_stores_nothing_and_ends_the_reading(monkeypatch, no_t
 def test_a_redirect_to_a_list_or_to_another_posting_is_never_read(monkeypatch) -> None:
     """Review of PR 864, item 3: the posting's address redirects to the website's search page
     listing its title, or to another posting's page holding it: no page is read as the
-    posting, each is a failed reading."""
-    search = START + "search?q=robot"
+    posting, each is a failed reading (one posting alone too: no page is held)."""
+    search = START + "search?q=robot+welder"  # test_b20's Site serves its own `search?q=robot`
     board = Board(
         {search: LIST_PAGE, job(9): posting("Robot Welder")},
         redirects={job(1): search, job(2): job(9)},
@@ -956,6 +965,8 @@ def test_a_redirect_to_a_list_or_to_another_posting_is_never_read(monkeypatch) -
     assert [(p.outcome, p.finding) for p in commits.saved] == [("unread", None)] * 2
     assert (done["read"], done["unread"], done["ended"]) == (0, 2, "done")
     assert board.opened() == [job(1), job(2)]
+    _, alone, _ = phase(monkeypatch, board, [listed(1)])
+    assert [(p.outcome, p.finding) for p in alone.saved] == [("unread", None)]
 
 
 def test_a_close_for_memory_named_by_a_navigate_that_loaded_ends_the_reading(monkeypatch) -> None:

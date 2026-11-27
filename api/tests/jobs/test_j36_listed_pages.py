@@ -10,6 +10,7 @@ import uuid
 from datetime import timedelta
 from types import SimpleNamespace
 
+import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -18,7 +19,7 @@ from app.jobs import liveness, service, sweep, sweep_router
 from app.jobs import router as jobs_router
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
 from tests.browser.fakes import FakeLeases, ScriptedFinder
-from tests.browser.test_j36_listed_pages import ELSEWHERE, Board, posting
+from tests.browser.test_j36_listed_pages import CHECK, ELSEWHERE, Board, posting
 from tests.jobs.sweep_helpers import (
     HOST,
     SITE,
@@ -356,3 +357,112 @@ def test_at_most_listed_max_postings_after_the_exact_filters(
     assert known.carded == {jobs[titles[2]].id}  # a duplicate, stored under the row's address
     picked = sweep.listed_postings(factory, alice, HOST, on_site, known.carded)
     assert [p.title for p in picked] == [titles[2], titles[1]]
+
+
+def failed_before(factory: sessionmaker[Session], user: uuid.UUID, jobs: list[Job]) -> None:
+    """Two earlier days of failed readings of each posting's page."""
+    with factory() as db, db.begin():
+        for job in jobs:
+            for days in (2, 1):
+                db.add(
+                    JobEvent(
+                        job_id=job.id, user_id=user, kind=JobEventKind.sweep,
+                        data={service.PAGE_UNREAD: {"list_url": LIST}},
+                        at=now() - timedelta(days=days),
+                    )
+                )  # fmt: skip
+
+
+def test_three_days_of_an_outage_give_up_nothing(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """Review of PR 864, round 2, item 2: no page loads (the network or the egress down,
+    browserd's navigation_failed) on a third day after two days of failed readings: three
+    pages opened, nothing written, nothing given up, the reading ends `no_page`."""
+    set_profile(factory, alice, search())
+    titles = ("GenAI engineer", "AI engineer", "Forward deployed engineer", "ML engineer")
+    run(factory, new_sweep(factory, alice), *(card(t) for t in titles))
+    jobs = jobs_of(factory, alice)
+    failed_before(factory, alice, jobs)
+    board = Board({}, start=START)
+    row = search_with_pages(factory, alice, board)
+    [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
+    assert entry["listed_pages"] == {
+        "read": 0, "closed": 0, "unread": 0, "given_up": 0, "ended": "no_page", "left": 4,
+    }  # fmt: skip
+    assert len([url for url in board.opened() if url != START]) == 3
+    with factory() as db:
+        assert service.pages_given_up(db, alice, [j.id for j in jobs]) == {}
+    assert {job.list_url for job in jobs_of(factory, alice)} == {LIST}
+    [source] = [s for s in sweep_router.sweep_out(row).sources if s.host == HOST]
+    assert source.listed_pages.ended == "no_page"
+
+
+def test_a_wall_on_its_page_is_a_failed_reading_and_its_mention_says_so(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """Round 2, follow up 1: a posting whose own page is a security check is a failed reading
+    with its reason, the reading goes on with the next posting, and after 3 days the posting
+    is no longer tried and its mention says its page asks to sign in or to pass a check."""
+    set_profile(factory, alice, search())
+    run(factory, new_sweep(factory, alice), card("GenAI engineer"), card("AI engineer"))
+    jobs = {job.title: job for job in jobs_of(factory, alice)}
+    walled = jobs["GenAI engineer"]
+    failed_before(factory, alice, [walled])
+    board = Board(
+        {url_of("GenAI engineer"): CHECK, url_of("AI engineer"): posting("AI engineer")},
+        start=START,
+    )
+    row = search_with_pages(factory, alice, board)
+    [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
+    assert (entry["listed_pages"]["read"], entry["listed_pages"]["given_up"]) == (1, 1)
+    assert entry["listed_pages"]["ended"] == "done"
+    with factory() as db:
+        assert service.pages_given_up(db, alice, [walled.id]) == {walled.id: "walled"}
+        stored = db.get(Job, walled.id)
+        user = SimpleNamespace(id=alice)
+        item = jobs_router._item(stored, 0, jobs_router._given_up(db, user, [stored]))
+    assert (item.page_given_up, item.page_walled, item.page_elsewhere) == (True, True, False)
+
+
+def test_a_card_on_another_host_says_no_reading_opens_it_and_www_is_the_same_host(
+    factory: sessionmaker[Session], alice: uuid.UUID
+) -> None:
+    """Round 2, follow up 3: a card of the website on an employer's application system is
+    never opened, and its mention says so; a card on the `www.` name of the website's host is
+    read as on its own host."""
+    set_profile(factory, alice, search())
+    ats = dataclasses.replace(card("AI engineer"), url="https://ats.example-hire.test/jobs/7")
+    www = dataclasses.replace(card("GenAI engineer"), url=f"https://www.{HOST}/jobs/genai")
+    run(factory, new_sweep(factory, alice), ats, www)
+    board = Board({www.url: posting("GenAI engineer")}, start=START)
+    row = search_with_pages(factory, alice, board)
+    assert ats.url not in board.opened()
+    [entry] = [s for s in row.stats["sources"] if s.get("host") == HOST]
+    assert (entry["listed_pages"]["read"], entry["listed_pages"]["left"]) == (1, 0)
+    jobs = {job.title: job for job in jobs_of(factory, alice)}
+    with factory() as db:
+        user = SimpleNamespace(id=alice)
+        stored = db.get(Job, jobs["AI engineer"].id)
+        item = jobs_router._item(stored, 0, jobs_router._given_up(db, user, [stored]))
+    assert (item.list_url, item.page_given_up, item.page_elsewhere) == (LIST, False, True)
+    assert jobs["GenAI engineer"].list_url is None
+
+
+@pytest.mark.parametrize(
+    ("url", "source", "elsewhere"),
+    [
+        (f"https://{HOST}/jobs/1", HOST, False),
+        (f"https://www.{HOST}/jobs/1", HOST, False),
+        ("https://ats.example-hire.test/jobs/1", HOST, True),
+        ("https://ats.example-hire.test/jobs/1", f"{HOST}, ats.example-hire.test", False),
+        ("https://www.linkedin.com/jobs/view/1234567890/", "fr.linkedin.com", False),
+        ("https://www.linkedin.com/jobs/view/1234567890/", HOST, True),
+        ("https://example.test/j/1", "web", True),  # the web source's postings
+        ("not an address", HOST, True),
+        (None, HOST, True),
+        ("https://[bad/j/1", HOST, True),
+    ],
+)
+def test_a_page_no_reading_opens(url, source, elsewhere) -> None:
+    assert service.page_elsewhere(url, source) is elsewhere
