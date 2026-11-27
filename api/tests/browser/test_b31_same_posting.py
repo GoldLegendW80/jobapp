@@ -610,6 +610,7 @@ def test_what_the_session_saw_by_posting_is_bounded(monkeypatch) -> None:
     monkeypatch.setattr(finder, "SEEN_POSTINGS_MAX", 3)
     one, _, _, _ = board_session(INDEED)
     one.postings.clear()
+    one.postings_chars = 0
     one._note_seen([f"{CAREERS}?id={n}" for n in range(5)])
     assert [finder.canonical(a) for (a,) in one.postings.values()] == [
         f"{CAREERS}?id={n}" for n in (2, 3, 4)
@@ -619,6 +620,67 @@ def test_what_the_session_saw_by_posting_is_bounded(monkeypatch) -> None:
     one._note_seen(spellings)
     assert one.postings[f"indeed.test {k}"] == tuple(spellings[-finder.SPELLINGS_MAX :])
     assert one._same(f"{INDEED}viewjob?jk={k}")[0] == spellings[-1]
+
+
+def test_what_the_session_saw_is_bounded_by_characters_and_a_long_address_is_none(
+    monkeypatch,
+) -> None:
+    one, _, _, _ = board_session(INDEED)
+    monkeypatch.setattr(finder, "SEEN_CHARS_MAX", one.postings_chars + 300)
+    one._note_seen([f"{CAREERS}?id={n}" for n in range(10)])
+    assert one.postings_chars <= finder.SEEN_CHARS_MAX
+    assert one.postings_chars == sum(finder._chars(k, a) for k, a in one.postings.items())
+    assert f"{CAREERS}?id=9" in one._same(f"{CAREERS}?id=9&utm_source=x")
+    assert one._same(f"{CAREERS}?id=0") == []  # the oldest dropped
+    long = f"{CAREERS}?id={'7' * finder.ADDRESS_MAX}"
+    one._note_seen([long])
+    assert one._same(long) == []
+
+
+def test_a_hostile_page_of_the_largest_size_stays_within_the_bounds() -> None:
+    """A page of PAGE_MAX characters of distinct links, each near ADDRESS_MAX, then one of short
+    links: what the session saw by posting stays within its bounds and its sum is exact."""
+    long = [f'- link "x":\n  - /url: /j/{n}?q={"a" * 3_900}' for n in range(500)]
+    short = [f'- link "x":\n  - /url: /rc/clk?jk={n:016x}&tk=t' for n in range(40_000)]
+    one, _, _, _ = board_session(INDEED)
+    for name, rows in (("long", long), ("short", short)):
+        page = "\n".join(rows)[: finder.PAGE_MAX]
+        asyncio.run(one._read_off_loop(INDEED + name, page))
+    assert len(one.postings) <= finder.SEEN_POSTINGS_MAX
+    assert one.postings_chars <= finder.SEEN_CHARS_MAX
+    assert one.postings_chars == sum(finder._chars(k, a) for k, a in one.postings.items())
+    assert all(
+        len(a) <= finder.ADDRESS_MAX for spellings in one.postings.values() for a in spellings
+    )
+
+
+def test_the_postings_of_a_large_page_are_keyed_off_the_event_loop(monkeypatch) -> None:
+    """The posting each link names is worked out with the page's parse, in a thread for a page
+    past PARSE_INLINE_MAX (#797); only the page's own address is keyed in the loop."""
+    on_loop: list[bool] = []
+    keyed = finder.posting_key
+
+    def watched(url: str) -> str:
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return keyed(url)
+
+    monkeypatch.setattr(finder, "posting_key", watched)
+    monkeypatch.setattr(finder, "PARSE_INLINE_MAX", 0)
+    one, _, _, _ = board_session(INDEED)
+    on_loop.clear()
+    results, page = indeed_list(keys(30))
+    asyncio.run(one._read_off_loop(results, page))
+    assert on_loop.count(False) == 30  # the links, in the parse's thread
+    assert on_loop.count(True) == 1  # the page's own address
+    script = json.dumps([{"jk": k, "title": f"Data Role {k[-4:]}"} for k in keys(5, 50)])
+    on_loop.clear()
+    asyncio.run(one._keep_script(INDEED_PAGE, script, False, READ))
+    assert on_loop
+    assert True not in on_loop
 
 
 def test_every_card_fallback_has_its_words_and_no_dash() -> None:

@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import functools
 import importlib.util
 import json
 import logging
@@ -301,10 +300,13 @@ SCOPE_VALUES_MAX = 100
 SCOPE_VALUE_MAX = 300
 SCOPE_BYTES_MAX = 32_768
 SEEN_MAX = 2000
-# B31: the postings a session saw, by `posting_key` (the oldest dropped), and the addresses kept
-# for each, the newest.
+# B31: the postings a session saw, by `posting_key`, the oldest dropped past SEEN_POSTINGS_MAX of
+# them or SEEN_CHARS_MAX characters of keys and addresses; the newest SPELLINGS_MAX addresses of
+# each. An address past ADDRESS_MAX (twice a report's 2,000, its percent encoding aside) is none.
 SEEN_POSTINGS_MAX = 20_000
+SEEN_CHARS_MAX = 10_000_000
 SPELLINGS_MAX = 4
+ADDRESS_MAX = 4_000
 # The pages a job website's agent opened that its reports are verified on (B21): the last ones
 # read, each with its posting text, its visible lines, their words, its headings' words and its
 # fields. The text (TEXT_MAX), the lines and the headings (LINES_MAX each, B26: a page is read
@@ -891,7 +893,6 @@ def posting_id(url: str) -> tuple[str, str] | None:
     return (domain, one) if board.shape.fullmatch(one) else None
 
 
-@functools.lru_cache(maxsize=8192)
 def posting_key(url: str) -> str:
     """What names the posting a canonical address shows (B31): its board and id (`posting_id`),
     else the address once the parameters that only track are left out, one trailing slash and
@@ -1846,20 +1847,31 @@ def _record_size(record: PageRead) -> int:
 
 
 Detail = tuple[tuple[str, list[str], dict[str, tuple[str, str]]], tuple[list[str], list[str]]]
-Parsed = tuple[list[str], Detail, list[tuple[str, str, Units]]]
+Parsed = tuple[list[str], Detail, list[tuple[str, str, Units]], dict[str, str]]
 
 
 def _parsed(url: str, text: str) -> Parsed:
     """What `FinderSession._read` keeps of a page, worked out off the event loop (#797: the whole
     kept page, up to PAGE_MAX, took about 1.1 s to parse on the Mac): the canonical addresses of
-    its links, in page order, its detail and visible lines, and its cards (J31). Pure."""
+    its links, in page order, its detail and visible lines, its cards (J31) and the posting each
+    link names (B31, `_keyed`). Pure."""
     from app.browser import sources
 
     root = sources.parse_snapshot(text[:PAGE_MAX])
     links = [
         link for node in root.walk() if node.url and (link := canonical(urljoin(url, node.url)))
     ]
-    return links, (_detail(root), _seen_text(root)), _page_cards(url, root)
+    return links, (_detail(root), _seen_text(root)), _page_cards(url, root), _keyed(links)
+
+
+def _keyed(addresses: Iterable[str]) -> dict[str, str]:
+    """B31: the `posting_key` of each address up to ADDRESS_MAX characters. Pure; linear."""
+    return {a: posting_key(a) for a in addresses if len(a) <= ADDRESS_MAX}
+
+
+def _chars(key: str, spellings: tuple[str, ...]) -> int:
+    """The characters a posting the session saw holds (B31): its key and its addresses."""
+    return len(key) + sum(map(len, spellings)) if spellings else 0
 
 
 async def parsed_off_loop(url: str, text: str) -> Parsed | None:
@@ -2078,6 +2090,7 @@ class FinderSession:
     # its script results' addresses and cards) by the posting they name (`_note_seen`), and the
     # postings its reports kept, by the same key.
     postings: dict[str, tuple[str, ...]] = field(default_factory=dict, repr=False)
+    postings_chars: int = field(default=0, repr=False)
     reported_keys: set[str] = field(default_factory=set, repr=False)
     parsed: InitVar[Parsed | None] = None
 
@@ -2103,14 +2116,16 @@ class FinderSession:
     def _read(self, url: str, text: str, parsed: Parsed | None = None, kind: str = "page") -> None:
         """Note the links of a page read, its visible text and its cards (`_parsed`, unless
         given); an error page's cards are none (J31)."""
-        links, ((body, titles, fields), (lines, headings)), cards = parsed or _parsed(url, text)
+        links, ((body, titles, fields), (lines, headings)), cards, keys = parsed or _parsed(
+            url, text
+        )
         if canonical(url) not in self.error_pages:
-            self._note_cards(url, kind, cards)
+            self._note_cards(url, kind, cards, keys)
         for link in links:
             if self.on_site(link) and len(self.seen) < SEEN_MAX:
                 self.seen.add(link)
         key = canonical(url)
-        self._note_seen([*links, key])
+        self._note_seen([*links, key], keys)
         if key:
             if key not in self.seen and len(self.seen) >= SEEN_MAX:
                 self.seen.pop()
@@ -2181,7 +2196,13 @@ class FinderSession:
         except Exception:
             self._stop_with("permission_unavailable")
 
-    def _note_cards(self, source: str, kind: str, cards: list[tuple[str, str, Units]]) -> None:
+    def _note_cards(
+        self,
+        source: str,
+        kind: str,
+        cards: list[tuple[str, str, Units]],
+        keys: dict[str, str] | None = None,
+    ) -> None:
         """Keep the cards a page, a fetch or a script result showed (J31), each address's
         newest CARD_SOURCES_MAX, CARDS_MAX addresses (the oldest dropped); a link to the source
         itself is none. A source with LIST_CARDS_MIN cards or more is a list."""
@@ -2199,25 +2220,33 @@ class FinderSession:
             self.cards[address] = (*held, card)[-CARD_SOURCES_MAX:]
         while len(self.cards) > CARDS_MAX:
             del self.cards[next(iter(self.cards))]
-        self._note_seen(shown)
+        self._note_seen(shown, keys)
         if len(shown) >= LIST_CARDS_MIN:
             self.lists.pop(list_url, None)
             self.lists[list_url] = None
             while len(self.lists) > LISTS_MAX:
                 del self.lists[next(iter(self.lists))]
 
-    def _note_seen(self, addresses: Iterable[str]) -> None:
+    def _note_seen(self, addresses: Iterable[str], keys: dict[str, str] | None = None) -> None:
         """B31: note each canonical address the session saw under the posting it names
-        (`posting_key`), the newest SPELLINGS_MAX of each, SEEN_POSTINGS_MAX postings at most
-        (the oldest dropped). Only what a page, a fetch or a script's result showed comes here,
-        never an address of the agent's own call."""
+        (`posting_key`, or `keys` worked out off the event loop), the newest SPELLINGS_MAX of
+        each; the oldest dropped past SEEN_POSTINGS_MAX postings or SEEN_CHARS_MAX characters.
+        Only what a page, a fetch or a script's result showed comes here, never an address of
+        the agent's own call."""
         for address in addresses:
-            key = posting_key(address) if address else ""
+            if not address or len(address) > ADDRESS_MAX:
+                continue
+            key = keys[address] if keys and address in keys else posting_key(address)
             if key:
-                held = tuple(a for a in self.postings.pop(key, ()) if a != address)
-                self.postings[key] = (*held, address)[-SPELLINGS_MAX:]
-        while len(self.postings) > SEEN_POSTINGS_MAX:
-            del self.postings[next(iter(self.postings))]
+                held = self.postings.pop(key, ())
+                spellings = (*(a for a in held if a != address), address)[-SPELLINGS_MAX:]
+                self.postings[key] = spellings
+                self.postings_chars += _chars(key, spellings) - _chars(key, held)
+        while self.postings and (
+            len(self.postings) > SEEN_POSTINGS_MAX or self.postings_chars > SEEN_CHARS_MAX
+        ):
+            key = next(iter(self.postings))
+            self.postings_chars -= _chars(key, self.postings.pop(key))
 
     def _same(self, url: str) -> list[str]:
         """B31: the addresses the session saw that name the posting `url` names, newest first."""
@@ -2456,15 +2485,18 @@ class FinderSession:
         whole = await asyncio.to_thread(_script_whole, raw)
         text = _head(whole, SCRIPT_RESULT_MAX)
         links = await asyncio.to_thread(_script_links, url, text)
+        cards: list[tuple[str, str, Units]] = []
         if isinstance(raw, str) and len(raw) <= SCRIPT_RESULT_MAX:
-            self._note_cards(url, "script", await asyncio.to_thread(_script_cards, url, raw, code))
+            cards = await asyncio.to_thread(_script_cards, url, raw, code)
+        keys = await asyncio.to_thread(_keyed, [*links, *(card[0] for card in cards)])
+        self._note_cards(url, "script", cards, keys)
         script = self.script = Kept(url, "", text, cut or len(text) < len(whole))
         for link in links:
             self.script_links.pop(link, None)
             self.script_links[link] = None
         while len(self.script_links) > SCRIPT_LINKS_MAX:
             del self.script_links[next(iter(self.script_links))]
-        self._note_seen(links)
+        self._note_seen(links, keys)
         said = f"The script's result holds {len(text):,} characters"
         if script.cut:
             said += f" (cut at {SCRIPT_RESULT_MAX:,})"

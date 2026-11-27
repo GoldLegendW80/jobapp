@@ -596,7 +596,7 @@ def test_a_script_result_is_said_cut_only_when_it_was(raw, cut):
         session = object.__new__(finder.FinderSession)
         session.script, session.script_links = None, {}
         session.cards, session.lists = {}, {}  # J31: a script's result is read for its cards
-        session.postings = {}  # B31: and for the postings it names
+        session.postings, session.postings_chars = {}, 0  # B31: and for the postings it names
         script, _ = await finder.FinderSession._keep_script(session, START, raw, False)
         return script
 
