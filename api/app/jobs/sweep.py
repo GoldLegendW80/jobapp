@@ -97,6 +97,7 @@ from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker, undefer
 
 from app import queue as queues
@@ -1778,20 +1779,32 @@ def _store_finding(
         )
     if job_id is not None and list_url is None and job_id in plan.known.listed:
         # Jobs J31: the page of a posting kept from a card was read: its text replaces the card's.
-        _page_read(db, plan, job_id, posting, source, now)
+        said = contract or kind(posting.title, posting.location, posting.url) if stated else None
+        page = posting, company, said
+        delta.listed_read += _page_read(db, plan, job_id, page, source, now)
         plan.known.listed.discard(job_id)
-        delta.listed_read += 1
     if job_id is not None:
         _badge_again(db, plan, job_id)
 
 
 def _page_read(
-    db: Session, plan: Plan, job_id: uuid.UUID, posting: Posting, source: str, now: datetime
-) -> None:
+    db: Session,
+    plan: Plan,
+    job_id: uuid.UUID,
+    page: tuple[Posting, str, ContractType | None],
+    source: str,
+    now: datetime,
+) -> bool:
     """Jobs J31: a posting kept from a card of a list whose own page a source read since: the
-    page's text replaces the card's, the posting is scored again (a fit the person set stays)
-    and read again by the posting reader, its date taken when it had none, and the mention
-    removed, with a `sweep` event naming the list. Its badge follows (`_badge_again`)."""
+    page's text replaces the card's, and its address the card's when it was found by the cross
+    board key (the page that opens is the one Apply needs); the posting is scored again (a fit
+    the person set stays) and read again by the posting reader, its date taken when it had
+    none, the contract the page states (`page`: the posting, its company, the contract only when
+    stated) taken when none was stated, the person's never apply rules read on the page's own
+    title and company as at any store (a posting still `found` is skipped), and the mention
+    removed, with a `sweep` event naming the list. Its badge follows (`_badge_again`). Whether
+    it wrote: never for a row gone or whose page was read already."""
+    posting, company, stated = page
     job = db.execute(
         sa.select(Job)
         .where(Job.id == job_id, Job.user_id == plan.user_id)
@@ -1799,24 +1812,35 @@ def _page_read(
         .with_for_update()
     ).scalar_one_or_none()
     if job is None or job.list_url is None:
-        return
+        return False
     text = posting.text[:POSTING_TEXT_MAX]
+    read: dict[str, Any] = {"list_url": job.list_url}
+    was = job.url
+    if posting.url and posting.url != was and _moved(db, plan, job, posting.url):
+        read["url_was"] = was
     events: list[tuple[JobEventKind, dict[str, Any]]] = [
         (
             JobEventKind.sweep,
-            {
-                "sweep_id": str(plan.sweep_id),
-                "board": source,
-                "page_read": {"list_url": job.list_url},
-            },
+            {"sweep_id": str(plan.sweep_id), "board": source, "page_read": read},
         )
     ]
+    rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
+    if rule is not None and job.status is JobStatus.found:
+        skipped = {"from": "found", "to": "skipped", "via": "never_apply"}
+        events.append((JobEventKind.status, skipped))
+        job.status = JobStatus.skipped
+        if not job.notes:
+            events.append((JobEventKind.note, {"from": "", "to": rule.text, "via": "never_apply"}))
+            job.notes = rule.text
     job.list_url = None
     job.posting_text = text or None
     job.description = text[:DESCRIPTION_CHARS] or None
     for name, value in signals.stored(text).items():
         setattr(job, name, value)
     job.published_on = job.published_on or published_date(posting.published)
+    if stated is not None and not job.contract_stated:  # a contract the person set is stated
+        job.contract_type = stated
+        job.contract_stated = True
     job.read_at = None
     job.read_attempts = 0
     score = (
@@ -1837,6 +1861,23 @@ def _page_read(
     for kind_, payload in events:
         db.add(JobEvent(job_id=job.id, user_id=plan.user_id, at=now, kind=kind_, data=payload))
     db.flush()
+    return True
+
+
+def _moved(db: Session, plan: Plan, job: Job, url: str) -> bool:
+    """Jobs J31: give a posting kept from a card the address of the page read for it, unless
+    another of the person's postings holds that address (the card's then stays)."""
+    try:
+        with db.begin_nested():
+            db.execute(
+                sa.update(Job)
+                .where(Job.id == job.id, Job.user_id == plan.user_id)
+                .values(url=url, updated_at=Job.updated_at)
+            )
+    except IntegrityError:
+        return False
+    plan.known.add_stored(job.company, job.title, job.location, url, job.slug, job.id, job.source)
+    return True
 
 
 def _badge_again(db: Session, plan: Plan, job_id: uuid.UUID) -> None:
