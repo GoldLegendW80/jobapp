@@ -101,6 +101,10 @@ export function releaseRun(
   );
 }
 
+/** An ended run's summary; a job search's names the saved search it ran (jobs J33b), never the
+ * main search, whose toast keeps its words. */
+export type RunEnd = WorkflowRunDetail & { search?: string };
+
 export interface RunEndWords {
   title: string;
   /** The subject, the reason of a failure, a search's count: one sentence each. */
@@ -120,9 +124,12 @@ function sentence(text: string) {
   return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
-export function runEndWords(run: WorkflowRunDetail): RunEndWords {
+export function runEndWords(run: RunEnd): RunEndWords {
   const lines: string[] = [];
-  if (run.subject?.words) lines.push(sentence(run.subject.words));
+  const subject = run.subject?.words ? sentence(run.subject.words) : null;
+  if (run.search)
+    lines.push(subject ? `${run.search}: ${subject}` : sentence(run.search));
+  else if (subject) lines.push(subject);
   if (run.status === "failure") {
     lines.push(sentence(run.reason ?? "A step of this run failed"));
   }

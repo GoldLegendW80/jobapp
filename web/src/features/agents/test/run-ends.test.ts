@@ -103,6 +103,19 @@ describe("runEndWords", () => {
     });
   });
 
+  it("names the saved search a job search ran, before its subject (jobs J33b)", () => {
+    expect(runEndWords({ ...SWEEP_RUN, search: "Remote roles" }).lines).toEqual(
+      [
+        "Remote roles: Data engineer, Analytics engineer in Lyon, Remote.",
+        "12 new postings added.",
+      ],
+    );
+    expect(
+      runEndWords({ ...SWEEP_RUN, subject: null, search: "Remote roles" })
+        .lines[0],
+    ).toBe("Remote roles.");
+  });
+
   it("says why a run failed, or that a step did when the api says no more", () => {
     expect(runEndWords(FAILED_RUN)).toEqual({
       title: "Application: Failed",
