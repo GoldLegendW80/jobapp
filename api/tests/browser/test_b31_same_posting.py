@@ -533,6 +533,23 @@ def test_two_spellings_in_one_report_are_one_posting() -> None:
     assert len(opened) == 1
 
 
+def test_a_posting_kept_under_one_spelling_is_a_duplicate_under_another() -> None:
+    """Kept from its card under the link as the list gives it (its page did not load), then
+    reported as `/viewjob?jk=<key>`: one posting, refused `duplicate`, never opened again."""
+    k = keys(1)[0]
+    one, batches, opened, _ = board_session(INDEED, indeed_list([k]))
+    seen = f"{INDEED}rc/clk?jk={k}&bb=x0&xkcb=y&vjs=3&tk=t1&from=serp"
+    assert reported(one, item(k, seen))["kept"] == 1
+    assert (opened, batches[0].findings[0].url) == ([seen], seen)
+    for spelling in (f"{INDEED}viewjob?jk={k}", f"http://fr.indeed.test:8080/m/viewjob?jk={k}"):
+        assert reported(one, item(k, spelling))["refused"][0]["reason"] == "duplicate"
+        assert (
+            listed(one, {"title": f"Data Role {k[-4:]}", "url": spelling})["refused"][0]["reason"]
+            == "duplicate"
+        )
+    assert opened == [seen]
+
+
 def test_a_gone_page_under_another_spelling_refuses_the_card() -> None:
     k = keys(1)[0]
     one, _, _, _ = board_session(INDEED, indeed_list([k]))
@@ -561,14 +578,21 @@ def test_linkedin_a_public_job_link_with_its_position_is_a_card() -> None:
     one, batches, _, _ = board_session(
         LINKEDIN, (LINKEDIN + "jobs/search?keywords=data", "\n".join(rows))
     )
+    links = [
+        f"{LINKEDIN}jobs/view/data-role-{n}-at-example-{4012345600 + n}?position={n + 1}"
+        f"&pageNum=0&refId=r{n}&trackingId=t{n}&trk=public_jobs"
+        for n in range(6)
+    ]
     answer = listed(
         one,
-        *({"title": f"Data Role {n}", "url": f"/jobs/view/{4012345600 + n}/"} for n in range(6)),
+        *({"title": f"Data Role {n}", "url": f"/jobs/view/{4012345600 + n}/"} for n in range(3)),
+        *({"title": f"Data Role {n}", "url": links[n]} for n in range(3, 6)),  # as it was seen
     )
     assert (answer["kept"], answer["refused"]) == (6, [])
     assert [f.url for b in batches for f in b.findings] == [
-        f"{LINKEDIN}jobs/view/{4012345600 + n}/" for n in range(6)
-    ]
+        f"{LINKEDIN}jobs/view/{4012345600 + n}/" for n in range(3)
+    ] + links[3:]
+    assert finder.route_of(links[3], {LINKEDIN}, [], typed_address=True) == "search_address"
 
 
 def test_a_link_seen_past_the_seen_set_still_counts() -> None:
