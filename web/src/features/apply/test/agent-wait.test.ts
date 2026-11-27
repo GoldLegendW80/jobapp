@@ -12,7 +12,6 @@ import {
   boxOf,
   CODE_IN_BROWSER,
   kindWords,
-  LATE_ANSWER,
   NO_PASSWORD,
   saidNothingSent,
   SHOWN_MAX,
@@ -159,7 +158,6 @@ describe("the apply agent's wait, in words (A25)", () => {
   it("writes no dash as a separator", () => {
     for (const line of [
       CODE_IN_BROWSER,
-      LATE_ANSWER,
       NO_PASSWORD,
       waitStatusLine(waits()),
       waitStatusLine(waits({ needs: "agent_asked" })),

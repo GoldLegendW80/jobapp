@@ -139,10 +139,6 @@ export const AFTER_SEND_WAIT =
 export const NO_PASSWORD =
   "The assistant never needs your password. Type passwords only in the browser yourself.";
 
-/** The answer came after the wait ended (409): it was not given to the assistant. */
-export const LATE_ANSWER =
-  "Your answer came after the assistant stopped waiting, so it did not get it.";
-
 /**
  * What the assistant said with `apply_done` when its run ended (api applier, the `agent_done`
  * event): yes, no or unsure was a send button clicked, `person` for the person's own send.

@@ -15,7 +15,6 @@ import { WAIT_POLL_MS } from "@/features/apply/api/use-agent-wait";
 import {
   AFTER_SEND_WAIT,
   CODE_IN_BROWSER,
-  LATE_ANSWER,
   NO_PASSWORD,
   SAID_NOTHING_SENT,
 } from "@/features/apply/helpers/agent-wait";
@@ -204,30 +203,38 @@ describe("the apply agent waits for the person (A25)", () => {
     expect(chat.querySelector("a, strong, em, b")).toBeNull();
   });
 
-  it("says when an answer came after the wait ended", async () => {
-    const fake = waiting();
-    server.use(
-      http.post("*/api/applications/:id/question", () => {
-        fake.application = fakeApplication("needs_person", {
-          mode: "direct",
-          needs: "agent_asked",
-        });
-        fake.detail = {
-          question: { ...SIGNIN_ASK, live: false },
-          chat: chatWith(SIGNIN_ASK, "person_late"),
-          now: WAIT_NOW,
-        };
-        return HttpResponse.json(
-          { detail: "This application waits for no answer now." },
-          { status: 409 },
-        );
-      }),
-    );
-    const { user, wait } = await openSection();
-    await user.type(wait.getByLabelText(BOX), "Too late");
-    await user.click(wait.getByRole("button", { name: "Send the answer" }));
-    expect(await wait.findByRole("alert")).toHaveTextContent(LATE_ANSWER);
-  });
+  it.each([
+    ["the wait ended", true],
+    ["another tab answered first", false],
+  ])(
+    "says in the api's words why an answer was not taken (%s)",
+    async (_, ended) => {
+      const fake = waiting();
+      const refused = "This application waits for no answer now.";
+      server.use(
+        http.post("*/api/applications/:id/question", () => {
+          if (ended) {
+            fake.application = fakeApplication("needs_person", {
+              mode: "direct",
+              needs: "agent_asked",
+            });
+            fake.detail = {
+              question: { ...SIGNIN_ASK, live: false },
+              chat: chatWith(SIGNIN_ASK, "person_late"),
+              now: WAIT_NOW,
+            };
+          }
+          return HttpResponse.json({ detail: refused }, { status: 409 });
+        }),
+      );
+      const { user, wait } = await openSection();
+      await user.type(wait.getByLabelText(BOX), "Too late");
+      await user.click(wait.getByRole("button", { name: "Send the answer" }));
+      const alert = await wait.findByRole("alert");
+      expect(alert).toHaveTextContent(refused);
+      expect(alert.textContent).not.toMatch(/came after/);
+    },
+  );
 
   it.each([
     [
