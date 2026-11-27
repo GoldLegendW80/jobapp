@@ -13,12 +13,16 @@ The badge is computed by code from the posting's own fields, never taken from an
   or none saved: any mode). WORK_MODES, a planner default: on site holds on site and hybrid (a
   hybrid job has days on site), remote holds remote only, hybrid holds hybrid only.
 - `older`: a published date more than the search's days before the day the posting was found.
+- `language` (jobs J35): a language the posting requires that the person's profile does not
+  declare (app/jobs/languages.py, `missing`), read against her current languages, whatever the
+  search (`Criteria.spoken`).
 An unstated field gives no code.
 
 It runs at the store and when a stored posting is found again (sweep._store_finding, against the
 sweep's frozen criteria), once the posting reader filled the fields (reader.save), and for the
 person's open postings of a search when its criteria are saved (`refresh`: the main search through
-the profile's section callback, a saved search through searches.change and searches.delete). A
+the profile's section callback, a saved search through searches.change and searches.delete), and
+for every search's open postings when the profile's languages may have changed (`on_sections`). A
 posting's search is the one that found it last (`jobs.criteria_search_id`; null, or a saved search
 deleted since, is the main search). A row stored before migration 0051 has no badge (null) until
 one of those passes reaches it.
@@ -27,7 +31,7 @@ one of those passes reaches it.
 import re
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any
 
@@ -35,14 +39,15 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.browser.nature import nature_contract
+from app.jobs import languages as tongues
 from app.jobs.importer import kind
 from app.jobs.models import ContractType, Job, JobStatus, SavedSearch
 from app.profile import service as profile_service
 from app.profile.models import Profile
 from app.profile.schemas import SearchSection
 
-CONTRACT, WORK_MODE, OLDER = "contract", "work_mode", "older"
-CODES = (CONTRACT, WORK_MODE, OLDER)
+CONTRACT, WORK_MODE, OLDER, LANGUAGE = "contract", "work_mode", "older", "language"
+CODES = (CONTRACT, WORK_MODE, OLDER, LANGUAGE)
 OPEN = (JobStatus.found, JobStatus.shortlisted)
 # The posting's work modes within each saved remote stance; "any" and none hold every mode.
 WORK_MODES = {"remote": {"remote"}, "hybrid": {"hybrid"}, "office": {"office", "hybrid"}}
@@ -52,11 +57,12 @@ _CDI = re.compile(r"\bCDI\b", re.IGNORECASE)
 @dataclass(frozen=True)
 class Criteria:
     """The criteria of one search the badge reads: its contract types, its remote stance and its
-    window in days."""
+    window in days; and the person's languages (None: not read yet, `refresh` reads them)."""
 
     contracts: frozenset[str] = frozenset()
     stance: str | None = None
     days: int | None = None
+    spoken: tuple[tongues.Spoken, ...] | None = None
 
     @classmethod
     def of(cls, search: SearchSection | None) -> "Criteria":
@@ -80,13 +86,15 @@ class Criteria:
 @dataclass(frozen=True)
 class Facts:
     """What the badge reads of a posting: its contract when stated, its work mode, its published
-    date, the day it was found, and the contract its website has by nature."""
+    date, the day it was found, the contract its website has by nature, and the languages the
+    reader read (`jobs.languages`)."""
 
     contract: str | None
     work_mode: str | None
     published_on: date | None
     found_on: date | None
     nature: str | None = None
+    languages: Any = None
 
 
 def codes(facts: Facts, criteria: Criteria) -> list[str]:
@@ -109,6 +117,8 @@ def codes(facts: Facts, criteria: Criteria) -> list[str]:
         and (facts.found_on - facts.published_on).days > criteria.days
     ):
         found.append(OLDER)
+    if criteria.spoken and tongues.missing(facts.languages, criteria.spoken):
+        found.append(LANGUAGE)
     return found
 
 
@@ -139,12 +149,26 @@ def facts_of(row: Any, contract_read: bool = False) -> Facts:
     if stated is False or (stated is None and contract == "CDI"):
         contract = None
     mode = getattr(row.work_mode, "value", row.work_mode)
-    return Facts(contract, mode, row.published_on, row.found_on, nature_of(row.source))
+    return Facts(
+        contract,
+        mode,
+        row.published_on,
+        row.found_on,
+        nature_of(row.source),
+        getattr(row, "languages", None),
+    )
 
 
 def criteria_for(db: Session, user_id: uuid.UUID, search_id: uuid.UUID | None) -> Criteria | None:
     """The current criteria of the person's search `search_id` (None, or a saved search that is
-    gone: the main search)."""
+    gone: the main search), with her current languages."""
+    sections = (
+        db.execute(
+            sa.select(Profile.sections).where(Profile.user_id == user_id)
+        ).scalar_one_or_none()
+        or {}
+    )
+    criteria = Criteria.read(sections.get("search"))
     if search_id is not None:
         saved = db.execute(
             sa.select(SavedSearch.criteria).where(
@@ -152,11 +176,8 @@ def criteria_for(db: Session, user_id: uuid.UUID, search_id: uuid.UUID | None) -
             )
         ).scalar_one_or_none()
         if isinstance(saved, Mapping):
-            return Criteria.read(dict(saved))
-    sections = db.execute(
-        sa.select(Profile.sections).where(Profile.user_id == user_id)
-    ).scalar_one_or_none()
-    return Criteria.read((sections or {}).get("search"))
+            criteria = Criteria.read(dict(saved))
+    return None if criteria is None else replace(criteria, spoken=tongues.spoken_from(sections))
 
 
 def _of_search(user_id: uuid.UUID, search_id: uuid.UUID | None) -> sa.ColumnElement[bool]:
@@ -178,6 +199,8 @@ def refresh(
     be read change nothing. The number of badges changed."""
     if criteria is None:
         return 0
+    if criteria.spoken is None:
+        criteria = replace(criteria, spoken=tongues.spoken_of(db, user_id))
     rows = db.execute(
         sa.select(
             Job.id,
@@ -187,6 +210,7 @@ def refresh(
             Job.published_on,
             Job.found_on,
             Job.source,
+            Job.languages,
             Job.outside_criteria,
         ).where(Job.user_id == user_id, Job.status.in_(OPEN), _of_search(user_id, search_id))
     ).all()
@@ -209,9 +233,24 @@ def refresh(
 def on_sections(
     db: Session, user_id: uuid.UUID, sections: frozenset[str], revision: int, now: datetime
 ) -> None:
-    """The profile's callback: a change of the main search's section computes its badges again."""
-    if "search" in sections:
+    """The profile's callback: a change of the main search's section computes its badges again,
+    a change of the identity section (the person's languages) those of every search."""
+    if "identity" in sections:
+        refresh_every(db, user_id)
+    elif "search" in sections:
         refresh(db, user_id, None, criteria_for(db, user_id, None))
+
+
+def refresh_every(db: Session, user_id: uuid.UUID) -> int:
+    """`refresh` the open postings of the main search and of each saved search of the person."""
+    changed = refresh(db, user_id, None, criteria_for(db, user_id, None))
+    saved = db.execute(
+        sa.select(SavedSearch.id, SavedSearch.criteria).where(SavedSearch.user_id == user_id)
+    ).all()
+    for search_id, raw in saved:
+        criteria = Criteria.read(dict(raw)) if isinstance(raw, Mapping) else None
+        changed += refresh(db, user_id, search_id, criteria)
+    return changed
 
 
 profile_service.register_section_callback(on_sections)
