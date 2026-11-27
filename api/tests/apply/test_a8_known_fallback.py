@@ -219,6 +219,7 @@ async def _saved_fallback(monkeypatch):
     [
         (None, None),
         ("below_min_fit", "below_min_fit"),
+        ("outside_criteria", "outside_criteria"),
         ("fields_left", "fields_left"),
         ("agent_designated", "agent_designated"),
         ("captcha_seen", "captcha_seen"),
@@ -267,7 +268,11 @@ def test_a_trusted_designation_keeps_every_other_full_auto_check(monkeypatch, pr
         "code",
         lambda *args: problem if problem and problem.startswith("model_check") else None,
     )
-    posting = SimpleNamespace(fit=79 if problem == "below_min_fit" else 100)
+    # A posting is a `Job` row: jobs J30's badge (`outside_criteria`), empty unless spoiled.
+    posting = SimpleNamespace(
+        fit=79 if problem == "below_min_fit" else 100,
+        outside_criteria=["older"] if problem == "outside_criteria" else [],
+    )
     assert full_auto.checks(db, application, posting) == expected
 
 

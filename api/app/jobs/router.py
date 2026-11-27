@@ -189,6 +189,7 @@ def _filters(
     sweep: uuid.UUID | None = None,
     search: uuid.UUID | service.MainSearch | None = None,
     criteria: service.CriteriaChoice = service.CriteriaChoice.all,
+    listing: service.ListingChoice = service.ListingChoice.all,
 ) -> JobFilters:
     """The list filters of the query, shared by GET /api/jobs, /places and /facets."""
     if fit_min is not None and fit_max is not None and fit_min > fit_max:
@@ -228,6 +229,7 @@ def _filters(
         sweep=sweep,
         search=search,
         criteria=criteria,
+        listing=listing,
     )
 
 

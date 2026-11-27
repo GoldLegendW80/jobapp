@@ -110,6 +110,10 @@ def test_the_summary_answer_names_the_counter() -> None:
         "opened_by_app",
         "results_read",
         "other_contract",
+        # Jobs J31: the postings kept from a card of a list, read since, and the cards refused.
+        "listed",
+        "listed_read",
+        "cards_refused",
         # Jobs J9: the frozen source identity and progress.
         "source_id",
         "mode",
@@ -184,6 +188,10 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "opened_by_app": 0,
         "results_read": None,
         "other_contract": 0,
+        # Jobs J31: nothing seen only in a list in an older stats row.
+        "listed": 0,
+        "listed_read": 0,
+        "cards_refused": {},
         # Jobs J9: the frozen source identity and progress, absent from an older stats row.
         "source_id": None,
         "mode": None,
