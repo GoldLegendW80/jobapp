@@ -78,6 +78,22 @@ export const DECISIONS = {
     confirm: "Fill it again",
     call: retryApplication,
   },
+  // A25: the assistant stopped waiting for the person before any send button was clicked.
+  retryAsked: {
+    title: "Try again?",
+    sentence:
+      "The assistant starts again on the site, with what it asked you and your answers so far. It may ask you again.",
+    confirm: "Try again",
+    call: retryApplication,
+  },
+  // A25: the same, after a send button had been clicked before the assistant asked.
+  retryAskedAfterSend: {
+    title: "Try again?",
+    sentence:
+      "The assistant starts again on the site, with what it asked you and your answers so far. A send button had been clicked before, so if that went through, the company may receive two applications.",
+    confirm: "Try again",
+    call: retryApplication,
+  },
 } satisfies Record<
   string,
   Confirmation & { call: (applicationId: string) => Promise<Application> }

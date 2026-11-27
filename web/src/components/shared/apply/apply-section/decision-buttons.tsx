@@ -5,15 +5,19 @@ import type { Phase } from "@/features/apply/helpers/apply-state";
 import type { DecisionKind } from "@/features/apply/helpers/decisions";
 
 /**
- * The decisions that ask first: after a click the app could not confirm, "It was submitted", "It
- * was not sent" and Try again (unless a question asked after the send stands in for it); after a
- * refusal, Try again; Cancel application at any moment before an end (`cancelKind`, A24).
+ * The decisions that ask first: after a click the app could not confirm, "It was sent", "It was
+ * not sent" and Try again (unless a question asked after the send stands in for it), "It was not
+ * sent" first when the assistant says nothing was sent (`notSentFirst`); after a refusal, Try
+ * again; once the assistant stopped waiting for the person, Try again (`askRetry`, A25); Cancel
+ * application at any moment before an end (`cancelKind`, A24).
  */
 export function DecisionButtons({
   phase,
   busy,
   questionAfterSend,
   retryKind,
+  askRetry = null,
+  notSentFirst = false,
   cancelKind,
   onAsk,
 }: {
@@ -21,25 +25,30 @@ export function DecisionButtons({
   busy: boolean;
   questionAfterSend: boolean;
   retryKind: DecisionKind;
+  askRetry?: DecisionKind | null;
+  notSentFirst?: boolean;
   cancelKind: CancelKind | null;
   onAsk: (kind: DecisionKind) => void;
 }) {
+  const sent =
+    phase === "unknown" ? (
+      <Button
+        variant={notSentFirst ? "outline" : "default"}
+        className="w-full @sm:w-fit"
+        disabled={busy}
+        onClick={() => {
+          onAsk("submitted");
+        }}
+      >
+        It was sent
+      </Button>
+    ) : null;
   return (
     <>
-      {phase === "unknown" ? (
-        <Button
-          className="w-full @sm:w-fit"
-          disabled={busy}
-          onClick={() => {
-            onAsk("submitted");
-          }}
-        >
-          It was submitted
-        </Button>
-      ) : null}
+      {notSentFirst ? null : sent}
       {cancelKind === "notSent" ? (
         <Button
-          variant="outline"
+          variant={notSentFirst ? "default" : "outline"}
           className="w-full @sm:w-fit"
           disabled={busy}
           onClick={() => {
@@ -49,6 +58,7 @@ export function DecisionButtons({
           It was not sent
         </Button>
       ) : null}
+      {notSentFirst ? sent : null}
       {phase === "unknown" && !questionAfterSend ? (
         <Button
           variant="outline"
@@ -61,12 +71,12 @@ export function DecisionButtons({
           Try again
         </Button>
       ) : null}
-      {phase === "refused" ? (
+      {phase === "refused" || askRetry ? (
         <Button
           className="w-full @sm:w-fit"
           disabled={busy}
           onClick={() => {
-            onAsk("retry");
+            onAsk(askRetry ?? "retry");
           }}
         >
           Try again

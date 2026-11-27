@@ -30,6 +30,9 @@ const STATUS = {
   // One click Apply sent on the submit lease (mode `direct` without the apply agent).
   directSubmits:
     "The assistant fills the form again with the same answers, then sends it.",
+  // A25: the apply agent asked the person and waits (api applier.WAITS).
+  agentWaits:
+    "The assistant waits for you. Choose Use the browser myself to do what it asks, then Let the assistant continue.",
 };
 
 /**
@@ -38,6 +41,8 @@ const STATUS = {
  */
 export function liveStatus(purpose: string, run: Run | null): string {
   const filling = run?.state === "filling";
+  if (run?.needs === "agent_waits" && purpose !== SUBMIT_PURPOSE)
+    return STATUS.agentWaits;
   switch (purpose) {
     case SUBMIT_PURPOSE:
       if (run?.dry_run) return STATUS.rehearses;
@@ -49,6 +54,24 @@ export function liveStatus(purpose: string, run: Run | null): string {
     default:
       return STATUS.fill;
   }
+}
+
+/**
+ * The line under a live view the person took over (A25): the browser is theirs until they give it
+ * back, for the minutes the api serves for the take over's bound (browserd TAKEOVER_S); null for a
+ * lease not taken over.
+ */
+export function takeoverLine(lease: {
+  wait_reason: string | null;
+  wait_minutes_left?: number | null;
+}): string | null {
+  if (lease.wait_reason !== "takeover") return null;
+  const minutes = lease.wait_minutes_left;
+  if (typeof minutes !== "number")
+    return "The browser is yours until you choose Let the assistant continue.";
+  const left =
+    minutes <= 1 ? "1 more minute" : `${String(minutes)} more minutes`;
+  return `The browser is yours until you choose Let the assistant continue, for ${left} at most: then the assistant has it back.`;
 }
 
 /**

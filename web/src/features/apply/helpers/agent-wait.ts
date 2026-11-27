@@ -78,11 +78,24 @@ export function boxOf(
 export const SHOWN_MAX = 600;
 
 // Control and direction characters: a page could make the assistant's words read in another order.
-const HIDDEN = /[\u0000-\u001f\u007f-\u009f​‎‏‪-‮⁦-⁩﻿]/g;
+const hidden = (code: number) =>
+  code < 0x20 ||
+  (code >= 0x7f && code <= 0x9f) ||
+  code === 0x200b ||
+  code === 0x200e ||
+  code === 0x200f ||
+  (code >= 0x202a && code <= 0x202e) ||
+  (code >= 0x2066 && code <= 0x2069) ||
+  code === 0xfeff;
 
 /** A line of the chat as shown: plain text on one line, cut at `max` characters with an ellipsis. */
 export function shownText(text: string, max = SHOWN_MAX): string {
-  const flat = text.replace(HIDDEN, " ").replace(/\s+/g, " ").trim();
+  const flat = Array.from(text, (one) =>
+    hidden(one.codePointAt(0) ?? 0) ? " " : one,
+  )
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
   const characters = Array.from(flat);
   return characters.length > max
     ? `${characters.slice(0, max).join("").trimEnd()}…`
@@ -146,3 +159,35 @@ export const saidNothingSent = (
   run: Run | null | undefined,
   events: readonly ApplicationEvent[] | undefined,
 ) => run?.state === "submit_unknown" && saidSent(events) === "no";
+
+/** An end the app could not confirm, in the words of what the assistant said (api applier). */
+const UNCONFIRMED: Record<string, string> = {
+  person_late:
+    "Nobody answered the assistant in time, after a send button had been clicked. Look for a confirmation mail or on the site.",
+  send_clicked:
+    "The assistant says it clicked a send button, but it could not confirm the application. Look for a confirmation mail or on the site.",
+  send_unsure:
+    "The assistant is not sure whether it clicked a send button, and it could not confirm the application. Look for a confirmation mail or on the site.",
+};
+
+export const SAID_NOTHING_SENT =
+  "The assistant says it sent nothing, but a send button had been clicked, so the app cannot be sure.";
+
+/** The status line of an application the assistant waits on, waited on, or ended with these words; else null. */
+export function waitStatusLine(run: Run): string | null {
+  if (agentWaits(run))
+    return run.state === "submitting"
+      ? "A send button was clicked, then the assistant asked for you. It waits for your answer or for you in the browser."
+      : "The assistant asked for you. It waits for your answer or for you in the browser.";
+  if (agentAsked(run))
+    return "The assistant stopped waiting for you. Try again when you are ready, or cancel.";
+  if (run.state === "submitted" && run.error_code === "sent_by_person")
+    return "Applied: you sent it yourself in the browser, and the site confirmed it.";
+  if (run.state === "submit_unknown" && run.error_code)
+    return (
+      (Object.hasOwn(UNCONFIRMED, run.error_code)
+        ? UNCONFIRMED[run.error_code]
+        : null) ?? null
+    );
+  return null;
+}

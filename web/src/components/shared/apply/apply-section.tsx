@@ -9,6 +9,13 @@ import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { useApplication } from "@/features/apply/api/use-application";
 import { useApplicationActions } from "@/features/apply/api/use-application-actions";
 import {
+  isAsk,
+  SAID_NOTHING_SENT,
+  saidNothingSent,
+  showsAsk,
+} from "@/features/apply/helpers/agent-wait";
+import {
+  askRetryOf,
   cancelKindOf,
   retryKindOf,
 } from "@/features/apply/helpers/apply-section-rules";
@@ -16,6 +23,7 @@ import { hasForm } from "@/features/apply/helpers/apply-state";
 import { DECISIONS } from "@/features/apply/helpers/decisions";
 import { AgentFields, ChosenAnswers } from "./agent-fields";
 import { AgentQuestion } from "./agent-question";
+import { AgentWait } from "./agent-wait";
 import { ApplicationLiveViews } from "./apply-section/application-live-views";
 import { ApplicationStatus } from "./apply-section/application-status";
 import { ApplyModeLine } from "./apply-section/apply-mode-line";
@@ -46,6 +54,10 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const { application, phase, id, manual, approval, approvalQuery, detail } =
     read;
   const act = useApplicationActions(job.id, id);
+  // A25: the apply agent waits for the person, or stopped waiting: its ask, the chat, the browser.
+  const asking = application !== null && !manual && showsAsk(application);
+  const ask = isAsk(detail.data?.question) ? detail.data?.question : null;
+  const notSentFirst = saidNothingSent(application, detail.data?.events);
 
   return (
     <Section title="Your application">
@@ -77,6 +89,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   reviewAgent={detail.data?.review_agent === true}
                 />
 
+                {asking ? <AgentWait application={application} /> : null}
                 {application?.ats === "email" && id ? (
                   <EmailApplication applicationId={id} />
                 ) : null}
@@ -131,6 +144,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                 {/* The apply agent's list (AgentFields) replaces the filled form, which is never read. */}
                 {application &&
                 application.needs !== "signin" &&
+                !asking &&
                 hasForm(application) &&
                 !detail.data?.review_agent ? (
                   <FilledForm
@@ -151,6 +165,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   />
                 ) : null}
 
+                {notSentFirst ? (
+                  <p className="text-sm">{SAID_NOTHING_SENT}</p>
+                ) : null}
                 <div className="flex flex-col gap-2 @sm:flex-row @sm:flex-wrap">
                   {phase === "idle" ? (
                     <StartButtons
@@ -183,6 +200,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
                     busy={act.busy}
                     questionAfterSend={read.afterSend !== null}
                     retryKind={retryKindOf(detail.data)}
+                    askRetry={askRetryOf(application, ask)}
+                    notSentFirst={notSentFirst}
                     cancelKind={
                       // A held item's countdown and the assistant's list have their own Cancel.
                       read.holdUntil ||
@@ -190,7 +209,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                         application?.state === "ready" &&
                         detail.data.filled?.fields_hash)
                         ? null
-                        : cancelKindOf(application)
+                        : cancelKindOf(application, ask?.after_send === true)
                     }
                     onAsk={act.setAsking}
                   />

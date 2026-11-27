@@ -30,7 +30,7 @@ export function useAgentWait(application: Application) {
   const detail = useQuery({
     queryKey: applicationKey(id),
     queryFn: ({ signal }) => getApplication(id, signal),
-    enabled: showsAsk(application),
+    enabled: showsAsk(application) || application.state === "submit_unknown",
     refetchInterval: (current) =>
       agentWaits(current.state.data ?? application) ? WAIT_POLL_MS : false,
   });
