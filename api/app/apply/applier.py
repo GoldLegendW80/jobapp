@@ -48,7 +48,8 @@ code, both ways (the owner: "les deux sont possibles"): the person types it in t
 gives it in the app (`answer_code`): browserd keeps it on the lease for that ask and types it
 once into the box the agent names (`apply_type_code`), the code never in a row, an event, a log
 line or the model's messages. The person may write to the agent at any time of the run
-(`post_message`): the message reaches it with the answer of its next tool call (`take_messages`).
+(`post_message`): the message reaches it with the answer of a tool call (`take_messages`), never
+with the answers of the code's exchange (`ApplySession._told`).
 A take over is known to the applier (browserd's `person_used`, any call): the agent reads the page
 before its next act, and a confirmation the person reached with no act of the agent on a submit
 element is recorded as sent by the person (SENT_BY_PERSON). An A19 question left from before
@@ -251,9 +252,10 @@ CODE_NOT_TAKEN = (
     "browser myself, then Let the assistant continue."
 )
 # The person's messages while the agent works (A25): rows of the chat (MESSAGE_KEY), read by the
-# session with the answer of the agent's next tool call (`take_messages`).
+# session with the answer of a tool call of the agent (`take_messages`, `ApplySession._told`).
 MESSAGE_KEY = ASK_KEY + "m"
 MESSAGE_MAX = 1000
+MESSAGE_LONG = "A message is 1,000 characters at most."
 MESSAGES_PER_MINUTE = 5
 MESSAGES_MAX = 100
 NO_RUN = "The assistant is not working on this application now, so it cannot read a message."
@@ -659,7 +661,9 @@ class ApplySession:
         self.capability = None
         return code if code in STOP_CODES else "paused"
 
-    async def _guarded(self, work: Callable[[], Awaitable[tuple[str, bool]]]) -> tuple[str, bool]:
+    async def _guarded(
+        self, work: Callable[[], Awaitable[tuple[str, bool]]], *, told: bool = True
+    ) -> tuple[str, bool]:
         if await self._gone():
             return self._ended()
         try:
@@ -667,11 +671,14 @@ class ApplySession:
         except BrowserError as exc:
             self.stopped = "lease_ended" if exc.code == "ended" else exc.code
             return self._ended()
-        return await self._told(text, error)
+        return await self._told(text, error) if told else (text, error)
 
     async def _told(self, text: str, error: bool) -> tuple[str, bool]:
         """A25: the person's messages not read yet, with this tool call's answer, marked as the
-        person's words; none once the run stops."""
+        person's words; none once the run stops. The code's exchange carries none (the wait's
+        answer that a code was given, every answer of apply_type_code): those stay the app's
+        fixed words, so nothing draws the agent to another act before the code (which drops
+        it), and the messages come with the next answer."""
         if self.waits is None or self.stopped:
             return text, error
         said = await self.waits.messages()
@@ -792,7 +799,7 @@ class ApplySession:
                     view[key] = result[key]
             return json.dumps(view, ensure_ascii=False), False
 
-        return await self._guarded(work)
+        return await self._guarded(work, told=name != "browser_type_code")
 
     async def _step_sent(self) -> None:
         """browserd let a step act on a submit element through (review lease): recorded once."""
@@ -858,7 +865,10 @@ class ApplySession:
         if key is None:
             self.stopped = "superseded"
             return self._ended()
-        return await self._told(*await self._wait(key, left))
+        text, error = await self._wait(key, left)
+        if _gave_code(text):
+            return text, error
+        return await self._told(text, error)
 
     def _wait_left(self) -> int:
         """APPLY_AGENT_WAIT_S, cut to the run's time left less ASK_MARGIN_S (at least 1 s)."""
@@ -1416,6 +1426,11 @@ def _heard(answer: str | None, *, used: bool) -> str:
     if used:
         said["then"] = USED
     return json.dumps(said, ensure_ascii=False)
+
+
+def _gave_code(text: str) -> bool:
+    """The wait's answer is the one that says the person gave a code in the app."""
+    return text in (_heard(GAVE_CODE, used=False), _heard(GAVE_CODE, used=True))
 
 
 def late(db: Session, application_id: uuid.UUID, key: str, now: datetime) -> bool:
@@ -2164,8 +2179,9 @@ def post_message(
 ) -> dict[str, Any]:
     """A25: the person's message to the agent at work (`under_way`), plain text of at most
     MESSAGE_MAX characters, MESSAGES_PER_MINUTE a minute and MESSAGES_MAX an application; while
-    the run waits on an ask of kind code, none that holds a code. Kept in the chat (MESSAGE_KEY),
-    read by the run with its next tool call's answer. The caller commits."""
+    the run waits on an ask of kind code, none the words box refuses (`looks_like_code`, the
+    same rule and sentence). No refusal repeats the text. Kept in the chat (MESSAGE_KEY), read by
+    the run with a tool call's answer (`ApplySession._told`). The caller commits."""
     from app.apply import run
 
     found = run._locked(db, application_id)
@@ -2174,12 +2190,14 @@ def post_message(
     application = found[0]
     if not under_way(db, application):
         raise QuestionError(409, NO_RUN)
+    if len(text) > MESSAGE_MAX:
+        raise QuestionError(422, MESSAGE_LONG)
+    if not text.strip():
+        raise QuestionError(422, "Write a message first.")
     try:
-        words = bank.saved_text(text[:MESSAGE_MAX])
+        words = bank.saved_text(text)
     except ValueError as exc:
         raise QuestionError(422, str(exc)) from None
-    if not words:
-        raise QuestionError(422, "Write a message first.")
     ask = open_ask(db, application) if waiting(application) else None
     if ask is not None and ask.kind == "ask:code" and looks_like_code(words):
         raise QuestionError(422, CODE_ALONE)

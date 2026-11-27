@@ -24,7 +24,7 @@
   an ask hold no code (422).
 - POST /api/applications/{id}/messages `{text}` is the person's message to the apply agent at
   work (A25, `applier.post_message`): 201 with its chat line, 409 when no run works on it, 429
-  past the rate, 422 not plain text.
+  past the rate, 422 not plain text, too long, or code like while an ask of kind code waits.
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 posting or application answers 404, as a missing one. Every answer is `Cache-Control: no-store`.
@@ -158,7 +158,8 @@ class QuestionIn(BaseModel):
 class MessageIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    text: str = Field(min_length=1, max_length=1000)  # applier.MESSAGE_MAX
+    # Bounded by the applier, whose refusals never repeat it (a validation error would).
+    text: str
 
 
 class StartedOut(ApplicationOut):
