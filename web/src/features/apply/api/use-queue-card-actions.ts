@@ -20,12 +20,13 @@ import { currentFormOf, emailToOf } from "../helpers/approval-form";
 import { DECISIONS } from "../helpers/decisions";
 
 /** The decisions of an item after the click, as the posting's Apply section offers them. */
-export type AfterClick = "submitted" | "notSent" | "retry";
+export type AfterClick =
+  "submitted" | "notSent" | "retry" | "retryAsked" | "retryAskedAfterSend";
 
 /**
  * What the person does on one card of the review queue: save an answer, approve the form shown,
- * reject (and maybe skip the posting), cancel, and after the click "It was submitted", "It was
- * not sent" or Try again, each behind its dialog. A card that leaves (Reject, Cancel, the end) calls
+ * reject (and maybe skip the posting), cancel, and after the click "It was sent", "It was not
+ * sent" or Try again (also once the assistant stopped waiting for the person, A25), each behind its dialog. A card that leaves (Reject, Cancel, the end) calls
  * `onLeave` once it is gone; after an approval the focus moves to the next card's title.
  * `onStaleForm` runs when Approve was refused because the form moved, to show the answers again.
  */
@@ -177,7 +178,7 @@ export function useQueueCardActions(
     },
   });
 
-  // After the click: "It was submitted" and "It was not sent" end the application (the card
+  // After the click: "It was sent" and "It was not sent" end the application (the card
   // leaves), "Try again" brings it back for a new approval (the card stays).
   const decision = useMutation({
     mutationFn: (kind: AfterClick) => DECISIONS[kind].call(item.id),

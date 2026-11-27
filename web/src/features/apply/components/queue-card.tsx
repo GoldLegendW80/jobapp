@@ -30,6 +30,15 @@ import { ApproveDialog } from "@/components/shared/apply/approve-dialog";
 import { ConfirmDialog } from "@/components/shared/apply/confirm-dialog";
 import { HeldCountdown } from "@/components/shared/apply/held-countdown";
 import { FillHandoff } from "@/components/shared/apply/live-view-slot";
+import { AgentWait } from "@/components/shared/apply/agent-wait";
+import { useAgentWait } from "../api/use-agent-wait";
+import {
+  isAsk,
+  SAID_NOTHING_SENT,
+  saidNothingSent,
+  showsAsk,
+} from "../helpers/agent-wait";
+import { askRetryOf } from "../helpers/apply-section-rules";
 import { QueueCardActions } from "./queue-card/queue-card-actions";
 import { QueueCardAnswers } from "./queue-card/queue-card-answers";
 import { QueueCardDocuments } from "./queue-card/queue-card-documents";
@@ -46,9 +55,9 @@ import { ShotView } from "@/components/shared/apply/shot-view";
  * here; Reject asks first and can also skip the posting. A Full auto item in its hold shows the
  * countdown with Cancel (`offset`: the server's clock minus the page's), and a rehearsal asks
  * "Does this look right?" over its answers, read only. After the click, an item the app could
- * not confirm or the site refused offers "It was submitted" and "Try again" with the posting
+ * not confirm or the site refused offers "It was sent" and "Try again" with the posting
  * page's confirmations and calls. `onLeave` is called when the card is gone after a Reject, a
- * Cancel or an "It was submitted" of its own.
+ * Cancel or an "It was sent" of its own.
  */
 export function QueueCard({
   item,
@@ -71,6 +80,11 @@ export function QueueCard({
   // A20: the list of what the agent filled and its Confirm are on the job page.
   const agentList = item.review_agent === true;
   const withAnswers = (reviewable || rehearsal) && !signingIn && !agentList;
+  // A25: the apply agent's ask and chat; after an unconfirmed send, what the assistant said.
+  const asking = showsAsk(item);
+  const detail = useAgentWait(item).detail.data;
+  const ask = isAsk(detail?.question) ? detail?.question : null;
+  const notSentFirst = saidNothingSent(item, detail?.events);
 
   const answers = useQueueCardAnswers(item, withAnswers, onUnsavedChange);
   const { approval, approvalQuery } = answers;
@@ -110,6 +124,8 @@ export function QueueCard({
 
         <CardContent className="@container flex flex-col gap-4">
           <p className="text-sm">{statusLine(item, agentList)}</p>
+          {asking ? <AgentWait application={item} /> : null}
+          {notSentFirst ? <p className="text-sm">{SAID_NOTHING_SENT}</p> : null}
           {item.state === "filling" && item.mode !== "manual" ? (
             <FillHandoff applicationId={item.id} />
           ) : null}
@@ -220,6 +236,8 @@ export function QueueCard({
               act.setCancelling(true);
             }}
             onAsk={act.setAsking}
+            retryKind={askRetryOf(item, ask) ?? "retry"}
+            notSentFirst={notSentFirst}
           />
         </CardFooter>
 
@@ -261,7 +279,9 @@ export function QueueCard({
           }}
         />
         <ConfirmDialog
-          ask={act.cancelling ? cancelAsk(item) : null}
+          ask={
+            act.cancelling ? cancelAsk(item, ask?.after_send === true) : null
+          }
           pending={act.cancel.isPending}
           onCancel={() => {
             act.setCancelling(false);

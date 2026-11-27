@@ -615,7 +615,7 @@ describe("the review queue page", () => {
     );
   });
 
-  it("offers It was submitted and Try again on an item the app could not confirm, each after a confirmation", async () => {
+  it("offers It was sent and Try again on an item the app could not confirm, each after a confirmation", async () => {
     const item = queueItem(1, "submit_unknown");
     const api = fakeQueue([item, queueItem(2, "submit_unknown")]);
     const user = userEvent.setup();
@@ -628,7 +628,7 @@ describe("the review queue page", () => {
 
     // "Not yet" sends nothing.
     await user.click(
-      within(unknown).getByRole("button", { name: "It was submitted" }),
+      within(unknown).getByRole("button", { name: "It was sent" }),
     );
     let dialog = await screen.findByRole("alertdialog", {
       name: "Mark this application as submitted?",
@@ -640,7 +640,7 @@ describe("the review queue page", () => {
     expect(api.decisions).toEqual([]);
 
     await user.click(
-      within(unknown).getByRole("button", { name: "It was submitted" }),
+      within(unknown).getByRole("button", { name: "It was sent" }),
     );
     dialog = await screen.findByRole("alertdialog");
     await user.click(
@@ -676,7 +676,7 @@ describe("the review queue page", () => {
     ]);
   });
 
-  it("offers Try again, not It was submitted, on an item the site refused", async () => {
+  it("offers Try again, not It was sent, on an item the site refused", async () => {
     const item = queueItem(1, "refused_by_site");
     const api = fakeQueue([item]);
     const user = userEvent.setup();
@@ -686,7 +686,7 @@ describe("the review queue page", () => {
     });
     expect(refused).toHaveTextContent("The site showed errors after the click");
     expect(
-      within(refused).queryByRole("button", { name: "It was submitted" }),
+      within(refused).queryByRole("button", { name: "It was sent" }),
     ).toBeNull();
     within(refused).getByRole("link", { name: "Open the posting" });
     await user.click(
@@ -724,7 +724,7 @@ describe("the review queue page", () => {
       "This application changed meanwhile. Read it again.",
     );
     expect(
-      within(unknown).getByRole("button", { name: "It was submitted" }),
+      within(unknown).getByRole("button", { name: "It was sent" }),
     ).toBeEnabled();
   });
 

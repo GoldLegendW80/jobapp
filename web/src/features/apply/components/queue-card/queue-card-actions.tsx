@@ -18,8 +18,8 @@ import {
 /**
  * The buttons at the foot of a queue card, each where the item's state offers it: Approve and
  * submit (waiting on unsaved or required answers), the agent's list on the job page, Reject,
- * Cancel (at any moment before an end, A24), "It was submitted", "It was not sent", Try again
- * and Open the posting.
+ * Cancel (at any moment before an end, A24), "It was sent", "It was not sent" (first when the
+ * assistant says nothing was sent, `notSentFirst`), Try again (`retryKind`) and Open the posting.
  */
 export function QueueCardActions({
   item,
@@ -33,6 +33,8 @@ export function QueueCardActions({
   onReject,
   onCancel,
   onAsk,
+  retryKind = "retry",
+  notSentFirst = false,
 }: {
   item: QueueItem;
   reviewable: boolean;
@@ -45,8 +47,22 @@ export function QueueCardActions({
   onReject: () => void;
   onCancel: () => void;
   onAsk: (kind: AfterClick) => void;
+  retryKind?: AfterClick;
+  notSentFirst?: boolean;
 }) {
   const blocking = approval ? blockingFields(approval.answers) : [];
+  const sent = canConfirmSubmitted(item) ? (
+    <Button
+      variant={notSentFirst ? "outline" : "default"}
+      className="w-full sm:w-fit"
+      disabled={busy}
+      onClick={() => {
+        onAsk("submitted");
+      }}
+    >
+      It was sent
+    </Button>
+  ) : null;
   return (
     <>
       {item.state === "ready" && agentList ? (
@@ -104,20 +120,10 @@ export function QueueCardActions({
           Cancel application
         </Button>
       ) : null}
-      {canConfirmSubmitted(item) ? (
-        <Button
-          className="w-full sm:w-fit"
-          disabled={busy}
-          onClick={() => {
-            onAsk("submitted");
-          }}
-        >
-          It was submitted
-        </Button>
-      ) : null}
+      {notSentFirst ? null : sent}
       {canSayNotSent(item) ? (
         <Button
-          variant="outline"
+          variant={notSentFirst ? "default" : "outline"}
           className="w-full sm:w-fit"
           disabled={busy}
           onClick={() => {
@@ -127,13 +133,14 @@ export function QueueCardActions({
           It was not sent
         </Button>
       ) : null}
+      {notSentFirst ? sent : null}
       {canRetry(item) ? (
         <Button
           variant={canConfirmSubmitted(item) ? "outline" : "default"}
           className="w-full sm:w-fit"
           disabled={busy}
           onClick={() => {
-            onAsk("retry");
+            onAsk(retryKind);
           }}
         >
           Try again

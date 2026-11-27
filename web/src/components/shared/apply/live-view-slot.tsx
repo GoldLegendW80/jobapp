@@ -1,7 +1,10 @@
 import { Empty, EmptyDescription, EmptyMedia } from "@/components/ui/empty";
 import { Spinner } from "@/components/ui/spinner";
 import { askText } from "@/features/agents/helpers/run-browser";
-import { SUBMIT_PURPOSE } from "@/features/apply/helpers/live-view";
+import {
+  SUBMIT_PURPOSE,
+  takeoverLine,
+} from "@/features/apply/helpers/live-view";
 import {
   leasesOf,
   personOwnsInput,
@@ -140,8 +143,9 @@ export function LiveViewSlot({
     // input for it, so the view is theirs, without Take over; it is the assistant's again after.
     const person = personOwnsInput(lease);
     const ask = askText(lease);
+    const yours = takeoverLine(lease);
     return (
-      <div data-testid="live-view-slot">
+      <div data-testid="live-view-slot" className="flex flex-col gap-2">
         <LiveBrowser
           key={`${lease.id}:${person}`}
           slot={lease.slot ?? 0}
@@ -155,6 +159,7 @@ export function LiveViewSlot({
               : (ask ?? statusOf(lease.purpose))
           }
         />
+        {yours ? <p className="text-sm">{yours}</p> : null}
       </div>
     );
   }

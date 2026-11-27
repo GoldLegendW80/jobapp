@@ -23,6 +23,13 @@ import {
   waiting,
   written,
 } from "@/design-system/fixtures/follow-ups";
+import {
+  chatWith,
+  CODE_ASK,
+  SIGNIN_ASK,
+  WAIT_NOW,
+} from "@/design-system/fixtures/agent-wait";
+import type { Question } from "@/features/apply/api/apply-api";
 import { fakeQueue } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
 import { server } from "@/test/server";
@@ -184,6 +191,112 @@ export const WatchApplicationsInTheBrowser: Story = {
     await userEvent.click(
       await page.findByRole("button", { name: "Watch the browser" }),
     );
+  },
+};
+
+/**
+ * The apply agent waits for the person on `ask` (A25): its card, the detail with the chat, and its
+ * lease waiting in the browser (`wait`: browserd's reason, `takeover` once the person has it).
+ */
+function assistantWaits(
+  ask: Question,
+  { wait = "ask_person", state = "needs_person" } = {},
+) {
+  fakeSession(member);
+  liveRoutes();
+  const item = application(3, state, 2, {
+    mode: "direct",
+    needs: "agent_waits",
+  });
+  browserHolds(
+    lease({
+      purpose: "apply_agent",
+      application_id: item.id,
+      state: "waiting_person",
+      wait_reason: wait,
+      wait_host: ask.host,
+      wait_minutes_left: 11,
+      max_s: 3600,
+    }),
+  );
+  const queue = fakeQueue([item]);
+  queue.now = WAIT_NOW;
+  queue.details[item.id] = { question: ask, chat: chatWith(ask), agent: true };
+  return fakeLiveScreens({ pages: ["form"] });
+}
+
+const watch = async ({ canvasElement }: { canvasElement: HTMLElement }) => {
+  await userEvent.click(
+    await within(canvasElement).findByRole("button", {
+      name: "Watch the browser",
+    }),
+  );
+};
+
+/** As a job seeker, I want to read what the assistant asks me in its own words, answer it here or use the browser, so that the application goes on without starting again. */
+export const AnswerTheAssistant: Story = {
+  beforeEach: () => assistantWaits(SIGNIN_ASK),
+};
+
+/** As a job seeker, I want to type a code the site sent me in the browser myself, so that the assistant goes on from the same page. */
+export const TypeACodeInTheBrowser: Story = {
+  beforeEach: () => assistantWaits(CODE_ASK),
+  play: watch,
+};
+
+/** As a job seeker, I want to know that the browser is mine until I give it back and for how long, so that I finish what the site asks in time. */
+export const UseTheBrowserDuringAWait: Story = {
+  beforeEach: () => assistantWaits(SIGNIN_ASK, { wait: "takeover" }),
+  play: watch,
+};
+
+/** As a job seeker, I want to be told when a send button was clicked before the assistant asked, so that I check the site before anything else. */
+export const AnAskAfterASendButton: Story = {
+  beforeEach: () =>
+    assistantWaits(
+      { ...SIGNIN_ASK, after_send: true },
+      { state: "submitting" },
+    ),
+};
+
+/** As a job seeker who did not come in time, I want to read what the assistant asked and try again when I am ready, so that nothing is lost. */
+export const TheAssistantStoppedWaiting: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    const item = application(3, "needs_person", 2, {
+      mode: "direct",
+      needs: "agent_asked",
+    });
+    const queue = fakeQueue([item]);
+    queue.details[item.id] = {
+      question: { ...SIGNIN_ASK, live: false },
+      chat: chatWith(SIGNIN_ASK, "person_late"),
+    };
+  },
+};
+
+/** As a job seeker, I want the assistant's own account of a send it could not confirm, with It was not sent first when it says nothing was sent, so that I answer what really happened. */
+export const WhatTheAssistantSaidOfTheSend: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    const said = application(4, "submit_unknown", 2, {
+      mode: "direct",
+      error_code: "no_confirmation",
+    });
+    const queue = fakeQueue([
+      application(1, "submit_unknown", 3, {
+        mode: "direct",
+        error_code: "send_clicked",
+      }),
+      application(2, "submit_unknown", 1, {
+        mode: "direct",
+        error_code: "person_late",
+      }),
+      said,
+    ]);
+    queue.details[said.id] = {
+      events: [{ at: WAIT_NOW, kind: "agent_done", data: { sent: "no" } }],
+    };
   },
 };
 
