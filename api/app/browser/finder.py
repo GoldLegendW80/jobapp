@@ -3259,31 +3259,31 @@ class FinderSession:
     def _unopened(self, items: list[Any], claimed: set[str]) -> list[tuple[str, str]]:
         """B31: for each reported posting, whether the app opens its page, with the posting it
         claims (`posting_key`): "card" when `_verified` answers `detail_not_opened` and a card of
-        a list the session read stands in for it (`_card`), "bare" when none does; "" for any
-        other answer (its page read, an error page, an address never seen, a duplicate, an item
-        refused before), and for a posting an earlier item claimed (`claimed`, which it fills: a
-        posting to open, or kept from a page or a card), which takes no open."""
+        a list the session read stands in for it (`_card`), "bare" when none does; "" for a
+        posting whose page was read or answered an error (it claims it), for any other answer
+        (an address never seen, a duplicate, an item refused before: it claims nothing), and for
+        a posting an earlier item claimed (`claimed`, which it fills), which takes no open."""
         planned: list[tuple[str, str]] = []
         for item in items:
-            finding, reason = self._verified(item, set())
-            if reason == "detail_not_opened":
-                address, _seen = self._as_seen(canonical(urljoin(self.current, item["url"])))
-                key = posting_key(address) or address
-                if key in claimed:
-                    planned.append(("", ""))
-                    continue
-                claimed.add(key)
-                carded = self._card(item, set())[0] is not None
-                planned.append(("card" if carded else "bare", key))
-                continue
-            if finding is None and reason in CARD_FALLBACK:
-                finding = self._card(item, set())[0]
-            key = (posting_key(finding.url) or finding.url) if finding is not None else ""
-            if key in claimed:
+            url = item.get("url") if isinstance(item, dict) else None
+            address, seen = (
+                self._as_seen(canonical(urljoin(self.current, url)))
+                if isinstance(url, str) and len(url) <= 2000
+                else ("", False)
+            )
+            key = (posting_key(address) or address) if seen else ""
+            kind = ""
+            if not key or key in claimed:
                 key = ""
-            elif key:
+            elif address in self.pages_read or address in self.error_pages:
+                pass  # its page answers it, never an open
+            elif self._verified(item, set())[1] != "detail_not_opened":
+                key = ""
+            else:
+                kind = "card" if self._card(item, set())[0] is not None else "bare"
+            if key:
                 claimed.add(key)
-            planned.append(("", key))
+            planned.append((kind, key))
         return planned
 
     def _verified(self, item: Any, pending: set[str]) -> tuple[VerifiedFinding | None, str]:
