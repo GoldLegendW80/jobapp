@@ -5,9 +5,9 @@ once the parameters that only track are left out (`TRACKING` and the prefix, and
 on its family), one trailing slash and the order of the parameters aside. A parameter not listed
 identifies. Accept and refuse tables: api/tests/browser/test_b31_same_posting.py.
 
-Two readers, so they cannot disagree: the website search's session (app/browser/finder.py, what
-it saw and what a report names) and the store's duplicate key (app/jobs/slug.py, `PostingKey`,
-`url_key` of this rule's key). Pure: no state, no cache.
+Two readers, so they cannot disagree (`test_the_store_and_the_session_read_one_rule`): the website
+search's session (app/browser/finder.py, what it saw and what a report names) and the store's
+duplicate key (app/jobs/slug.py, `PostingKey`, `url_key` of this rule's key). Pure: no state.
 """
 
 import re
