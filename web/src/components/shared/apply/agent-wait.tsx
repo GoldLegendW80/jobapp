@@ -245,11 +245,11 @@ function CodeBox({
     >
       {again ? <p className="text-sm">{CODE_ASKED_AGAIN}</p> : null}
       <Label htmlFor={`${id}-code`}>The code the site sent you</Label>
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="flex flex-col gap-2 @md:flex-row @md:items-center">
         <Input
           id={`${id}-code`}
           aria-describedby={`${id}-typed`}
-          className={`font-mono sm:max-w-64 ${ABOVE_TAB_BAR}`}
+          className={`font-mono @md:max-w-64 ${ABOVE_TAB_BAR}`}
           autoComplete="one-time-code"
           autoCapitalize="off"
           autoCorrect="off"
@@ -262,7 +262,7 @@ function CodeBox({
         />
         <Button
           type="submit"
-          className="w-full sm:w-fit"
+          className="w-full @sm:w-fit"
           disabled={giving || !code.trim()}
         >
           Give the code
@@ -276,12 +276,12 @@ function CodeBox({
           {error}
         </p>
       ) : null}
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+      <div className="flex flex-col gap-2 @md:flex-row @md:items-center">
         <p className="text-sm">{CODE_BY_HAND}</p>
         <Button
           type="button"
           variant="outline"
-          className="w-full shrink-0 sm:w-fit"
+          className="w-full shrink-0 @md:w-fit"
           onClick={onBrowser}
         >
           Open the browser
@@ -344,7 +344,7 @@ function AnswerBox({
       <Button
         type="submit"
         variant={box === "code" ? "outline" : "default"}
-        className="w-full sm:w-fit"
+        className="w-full @sm:w-fit"
         disabled={pending || !text.trim()}
       >
         Send the answer
@@ -404,7 +404,7 @@ function MessageBox({
       <Button
         type="submit"
         variant="outline"
-        className="w-full sm:w-fit"
+        className="w-full @sm:w-fit"
         disabled={pending || !text.trim()}
       >
         Send the message
