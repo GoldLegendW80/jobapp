@@ -59,19 +59,26 @@ export function liveStatus(purpose: string, run: Run | null): string {
 /**
  * The line under a live view the person took over (A25): the browser is theirs until they give it
  * back, for the minutes the api serves for the take over's bound (browserd TAKEOVER_S); null for a
- * lease not taken over.
+ * lease not taken over. `assistantWaits`: the apply agent waits on the person (`needs`
+ * `agent_waits`), so it has the browser back after the bound; no assistant holds an adapter's fill.
  */
-export function takeoverLine(lease: {
-  wait_reason: string | null;
-  wait_minutes_left?: number | null;
-}): string | null {
+export function takeoverLine(
+  lease: {
+    wait_reason: string | null;
+    wait_minutes_left?: number | null;
+  },
+  assistantWaits = false,
+): string | null {
   if (lease.wait_reason !== "takeover") return null;
   const minutes = lease.wait_minutes_left;
   if (typeof minutes !== "number")
     return "The browser is yours until you choose Let the assistant continue.";
   const left =
     minutes <= 1 ? "1 more minute" : `${String(minutes)} more minutes`;
-  return `The browser is yours until you choose Let the assistant continue, for ${left} at most: then the assistant has it back.`;
+  const line = `The browser is yours until you choose Let the assistant continue, for ${left} at most`;
+  return assistantWaits
+    ? `${line}: then the assistant has it back.`
+    : `${line}.`;
 }
 
 /**

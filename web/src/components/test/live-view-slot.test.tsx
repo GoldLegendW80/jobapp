@@ -23,6 +23,7 @@ import {
   LiveViewSlot,
   type LeaseOf,
 } from "@/components/shared/apply/live-view-slot";
+import { agentWaits } from "@/features/apply/helpers/agent-wait";
 import { liveStatus, liveWatchOnly } from "@/features/apply/helpers/live-view";
 
 afterEach(() => {
@@ -91,6 +92,7 @@ function slot(
       status={(purpose) => liveStatus(purpose, run)}
       watchOnly={(purpose) => liveWatchOnly(purpose, run)}
       namedOnly={state !== "filling"}
+      assistantWaits={agentWaits(run)}
     />,
   );
 }
@@ -406,6 +408,26 @@ describe("the fill of the apply agent", () => {
         "The browser is yours until you choose Let the assistant continue, for 9 more minutes at most: then the assistant has it back.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("says no assistant has it back after a take over of an adapter's fill", async () => {
+    const opened = fakeScreens();
+    browser(
+      lease({
+        purpose: "apply_fill",
+        state: "waiting_person",
+        wait_reason: "takeover",
+        wait_minutes_left: 9,
+      }),
+    );
+    slot(OF_MINE);
+    await connected(opened);
+    expect(
+      await screen.findByText(
+        "The browser is yours until you choose Let the assistant continue, for 9 more minutes at most.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/the assistant has it back/)).toBeNull();
   });
 
   it("gives the keyboard and the mouse for a captcha of a fill, whatever its state", async () => {
