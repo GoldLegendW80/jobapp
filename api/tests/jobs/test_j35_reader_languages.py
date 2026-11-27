@@ -414,8 +414,12 @@ def test_a_reread_that_cannot_start_leaves_its_postings_read(
         assert reading.backlog(factory) == []
     finally:
         sa.event.remove(engine, "before_cursor_execute", seen)
-    # No credential: skipped before any work, no posting changed and rolled back.
-    assert not [one for one in statements if one.lstrip().upper().startswith("UPDATE JOBS")]
+    # No credential: skipped before any work, no posting locked nor changed.
+    assert not [
+        one
+        for one in statements
+        if one.lstrip().upper().startswith("UPDATE JOBS") or "FOR UPDATE" in one.upper()
+    ]
     with factory() as db:
         reads = db.scalars(sa.select(Job.read_at).where(Job.user_id == user)).all()
     assert reads == [NOW - timedelta(days=3)] * 2
