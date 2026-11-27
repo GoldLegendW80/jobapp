@@ -147,6 +147,20 @@ MESSAGES = {
     "bad_url": "Refused: this address cannot be opened.",
     "not_editable": "Refused: only a text field is typed into.",
     "signin_required": "The website asks to sign in again: the person signs in themselves.",
+    # A25: the code the person gave in the app (`type_code`).
+    "no_code": "No code waits: the person gave none since your last ask, or it was used. Ask "
+    "again with apply_ask_person kind code, or ask them to type it in the browser.",
+    "not_code_box": "Refused: this is not a one time code box, so the code was not typed and is "
+    "gone. Ask again with apply_ask_person kind code, naming the box, or ask the person to type "
+    "it in the browser.",
+    "other_site": "Refused: the code goes only to the site that asked for it, on the page of your "
+    "ask. It was not typed and is gone.",
+    "code_too_long": "Refused: this box takes fewer characters than the code (a box per "
+    "character?). It was not typed and is gone: ask the person to type it in the browser.",
+    "focus_moved": "The page moved the focus out of the box while the code was typed, so the box "
+    "was emptied and the code is gone: ask the person to type it in the browser.",
+    "code_on_page": "Refused: the code the person gave is in a box of this page, so no screenshot "
+    "or script runs until it is sent or the box is emptied. Use browser_snapshot.",
     # B20: the search's line (tools/line.py), whatever the tool.
     "line": "Refused: the search never applies, submits a form that is no search, writes to "
     "anyone, pays, signs out or changes the account. Go on another way.",
@@ -219,10 +233,24 @@ class State:
     # A9: the file chooser the person opened during Apply myself, until a document answers it.
     chooser: Any = None
     chooser_id: int = 0
+    # A25: the apply agent's open ask (routes.agent_ask: its id, the tab's host, whether a code
+    # may answer it), the code the person gave for it until `type_code` takes it, and the box it
+    # went into, whose value every answer of the lease masks while the box holds one.
+    ask_id: str = ""
+    ask_host: str = ""
+    ask_code: bool = False
+    code: str | None = field(default=None, repr=False)
+    code_host: str = ""
+    code_box: Any = field(default=None, repr=False)
+
+    def drop_code(self) -> None:
+        self.code, self.code_host = None, ""
 
     def end(self) -> None:
         """The lease ended: its documents and its tab are dropped at once, not when the old
         context's route handler (which holds this state) is collected."""
+        self.drop_code()
+        self.code_box, self.ask_id, self.ask_code = None, "", False
         self.files.clear()
         self.blocked.clear()
         self.stopped_kind, self.route_logged = "", 0
@@ -765,7 +793,7 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
     (Tab.page) checks the tab: off the list (a redirect that committed, a hop seen between calls)
     it is taken back and the call answers host_not_allowed before the tool acts or reads further.
     A result is answered only while the tab is still on the list (settle)."""
-    marker = args.get("_discovery")
+    marker, scope = args.get("_discovery"), None
     if (
         tab.state.discovery
         and marker is None
@@ -798,6 +826,19 @@ async def run(tab: Tab, name: str, args: dict[str, Any]) -> dict[str, Any]:
                 "not_a_sweep_tool",
             )
         scope = discovery.Scope.parse(args.get("_discovery_scope"))
+    if name not in CODE_KEEPS:
+        tab.state.drop_code()
+    if name in CODE_HIDDEN and await code_shown(tab.state) is not None:
+        return refused("code_on_page")
+    answer = await _run(tab, name, args, marker, scope)
+    if (value := await code_shown(tab.state)) is not None:
+        return masked(answer, value)
+    return answer
+
+
+async def _run(
+    tab: Tab, name: str, args: dict[str, Any], marker: Any, scope: "discovery.Scope | None"
+) -> dict[str, Any]:
     try:
         try:
             if marker is not None:
@@ -1154,6 +1195,97 @@ async def type_text(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         tab.require_input()
         await page.keyboard.press("Enter")
     return await tab.settle(await _here(tab))
+
+
+CODE_PURPOSES = (AGENT_PURPOSE, REVIEW_PURPOSE)
+MAIN_REF = re.compile(r"^e\d{1,7}$")  # a ref of the top document, never of a frame
+# The calls that keep a code the person gave until `type_code`: it reads them, or reads it. Any
+# other call (an act, a navigation, a tab) drops it first: the code goes in at once or never.
+CODE_KEEPS = frozenset({"browser_snapshot", "browser_wait_for", "browser_type_code"})
+CODE_MASK = "[the code the person gave]"
+CODE_HIDDEN = frozenset({"browser_take_screenshot", "browser_evaluate"})
+VALUE_JS = "e => e.isConnected ? String(e.value || '') : null"
+CODE_SHOWN_MIN = 4  # a shorter value is no code the app typed (the codes are 4 to 16 long)
+
+
+async def type_code(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
+    """A25: types the code the person gave in the app (`State.code`, routes.give_code) into the
+    one time code box `ref` names, once: the code is taken before anything else, so a refusal or
+    a failure uses it up too. Refused off the apply agent's leases, with the gate's capability, on
+    a page whose host is not the ask's, for a ref of a frame and for any box `detect.code_box`
+    does not hold for a one time code box. The box is focused (no click lands anywhere else)
+    and typed key by key while it holds the focus. Its answer names no code."""
+    code, host = tab.state.code, tab.state.code_host
+    tab.state.drop_code()
+    if tab.request.purpose not in CODE_PURPOSES or tab.gate:
+        return refused("not_code_box", "not_code_lease")
+    if code is None:
+        return refused("no_code")
+    if not MAIN_REF.fullmatch(policy.ref_of(args)):
+        return refused("not_code_box", "frame")
+    page = await tab.page()
+    if not host or host_of(page.url) != host:
+        log.warning("lease %s: browser_type_code refused: other_site", tab.lease_tag)
+        return refused("other_site")
+    locator, gone = await tab.element(args)
+    if gone:
+        return gone
+    await tab.approach(locator)
+    try:
+        facts = await locator.evaluate(detect.CODE_BOX_JS)
+    except Exception:
+        facts = None
+    if (no := detect.code_box(facts)) is not None:
+        log.warning("lease %s: browser_type_code refused: %s", tab.lease_tag, no)
+        if no == "credential":
+            return failure("credential", MESSAGES["not_code_box"], "credential")
+        return refused(no)
+    if facts.get("host") != host:
+        return refused("other_site")
+    if type(facts.get("max")) is int and 0 <= facts["max"] < len(code):
+        return refused("code_too_long")
+    tab.require_input()
+    await locator.focus(timeout=ACTION_S * 1000)
+    await locator.fill("", timeout=ACTION_S * 1000)
+    tab.state.code_box = await locator.element_handle()
+    for char, delay in zip(code, tab.pacer.key_delays_s(len(code)), strict=True):
+        tab.require_input()
+        if await locator.evaluate(FOCUSED_JS, timeout=ACTION_S * 1000) is not True:
+            with contextlib.suppress(Exception):
+                await locator.fill("", timeout=ACTION_S * 1000)
+            log.warning("lease %s: browser_type_code stopped: focus_moved", tab.lease_tag)
+            return refused("focus_moved")
+        await page.keyboard.type(char)
+        await tab.pacer.sleep(delay)
+    log.info("lease %s: browser_type_code typed the person's code", tab.lease_tag)
+    return {**await tab.settle(await _here(tab)), "code_typed": True}
+
+
+async def code_shown(state: State) -> str | None:
+    """The value of the box the person's code went into while it holds one, else None (the box
+    emptied or gone: nothing is masked any more)."""
+    box = state.code_box
+    if box is None:
+        return None
+    try:
+        value = await box.evaluate(VALUE_JS)
+    except Exception:
+        value = None
+    if not isinstance(value, str) or len(value) < CODE_SHOWN_MIN:
+        state.code_box = None
+        return None
+    return value
+
+
+def masked(found: Any, value: str) -> Any:
+    """Every string of an answer with the box's value replaced by CODE_MASK."""
+    if isinstance(found, str):
+        return found.replace(value, CODE_MASK)
+    if isinstance(found, dict):
+        return {k: masked(v, value) for k, v in found.items()}
+    if isinstance(found, list):
+        return [masked(v, value) for v in found]
+    return found
 
 
 async def select_option(tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
@@ -1610,5 +1742,6 @@ TOOLS: dict[str, Tool] = {
     "browser_scroll": scroll,
     "browser_evaluate": evaluate,
     "browser_ask_person": ask_person.run,  # browserd/tools/ask_person.py
+    "browser_type_code": type_code,  # A25: the code the person gave in the app
     "web_fetch": fetch.run,  # B28: a discovery's GET of a public page
 }

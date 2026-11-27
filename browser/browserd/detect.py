@@ -155,6 +155,28 @@ SECRET_BOX_JS = """e => {
     || tokens.some(t => SECRET.includes(t));
 }"""  # noqa: S105  JS source run in the page, no secret
 
+# A25: what `code_box` reads of the box the apply agent names for the code the person gave in the
+# app: its own type, autocomplete tokens, name, id, labels, length limit and document.
+CODE_BOX_JS = """e => {
+  const doc = e.ownerDocument, win = doc && doc.defaultView;
+  const tokens = String((e.getAttribute && e.getAttribute("autocomplete")) || "")
+    .toLowerCase().split(/\\s+/).filter(Boolean).slice(0, 10);
+  const labels = Array.from(e.labels || []).slice(0, 5).map(l => l.textContent);
+  const said = [e.getAttribute("name"), e.id, e.getAttribute("aria-label"),
+    e.getAttribute("placeholder"), ...labels];
+  return {
+    tag: e.tagName.toLowerCase(),
+    type: e.tagName === "INPUT" ? String(e.type).toLowerCase() : "",
+    autocomplete: tokens,
+    names: said.filter(v => typeof v === "string" && v.trim()).map(v => v.slice(0, 200)),
+    max: typeof e.maxLength === "number" ? e.maxLength : -1,
+    readonly: !!e.readOnly, disabled: !!e.disabled,
+    top: !!win && win === win.top,
+    host: String((doc && doc.location && doc.location.hostname) || "").toLowerCase(),
+    credential: (/*credential*/)(e),
+  };
+}""".replace("/*credential*/", CREDENTIAL_FN)
+
 # What the page tells about the element a ref names, `opts.sels` being the lease's submit selectors.
 # The control is the element itself, or the button or link it sits in, or a label's control; every
 # walk up crosses shadow roots (a shadow root's host is the next ancestor), since closest() stops
@@ -569,3 +591,69 @@ def _own(facts: Any, action: str, profile_edit: bool) -> str | None:
     if action in ("click", "key") and button and says_submit(names, profile_edit):
         return "submit"
     return None
+
+
+# A25: the one exception of the credential rule (owner, 2026-11-26, "les deux sont possibles"):
+# browserd types a one time code the person gave in the app, never the agent, and only into a box
+# `code_box` holds for one. An allow list over the box's own type, autocomplete, name, id and
+# labels; whatever it does not name is refused (`not_code_box`), a password box `credential`.
+CODE_TYPES = frozenset({"text", "tel", "number"})
+PASSWORD_TOKENS = frozenset({"current-password", "new-password", "webauthn", "username"})
+QUIET_TOKENS = frozenset({"one-time-code", "off", "on"})  # and `section-*`, a group's name
+CODE_WORDS_STRONG = frozenset({
+    "otp", "totp", "hotp", "mfa", "2fa", "twofa", "onetimecode", "onetimepassword", "otpcode",
+    "verificationcode", "verifycode", "securitycode", "confirmationcode", "authcode",
+    "authenticationcode", "validationcode", "logincode", "signincode", "emailcode", "smscode",
+    "codedeverification", "codedesecurite", "codedeconfirmation", "bestatigungscode",
+    "sicherheitscode", "verifizierungscode", "einmalcode",
+})  # fmt: skip
+CODE_QUALIFIERS = frozenset({
+    "verification", "verify", "verif", "verifier", "security", "securite", "confirmation",
+    "confirm", "auth", "authentication", "authentification", "login", "signin", "otp",
+    "validation", "email", "mail", "sms", "texto", "bestatigung", "sicherheit", "verifizierung",
+})  # fmt: skip
+# A code of a place, an offer, a bank, a card, a person's id or a lasting secret (a PIN, a
+# recovery code) is never the one time code a site just sent.
+CODE_DENY = frozenset({
+    "postal", "postcode", "zip", "zipcode", "post", "area", "country", "dialing", "dialling",
+    "dial", "pays", "promo", "promotion", "promotional", "coupon", "discount", "voucher",
+    "referral", "referrer", "parrainage", "invite", "invitation", "gift", "tax", "vat", "iban",
+    "bic", "swift", "sort", "routing", "bank", "card", "carte", "cvc", "cvv", "csc", "pin",
+    "password", "passwd", "pwd", "pass", "passe", "passcode", "recovery", "backup", "secours",
+    "access", "accesscode", "employee", "siret", "siren", "naf", "ape", "insee", "city",
+    "cedex", "region", "currency", "language", "locale", "nationality", "tracking", "campaign",
+    "barcode", "product", "member", "membership", "sponsor",
+})  # fmt: skip
+
+
+def code_box(facts: Any) -> str | None:
+    """None when the box CODE_BOX_JS read is one for a one time code: a text, tel or number
+    input of the top document, editable, whose autocomplete says `one-time-code` or whose name,
+    id or labels say a verification, security, confirmation or sign in code (an OTP, 2FA, or a
+    name of `code` alone), with no word of CODE_DENY. Else `credential` for a password box, a
+    user name box of a sign in form or a passkey box, and `not_code_box` for anything else,
+    facts that cannot be read included (fail closed)."""
+    if not isinstance(facts, dict):
+        return "not_code_box"
+    names, tokens = facts.get("names"), facts.get("autocomplete")
+    if not isinstance(names, list) or not isinstance(tokens, list):
+        return "not_code_box"
+    tokens = [t for t in tokens if isinstance(t, str)]
+    if facts.get("type") == "password" or PASSWORD_TOKENS.intersection(tokens):
+        return "credential"
+    otp = "one-time-code" in tokens
+    if facts.get("credential") is not False and not (facts.get("credential") is True and otp):
+        return "credential" if facts.get("credential") is True else "not_code_box"
+    if facts.get("tag") != "input" or facts.get("type") not in CODE_TYPES:
+        return "not_code_box"
+    if (facts.get("readonly"), facts.get("disabled"), facts.get("top")) != (False, False, True):
+        return "not_code_box"
+    if any(t not in QUIET_TOKENS and not t.startswith("section-") for t in tokens):
+        return "not_code_box"
+    said = [match_words(n[:NAME_MAX]) for n in names[:10] if isinstance(n, str)]
+    found = {w for ws in said for w in ws} | {"".join(ws) for ws in said}
+    if found & CODE_DENY:
+        return "not_code_box"
+    if otp or found & CODE_WORDS_STRONG or ["code"] in said:
+        return None
+    return None if "code" in found and found & CODE_QUALIFIERS else "not_code_box"
