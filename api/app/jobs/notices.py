@@ -7,8 +7,9 @@ card and the Apply confirmation:
   the place it names, and the pay the person aims for (`search.compensation`, compared only in
   the same currency and period);
 - the languages it asks for read against the profile's (jobs J35, app/jobs/languages.py): a
-  required one she does not list, one that may be required, one asked at a level that may be
-  above hers (both levels quoted), and the ad's own language when it asks for none;
+  required one she does not list, a required one she may list under a name the app cannot read,
+  one that may be required, one asked at a level that may be above hers (both levels quoted), and
+  the ad's own language when it asks for none;
 - its closing date;
 - a posting of another company with nearly the same text (`signals.same_text`);
 - the person's applications to the same company (folded as `guardrails.company_key` folds).
@@ -268,6 +269,12 @@ def language_notices(job: Job, person: Person) -> list[Notice]:
         if gap.kind == "missing":
             text = f"This posting requires {gap.language}, which your profile does not list."
             found.append(Notice("signal", "language_missing", text, gap.quote, "warning"))
+        elif gap.kind == "unread":
+            text = (
+                f"This posting requires {gap.language}; your profile lists "
+                f"“{gap.unread}”, which the app cannot read as a language."
+            )
+            found.append(Notice("signal", "language_unread", text, gap.quote, "warning"))
         elif gap.kind == "unsure":
             text = f"This posting may ask for {gap.language}, which your profile does not list."
             found.append(Notice("signal", "language_unsure", text, gap.quote, "warning"))
