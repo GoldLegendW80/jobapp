@@ -373,7 +373,7 @@ def test_the_backlog_reads_the_open_postings_read_before_again(
     taken = held(factory, again)
     assert len(taken) == reader.BATCH_MAX
     assert {job.status for job in taken} == {JobStatus.found, JobStatus.shortlisted}
-    assert all(job.read_at is None and job.read_attempts == 1 for job in taken)
+    assert all(job.read_at == NOW - timedelta(days=3) and job.read_attempts == 2 for job in taken)
     [record] = [r for r in caplog.records if r.getMessage().startswith("open postings read")]
     assert (record.postings, record.left) == (10, 3)  # type: ignore[attr-defined]
     assert "Deutsch" not in str(record.__dict__)
@@ -384,13 +384,14 @@ def test_the_backlog_reads_the_open_postings_read_before_again(
         first_id = uuid.UUID(run_row.input["job_ids"][0])
     assert execute(rc, again) is RunStatus.done  # the fake saves its posting 0
     job = reading.job_of(factory, first_id)
-    assert job.read_at == NOW
+    assert job.read_at == NOW - timedelta(days=3)
     assert job.languages == {"written_in": None, "asked": []}
     with factory() as db:
         untouched = db.scalars(
             sa.select(Job.id).where(
                 Job.user_id == user,
                 Job.read_at == NOW - timedelta(days=3),
+                Job.read_attempts == 1,
                 Job.read_run_id.is_(None),
             )
         ).all()
@@ -418,6 +419,31 @@ def test_a_reread_that_cannot_start_leaves_its_postings_read(
     with factory() as db:
         reads = db.scalars(sa.select(Job.read_at).where(Job.user_id == user)).all()
     assert reads == [NOW - timedelta(days=3)] * 2
+
+
+def test_a_reread_that_fails_for_the_provider_stays_a_reading_of_the_languages(
+    factory: sessionmaker[Session], run_context: tuple[RunContext, Keyring]
+) -> None:
+    _, keyring = run_context
+    user = new_user(factory, "e2e-languages-provider@example.org")
+    save_credential(factory, keyring, user)
+    stale(factory, user, 2)
+    [first] = reading.backlog(factory)
+    reading.end_run(factory, first, failures.BUSY)
+    with factory() as db:
+        reader.settle(db, first)
+        db.commit()
+    with factory() as db:
+        rows = db.execute(
+            sa.select(Job.read_at, Job.read_attempts, Job.languages).where(Job.user_id == user)
+        ).all()
+    assert [tuple(row) for row in rows] == [(NOW - timedelta(days=3), 1, None)] * 2
+    later = NOW + reader.BACKLOG_PAUSE + reader.REREAD_EVERY
+    [again] = reading.backlog(factory, later)
+    with factory() as db:
+        run_row = db.get(AgentRun, again)
+        assert run_row is not None
+        assert run_row.input["languages_only"] is True
 
 
 def test_six_hundred_open_postings_are_read_again_in_ten_hours_and_sixty_runs_a_day(
@@ -481,7 +507,7 @@ def test_a_reading_for_the_languages_changes_nothing_else(
     assert (done.read, done.error) == (True, False)
     job = reading.job_of(factory, job_id)
     assert (job.posting_text, job.location, job.company) == (TEXT, "", "Employer not stated")
-    assert (job.fit, job.updated_at, job.read_at) == (77, earlier, NOW)
+    assert (job.fit, job.updated_at, job.read_at) == (77, earlier, earlier)
     assert job.languages["asked"][0]["quote"] == GERMAN["quote"]
     assert job.outside_criteria == [LANGUAGE]
     [event] = reading.reader_events(factory, job_id)

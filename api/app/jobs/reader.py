@@ -140,6 +140,9 @@ BACKLOG_PAUSE = timedelta(minutes=30)
 # in 10 hours), so a first deploy spreads the person's budget over the day.
 REREAD_EVERY = timedelta(minutes=10)
 REREAD_RUNS_PER_DAY = 60
+# A posting's attempts go on from its first reading's (at most ATTEMPTS_MAX): the second reading
+# gets at least ATTEMPTS_MAX more.
+REREAD_ATTEMPTS_MAX = 2 * ATTEMPTS_MAX
 PROMPT_PATH = Path(__file__).parent / "prompts" / "reader.md"
 FIRST_MESSAGE = (
     "Read the postings with read_postings, save the facts of each one with save_posting_facts, "
@@ -181,6 +184,8 @@ def _stale() -> sa.ColumnElement[bool]:
         Job.read_at.is_not(None),
         Job.languages.is_(None),
         Job.status.in_(criteria_badge.OPEN),
+        Job.read_run_id.is_(None),
+        Job.read_attempts < REREAD_ATTEMPTS_MAX,
         _readable(),
     )
 
@@ -786,7 +791,7 @@ def save(
         # them (`_reread`) leaves `updated_at` as it is.
         done: dict[str, Any] = {"updated_at": Job.updated_at, "languages": languages}
         done.update(_badge(db, job, "contract_type" in values, languages))
-        if not replaced:
+        if not replaced and not only:
             done["read_at"] = now
         db.execute(
             sa.update(Job)
@@ -957,7 +962,9 @@ def begin(
     held = list(
         db.scalars(
             sa.select(Job.id)
-            .where(Job.user_id == user_id, Job.id.in_(ids), _unread())
+            .where(
+                Job.user_id == user_id, Job.id.in_(ids), _stale() if languages_only else _unread()
+            )
             .order_by(Job.id)
             .with_for_update(key_share=True, skip_locked=True)
         )
@@ -1002,20 +1009,26 @@ def gives_back(error: str | None) -> bool:
 
 
 def settle(db: Session, run_id: uuid.UUID) -> str | None:
-    """Once a reading run ended, its postings let go of it, each still unread getting its
-    attempt back when `gives_back`; once only, as only the postings it holds are changed.
+    """Once a reading run ended, its postings let go of it, each still unread (or, for a reading
+    of the languages only, still without them) getting its attempt back when `gives_back`; once
+    only, as only the postings it holds are changed.
     Returns `failed_for` of a failed run, else None (a run not ended yet changes nothing).
     The caller commits."""
     row = db.execute(
-        sa.select(AgentRun.status, AgentRun.error).where(AgentRun.id == run_id)
+        sa.select(AgentRun.status, AgentRun.error, AgentRun.input).where(AgentRun.id == run_id)
     ).one_or_none()
     if row is None or row.status in (RunStatus.queued, RunStatus.running):
         return None
     failed = row.status is RunStatus.failed
+    only = isinstance(row.input, Mapping) and row.input.get(LANGUAGES_ONLY) is True
     if failed and gives_back(row.error):
         db.execute(
             sa.update(Job)
-            .where(Job.read_run_id == run_id, Job.read_at.is_(None), Job.read_attempts > 0)
+            .where(
+                Job.read_run_id == run_id,
+                Job.languages.is_(None) if only else Job.read_at.is_(None),
+                Job.read_attempts > 0,
+            )
             .values(read_attempts=Job.read_attempts - 1, updated_at=Job.updated_at)
             .execution_options(synchronize_session=False)
         )
@@ -1289,9 +1302,10 @@ def _rereads_allowed(db: Session, user_id: uuid.UUID, now: datetime) -> bool:
 
 def _reread(db: Session, now: datetime) -> list[uuid.UUID]:
     """Jobs J35, with no posting left unread: one batch of a person's open postings read before
-    the languages were read (`_stale`), newest first, within `_rereads_allowed`. They become
-    unread for that run (`read_at` null, no attempt yet), so it reads, counts and gives back
-    attempts as for a posting never read; a run that cannot start leaves them as they were."""
+    the languages were read (`_stale`), newest first, within `_rereads_allowed`, for a person
+    with a credential. They stay read (`read_at` kept), so a run that fails never makes them a
+    full reading's; it counts and gives back attempts as for a posting never read, up to
+    REREAD_ATTEMPTS_MAX, and a run that cannot start leaves them as they were."""
     last = (
         sa.select(sa.func.max(AgentRun.created_at))
         .where(AgentRun.agent == NAME, AgentRun.user_id == Job.user_id)
@@ -1323,19 +1337,10 @@ def _reread(db: Session, now: datetime) -> list[uuid.UUID]:
         )
         if not ids:
             continue
-        savepoint = db.begin_nested()
-        db.execute(
-            sa.update(Job)
-            .where(Job.id.in_(ids))
-            .values(read_at=None, read_attempts=0, updated_at=Job.updated_at)
-            .execution_options(synchronize_session=False)
-        )
         flow = runs.WorkflowRef("posting_reading", trigger="backlog")
         made = begin(db, person, ids, now, None, flow, languages_only=True)
         if isinstance(made, str):
-            savepoint.rollback()
             continue
-        savepoint.commit()
         logger.info(
             "open postings read again for their languages",
             extra={
