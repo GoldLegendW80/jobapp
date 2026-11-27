@@ -206,6 +206,33 @@ def test_a_page_read_through_the_cross_board_key_keeps_the_readable_address(
     assert said == {"list_url": LIST, "url_was": listed.url}
 
 
+@pytest.mark.parametrize(
+    ("kept_at", "read_at"),
+    [
+        ("http://ch.indeed.test:8080/rc/clk?jk=5f1c2d3e4a5b6c7d&bb=x0&tk=t1&from=serp",
+         "http://www.indeed.test:8080/viewjob?jk=5f1c2d3e4a5b6c7d&from=serp&vjs=3"),
+        ("http://www.linkedin.test:8080/jobs/view/genai-engineer-at-acme-4012345678?position=1"
+         "&pageNum=0&trk=public_jobs", "http://ch.linkedin.test:8080/jobs/view/4012345678/"),
+    ],
+)  # fmt: skip
+def test_a_card_kept_under_one_spelling_is_one_row_with_its_page_read_under_another(
+    factory: sessionmaker[Session], alice: uuid.UUID, kept_at: str, read_at: str
+) -> None:
+    """Browser B31, review of #854, round 1: one posting, one row. The store reads the session's
+    rule of the same posting (`slug.posting_url_key`): a card kept under the list's spelling,
+    its employer not on the card, and its page read later under another spelling with its
+    employer, is one row whose mention is removed, at the address of the page read."""
+    set_profile(factory, alice, search())
+    listed = dataclasses.replace(card(company=None), url=kept_at)
+    job = stored(factory, alice, listed)
+    assert job.company == sweep.UNKNOWN_EMPLOYER
+    page = finding("GenAI engineer", url=read_at, text=PAGE_TEXT)
+    done, read = read_later(factory, alice, page)
+    assert read.id == job.id
+    assert (read.url, read.list_url, read.posting_text) == (read_at, None, PAGE_TEXT)
+    assert (done.stats["duplicates"], done.stats["listed_read"]) == (1, 1)
+
+
 def test_an_address_another_posting_holds_keeps_the_cards(
     factory: sessionmaker[Session], alice: uuid.UUID
 ) -> None:

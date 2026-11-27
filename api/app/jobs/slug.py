@@ -10,10 +10,17 @@ Text with nothing left (only symbols, or a script with no Latin letters) gives "
 `unique_slug` adds "-2", "-3", ... until the slug is free, as the engine's upsert did (without
 its limit of 98).
 
-Duplicates. Two postings are the same when they have the same URL, compared by `url_key`, or
-when company, title and location are the same once normalised by `text_key`. Location is part of
-the rule, as in the engine: ../data/jobs.csv holds ten pairs with the same company and title in
+Duplicates. Two postings are the same when they have the same URL, compared by `posting_url_key`,
+or when company, title and location are the same once normalised by `text_key`. Location is part
+of the rule, as in the engine: ../data/jobs.csv holds ten pairs with the same company and title in
 different cities (Anthropic, OpenAI, Databricks, ...), which are different postings.
+
+The same URL (`posting_url_key`, browser B31): `url_key` of the posting the address names by the
+one rule of the same posting, app/browser/same_posting.py, which the website search's session
+reads too: a board's posting id (Indeed's `jk`, LinkedIn's job id) on any host of the board and
+any path, else the address once the parameters that only track are left out. So two addresses
+the session counts as one posting have one key here (api/tests/browser/test_b31_same_posting.py,
+`test_the_store_and_the_session_read_one_rule`).
 
 What counts as the same URL (`url_key`):
 - http and https are the same; the host is compared lowercase, without "www." and without a
@@ -32,6 +39,8 @@ import unicodedata
 from collections.abc import Callable, Container, Iterable
 from dataclasses import dataclass
 from urllib.parse import parse_qsl, urlencode, urlsplit
+
+from app.browser import same_posting
 
 SLUG_MAX = 80
 FALLBACK_SLUG = "job"
@@ -120,6 +129,15 @@ def url_key(url: str | None) -> str | None:
     return f"{scheme}://{host}{path}{query}"
 
 
+def posting_url_key(url: str | None) -> str | None:
+    """The URL as duplicate detection compares it (module docstring): `url_key` of the posting's
+    key by the one rule of the same posting (`same_posting.posting_key`), so it is a function of
+    that key; the address itself when the rule cannot read it. None when there is none."""
+    if url is None or not url.strip():
+        return None
+    return url_key(same_posting.posting_key(url.strip()) or url)
+
+
 @dataclass(frozen=True)
 class PostingKey:
     """What duplicate detection compares: the URL key and the company, title, location key."""
@@ -129,7 +147,9 @@ class PostingKey:
 
     @classmethod
     def of(cls, company: str, title: str, location: str | None, url: str | None) -> "PostingKey":
-        return cls(url_key(url), (text_key(company), text_key(title), text_key(location or "")))
+        return cls(
+            posting_url_key(url), (text_key(company), text_key(title), text_key(location or ""))
+        )
 
     def same_as(self, other: "PostingKey") -> bool:
         if self.url is not None and self.url == other.url:

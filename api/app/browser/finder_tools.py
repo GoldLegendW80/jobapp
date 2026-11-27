@@ -245,8 +245,11 @@ DESCRIPTIONS = {
     "of this search: the title as the page shows it, location, company and published_on when "
     "the page shows them (date_shown, the page's own words, when it gives no exact date), "
     "the address of the posting's own page, and its text. The app opens an address you saw "
-    "and did not open, and checks each one against the pages opened; what it keeps stays, and "
-    "a refusal says what to do. results_read: how many search results you read in this run "
+    f"and did not open (at most {finder.APP_OPENS_MAX} a report: past them it keeps a posting "
+    "you saw as a card of a list from that card, and says so), and checks each one against "
+    "the pages opened; what it keeps stays, and a refusal says what to do. An address with the "
+    "id of a posting you saw on that board (Indeed's jk, LinkedIn's job id) counts as seen. "
+    "results_read: how many search results you read in this run "
     "so far, in all (optional, shown to the person as your own count).",
     "report_listing": "Report the postings that fit the profile and that you saw only as cards "
     "of a list (on a page, a fetched page or in a script's result of this search) because their "

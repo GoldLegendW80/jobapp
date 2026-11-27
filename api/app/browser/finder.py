@@ -58,6 +58,16 @@ from app.agents.failures import TURN_LIMIT
 from app.agents.models import CredentialKind, RunStatus
 from app.browser import screenshot, web_plan
 from app.browser.client import BrowserError
+from app.browser.same_posting import (
+    Board,
+    board_address,
+    board_of,
+    family_of,
+    posting_address,
+    posting_id,
+    posting_key,
+    posting_page,
+)
 from app.browser.words import words as _words
 
 if TYPE_CHECKING:
@@ -218,12 +228,37 @@ STORES_AFTER_STOP = frozenset(
 )  # fmt: skip
 # The refusals of report_postings a card of a list the session read may stand in for (J31): the
 # app could not open the address, or opened a page that does not show the posting, or a page
-# that answered a walled status (`_card` refuses any other `page_error`). Never `app_opens_max`:
-# that page opens at the next call.
-CARD_FALLBACK = frozenset({"not_seen", "detail_not_opened", "not_on_opened_page", "page_error"})
+# that answered a walled status (`_card` refuses any other `page_error`). B31: and a posting
+# past the APP_OPENS_MAX opens of one call, so the agent does not report it again and again.
+CARD_FALLBACK = frozenset(
+    {"not_seen", "detail_not_opened", "not_on_opened_page", "page_error", "app_opens_max"}
+)
 # The error statuses of a posting's own page that say it is walled, not gone (J31): a card may
 # stand in for it. Any other error status (404, 410, 500) refuses its card `page_error`.
 WALL_STATUSES = frozenset({401, 403, 429, 503})
+# What a report's answer says of the postings kept from their card (B31), by what kept their page
+# unread (CARD_FALLBACK), so the agent reports them no more.
+CARD_KEPT = (
+    "so they were kept from the card you saw in a list, marked for the person as seen only in "
+    "a list (a later search may read their page): do not report them again."
+)
+CARD_WHY = {
+    "app_opens_max": (
+        f"The app opens at most {APP_OPENS_MAX} pages a report and opened other postings' "
+        f"pages, {CARD_KEPT}"
+    ),
+    "detail_not_opened": (
+        "The app could not open their page (no free tab, a page that did not load, or the "
+        f"search stopped), {CARD_KEPT}"
+    ),
+    "not_on_opened_page": (
+        f"Their page opened without their title (a security check or a sign in wall), {CARD_KEPT}"
+    ),
+    "page_error": (
+        f"Their page answered a wall ({', '.join(map(str, sorted(WALL_STATUSES)))}), {CARD_KEPT}"
+    ),
+    "not_seen": f"The app had no page of theirs to open, {CARD_KEPT}",
+}
 # The routes of a website's search (B27): report_no_postings is refused until the agent tried
 # the three (accept and refuse table: test_b27_code_first.py). A route is tried once the agent's
 # tab landed on it, or once the agent's browser_navigate to it was refused by the app or
@@ -278,6 +313,13 @@ SCOPE_VALUES_MAX = 100
 SCOPE_VALUE_MAX = 300
 SCOPE_BYTES_MAX = 32_768
 SEEN_MAX = 2000
+# B31: the postings a session saw, by `posting_key`, the oldest dropped past SEEN_POSTINGS_MAX of
+# them or SEEN_CHARS_MAX characters of keys and addresses; the newest SPELLINGS_MAX addresses of
+# each. An address past ADDRESS_MAX (twice a report's 2,000, its percent encoding aside) is none.
+SEEN_POSTINGS_MAX = 20_000
+SEEN_CHARS_MAX = 10_000_000
+SPELLINGS_MAX = 4
+ADDRESS_MAX = 4_000
 # The pages a job website's agent opened that its reports are verified on (B21): the last ones
 # read, each with its posting text, its visible lines, their words, its headings' words and its
 # fields. The text (TEXT_MAX), the lines and the headings (LINES_MAX each, B26: a page is read
@@ -351,7 +393,11 @@ REPORT_ADVICE = {
         "The app opened this address and did not find the title on it (it may show a security "
         "check or a sign in wall): open it yourself, then report the title as the page shows it."
     ),
-    "app_opens_max": "Report fewer postings the app has to open in one call.",
+    "app_opens_max": (
+        f"The app opens at most {APP_OPENS_MAX} pages a report, and no card of a list you read "
+        "shows this posting: open its page yourself and report it, or report it again in your "
+        "next report, where the app may open it."
+    ),
     "card_not_seen": (
         "Report only a card you saw in this search, on a page, a fetched page or in a script's "
         "result: its title as the card shows it and its link exactly as the list gives it."
@@ -717,53 +763,6 @@ def canonical(url: str) -> str:
     return urlunsplit((scheme, host, path, quote(parts.query, safe=_QUERY_SAFE), ""))
 
 
-# Owner, 2026-10-29 (B19, "Let it use the search boxes"): each website's own hosts are allowed.
-# A platform's hosts are a family, as browserd's discovery.FAMILIES: its domain, the domain's
-# `www.` host and, with `countries`, every host of two lowercase ASCII letters under it
-# (`fr.indeed.com`), on https and its default port; each has a `.test` stand in on http and port
-# 8080 for the tests (`.test` is reserved, RFC 2606), as platform_policy.test_start maps a
-# platform there. The lease opens the family (`lease_hosts`); since B20 a page may be on any
-# public host.
-COUNTRY_LABEL = re.compile(r"[a-z]{2}")
-PLATFORM_FAMILIES = (
-    ("indeed.com", True),
-    ("linkedin.com", True),
-    ("welcometothejungle.com", False),
-)
-FAMILIES = tuple(
-    family
-    for domain, countries in PLATFORM_FAMILIES
-    for family in (
-        (domain, countries, "https", 443),
-        (domain.rsplit(".", 1)[0] + ".test", countries, "http", 8080),
-    )
-)
-
-
-def family_of(url: str) -> tuple[str, bool, str, int] | None:
-    """The family a canonical address is on: its scheme and port, its host the domain, the
-    domain's `www.` host or, with countries, two lowercase letters under the domain."""
-    try:
-        parts = urlsplit(url)
-        port = parts.port
-    except ValueError:
-        return None
-    if parts.username or parts.password:
-        return None
-    host = parts.hostname or ""
-    port = {"http": 80, "https": 443}.get(parts.scheme) if port is None else port
-    for family in FAMILIES:
-        domain, countries, scheme, family_port = family
-        if (parts.scheme, port) != (scheme, family_port):
-            continue
-        label, dot, rest = host.partition(".")
-        if host in (domain, "www." + domain) or (
-            countries and dot and rest == domain and COUNTRY_LABEL.fullmatch(label)
-        ):
-            return family
-    return None
-
-
 def lease_hosts(start: str) -> list[str]:
     """The hosts a job website's lease opens: its family's (the domain, and every name under it
     or its `www.` host; browserd narrows them to the family, discovery.on_site), else the
@@ -773,6 +772,24 @@ def lease_hosts(start: str) -> list[str]:
         return [urlsplit(canonical(start)).hostname or ""]
     domain, countries = family[0], family[1]
     return [domain, f"*.{domain}" if countries else f"www.{domain}"]
+
+
+def _item_ids(one: dict[str, Any], board: Board) -> dict[str, str]:
+    """The posting id an object of a script's result gives in its own fields (B31): a field the
+    board names (`Board.fields`) holding an id of the board's shape, a number, or a value naming
+    one (`Board.urn`); by the value as given. Two different ids give none, as an address with two
+    ids has none (`posting_id`)."""
+    ids: dict[str, str] = {}
+    for name, value in one.items():
+        if re.sub(r"[_-]", "", name.casefold()) not in board.fields:
+            continue
+        given = str(value) if type(value) is int and value >= 0 else value
+        if not isinstance(given, str):
+            continue
+        posting = match.group(1) if board.urn and (match := board.urn.fullmatch(given)) else given
+        if board.shape.fullmatch(posting):
+            ids[given] = posting
+    return ids if len(set(ids.values())) == 1 else {}
 
 
 @dataclass
@@ -1024,22 +1041,29 @@ def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str, Unit
     with its strings and its nested objects' as text and title units (a cut one None); each
     text of a list, else each line of a text result, naming one address. A text naming several
     (a cut JSON, a joined list) gives none: its words cannot be told apart. A string the code
-    writes is no card's word, and an address it writes (`_written`) no card. Pure; linear in
-    the result."""
+    writes is no card's word, and an address it writes (`_written`) no card. B31: on a board's
+    page (BOARDS), an object giving a posting id in a field the board names (`_item_ids`) is
+    also the card of the board's own address of that posting, unless its code writes the id.
+    Pure; linear in the result."""
     text = raw if isinstance(raw, str) else ""
     try:
         value: Any = json.loads(text)
     except (ValueError, RecursionError):
         value = text
-    found: list[tuple[list[str], list[str]]] = []
+    board = board_of(canonical(url))
+    found: list[tuple[list[str], list[str], list[str]]] = []
     lines: list[str] = []
     if isinstance(value, list | dict):
         stack: list[Any] = [value]
         while stack and len(found) + len(lines) <= SCRIPT_LINKS_MAX:
             one = stack.pop()
             if isinstance(one, dict):
+                ids = _item_ids(one, board[1]) if board else {}
                 words = [s for s in _strings(one) if not SCRIPT_ADDRESS.fullmatch(s)]
-                found.append((_own_links(one), words))
+                posting = next(iter(ids.values()), "")
+                written = posting in code or any(given in code for given in ids)
+                built = [board_address(canonical(url), posting)] if ids and not written else []
+                found.append((_own_links(one), [s for s in words if s not in ids], built))
                 stack.extend(v for v in one.values() if isinstance(v, list | dict))
             else:
                 lines.extend(child for child in one if isinstance(child, str))
@@ -1048,17 +1072,18 @@ def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str, Unit
         lines = (value if isinstance(value, str) else text).split("\n")
     for line in lines:
         if SCRIPT_ADDRESS.fullmatch(line):
-            found.append(([line], []))
+            found.append(([line], [], []))
         elif len(links := {m.group(0) for m in SCRIPT_LINK.finditer(line)}) == 1:
-            found.append((list(links), [SCRIPT_LINK.sub(" ", line)]))
+            found.append((list(links), [SCRIPT_LINK.sub(" ", line)], []))
     cards: list[tuple[str, str, Units]] = []
-    for links, strings in found:
+    for links, strings, built in found:
         lines, cut = _lines(s for s in strings if s not in code)
         units: Units = (None, *lines[1:]) if cut else tuple(lines)
         for given in links if lines else ():
             link = canonical(urljoin(url, given))
             if link and not _written(given, link, code):
                 cards.append((link, "\n".join(lines), units))
+        cards.extend((link, "\n".join(lines), units) for link in built if link and lines)
     return cards
 
 
@@ -1656,20 +1681,31 @@ def _record_size(record: PageRead) -> int:
 
 
 Detail = tuple[tuple[str, list[str], dict[str, tuple[str, str]]], tuple[list[str], list[str]]]
-Parsed = tuple[list[str], Detail, list[tuple[str, str, Units]]]
+Parsed = tuple[list[str], Detail, list[tuple[str, str, Units]], dict[str, str]]
 
 
 def _parsed(url: str, text: str) -> Parsed:
     """What `FinderSession._read` keeps of a page, worked out off the event loop (#797: the whole
     kept page, up to PAGE_MAX, took about 1.1 s to parse on the Mac): the canonical addresses of
-    its links, in page order, its detail and visible lines, and its cards (J31). Pure."""
+    its links, in page order, its detail and visible lines, its cards (J31) and the posting each
+    link names (B31, `_keyed`). Pure."""
     from app.browser import sources
 
     root = sources.parse_snapshot(text[:PAGE_MAX])
     links = [
         link for node in root.walk() if node.url and (link := canonical(urljoin(url, node.url)))
     ]
-    return links, (_detail(root), _seen_text(root)), _page_cards(url, root)
+    return links, (_detail(root), _seen_text(root)), _page_cards(url, root), _keyed(links)
+
+
+def _keyed(addresses: Iterable[str]) -> dict[str, str]:
+    """B31: the `posting_key` of each address up to ADDRESS_MAX characters. Pure; linear."""
+    return {a: posting_key(a) for a in addresses if len(a) <= ADDRESS_MAX}
+
+
+def _chars(key: str, spellings: tuple[str, ...]) -> int:
+    """The characters a posting the session saw holds (B31): its key and its addresses."""
+    return len(key) + sum(map(len, spellings)) if spellings else 0
 
 
 async def parsed_off_loop(url: str, text: str) -> Parsed | None:
@@ -1884,6 +1920,12 @@ class FinderSession:
     cards: dict[str, tuple[Card, ...]] = field(default_factory=dict, repr=False)
     lists: dict[str, None] = field(default_factory=dict, repr=False)
     cards_refused: Counter[str] = field(default_factory=Counter)
+    # B31: the addresses the session saw (the links of its pages read or fetched, those pages,
+    # its script results' addresses and cards) by the posting they name (`_note_seen`), and the
+    # postings its reports kept, by the same key.
+    postings: dict[str, tuple[str, ...]] = field(default_factory=dict, repr=False)
+    postings_chars: int = field(default=0, repr=False)
+    reported_keys: set[str] = field(default_factory=set, repr=False)
     parsed: InitVar[Parsed | None] = None
 
     def __post_init__(self, parsed: Parsed | None) -> None:
@@ -1908,13 +1950,16 @@ class FinderSession:
     def _read(self, url: str, text: str, parsed: Parsed | None = None, kind: str = "page") -> None:
         """Note the links of a page read, its visible text and its cards (`_parsed`, unless
         given); an error page's cards are none (J31)."""
-        links, ((body, titles, fields), (lines, headings)), cards = parsed or _parsed(url, text)
+        links, ((body, titles, fields), (lines, headings)), cards, keys = parsed or _parsed(
+            url, text
+        )
         if canonical(url) not in self.error_pages:
-            self._note_cards(url, kind, cards)
+            self._note_cards(url, kind, cards, keys)
         for link in links:
             if self.on_site(link) and len(self.seen) < SEEN_MAX:
                 self.seen.add(link)
         key = canonical(url)
+        self._note_seen([*links, key], keys)
         if key:
             if key not in self.seen and len(self.seen) >= SEEN_MAX:
                 self.seen.pop()
@@ -1985,29 +2030,105 @@ class FinderSession:
         except Exception:
             self._stop_with("permission_unavailable")
 
-    def _note_cards(self, source: str, kind: str, cards: list[tuple[str, str, Units]]) -> None:
+    def _note_cards(
+        self,
+        source: str,
+        kind: str,
+        cards: list[tuple[str, str, Units]],
+        keys: dict[str, str] | None = None,
+    ) -> None:
         """Keep the cards a page, a fetch or a script result showed (J31), each address's
         newest CARD_SOURCES_MAX, CARDS_MAX addresses (the oldest dropped); a link to the source
         itself is none. A source with LIST_CARDS_MIN cards or more is a list."""
         list_url = canonical(source)
         if not list_url:
             return
-        shown: set[str] = set()
+        shown: dict[str, None] = {}
         for address, text, units in cards:
             words = _words(text)
             if address == list_url or not words:
                 continue
-            shown.add(address)
+            shown[address] = None
             card = Card(list_url, kind, text, f" {words} ", units)
             held = tuple(c for c in self.cards.pop(address, ()) if c != card)
             self.cards[address] = (*held, card)[-CARD_SOURCES_MAX:]
         while len(self.cards) > CARDS_MAX:
             del self.cards[next(iter(self.cards))]
+        self._note_seen(shown, keys)
         if len(shown) >= LIST_CARDS_MIN:
             self.lists.pop(list_url, None)
             self.lists[list_url] = None
             while len(self.lists) > LISTS_MAX:
                 del self.lists[next(iter(self.lists))]
+
+    def _note_seen(self, addresses: Iterable[str], keys: dict[str, str] | None = None) -> None:
+        """B31: note each canonical address the session saw under the posting it names
+        (`posting_key`, or `keys` worked out off the event loop), the newest SPELLINGS_MAX of
+        each; the oldest dropped past SEEN_POSTINGS_MAX postings or SEEN_CHARS_MAX characters.
+        Only what a page, a fetch or a script's result showed comes here, never an address of
+        the agent's own call."""
+        for address in addresses:
+            if not address or len(address) > ADDRESS_MAX:
+                continue
+            key = keys[address] if keys and address in keys else posting_key(address)
+            if key:
+                held = self.postings.pop(key, ())
+                spellings = (*(a for a in held if a != address), address)[-SPELLINGS_MAX:]
+                self.postings[key] = spellings
+                self.postings_chars += _chars(key, spellings) - _chars(key, held)
+        while self.postings and (
+            len(self.postings) > SEEN_POSTINGS_MAX or self.postings_chars > SEEN_CHARS_MAX
+        ):
+            key = next(iter(self.postings))
+            self.postings_chars -= _chars(key, self.postings.pop(key))
+
+    def _same(self, url: str) -> list[str]:
+        """B31: the addresses the session saw that name the posting `url` names, newest first."""
+        key = posting_key(url) if url else ""
+        return list(reversed(self.postings.get(key, ()))) if key else []
+
+    def _as_seen(self, url: str) -> tuple[str, bool]:
+        """B31: the address of the posting a reported canonical address names, as the session saw
+        it, and whether it saw it: the address itself when its page was read; else a page of the
+        same posting it read that is the posting's own (`_own_page`); else the address itself
+        when it saw it; else, of the same posting it saw, the board's own address for its id
+        (`posting_address`), or its newest address. The address itself, unseen, when it saw no
+        address of that posting: a made up address or id stays refused. A board's address of a
+        posting that is not the board's page of it (a search or a company page holding its id,
+        `posting_page`) is read as the board's own address of that posting first."""
+        if posting_id(url) is not None and not posting_page(url):
+            url = posting_address(url)
+        same = self._same(url)
+        if url in self.pages_read:
+            return url, True
+        read = next((a for a in same if a in self.pages_read and self._own_page(a)), None)
+        if read is not None:
+            return read, True
+        if url in same or url in self.seen or url in self.script_links or url in self.cards:
+            return url, True
+        if url in self.error_pages:
+            return url, False
+        return (posting_address(same[0]), True) if same else (url, False)
+
+    def _own_page(self, url: str) -> bool:
+        """B31: whether a page read is a posting's own page: on a board, the board's page of the
+        posting its id names (`posting_page`); elsewhere neither a list nor an address `route_of`
+        reads as a search or listing page."""
+        if url in self.lists:
+            return False
+        if posting_id(url) is not None:
+            return posting_page(url)
+        return route_of(url, {self.start, self.landed}, [], typed_address=True) is None
+
+    def _reported(self, url: str, pending: set[str]) -> bool:
+        """Whether a report of this session already kept the posting `url` names (B31: by its
+        `posting_key` too), or the report being read holds it (`pending`)."""
+        if url in self.reported_urls or url in pending:
+            return True
+        key = posting_key(url)
+        return bool(key) and (
+            key in self.reported_keys or any(posting_key(other) == key for other in pending)
+        )
 
     def _view(self, url: str, text: str, title: str = "", cut: bool = False) -> str:
         """An action's answer (B26, as Playwright CLI gives it): the address, the title and a
@@ -2212,14 +2333,18 @@ class FinderSession:
         whole = await asyncio.to_thread(_script_whole, raw)
         text = _head(whole, SCRIPT_RESULT_MAX)
         links = await asyncio.to_thread(_script_links, url, text)
+        cards: list[tuple[str, str, Units]] = []
         if isinstance(raw, str) and len(raw) <= SCRIPT_RESULT_MAX:
-            self._note_cards(url, "script", await asyncio.to_thread(_script_cards, url, raw, code))
+            cards = await asyncio.to_thread(_script_cards, url, raw, code)
+        keys = await asyncio.to_thread(_keyed, [*links, *(card[0] for card in cards)])
+        self._note_cards(url, "script", cards, keys)
         script = self.script = Kept(url, "", text, cut or len(text) < len(whole))
         for link in links:
             self.script_links.pop(link, None)
             self.script_links[link] = None
         while len(self.script_links) > SCRIPT_LINKS_MAX:
             del self.script_links[next(iter(self.script_links))]
+        self._note_seen(links, keys)
         said = f"The script's result holds {len(text):,} characters"
         if script.cut:
             said += f" (cut at {SCRIPT_RESULT_MAX:,})"
@@ -2926,12 +3051,20 @@ class FinderSession:
                 self.stopped = "store_failed"
                 return False
             self.reported_urls.update(f.url for f in pending)
+            self.reported_keys.update(k for f in pending if (k := posting_key(f.url)))
             self.verified_count += len(pending)
             kept += len(pending)
             pending.clear()
             return True
 
+        # B31: the opens of one call go first to the postings no card stands in for, so that
+        # past APP_OPENS_MAX a card keeps a posting rather than a refusal (`plan`, planned again
+        # after each open, which may change what the next postings need; `tried`: one open a
+        # posting).
+        plan = [] if listing or self.stopped else self._unopened(items, set())
+        tried: set[str] = set()
         opens = 0
+        from_card: dict[str, list[int]] = {}
         for index, item in enumerate(items):
             urls = {f.url for f in pending}
             if listing:
@@ -2940,13 +3073,19 @@ class FinderSession:
                 finding, reason = self._verified(item, urls)
             if not listing and reason == "detail_not_opened" and not self.stopped:
                 # B27: an address the agent saw and did not open, the app opens itself.
-                if opens >= APP_OPENS_MAX:
+                address, _seen = self._as_seen(canonical(urljoin(self.current, item["url"])))
+                key = posting_key(address) or address
+                carded = index < len(plan) and plan[index][0] == "card"
+                left = APP_OPENS_MAX - opens
+                bare = sum(kind == "bare" for kind, _ in plan[index + 1 :])
+                if key in tried:
+                    pass  # this report opened it and its page did not load: it stays unread
+                elif left <= 0 or (carded and left <= bare):
                     reason = "app_opens_max"
                 else:
                     opens += 1
-                    opened = await self._open_for_report(
-                        canonical(urljoin(self.current, item["url"]))
-                    )
+                    tried.add(key)
+                    opened = await self._open_for_report(address)
                     if self.stopped and self.stopped not in STORES_AFTER_STOP:
                         pending.clear()  # a permission taken back: nothing more is kept
                         break
@@ -2956,10 +3095,13 @@ class FinderSession:
                             reason = "not_on_opened_page"
                     elif self.stopped and (again := self._verified(item, urls))[0] is not None:
                         finding, reason = again  # read, then its tab not given back (J31)
+                    claimed = tried | {k for _, k in plan[: index + 1] if k}
+                    plan[index + 1 :] = self._unopened(items[index + 1 :], claimed)
             if not listing and reason in CARD_FALLBACK:
                 # J31: a page the app could not open or read; a card of a list read stands in.
                 card, _why = self._card(item, urls)
                 if card is not None:
+                    from_card.setdefault(reason, []).append(index)
                     finding, reason = card, ""
             if reason and listing:
                 self.cards_refused[reason] += 1
@@ -2975,11 +3117,16 @@ class FinderSession:
             return self._stop("store_failed")
         if self.stopped and self.stopped not in STORES_AFTER_STOP:
             return self._stop(self.stopped)
-        answer: dict[str, Any] = {
-            "kept": kept,
-            "refused": refusals[:50],
-            "kept_in_all": self.verified_count,
-        }
+        answer: dict[str, Any] = {"kept": kept}
+        if from_card:
+            # B31: which were kept from their card and why, so the agent reports them no more.
+            answer["kept_from_card"] = sum(map(len, from_card.values()))
+            answer["from_card"] = [
+                {"indexes": indexes, "why": CARD_WHY[reason]}
+                for reason, indexes in from_card.items()
+            ]
+        answer["refused"] = refusals[:50]
+        answer["kept_in_all"] = self.verified_count
         if self.stopped:
             answer["stopped"] = self._stop(self.stopped)[0]
             return json.dumps(answer), True
@@ -3109,6 +3256,36 @@ class FinderSession:
             refusal["do"] = REPORT_ADVICE[reason]
         return refusal
 
+    def _unopened(self, items: list[Any], claimed: set[str]) -> list[tuple[str, str]]:
+        """B31: for each reported posting, whether the app opens its page, with the posting it
+        claims (`posting_key`): "card" when `_verified` answers `detail_not_opened` and a card of
+        a list the session read stands in for it (`_card`), "bare" when none does; "" for a
+        posting whose page was read or answered an error (it claims it), for any other answer
+        (an address never seen, a duplicate, an item refused before: it claims nothing), and for
+        a posting an earlier item claimed (`claimed`, which it fills), which takes no open."""
+        planned: list[tuple[str, str]] = []
+        for item in items:
+            url = item.get("url") if isinstance(item, dict) else None
+            address, seen = (
+                self._as_seen(canonical(urljoin(self.current, url)))
+                if isinstance(url, str) and len(url) <= 2000
+                else ("", False)
+            )
+            key = (posting_key(address) or address) if seen else ""
+            kind = ""
+            if not key or key in claimed:
+                key = ""
+            elif address in self.pages_read or address in self.error_pages:
+                pass  # its page answers it, never an open
+            elif self._verified(item, set())[1] != "detail_not_opened":
+                key = ""
+            else:
+                kind = "card" if self._card(item, set())[0] is not None else "bare"
+            if key:
+                claimed.add(key)
+            planned.append((kind, key))
+        return planned
+
     def _verified(self, item: Any, pending: set[str]) -> tuple[VerifiedFinding | None, str]:
         if not isinstance(item, dict):
             return None, "not_a_posting"
@@ -3126,8 +3303,15 @@ class FinderSession:
         url = canonical(urljoin(self.current, item["url"]))
         if not self.on_site(url):
             return None, "other_host"
-        if url in {self.start, self.landed}:
+        home = {self.start, self.landed}
+        if url in home:
             return None, "not_a_posting_page"
+        # B31: another spelling of an address the session saw is that address; never one made up.
+        url, seen = self._as_seen(url)
+        if url in home:
+            return None, "not_a_posting_page"
+        if self._reported(url, pending):
+            return None, "duplicate"
         # B21: any page the agent opened in this session (the last OPENED_MAX), never one it
         # did not open; a job website's verified postings have no cap (J18).
         page = self.pages_read.get(url)
@@ -3135,10 +3319,7 @@ class FinderSession:
             return None, "page_error"
         if page is None:
             # B27: an address seen on a page or in a script result; never one made up.
-            seen = url in self.seen or url in self.script_links
             return None, "detail_not_opened" if seen else "not_seen"
-        if url in self.reported_urls or url in pending:
-            return None, "duplicate"
         found = title_on(page, title)
         if found is None:
             return None, "title_not_on_page"
@@ -3198,11 +3379,18 @@ class FinderSession:
         if not url:
             return None, "not_an_address"
         home = {self.start, self.landed}
-        if url in home or url in self.lists or route_of(url, home, [], typed_address=True):
+        if url in home:
+            return None, "not_a_posting_page"
+        # B31: the card of another spelling of the posting's address stands for it too.
+        url, _seen = self._as_seen(url)
+        same = list(dict.fromkeys([url, *self._same(url)]))
+        # B31: a board's address of a posting id is now the board's page of it, whatever its query.
+        searched = posting_id(url) is None and route_of(url, home, [], typed_address=True)
+        if url in home or url in self.lists or searched:
             return None, "not_a_posting_page"  # a search address or a listing page's shape too
-        if url in self.error_pages and self.error_pages[url] not in WALL_STATUSES:
+        if any(a in self.error_pages and self.error_pages[a] not in WALL_STATUSES for a in same):
             return None, "page_error"  # its page answered gone or failed, never walled
-        if url in self.reported_urls or url in pending:
+        if self._reported(url, pending):
             return None, "duplicate"
         page = self.pages_read.get(url)
         if page is not None and title_on(page, title) is not None:
@@ -3211,7 +3399,8 @@ class FinderSession:
         card, shown = next(
             (
                 (c, held)
-                for c in reversed(self.cards.get(url, ()))
+                for address in same
+                for c in reversed(self.cards.get(address, ()))
                 if any(f" {key} " in c.words for key in keys)
                 and (held := _held(c, keys))
                 and not CONTROLS.search(held)
