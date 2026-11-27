@@ -12,6 +12,7 @@ import json
 import logging
 import secrets
 import sys
+import unicodedata
 import uuid
 from collections.abc import Callable
 from datetime import timedelta
@@ -242,13 +243,14 @@ def test_a_code_as_people_type_it(
         ("not_a_code_ask", 409, applier.NO_CODE_ASKED),
         ("nothing_waits", 409, "This application waits for no answer now."),
         ("answered_already", 409, "This application waits for no answer now."),
-        ("short", 422, applier.CODE_FORM),
-        ("long", 422, applier.CODE_FORM),
+        ("short", 422, applier.CODE_IN_BROWSER),
+        ("long", 422, applier.CODE_IN_BROWSER),
         ("words", 422, applier.CODE_FORM),
         ("labelled", 422, applier.CODE_FORM),
         ("another_person", 404, "No such application."),
         ("browserd_says_no", 409, "This application waits for no answer now."),
         ("browserd_away", 409, applier.CODE_NOT_TAKEN),
+        ("client_breaks", 409, applier.CODE_NOT_TAKEN),
         ("ended_meanwhile", 409, "This application waits for no answer now."),
         ("no_lease_named", 409, applier.CODE_NOT_TAKEN),
     ],
@@ -282,6 +284,9 @@ def test_a_code_is_refused_off_the_ask_that_waits_for_it_and_nothing_of_it_is_ke
         if case == "browserd_away":  # a timeout after browserd took it, or before
             site.give(lease, ask, code)
             raise BrowserError("unavailable")
+        if case == "client_breaks":  # any other failure after browserd took it: erased too
+            site.give(lease, ask, code)
+            raise RuntimeError("the event loop is closed")
         given = site.give(lease, ask, code)
         if case == "ended_meanwhile":  # the person gave the browser back as browserd took it
             with factory() as s:
@@ -293,7 +298,8 @@ def test_a_code_is_refused_off_the_ask_that_waits_for_it_and_nothing_of_it_is_ke
     with factory() as s, pytest.raises(applier.QuestionError) as refused:
         applier.answer_code(s, who, app_id, planted, AT, give_, erased.append)
     assert (refused.value.status, refused.value.detail) == (status, detail)
-    assert erased == ([site.lease_id] if case in ("ended_meanwhile", "browserd_away") else [])
+    erasing = ("ended_meanwhile", "browserd_away", "client_breaks")
+    assert erased == ([site.lease_id] if case in erasing else [])
     with factory() as s:
         texts = [json.dumps(r.value) for r in s.scalars(sa.select(ApplicationAnswer))]
     assert not any(planted in text for text in texts)
@@ -440,10 +446,27 @@ WORDS_REFUSED = [
     "OK 404",
     "aBcDeF",
     "K 7 Q 2",
-    "code ４８１５",
+    "code \uff14\uff18\uff11\uff15",
     "K7Q2",
     "it says K7Q2X9 thanks",
     "A B C D",
+    # Small letters (review of PR 849, round 2): a token whose letters and digits, its marks
+    # aside, number 4 or more with a digit among them.
+    "abc-123",
+    "Abc-123",
+    "abc.123",
+    "abc_123",
+    "ab-12-cd",
+    "12-ab-34",
+    "the code is abc-123",
+    "abc!123",
+    "(abc-123)",
+    "abc/123",
+    "a1b2",
+    "x-4815",
+    "q-4-8-1",
+    "Il est 9h30",
+    "abc\u200b123",
 ]
 WORDS_KEPT = [
     "No mail came",
@@ -453,7 +476,7 @@ WORDS_KEPT = [
     "It says error 404",
     "The mail went to spam, give me a minute",
     "I am on it",
-    "Je n'ai rien reçu",
+    "Je n'ai rien re\u00e7u",
     "Ich habe keine Mail bekommen",
     "Wait 10 min please",
     "Use my other address",
@@ -470,6 +493,10 @@ WORDS_KEPT = [
     "Il est 9h",
     "Can you click Resend",
     "My phone is off for 1 hour",
+    "My e-mail is fine",
+    "Maybe a 2nd mail",
+    "Step 3 of 5",
+    "abc-def",
 ]
 
 
@@ -494,38 +521,52 @@ CODE_BOX = [
     ("123\u2013456", "123456"),
     ("123\u2011456", "123456"),
     ("12 34 56", "123456"),
-    ("４８１５１６", "481516"),
+    ("\uff14\uff18\uff11\uff15\uff11\uff16", "481516"),
     (" K7Q2X9 ", "K7Q2X9"),
     ("XKCDQW", "XKCDQW"),
-    ("xkcdqw", "xkcdqw"),
     ("G-123456", "G123456"),
     ("4815_1623", "48151623"),
     ("ABCD-EFGH", "ABCDEFGH"),
     ("1234567890123456", "1234567890123456"),
-    ("4 8 1 5", "4815"),
     ("Q4815162342", "Q4815162342"),
+    # The words box's code like tokens, in small letters too (review of PR 849, round 2).
+    ("abc-123", "abc123"),
+    ("Abc-123", "Abc123"),
+    ("abc.123", "abc123"),
+    ("abc_123", "abc123"),
+    ("ab-12-cd", "ab12cd"),
+    ("12-ab-34", "12ab34"),
+    ("12/34/56", "123456"),
+    ("123,456", "123456"),
+    ("12:34:56", "123456"),
+    ("K7Q+2X9", "K7Q2X9"),
+    ("(481516)", "481516"),
+    ("481516.", "481516"),
+    ("abc\u200b123", "abc123"),
 ]
 CODE_BOX_REFUSED = [
     "123",
     "1" * 17,
     "the code is 4815",
     "Code: 7KD-3QX",
-    "12/34/56",
-    "123,456",
-    "12:34:56",
-    "K7Q+2X9",
     "abc-def",
     "4815!",
     "",
     "   ",
     "-4815",
     "481 516 ok",
-    "ÄBCD",
-    "κωδικός",
+    "\u00c4BCD",
+    "\u03ba\u03c9\u03b4\u03b9\u03ba\u03cc\u03c2",
     "48/15",
     "My code 4815",
     "12 34 56 78 90 12 34 56 7",
     "co de",
+    "xkcdqw",
+    "4 8 1 5",
+    "4815",
+    "48151",
+    "abc 123",
+    "\u0661\u0662\u0663\u0664\u0665\u0666",
 ]
 
 
@@ -537,22 +578,56 @@ def test_the_code_box_takes_the_shapes_sites_send(typed: str, given: str) -> Non
 @pytest.mark.parametrize("typed", CODE_BOX_REFUSED)
 def test_the_code_box_refuses_what_is_no_code(typed: str) -> None:
     assert applier.code_of(typed) == ""
+    assert applier.code_refused(typed) in (applier.CODE_FORM, applier.CODE_IN_BROWSER)
 
 
-# The review's inputs: each refused as words; the code box takes the code-shaped ones, and its
-# refusal of the others (CODE_FORM) says which separators it takes.
-FAMILY = [
-    ("K7Q-2X9", True), ("K7Q 2X9", True), ("ABC-123", True), ("Code: 7KD-3QX", False),
-    ("12/34/56", False), ("123,456", False), ("12:34:56", False), ("123\u2013456", True),
-    ("123\u2011456", True),
-]  # fmt: skip
+@pytest.mark.parametrize(
+    ("typed", "said"),
+    [("4815", applier.CODE_IN_BROWSER), ("48151", applier.CODE_IN_BROWSER),
+     ("48 15", applier.CODE_IN_BROWSER), ("ab-12", applier.CODE_IN_BROWSER),
+     ("1" * 17, applier.CODE_IN_BROWSER),
+     ("\u0661\u0662\u0663\u0664\u0665\u0666", applier.CODE_IN_BROWSER),
+     ("the code is 4815", applier.CODE_FORM), ("xkcdqw", applier.CODE_FORM),
+     ("Code: 7KD-3QX", applier.CODE_FORM)],
+)  # fmt: skip
+def test_a_code_the_app_does_not_type_is_sent_to_the_browser(typed: str, said: str) -> None:
+    # 4 or 5 characters would end honest runs on a year or a phone number (browserd closes the
+    # tools when an answer holds the code): the person types such a code in the browser.
+    assert applier.code_refused(typed) == said
+    assert typed.strip() not in said or not typed.strip()
 
 
-@pytest.mark.parametrize(("text", "taken"), FAMILY)
-def test_what_the_words_box_refuses_the_code_box_takes_when_it_is_a_code(
-    text: str, taken: bool
-) -> None:
-    assert applier.looks_like_code(text)
-    assert bool(applier.code_of(text)) is taken
-    assert "code box" in applier.CODE_ALONE
-    assert "browser" in applier.CODE_ALONE
+# Generated inputs over a code's alphabet, its marks and other scripts: the two properties of
+# the words box and the code box (review of PR 849, round 2).
+ALPHABET = (
+    "abcxyzABCXYZ0123456789"
+    + "-._/:,+!?()'"
+    + "  "
+    + "\u00a0\u2013\u200b\u00ad"
+    + "\uff14\u00e9\u00c4\u03ba\u0661"
+)
+
+
+def generated(count: int, *, spaces: bool) -> list[str]:
+    import random
+
+    pick = random.Random(849)  # noqa: S311  a fixed draw of test inputs, no secret
+    letters = ALPHABET if spaces else ALPHABET.replace(" ", "").replace("\u00a0", "")
+    return ["".join(pick.choice(letters) for _ in range(pick.randint(1, 22))) for _ in range(count)]
+
+
+def test_nothing_the_code_box_takes_passes_as_words() -> None:
+    taken = [text for text in generated(20_000, spaces=True) if applier.code_of(text)]
+    assert len(taken) > 500  # the generator reaches codes
+    assert [text for text in taken if not applier.looks_like_code(text)] == []
+
+
+def test_a_token_refused_as_code_like_is_taken_or_sent_to_the_browser() -> None:
+    tokens = [t for t in generated(20_000, spaces=False) if len(t.split()) == 1]
+    refused = [t for t in tokens if applier._code_token(applier.WORD.findall(
+        unicodedata.normalize("NFKC", t)))]  # fmt: skip
+    assert len(refused) > 500
+    for token in refused:
+        assert applier.looks_like_code(token)
+        if not applier.code_of(token):
+            assert applier.code_refused(token) == applier.CODE_IN_BROWSER, token

@@ -200,20 +200,25 @@ PERSON_SAID = "The person's own words, not a page's."
 # A25, the code the person gives in the app (owner, 2026-11-26: "les deux sont possibles"):
 # browserd keeps it on the lease and types it (`answer_code`, ApplySession.type_code); no text
 # of it is stored, logged, told to the model or shown again.
-CODE = re.compile(r"^[0-9A-Za-z]{4,16}$")  # browserd routes.CODE
-# Between the groups of a code as sites send it: spaces, hyphens and dashes, dots, underscores.
-CODE_GAPS = re.compile(r"[\s.\-_\u2010-\u2015\u2212]+")
+# 6 at least (planner default, review of PR 849): browserd ends the run when an answer holds the
+# code, and a shorter one would match a year or a phone number on honest pages.
+CODE = re.compile(r"^[0-9A-Za-z]{6,16}$")  # browserd routes.CODE
 GIVING_S = 30  # a code on its way to browserd holds its ask that long (TIMEOUT_S is 5 s)
 GAVE_CODE = "\x00code"  # went_on's answer for an ask the person answered with a code
 CODE_SAID = "The code you gave, typed by the app on the site and never shown to the assistant."
 CODE_GIVEN = (
     "The person gave the code in the app. At once, before any other act, call apply_type_code "
-    "with the ref of the site's one time code box in your last snapshot: the app types it there "
-    "once, and you never see it."
+    "with the ref of the site's one time code box in your last snapshot, and the ref of the "
+    "button that sends it when the form has one: the app types it there once, sends it and "
+    "answers only whether the site took it. You never see it."
 )
 CODE_FORM = (
-    "A code is 4 to 16 letters or digits, given alone (spaces, hyphens or dots between its "
-    "groups are fine)."
+    "A code is 6 to 16 letters or digits, given alone (spaces, hyphens, dots or other marks "
+    "between its groups are fine; in capitals when it has no digit)."
+)
+CODE_IN_BROWSER = (
+    "The app types a code of 6 to 16 letters or digits only. Type this one in the browser "
+    "yourself: open Use the browser myself, then Let the assistant continue."
 )
 CODE_ALONE = (
     "This may hold a code, so it is not sent to the assistant: give a code in the code box, or "
@@ -1885,9 +1890,15 @@ def looks_like_code(text: str) -> bool:
     code like words, whatever spaces or punctuation lie between them ("K7Q-2X9", "12 34 56",
     "Code: ABC-123"), make one run: True when a run holds 4 or more letters and digits. What
     passes: words in small letters or with a capital first, and lone numbers of 1 to 3 digits
-    ("Try again in 5 minutes"). Fail closed: a year, a time or a word in capitals is refused."""
+    ("Try again in 5 minutes"). Fail closed: a year, a time or a word in capitals is refused.
+    Beside that run, a token (no whitespace in it) whose letters and digits, every other mark
+    aside, number 4 or more with a digit among them is refused whatever its case ("abc-123",
+    "ab-12-cd"), the shapes `code_of` takes when they are 6 to 16 long."""
+    folded = unicodedata.normalize("NFKC", text)
+    if any(_code_token(WORD.findall(token)) for token in folded.split()):
+        return True
     run = 0
-    for word in WORD.findall(unicodedata.normalize("NFKC", text)):
+    for word in WORD.findall(folded):
         code_like = (
             any(c.isdigit() for c in word)
             or any(c.isupper() for c in word[1:])
@@ -1899,18 +1910,39 @@ def looks_like_code(text: str) -> bool:
     return False
 
 
+def _code_token(groups: list[str]) -> bool:
+    joined = "".join(groups)
+    return len(joined) >= 4 and any(c.isdigit() for c in joined)
+
+
+def _code_shape(raw: str) -> str:
+    """The letters and digits of `raw` when it has a code's shape, of any length and script,
+    else "": after NFKC, its groups are its runs of letters or digits (any other mark splits
+    them); one token (no whitespace) with a digit, whatever its case, or groups that each hold
+    a digit or are in capitals ("4815 1623", "K7Q-2X9", "abc-123", "XKCDQW")."""
+    tokens = [WORD.findall(t) for t in unicodedata.normalize("NFKC", raw).split()]
+    tokens = [groups for groups in tokens if groups]
+    groups = [g for t in tokens for g in t]
+    joined = "".join(groups)
+    if len(tokens) == 1 and any(c.isdigit() for c in joined):
+        return joined
+    if groups and all(any(c.isdigit() for c in g) or g.isupper() for g in groups):
+        return joined
+    return ""
+
+
 def code_of(raw: str) -> str:
     """The code the person typed in the code box, as browserd types it ("" when it is none):
-    after NFKC, groups split by spaces, hyphens or dashes, dots or underscores, joined into 4 to
-    16 ASCII letters or digits; with two groups or more, each holds a digit or is in capitals
-    ("4815 1623", "K7Q-2X9", "ABC.123"), so words ("the code is 4815") are no code."""
-    groups = CODE_GAPS.split(unicodedata.normalize("NFKC", raw).strip())
-    code = "".join(groups)
-    if not CODE.fullmatch(code):
-        return ""
-    if len(groups) > 1 and not all(any(c.isdigit() for c in g) or g.isupper() for g in groups):
-        return ""
-    return code
+    `_code_shape` of 6 to 16 ASCII letters or digits, so words ("the code is 4815") and small
+    letters with no digit are no code. Nothing it takes passes `looks_like_code` as words."""
+    code = _code_shape(raw)
+    return code if CODE.fullmatch(code) else ""
+
+
+def code_refused(raw: str) -> str:
+    """Why the code box refuses `raw`, never repeating it: a code's shape the app does not type
+    (shorter than 6, longer than 16, another script) is typed in the browser, else CODE_FORM."""
+    return CODE_IN_BROWSER if _code_shape(raw) else CODE_FORM
 
 
 def _code_ask(db: Session, application: Application, now: datetime) -> ApplicationAnswer:
@@ -1973,7 +2005,7 @@ def answer_code(
         raise QuestionError(404, "No such application.")
     row = _code_ask(db, found[0], now)
     if not CODE.fullmatch(code):
-        raise QuestionError(422, CODE_FORM)
+        raise QuestionError(422, code_refused(raw))
     key, lease_id, ask_id = row.field_key, _value(row).get("lease_id"), _value(row).get("ask_id")
     if not (isinstance(lease_id, str) and lease_id and isinstance(ask_id, str) and ask_id):
         raise QuestionError(409, CODE_NOT_TAKEN)
@@ -1984,8 +2016,11 @@ def answer_code(
     db.commit()
     try:
         given: bool | None = give(lease_id, ask_id, code)
-    except BrowserError:
-        given = None  # a timeout too: browserd may have taken it, so it is erased below
+    except Exception as exc:
+        # Any failure, a timeout too: browserd may have taken it, so it is erased below.
+        if not isinstance(exc, BrowserError):
+            logger.warning("apply.code_not_given", extra={"error": type(exc).__name__})
+        given = None
     if given is not True:
         if _given_up(db, application_id, key, mark) and given is None:
             erase(lease_id)
