@@ -201,7 +201,9 @@ PERSON_SAID = "The person's own words, not a page's."
 # browserd keeps it on the lease and types it (`answer_code`, ApplySession.type_code); no text
 # of it is stored, logged, told to the model or shown again.
 CODE = re.compile(r"^[0-9A-Za-z]{4,16}$")  # browserd routes.CODE
-CODE_GAPS = re.compile(r"[\s-]+")  # between groups of digits only ("123 456", "12-34-56")
+# Between the groups of a code as sites send it: spaces, hyphens and dashes, dots, underscores.
+CODE_GAPS = re.compile(r"[\s.\-_\u2010-\u2015\u2212]+")
+GIVING_S = 30  # a code on its way to browserd holds its ask that long (TIMEOUT_S is 5 s)
 GAVE_CODE = "\x00code"  # went_on's answer for an ask the person answered with a code
 CODE_SAID = "The code you gave, typed by the app on the site and never shown to the assistant."
 CODE_GIVEN = (
@@ -209,11 +211,16 @@ CODE_GIVEN = (
     "with the ref of the site's one time code box in your last snapshot: the app types it there "
     "once, and you never see it."
 )
-CODE_FORM = "A code is 4 to 16 letters or digits, given alone."
-CODE_ALONE = (
-    "This looks like a code: give it in the code box, so the app types it on the site without "
-    "the assistant seeing it. Words here go to the assistant as you write them."
+CODE_FORM = (
+    "A code is 4 to 16 letters or digits, given alone (spaces, hyphens or dots between its "
+    "groups are fine)."
 )
+CODE_ALONE = (
+    "This may hold a code, so it is not sent to the assistant: give a code in the code box, or "
+    "type it in the browser yourself. Words here go to the assistant as you write them, so write "
+    "them with no digits and no word in capitals."
+)
+CODE_ON_ITS_WAY = "A code for this question is on its way already."
 NO_CODE_ASKED = "The assistant asks for no code now."
 CODE_NOT_TAKEN = (
     "The browser could not take the code now. Type it in the browser yourself: open Use the "
@@ -1859,6 +1866,8 @@ def _answer_ask(db: Session, application: Application, answer: str, now: datetim
         text = bank.saved_text(answer[: bank.VALUE_MAX])
     except ValueError as exc:
         raise QuestionError(422, str(exc)) from None
+    if row.kind == "ask:code" and _on_its_way(row, now):
+        raise QuestionError(409, CODE_ON_ITS_WAY)
     if row.kind == "ask:code" and looks_like_code(text):
         raise QuestionError(422, CODE_ALONE)
     row.value = {**_value(row), "answer": text, "answered_at": now.isoformat()}
@@ -1866,22 +1875,77 @@ def _answer_ask(db: Session, application: Application, answer: str, now: datetim
     return application
 
 
+WORD = re.compile(r"[^\W_]+")
+
+
 def looks_like_code(text: str) -> bool:
-    """A word of 4 characters or more that holds a digit (digits written in groups joined
-    first: "123 456", "12-34-56"): what a person's words to an ask of kind code may not hold,
-    since words reach the model. Fail closed: a year or a reference is refused too."""
-    text = re.sub(r"(?<=\d)[\s.\-]+(?=\d)", "", unicodedata.normalize("NFKC", text))
-    return any(len(w) >= 4 and any(c.isdigit() for c in w) for w in re.split(r"\W+", text))
+    """Words to an ask of kind code reach the model, so they may hold nothing a code can be
+    (SPEC-apply, A25). After NFKC, a word is a run of letters or digits; it is code like when it
+    holds a digit or a capital after its first character, or is one capital alone. Consecutive
+    code like words, whatever spaces or punctuation lie between them ("K7Q-2X9", "12 34 56",
+    "Code: ABC-123"), make one run: True when a run holds 4 or more letters and digits. What
+    passes: words in small letters or with a capital first, and lone numbers of 1 to 3 digits
+    ("Try again in 5 minutes"). Fail closed: a year, a time or a word in capitals is refused."""
+    run = 0
+    for word in WORD.findall(unicodedata.normalize("NFKC", text)):
+        code_like = (
+            any(c.isdigit() for c in word)
+            or any(c.isupper() for c in word[1:])
+            or (len(word) == 1 and word.isupper())
+        )
+        run = run + len(word) if code_like else 0
+        if run >= 4:
+            return True
+    return False
 
 
-def _code_ask(db: Session, application: Application) -> ApplicationAnswer:
-    """The ask of kind code the run waits on with no answer yet, else QuestionError 409."""
+def code_of(raw: str) -> str:
+    """The code the person typed in the code box, as browserd types it ("" when it is none):
+    after NFKC, groups split by spaces, hyphens or dashes, dots or underscores, joined into 4 to
+    16 ASCII letters or digits; with two groups or more, each holds a digit or is in capitals
+    ("4815 1623", "K7Q-2X9", "ABC.123"), so words ("the code is 4815") are no code."""
+    groups = CODE_GAPS.split(unicodedata.normalize("NFKC", raw).strip())
+    code = "".join(groups)
+    if not CODE.fullmatch(code):
+        return ""
+    if len(groups) > 1 and not all(any(c.isdigit() for c in g) or g.isupper() for g in groups):
+        return ""
+    return code
+
+
+def _code_ask(db: Session, application: Application, now: datetime) -> ApplicationAnswer:
+    """The ask of kind code the run waits on with no answer yet and no code on its way to
+    browserd (`giving`, GIVING_S at most), else QuestionError 409."""
     row = open_ask(db, application) if waiting(application) else None
     if row is None or _given(row) is not None:
         raise QuestionError(409, "This application waits for no answer now.")
     if row.kind != "ask:code":
         raise QuestionError(409, NO_CODE_ASKED)
+    if _on_its_way(row, now):
+        raise QuestionError(409, CODE_ON_ITS_WAY)
     return row
+
+
+def _on_its_way(row: ApplicationAnswer, now: datetime) -> bool:
+    """A code for this ask is on its way to browserd (`answer_code`), GIVING_S at most."""
+    try:
+        return now < datetime.fromisoformat(_value(row)["giving_at"]) + timedelta(seconds=GIVING_S)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _given_up(db: Session, application_id: uuid.UUID, key: str, mark: str) -> bool:
+    """Takes the marker `mark` of a code on its way off its ask; True when it was still this
+    answer's (no later answer took the ask over). Commits."""
+    from app.apply import run
+
+    found = run._locked(db, application_id)
+    row = db.get(ApplicationAnswer, (application_id, key)) if found is not None else None
+    ours = row is not None and _value(row).get("giving") == mark
+    if ours:
+        row.value = {k: v for k, v in _value(row).items() if k not in ("giving", "giving_at")}
+    db.commit()
+    return ours
 
 
 def answer_code(
@@ -1896,43 +1960,54 @@ def answer_code(
     """A25: the code the person gives in the app for the ask of kind code the run waits on.
     `give(lease_id, ask_id, code)` hands it to browserd, which keeps it on that lease for that ask
     (False: no such ask waits there); the application's lock is not held over that call, so the
-    ask is read again after it, and a code browserd took for an ask that ended meanwhile is
-    erased (`erase(lease_id)`). The ask row then says a code was given (`code`), never which:
+    ask is marked first (`giving`: one code per ask, a second answer meanwhile refused) and read
+    again after it; a code browserd took for an ask that ended meanwhile, or may have taken
+    before a failure or a timeout, is erased (`erase(lease_id)`), only while the mark is still
+    this answer's. The ask row then says a code was given (`code`), never which:
     the code is in no row, event, log line or answer. The caller commits."""
     from app.apply import run
 
-    groups = CODE_GAPS.split(unicodedata.normalize("NFKC", raw).strip())
-    spaced = len(groups) > 1 and not all(g.isdigit() for g in groups)
-    code = "" if spaced else "".join(groups)
+    code = code_of(raw)
     found = run._locked(db, application_id)
     if found is None or found[0].user_id != user_id:
         raise QuestionError(404, "No such application.")
-    row = _code_ask(db, found[0])
+    row = _code_ask(db, found[0], now)
     if not CODE.fullmatch(code):
         raise QuestionError(422, CODE_FORM)
     key, lease_id, ask_id = row.field_key, _value(row).get("lease_id"), _value(row).get("ask_id")
-    db.rollback()  # browserd's call runs with no lock held
     if not (isinstance(lease_id, str) and lease_id and isinstance(ask_id, str) and ask_id):
         raise QuestionError(409, CODE_NOT_TAKEN)
+    # One code per ask: a second answer meanwhile is refused (`_code_ask`), so neither can
+    # overwrite the other's code nor erase it. browserd's call runs with no lock held.
+    mark = secrets.token_hex(8)
+    row.value = {**_value(row), "giving": mark, "giving_at": now.isoformat()}
+    db.commit()
     try:
-        given = give(lease_id, ask_id, code)
+        given: bool | None = give(lease_id, ask_id, code)
     except BrowserError:
-        raise QuestionError(409, CODE_NOT_TAKEN) from None
-    if not given:
+        given = None  # a timeout too: browserd may have taken it, so it is erased below
+    if given is not True:
+        if _given_up(db, application_id, key, mark) and given is None:
+            erase(lease_id)
+        if given is None:
+            raise QuestionError(409, CODE_NOT_TAKEN)
         raise QuestionError(409, "This application waits for no answer now.")
     try:
         found = run._locked(db, application_id)
-        if found is None:
+        if found is None or not waiting(found[0]):
             raise QuestionError(409, "This application waits for no answer now.")
-        row = _code_ask(db, found[0])
-        if row.field_key != key or _value(row).get("ask_id") != ask_id:
+        row = open_ask(db, found[0])
+        if row is None or row.field_key != key or _given(row) is not None:
+            raise QuestionError(409, "This application waits for no answer now.")
+        if _value(row).get("giving") != mark:
             raise QuestionError(409, "This application waits for no answer now.")
     except QuestionError:
         db.rollback()
-        with contextlib.suppress(BrowserError):
+        if _given_up(db, application_id, key, mark):
             erase(lease_id)
         raise
-    row.value = {**_value(row), "code": True, "answered_at": now.isoformat()}
+    value = {k: v for k, v in _value(row).items() if k not in ("giving", "giving_at")}
+    row.value = {**value, "code": True, "answered_at": now.isoformat()}
     run._event(db, found[0], "person_answered", now, remembered=False, code=True)
     return found[0]
 
