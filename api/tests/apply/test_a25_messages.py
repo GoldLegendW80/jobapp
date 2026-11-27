@@ -463,6 +463,9 @@ def test_a_planted_message_reaches_the_model_only_as_the_person_s_words_in_no_ev
     for record in caplog.records:
         assert planted not in json.dumps(record.__dict__, default=str)
     assert planted not in json.dumps([e.data for e in events(db, app_id)])
+    # The runner's tool_result event keeps an answer's text unless both of these hold.
+    assert applier.APPLY_AGENT.private_io
+    assert not applier.APPLY_AGENT.step_detail
     rows = [row for row in tables(db) if planted in row]
     assert len(rows) == 1  # its chat row only
     assert applier.MESSAGE_KEY in rows[0]
