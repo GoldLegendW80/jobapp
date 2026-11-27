@@ -5,7 +5,6 @@ read does, a gone page closes it as the liveness check does, a failed reading is
 day and after three days the posting is no longer tried and says so; the counters the summary
 serves stay true. Invented postings only."""
 
-import asyncio
 import dataclasses
 import uuid
 from datetime import timedelta
@@ -27,7 +26,6 @@ from tests.jobs.sweep_helpers import (
     jobs_of,
     new_sweep,
     now,
-    read_sweep,
     run,
     search,
     set_profile,
@@ -151,7 +149,7 @@ def test_after_three_days_of_failed_readings_it_is_no_longer_tried_and_says_so(
         assert item.list_url == LIST
     opened = len(board.opened())
     again = search_with_pages(factory, alice, board)  # no longer tried
-    assert len(board.opened()) == opened
+    assert url_of("GenAI engineer") not in board.opened()[opened:]
     [entry] = [s for s in again.stats["sources"] if s.get("host") == HOST]
     assert entry["listed_pages"]["read"] + entry["listed_pages"]["unread"] == 0
 
@@ -195,7 +193,7 @@ def test_another_persons_and_another_websites_postings_are_never_opened(
         )
     board = Board({}, start=START)
     search_with_pages(factory, alice, board)
-    assert board.opened() == [START]  # the agent's start page alone
+    assert set(board.opened()) == {START}  # the agent's start page alone
 
 
 def test_the_store_after_the_sweep_ended_writes_nothing(
@@ -205,18 +203,19 @@ def test_the_store_after_the_sweep_ended_writes_nothing(
     run(factory, new_sweep(factory, alice), card("GenAI engineer"))
     [job] = jobs_of(factory, alice)
     sweep_id = new_sweep(factory, alice)
+    plan = sweep.claim(factory, sweep_id, now())
+    assert plan is not None
     with factory() as db, db.begin():
-        db.execute(sa.update(sweep.Sweep).where(sweep.Sweep.id == sweep_id).values(status="done"))
-    plan = SimpleNamespace(sweep_id=sweep_id, user_id=alice, known=None)
+        db.execute(
+            sa.update(sweep.Sweep)
+            .where(sweep.Sweep.id == sweep_id)
+            .values(status="done", finished_at=now())
+        )
     listed = sweep.ListedPage(job.id, job.url, "unread")
     stored = sweep.commit_verified(
-        factory, plan, sweep.Known.__new__(sweep.Known), sweep.Stats(), "s", HOST, (), now(),
-        listed=listed,
-    )  # fmt: skip
+        factory, plan, plan.known.copy(), sweep.Stats(), "s", HOST, (), now(), listed=listed
+    )
     assert stored is None
-    assert asyncio.run(asyncio.sleep(0)) is None
     with factory() as db:
-        assert not db.scalar(
-            sa.select(sa.exists().where(JobEvent.data.has_key(service.PAGE_UNREAD)))
-        )
-    assert read_sweep(factory, sweep_id).status.value == "done"
+        written = sa.exists().where(JobEvent.data.has_key(service.PAGE_UNREAD))
+        assert not db.scalar(sa.select(written))

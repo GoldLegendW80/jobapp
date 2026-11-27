@@ -360,6 +360,7 @@ class _Site:
     # the app's reading of the pages of the postings seen only in a list did (listed_pages).
     carded: dict[str, None] = field(default_factory=dict)
     listed_pages: dict[str, Any] | None = None
+    reads_pages: bool = True  # False on a retry (B24) after an attempt that read them
 
     def _excluded(self, title: str, location: str) -> str:
         """The person's unwanted title or place a posting read meets, as a note ("Unwanted
@@ -657,6 +658,7 @@ async def _one(
         source_id=entry["source_id"],
         host=entry.get("host") or "",
         flow=getattr(plan, "flow", None),
+        reads_pages=entry.get("listed_pages") is None,  # jobs J36: once a website and search
     )
     try:
         code = await _website(runner, plan, context, planned.scope, site, deadline, turn)
@@ -720,6 +722,8 @@ async def _website(
         )
         # Jobs J36: after the agent, on this lease, the pages of the postings seen in a list.
         listed = functools.partial(listed_pages.read, site=site, runner=runner, plan=plan)
+        if not site.reads_pages:
+            listed = None
         return await _search(
             runner.finder, pages, scope, str(plan.user_id), site, runner.base_url, listed
         )
