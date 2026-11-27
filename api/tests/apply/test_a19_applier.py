@@ -60,9 +60,13 @@ class Site:
         self.calls: list[tuple[str, bool]] = []
         self.watched, self.user_id, self.lease_id, self._token = watched, "", "lease-1", "t"
         self.client = Client(self)
+        self.erased = 0
 
     async def _held(self) -> None:
         return None
+
+    async def erase_code(self) -> None:
+        self.erased += 1  # A25: the run's end drops a code the person gave
 
     async def put_file(self, name: str, data: bytes) -> dict[str, Any]:
         self.files[name] = data

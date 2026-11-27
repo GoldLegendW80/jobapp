@@ -45,8 +45,9 @@ class AskSite(Site):
         self.begun: list[int] = []
         self.resumed = 0
 
-    async def ask_begin(self, left_s: int) -> str:
+    async def ask_begin(self, left_s: int, ask: str = "", code: bool = False) -> str:
         self.begun.append(left_s)
+        self.ask, self.takes_code = ask, code
         return "jobs.example.org"
 
     async def ask_state(self) -> str:
@@ -295,21 +296,25 @@ def test_a_run_cancelled_in_activity_or_dead_during_its_wait(
     assert applier.PERSON_LATE not in kinds(db, app_id)  # somebody may have come: not "late"
 
 
-def test_a_code_is_never_taken_in_the_app_s_box(
+def test_a_code_is_never_taken_as_words_in_the_app_s_box(
     db: Session, factory: sessionmaker[Session], person_a: Person
 ) -> None:
-    """Planted code: a run's code question refuses the app's box (the person types it in the
-    browser), and nothing of it is stored on the ask or in any event."""
+    """Planted code: words to a run's code question that hold a code are refused (the code goes
+    in the code box, `answer_code`, and words reach the model), and nothing of it is stored."""
     app_id = started(db, person_a, Mode.direct)
     waits(db, factory, app_id, "code")
     planted = str(uuid.uuid4().int)[:8]
-    with factory() as s, pytest.raises(applier.QuestionError) as refused:
-        applier.answer_question(s, person_a.user_id, app_id, planted, False, AT)
-    assert (refused.value.status, refused.value.detail) == (409, applier.CODE_IN_BROWSER)
+    for words in (planted, f"The code is {planted[:4]} {planted[4:]}."):
+        with factory() as s, pytest.raises(applier.QuestionError) as refused:
+            applier.answer_question(s, person_a.user_id, app_id, words, False, AT)
+        assert (refused.value.status, refused.value.detail) == (422, applier.CODE_ALONE)
     found = application(db, app_id)
     assert applier.open_ask(db, found).value["answer"] is None
     assert planted not in json.dumps([e.data for e in events(db, app_id)])
     assert planted not in json.dumps(applier.chat(db, found))
+    # Words with no code still answer it: the person says what came, or did not.
+    answer(factory, person_a, app_id, "No mail came: ask the site to send it again.")
+    assert applier.open_ask(db, application(db, app_id)).value["answer"].startswith("No mail")
 
 
 @pytest.mark.parametrize(

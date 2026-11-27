@@ -83,7 +83,7 @@ import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlsplit
 
@@ -201,8 +201,8 @@ PERSON_SAID = "The person's own words, not a page's."
 # A25, the code the person gives in the app (owner, 2026-11-26: "les deux sont possibles"):
 # browserd keeps it on the lease and types it (`answer_code`, ApplySession.type_code); no text
 # of it is stored, logged, told to the model or shown again.
-CODE = re.compile(r"^[0-9A-Za-z]{4,16}$")  # browserd routes.CODE, after CODE_GAPS
-CODE_GAPS = re.compile(r"[\s-]+")
+CODE = re.compile(r"^[0-9A-Za-z]{4,16}$")  # browserd routes.CODE
+CODE_GAPS = re.compile(r"[\s-]+")  # between groups of digits only ("123 456", "12-34-56")
 GAVE_CODE = "\x00code"  # went_on's answer for an ask the person answered with a code
 CODE_SAID = "The code you gave, typed by the app on the site and never shown to the assistant."
 CODE_GIVEN = (
@@ -210,7 +210,7 @@ CODE_GIVEN = (
     "with the ref of the site's one time code box in your last snapshot: the app types it there "
     "once, and you never see it."
 )
-CODE_FORM = "A code is 4 to 16 letters or digits."
+CODE_FORM = "A code is 4 to 16 letters or digits, given alone."
 CODE_ALONE = (
     "This looks like a code: give it in the code box, so the app types it on the site without "
     "the assistant seeing it. Words here go to the assistant as you write them."
@@ -1936,7 +1936,9 @@ def answer_code(
     the code is in no row, event, log line or answer. The caller commits."""
     from app.apply import run
 
-    code = CODE_GAPS.sub("", unicodedata.normalize("NFKC", raw))
+    groups = CODE_GAPS.split(unicodedata.normalize("NFKC", raw).strip())
+    spaced = len(groups) > 1 and not all(g.isdigit() for g in groups)
+    code = "" if spaced else "".join(groups)
     found = run._locked(db, application_id)
     if found is None or found[0].user_id != user_id:
         raise QuestionError(404, "No such application.")
@@ -2086,9 +2088,14 @@ def chat(db: Session, application: Application) -> list[dict[str, Any]]:
         elif isinstance(value.get("answer"), str):
             out.append({"at": value.get("answered_at"), "who": "person", "kind": "answer",
                         "text": value["answer"], "end": None})  # fmt: skip
-    out += [_said_line(_value(row)) for row in _messages(db, application)]
-    first = datetime.min.replace(tzinfo=UTC)
-    return sorted(out, key=lambda line: _at(line["at"]) or first)
+    said = [_said_line(_value(row)) for row in _messages(db, application)]
+    merged: list[dict[str, Any]] = []
+    for line in out:  # each message before the first ask or answer said after it
+        at = _at(line["at"])
+        while said and at is not None and (_at(said[0]["at"]) or at) < at:
+            merged.append(said.pop(0))
+        merged.append(line)
+    return merged + said
 
 
 def retry_asked(db: Session, application: Application, now: datetime) -> None:

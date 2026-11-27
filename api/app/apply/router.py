@@ -57,6 +57,7 @@ NOT_FOUND = "No such posting."
 NO_APPLICATION = "No such application."
 NO_STORE = {"Cache-Control": "no-store"}
 BUSY = "This posting is busy with another change. Try again in a moment."
+CODE_SENT_MAX = 64  # A25: a code as the person types it, spaces and hyphens included
 
 
 def _no_store(response: Response) -> None:
@@ -149,14 +150,9 @@ class QuestionIn(BaseModel):
 
     answer: str = Field(default="", max_length=5000)
     remember: bool = False
-    # A25: the code an ask of kind code waits for; never with an answer.
-    code: str | None = Field(default=None, max_length=64)
-
-    @model_validator(mode="after")
-    def _a_code_alone(self) -> "QuestionIn":
-        if self.code is not None and (self.answer or self.remember):
-            raise ValueError("A code comes alone.")
-        return self
+    # A25: the code an ask of kind code waits for, never with an answer. Checked by the route,
+    # whose refusals never echo it (a validation error would).
+    code: str | None = None
 
 
 class MessageIn(BaseModel):
@@ -439,6 +435,8 @@ def answer_question(
     from app.apply import applier
 
     found = _uuid_or_404(application_id, NO_APPLICATION)
+    if body.code is not None and (body.answer or body.remember or len(body.code) > CODE_SENT_MAX):
+        raise HTTPException(status_code=422, detail=applier.CODE_FORM)
     try:
         if body.code is not None:
             application = applier.answer_code(
