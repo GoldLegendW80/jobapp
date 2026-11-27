@@ -16,10 +16,11 @@ import {
   StatusBadge,
 } from "@/components/shared/jobs/badges";
 import { CriteriaBadge } from "@/components/shared/jobs/criteria-badge";
+import { ListedMention } from "@/components/shared/jobs/listed-mention";
 
 /** One posting of the list as a compact card: the company's initial, the title, the company,
- * the place, what is outside the criteria of its search, the pay, the date found, the fit, the
- * status and its Apply. */
+ * the place, what is outside the criteria of its search, whether it was seen only in a list, the
+ * pay, the date found, the fit, the status and its Apply. */
 export function PostingItem({
   job,
   index,
@@ -100,6 +101,7 @@ export function PostingItem({
           {placeLine(job)}
         </p>
         <CriteriaBadge job={job} className="my-0.5" />
+        <ListedMention job={job} focusable={focusable} />
         <p className="flex items-baseline justify-between gap-2 text-xs">
           <PayText job={job} className="font-medium" />
           <time

@@ -16,7 +16,7 @@ import re
 import unicodedata
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -27,7 +27,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session, SessionTransaction, undefer
 
 from app.agents.models import Proposal, ProposalDecider, ProposalStatus
-from app.jobs import criteria_badge, scoring, signals
+from app.jobs import criteria_badge, scoring, searches, signals
 from app.jobs import slug as slugs
 from app.jobs import undo as undo_tokens
 from app.jobs.models import (
@@ -39,13 +39,16 @@ from app.jobs.models import (
     JobFile,
     JobStatus,
     PayPeriod,
+    SavedSearch,
     Sweep,
     SweepStatus,
     SweepTrigger,
     WorkMode,
 )
+from app.jobs.never_apply import NeverApplyRule
 from app.jobs.schemas import ImportFile, ImportJob
 from app.jobs.scoring import ScoreResult
+from app.profile import matching
 from app.profile.models import Profile
 from app.profile.schemas import SearchSection, SkillsSection
 
@@ -115,6 +118,175 @@ def listed_refusal(db: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> str | 
         sa.select(Job.list_url).where(Job.id == job_id, Job.user_id == user_id)
     ).scalar_one_or_none()
     return LISTED_WAITS if listed is not None else None
+
+
+DESCRIPTION_CHARS = 300  # sweep.DESCRIPTION_CHARS
+# Jobs J31b: reader.CUT_MIN_CHARS, under which a piece of a page is no posting's text.
+TEXT_MIN_CHARS = 300
+TEXT_SHORT = (
+    "This text is too short to be the posting's: paste its whole text, from its title to how to "
+    "apply."
+)
+PAGE_READ_ALREADY = "Its own page was read meanwhile: the posting already has its text."
+
+
+class TextRefusedError(Exception):
+    """Jobs J31b: a text the person pasted that the posting does not take, with its code, its
+    sentence and its status."""
+
+    def __init__(self, code: str, detail: str, status: int) -> None:
+        super().__init__(code)
+        self.code, self.detail, self.status = code, detail, status
+
+
+class SearchUnreadableError(Exception):
+    """The stored search a posting's exclusions read no longer validates or compiles."""
+
+
+def page_text(
+    db: Session,
+    job: Job,
+    text: str,
+    event: tuple[JobEventKind, dict[str, Any]],
+    now: datetime,
+    *,
+    rule: NeverApplyRule | None,
+    excluded: str,
+    skills: SkillsSection | None,
+    search: SearchSection | None,
+    via: str,
+    published: date | None = None,
+    stated: ContractType | None = None,
+) -> bool:
+    """Jobs J31: the text of the own page of a posting kept from a card of a list replaces the
+    card's (`job`, locked, its text loaded), as a later search's read (`sweep._page_read`) and
+    the person's paste (`set_listed_text`) do: the never apply `rule` its title and company
+    met, else the person's unwanted title or place it met (`excluded`), skips a posting still
+    `found` with it as its note (a status the person set stays); the mention goes, the posting
+    reader reads it again, its date and its stated contract are taken when it had none, and it
+    is scored again (a fit the person set stays), the fit event `via` the text's source. Writes
+    `event` first, then the others; the caller sets `updated_at` and flushes. Returns whether
+    `rule` skipped it."""
+    events = [event]
+    note, why = (rule.text, "never_apply") if rule is not None else (excluded, "unwanted")
+    skipped = False
+    if note and job.status is JobStatus.found:
+        events.append((JobEventKind.status, {"from": "found", "to": "skipped", "via": why}))
+        job.status = JobStatus.skipped
+        skipped = rule is not None
+        if not job.notes:
+            events.append((JobEventKind.note, {"from": "", "to": note, "via": why}))
+            job.notes = note
+    job.list_url = None
+    job.posting_text = text or None
+    job.description = text[:DESCRIPTION_CHARS] or None
+    for name, value in signals.stored(text).items():
+        setattr(job, name, value)
+    job.published_on = job.published_on or published
+    if stated is not None and not job.contract_stated:  # a contract the person set is stated
+        job.contract_type = stated
+        job.contract_stated = True
+    job.read_at = None
+    job.read_attempts = 0
+    score = (
+        scoring.score(text, skills, title=job.title, search=search)
+        if skills is not None and text.strip()
+        else None
+    )
+    if score is not None and not job.fit_overridden:
+        if job.fit != score.fit:
+            events.append(
+                (JobEventKind.fit, {"from": job.fit, "to": score.fit, "manual": False, "via": via})
+            )
+        job.fit, job.competencies, job.gaps = score.fit, list(score.competencies), list(score.gaps)
+    for kind, payload in events:
+        add_event(db, job, kind, payload, now)
+    return skipped
+
+
+def posting_search(
+    db: Session, user_id: uuid.UUID, search_id: uuid.UUID | None
+) -> SearchSection | None:
+    """Jobs J31b: the search a posting's exclusions and fit read, the one its badge reads
+    (`criteria_badge.criteria_for`): its saved search's criteria over the person's settings
+    (`searches.merged`), else the main search; None when the person has none. Raises
+    SearchUnreadableError when the stored one no longer validates."""
+    sections = db.execute(
+        sa.select(Profile.sections).where(Profile.user_id == user_id)
+    ).scalar_one_or_none()
+    raw = (sections or {}).get("search")
+    if search_id is not None:
+        saved = db.execute(
+            sa.select(SavedSearch.criteria).where(
+                SavedSearch.user_id == user_id, SavedSearch.id == search_id
+            )
+        ).scalar_one_or_none()
+        if isinstance(saved, Mapping):
+            raw = searches.merged(raw if isinstance(raw, dict) else None, saved)
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return SearchSection.model_validate(raw)
+    except ValueError:
+        raise SearchUnreadableError from None
+
+
+def unwanted_of(search: SearchSection | None, title: str, location: str) -> str:
+    """The person's unwanted title or place a posting meets, as the note a search writes for it
+    ("Unwanted title: Stage", `_Site._excluded` of the browser's sources), else "". Raises
+    SearchUnreadableError when a stored term list no longer compiles."""
+    if search is None:
+        return ""
+    for name, terms, text in (
+        ("title", search.title_exclude, title),
+        ("place", search.location_exclude, location),
+    ):
+        try:
+            pattern = matching.compile_terms(list(terms.terms), terms.advanced_regex)
+        except re.error:
+            raise SearchUnreadableError from None
+        if pattern is not None and (met := pattern.search(text)):
+            return f"Unwanted {name}: {met.group(0)}"
+    return ""
+
+
+def set_listed_text(
+    db: Session, user_id: uuid.UUID, job_id: uuid.UUID, text: str, now: datetime
+) -> Job | None:
+    """Jobs J31b: the text the person pasted for a posting seen only in a list replaces its
+    card's (`page_text`), with an `edit` event naming the list; the never apply rules and the
+    unwanted titles and places of the posting's search (`posting_search`) read its title,
+    company and place as a search's read of its page does. None when the posting is not the
+    person's. Raises TextRefusedError for a text too short to be a posting's (422,
+    `text_too_short`) or a posting no longer seen in a list (409, `page_read`: a search read
+    its page meanwhile), SearchUnreadableError when its search no longer reads; nothing is
+    written then."""
+    text = text.strip()
+    if len(" ".join(text.split())) < TEXT_MIN_CHARS:
+        raise TextRefusedError("text_too_short", TEXT_SHORT, 422)
+    job = lock_job(db, user_id, job_id)
+    if job is None:
+        return None
+    if job.list_url is None:
+        raise TextRefusedError("page_read", PAGE_READ_ALREADY, 409)
+    search = posting_search(db, user_id, job.criteria_search_id)
+    rules = [NeverApplyRule.parse(one) for one in search.never_apply] if search else []
+    rule = next((r for r in rules if r.matches(job.company, job.title)), None)
+    page_text(
+        db,
+        job,
+        text,
+        (JobEventKind.edit, {"text_pasted": {"list_url": job.list_url}}),
+        now,
+        rule=rule,
+        excluded=unwanted_of(search, job.title, job.location),
+        skills=user_skills(db, user_id),
+        search=search,
+        via="pasted",
+    )
+    touch(job, now)
+    db.flush()
+    return job
 
 
 class CriteriaChoice(enum.StrEnum):

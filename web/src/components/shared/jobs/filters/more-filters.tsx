@@ -1,7 +1,7 @@
 /**
  * The filters of the Filters panel beyond status, contract, fit, found and company (jobs J29):
- * place, work mode, website, published, pay, application, and the two presets; and the criteria
- * of the search that found a posting (jobs J30).
+ * place, work mode, website, published, pay, application, and the two presets; the criteria of
+ * the search that found a posting (jobs J30) and whether its own page was read (jobs J31).
  */
 import { useId, useState } from "react";
 
@@ -25,6 +25,11 @@ import {
   CRITERIA_CHOICES,
   type CriteriaChoice,
 } from "@/features/jobs/helpers/criteria-words";
+import {
+  LISTING_CHOICE_LABELS,
+  LISTING_CHOICES,
+  type ListingChoice,
+} from "@/features/jobs/helpers/listed-words";
 import {
   cleanPlace,
   foundToday,
@@ -231,6 +236,31 @@ export function CriteriaFilter({ filters, onChange }: FilterProps) {
         {CRITERIA_CHOICES.map((value) => (
           <option key={value} value={value}>
             {CRITERIA_CHOICE_LABELS[value]}
+          </option>
+        ))}
+      </NativeSelect>
+    </FieldSet>
+  );
+}
+
+/** Jobs J31: every posting (the default), those seen only in a list (their own page not read),
+ * or those whose page was read. */
+export function ListingFilter({ filters, onChange }: FilterProps) {
+  return (
+    <FieldSet className="gap-2">
+      <FieldLegend variant="label">Posting page</FieldLegend>
+      <NativeSelect
+        aria-label="Posting page"
+        value={filters.listing ?? ""}
+        onChange={(event) => {
+          const value = event.target.value as ListingChoice | "";
+          onChange({ ...filters, listing: value === "" ? null : value });
+        }}
+      >
+        <option value="">All postings</option>
+        {LISTING_CHOICES.map((value) => (
+          <option key={value} value={value}>
+            {LISTING_CHOICE_LABELS[value]}
           </option>
         ))}
       </NativeSelect>

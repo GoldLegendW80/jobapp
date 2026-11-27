@@ -31,6 +31,7 @@ import { PostingHeader } from "./posting-header";
 import { PostingHistory } from "./posting-history";
 import { PostingLiveness } from "./posting-liveness";
 import { PostingNotices } from "./posting-notices";
+import { ListedNotice } from "./listed-notice";
 
 /** The rhythm of Page between the header and the body, for the pane that has no Page. */
 const RHYTHM = "flex flex-col gap-6 sm:gap-8";
@@ -105,6 +106,7 @@ function JobDetailView({
         actions={actions}
       />
       <PostingNotices notices={job.notices} />
+      <ListedNotice job={job} />
       <PageBody
         lead={<ApplySection job={job} />}
         aside={

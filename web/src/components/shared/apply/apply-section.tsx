@@ -178,6 +178,7 @@ export function ApplySection({ job }: { job: JobDetail }) {
                       }
                       linkedinBlocked={read.linkedinBlocked}
                       linkedinPosting={read.linkedinPosting}
+                      listed={job.list_url !== null}
                       onStart={act.start.mutate}
                     />
                   ) : null}

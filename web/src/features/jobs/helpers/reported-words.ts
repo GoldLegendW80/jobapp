@@ -5,6 +5,7 @@
  * said as its words, never as a fact of the app. A sweep from before J30 is said the same way, from
  * the figures it has (`found`, `new`, and the sweep's `duplicates`).
  */
+import { cardsRefusedSentence, listedReadSentence } from "./listed-words";
 import { plural } from "./selection";
 
 /** Why the app's check refused a posting an assistant reported, by the api's reason
@@ -42,6 +43,9 @@ export interface ReportedFigures {
   opened_by_app?: number;
   results_read?: number | null;
   other_contract?: number;
+  listed?: number;
+  listed_read?: number;
+  cards_refused?: Record<string, number>;
 }
 
 const positive = (n: number | null | undefined): n is number =>
@@ -65,15 +69,21 @@ export function refusedSentence(refused?: Record<string, number>): string {
   return `${total.toLocaleString("en-GB")} refused by the app's check: ${why}.`;
 }
 
-/** The new postings kept, of them those outside the criteria, and those already in the list. */
+/** The new postings kept, of them those outside the criteria and those seen only in a list
+ * (jobs J31), and those already in the list. */
 export function keptParts(figures: ReportedFigures): string[] {
   const parts: string[] = [];
   if (positive(figures.new)) {
-    const kept = `${plural(figures.new, "new posting")} kept`;
-    parts.push(
+    const of = [
       positive(figures.outside)
-        ? `${kept}, ${figures.outside.toLocaleString("en-GB")} of them outside your criteria`
-        : kept,
+        ? `${figures.outside.toLocaleString("en-GB")} of them outside your criteria`
+        : "",
+      positive(figures.listed)
+        ? `${figures.listed.toLocaleString("en-GB")} of them seen only in a list, their own page not read`
+        : "",
+    ].filter((part) => part !== "");
+    parts.push(
+      [`${plural(figures.new, "new posting")} kept`, ...of].join(", "),
     );
   }
   if (positive(figures.duplicates))
@@ -110,6 +120,8 @@ export function reportedSentences(figures: ReportedFigures): string {
       ? `${plural(figures.unwanted, "posting")} set aside by your unwanted titles and places.`
       : "",
     refusedSentence(figures.refused),
+    listedReadSentence(figures.listed_read),
+    cardsRefusedSentence(figures.cards_refused),
     positive(figures.opened_by_app)
       ? `The app opened ${plural(figures.opened_by_app, "posting")} itself, as the assistant had not.`
       : "",

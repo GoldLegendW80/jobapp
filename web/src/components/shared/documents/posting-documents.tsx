@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useProfile } from "@/features/profile/api/use-profile";
 import { type JobDetail } from "@/features/jobs/api/jobs-api";
+import { isListed, LISTED_WAITS } from "@/features/jobs/helpers/listed-words";
 
 import { useBaseCvList } from "@/features/documents/api/use-base-cvs";
 import {
@@ -95,7 +96,10 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
       ).tag === "empty",
   );
 
-  const offerBoth = documents.data !== undefined && untouched && !noExperience;
+  // Jobs J31: no CV or letter for a posting seen only in a list until its text is read.
+  const listed = isListed(job);
+  const offerBoth =
+    documents.data !== undefined && untouched && !noExperience && !listed;
 
   return (
     <Section
@@ -142,6 +146,14 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                 </Link>
               </p>
             ) : null}
+            {listed ? (
+              <p
+                className="text-sm text-muted-foreground"
+                data-testid="documents-wait"
+              >
+                {LISTED_WAITS}
+              </p>
+            ) : null}
             <div className="flex flex-col divide-y">
               {(["cv", "letter"] as const).map((kind) => (
                 <PostingDocumentRow
@@ -155,6 +167,7 @@ export function PostingDocumentsSection({ job }: { job: JobDetail }) {
                   cvReady={cvReady}
                   letterWritten={letterWritten}
                   afterPanel={kind === "letter" && letterFollows}
+                  held={listed}
                 />
               ))}
             </div>

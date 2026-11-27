@@ -24,6 +24,10 @@ export function useSelection(
   const [anchor, setAnchor] = useState<number | null>(null);
   const [cappedFrom, setCappedFrom] = useState<number | null>(null);
   const [selectingAll, setSelectingAll] = useState(false);
+  // The seen-in-a-list postings "select all" found beyond the rows loaded (jobs J31).
+  const [collectedListed, setCollectedListed] = useState<ReadonlySet<string>>(
+    new Set(),
+  );
   const [view, setView] = useState(apiQuery);
   const collectIds = useCollectIds();
   if (view !== apiQuery) {
@@ -31,6 +35,7 @@ export function useSelection(
     setSelected(new Set());
     setAnchor(null);
     setCappedFrom(null);
+    setCollectedListed(new Set());
   }
 
   const clear = useCallback(() => {
@@ -80,9 +85,10 @@ export function useSelection(
     }
     setSelectingAll(true);
     collectIds(apiQuery, BULK_MAX).then(
-      ({ ids, total: matching }) => {
+      ({ ids, total: matching, listed }) => {
         setSelectingAll(false);
         setSelected(new Set(ids));
+        setCollectedListed(new Set(listed));
         setAnchor(null);
         setCappedFrom(matching > ids.length ? matching : null);
       },
@@ -96,7 +102,13 @@ export function useSelection(
   }, [apiQuery, selected.size, clear, collectIds]);
 
   const ids = useMemo(() => [...selected], [selected]);
+  const listed = useMemo(() => {
+    const known = new Set(collectedListed);
+    for (const item of items) if (item.list_url !== null) known.add(item.id);
+    return new Set(ids.filter((id) => known.has(id)));
+  }, [ids, items, collectedListed]);
   return {
+    listed,
     selected,
     ids,
     toggle,

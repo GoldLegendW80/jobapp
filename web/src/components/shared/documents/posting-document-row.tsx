@@ -67,6 +67,7 @@ export function PostingDocumentRow({
   cvReady,
   letterWritten,
   afterPanel = false,
+  held = false,
 }: {
   jobId: string;
   kind: Kind;
@@ -82,6 +83,8 @@ export function PostingDocumentRow({
   letterWritten: boolean;
   /** The CV's hiring panel runs: a letter not written yet follows its end (D29). */
   afterPanel?: boolean;
+  /** The posting's text is needed first (jobs J31): no Write now. */
+  held?: boolean;
 }) {
   const selectId = useId();
   const state = cardState(document, afterPanel);
@@ -119,6 +122,7 @@ export function PostingDocumentRow({
     state.tag === "waiting" &&
     (state.reason === null || !CLICK_REPLACES.has(state.reason));
   const canWrite =
+    !held &&
     (kind === "cv" || cvReady) &&
     (state.tag === "empty" ||
       (state.tag === "waiting" && !clickWouldWait) ||

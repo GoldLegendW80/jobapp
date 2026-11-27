@@ -41,6 +41,10 @@ import { describeError } from "@/lib/api";
 import { FitBadge, StatusBadge } from "@/components/shared/jobs/badges";
 import { formatDateTime } from "@/features/jobs/helpers/format";
 import { isJobFeed } from "@/features/jobs/helpers/job-feeds";
+import {
+  countedCards,
+  listedReadSentence,
+} from "@/features/jobs/helpers/listed-words";
 import { keptParts } from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
 import { ScheduleDialog } from "./schedule-dialog";
@@ -221,6 +225,8 @@ function reportedTotals(sweep: Sweep): string[] {
     Object.values(source.refused ?? {}).reduce((total, n) => total + n, 0),
   );
   const opened = sum((source) => source.opened_by_app ?? 0);
+  const listedRead = sum((source) => source.listed_read ?? 0);
+  const cards = sum((source) => countedCards(source.cards_refused));
   return [
     unwanted
       ? `${plural(unwanted, "posting")} set aside by your unwanted titles and places.`
@@ -229,6 +235,10 @@ function reportedTotals(sweep: Sweep): string[] {
       ? `${plural(refused, "posting")} refused by the app's check: each source below says why.`
       : "",
     opened ? `The app opened ${plural(opened, "posting")} itself.` : "",
+    listedReadSentence(listedRead),
+    cards
+      ? `${plural(cards, "card")} of a list refused by the app's check: each source below says why.`
+      : "",
   ].filter((part) => part !== "");
 }
 
@@ -245,7 +255,12 @@ function summaryLine(sweep: Sweep): string {
     ...feedsRead(sweep),
     ...boardsRead(sweep),
   ];
-  const kept = keptParts(sweep);
+  // Jobs J31: the sweep serves no total of the postings kept from a list; its sources do.
+  const listed = sweep.sources.reduce(
+    (total, source) => total + (source.listed ?? 0),
+    0,
+  );
+  const kept = keptParts({ ...sweep, listed });
   return [
     `${searched.join(", ")}.`,
     kept.length ? `${capitalised(kept.join("; "))}.` : "No new posting kept.",
