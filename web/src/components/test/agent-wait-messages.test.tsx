@@ -26,6 +26,9 @@ import { server } from "@/test/server";
 const JOB_ID = "00000000-0000-4000-9000-000000000001";
 const SEPARATOR = /[–—]| - /;
 const BOX = "Write to the assistant";
+// WAIT_NOW is 10:04:00: the api counts the messages of the last minute only.
+const MINUTE_AGO = "2026-11-26T10:03:30Z";
+const LONG_AGO = "2026-11-26T09:00:00Z";
 
 beforeEach(() => {
   fakeSession(member);
@@ -118,7 +121,17 @@ describe("writing to the assistant while it works (A25c)", () => {
       SAID.tooMany,
       (fake: ReturnType<typeof filling>) => {
         fake.detail.chat = Array.from({ length: 5 }, (_, n) =>
-          messageLine(`Message number ${String(n + 1)}.`, true),
+          messageLine(`Message number ${String(n + 1)}.`, true, MINUTE_AGO),
+        );
+      },
+      "One more thing.",
+    ],
+    [
+      "past the 100 an application takes, whatever the rate",
+      SAID.messagesFull,
+      (fake: ReturnType<typeof filling>) => {
+        fake.detail.chat = Array.from({ length: 100 }, (_, n) =>
+          messageLine(`Message number ${String(n + 1)}.`, true, LONG_AGO),
         );
       },
       "One more thing.",
@@ -177,6 +190,43 @@ describe("writing to the assistant while it works (A25c)", () => {
     const alert = await work.findByRole("alert");
     expect(alert).toHaveTextContent(SAID.codeAlone);
     expect(alert.textContent).not.toContain("7KD");
+  });
+
+  it("sends a message once the five of an earlier minute are forgotten", async () => {
+    const fake = filling(
+      {},
+      {
+        chat: Array.from({ length: 5 }, (_, n) =>
+          messageLine(`Message number ${String(n + 1)}.`, true, LONG_AGO),
+        ),
+      },
+    );
+    const { user, work } = await openSection();
+    await user.type(work.getByLabelText(BOX), "A new minute.");
+    await user.click(work.getByRole("button", { name: "Send the message" }));
+    expect(fake.agent.sent).toHaveLength(1);
+    expect(
+      await work.findByText(/A new minute\./, {}, { timeout: 2000 }),
+    ).toBeInTheDocument();
+    expect(work.queryByRole("alert")).toBeNull();
+  });
+
+  it("refuses a message that may hold a code while the code given waits to be typed, in the api's words", async () => {
+    const fake = filling();
+    fake.agent.codeWaits = true;
+    const { user, work } = await openSection();
+    await user.type(work.getByLabelText(BOX), "It is 7KD-3QX");
+    await user.click(work.getByRole("button", { name: "Send the message" }));
+    const alert = await work.findByRole("alert");
+    expect(alert).toHaveTextContent(SAID.codeAlone);
+    expect(alert.textContent).not.toContain("7KD");
+    await user.clear(work.getByLabelText(BOX));
+    await user.type(work.getByLabelText(BOX), "Thanks for waiting.");
+    await user.click(work.getByRole("button", { name: "Send the message" }));
+    expect(fake.agent.sent.at(-1)).toEqual({
+      route: "messages",
+      body: { text: "Thanks for waiting." },
+    });
   });
 
   it("shows a refusal the api words differently as it comes", async () => {

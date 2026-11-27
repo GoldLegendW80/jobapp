@@ -29,6 +29,8 @@ export const SAID = {
     "The assistant is not working on this application now, so it cannot read a message.",
   tooMany:
     "That is a lot of messages at once: wait a minute, then write again.",
+  messagesFull:
+    "No more messages for this application: it has 100, the most it takes. Use the browser yourself, or wait for the assistant's question.",
   messageLong: "A message is 1,000 characters at most.",
   writeFirst: "Write a message first.",
   plainText: "Use plain text without control characters.",
@@ -37,6 +39,7 @@ export const SAID = {
 const CODE_SENT_MAX = 64;
 const MESSAGE_MAX = 1000;
 const MESSAGES_PER_MINUTE = 5;
+const MESSAGES_MAX = 100;
 
 const WORD = /[\p{L}\p{N}]+/gu;
 const words = (text: string) => text.match(WORD) ?? [];
@@ -107,6 +110,8 @@ export function agentWaitState() {
     sent: [] as { route: "question" | "messages"; body: unknown }[],
     /** The browser takes the next code (false: the api's 409 that it could not). */
     browserTakes: true,
+    /** The code the person gave waits on the lease to be typed (applier._code_pending). */
+    codeWaits: false,
     /** Another tab's code for the open ask is on its way. */
     onItsWay: false,
     /** The time of the next line of the chat, as the api writes it. */
@@ -188,6 +193,7 @@ export function agentWaitRoutes(
               codeShape(body.code) ? SAID.codeInBrowser : SAID.codeForm,
             );
           if (!state.browserTakes) return refuse(409, SAID.codeNotTaken);
+          state.codeWaits = true;
           say(found, {
             at: state.now,
             who: "person",
@@ -230,13 +236,17 @@ export function agentWaitRoutes(
           return refuse(422, SAID.messageLong);
         if (!text.trim()) return refuse(422, SAID.writeFirst);
         if (!plain(text)) return refuse(422, SAID.plainText);
-        if (openAsk(found)?.kind === "code" && looksLikeCode(text))
+        const codePending = openAsk(found)?.kind === "code" || state.codeWaits;
+        if (codePending && looksLikeCode(text))
           return refuse(422, SAID.codeAlone);
-        // The fake's clock stands still: every message is of the same minute.
         const said = chatOf(found).filter(
           (line) => line.who === "person" && line.kind === "message",
         );
-        if (said.length >= MESSAGES_PER_MINUTE)
+        // The cap comes before the rate; the rate counts the last minute only.
+        if (said.length >= MESSAGES_MAX) return refuse(429, SAID.messagesFull);
+        const since = Date.parse(state.now) - 60_000;
+        const recent = said.filter((line) => Date.parse(line.at ?? "") > since);
+        if (recent.length >= MESSAGES_PER_MINUTE)
           return refuse(429, SAID.tooMany);
         const line: ChatLine = {
           at: state.now,
