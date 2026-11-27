@@ -41,10 +41,7 @@ import { describeError } from "@/lib/api";
 import { FitBadge, StatusBadge } from "@/components/shared/jobs/badges";
 import { formatDateTime } from "@/features/jobs/helpers/format";
 import { isJobFeed } from "@/features/jobs/helpers/job-feeds";
-import {
-  hasReportedFigures,
-  keptParts,
-} from "@/features/jobs/helpers/reported-words";
+import { keptParts } from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
 import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel, sourceName } from "@/features/jobs/helpers/labels";
@@ -236,8 +233,8 @@ function reportedTotals(sweep: Sweep): string[] {
 }
 
 /** The summary's sentences: what the sweep searched, then what it kept and why the rest was not
- * (jobs J30, in place of the postings "seen" and "matched", which counted only what was kept). A
- * sweep without any figure of J30 (every one before it) reads as before. */
+ * (jobs J30, in place of the postings "seen" and "matched", which counted only what was kept, for
+ * every sweep, older ones included). */
 function summaryLine(sweep: Sweep): string {
   const searched = [
     // A sweep that read no board (every sweep since the owner's decision of 2026-10-28, which
@@ -248,21 +245,10 @@ function summaryLine(sweep: Sweep): string {
     ...feedsRead(sweep),
     ...boardsRead(sweep),
   ];
-  if (!sweep.outside && !sweep.sources.some(hasReportedFigures))
-    return `${[
-      ...searched,
-      `${plural(sweep.seen, "posting")} seen`,
-      `${sweep.matched.toLocaleString("en-GB")} matched your search`,
-      plural(sweep.new, "new posting"),
-    ].join(", ")}.${
-      sweep.duplicates
-        ? ` ${plural(sweep.duplicates, "match", "matches")} already in your list.`
-        : ""
-    }`;
   const kept = keptParts(sweep);
   return [
     `${searched.join(", ")}.`,
-    kept.length ? `${capitalised(kept.join("; "))}.` : "",
+    kept.length ? `${capitalised(kept.join("; "))}.` : "No new posting kept.",
     ...reportedTotals(sweep),
   ]
     .filter((part) => part !== "")
