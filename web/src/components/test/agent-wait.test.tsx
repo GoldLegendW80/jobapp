@@ -14,8 +14,9 @@ import type { Application, Question } from "@/features/apply/api/apply-api";
 import { WAIT_POLL_MS } from "@/features/apply/api/use-agent-wait";
 import {
   AFTER_SEND_WAIT,
+  ASK_NOT_SHOWN,
   CODE_IN_BROWSER,
-  LATE_ANSWER,
+  NO_CODE_HERE,
   NO_PASSWORD,
   SAID_NOTHING_SENT,
 } from "@/features/apply/helpers/agent-wait";
@@ -103,7 +104,8 @@ describe("the apply agent waits for the person (A25)", () => {
     expect(wait.getByText("It asks for a sign in.")).toBeInTheDocument();
     // 12 minutes from the server's time, never the page's clock.
     expect(wait.getByRole("timer").textContent).toMatch(/^1[12]:\d\d$/);
-    expect(wait.getByLabelText(BOX)).toBeInTheDocument();
+    // The answer goes to the assistant: the box says a code is typed in the browser.
+    expect(wait.getByLabelText(BOX)).toHaveAccessibleDescription(NO_CODE_HERE);
     expect(wait.getByText(NO_PASSWORD)).toBeInTheDocument();
     expect(
       within(section).getByRole("button", { name: "Cancel application" }),
@@ -123,6 +125,16 @@ describe("the apply agent waits for the person (A25)", () => {
       await screen.findByText(/What the assistant asks could not be loaded\./),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  it("says in one sentence when the run waits and the detail carries no ask, with Cancel", async () => {
+    const fake = waiting();
+    fake.detail = { question: null, chat: [], now: WAIT_NOW };
+    const { section, wait } = await openSection();
+    expect(wait.getByText(ASK_NOT_SHOWN)).toBeInTheDocument();
+    expect(wait.queryByLabelText(BOX)).toBeNull();
+    expect(buttons(section)).toEqual(["Cancel application"]);
+    expect(ASK_NOT_SHOWN).not.toMatch(SEPARATOR);
   });
 
   it("opens the browser only on a click", async () => {
@@ -204,30 +216,38 @@ describe("the apply agent waits for the person (A25)", () => {
     expect(chat.querySelector("a, strong, em, b")).toBeNull();
   });
 
-  it("says when an answer came after the wait ended", async () => {
-    const fake = waiting();
-    server.use(
-      http.post("*/api/applications/:id/question", () => {
-        fake.application = fakeApplication("needs_person", {
-          mode: "direct",
-          needs: "agent_asked",
-        });
-        fake.detail = {
-          question: { ...SIGNIN_ASK, live: false },
-          chat: chatWith(SIGNIN_ASK, "person_late"),
-          now: WAIT_NOW,
-        };
-        return HttpResponse.json(
-          { detail: "This application waits for no answer now." },
-          { status: 409 },
-        );
-      }),
-    );
-    const { user, wait } = await openSection();
-    await user.type(wait.getByLabelText(BOX), "Too late");
-    await user.click(wait.getByRole("button", { name: "Send the answer" }));
-    expect(await wait.findByRole("alert")).toHaveTextContent(LATE_ANSWER);
-  });
+  it.each([
+    ["the wait ended", true],
+    ["another tab answered first", false],
+  ])(
+    "says in the api's words why an answer was not taken (%s)",
+    async (_, ended) => {
+      const fake = waiting();
+      const refused = "This application waits for no answer now.";
+      server.use(
+        http.post("*/api/applications/:id/question", () => {
+          if (ended) {
+            fake.application = fakeApplication("needs_person", {
+              mode: "direct",
+              needs: "agent_asked",
+            });
+            fake.detail = {
+              question: { ...SIGNIN_ASK, live: false },
+              chat: chatWith(SIGNIN_ASK, "person_late"),
+              now: WAIT_NOW,
+            };
+          }
+          return HttpResponse.json({ detail: refused }, { status: 409 });
+        }),
+      );
+      const { user, wait } = await openSection();
+      await user.type(wait.getByLabelText(BOX), "Too late");
+      await user.click(wait.getByRole("button", { name: "Send the answer" }));
+      const alert = await wait.findByRole("alert");
+      expect(alert).toHaveTextContent(refused);
+      expect(alert.textContent).not.toMatch(/came after/);
+    },
+  );
 
   it.each([
     [

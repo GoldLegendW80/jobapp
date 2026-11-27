@@ -52,9 +52,9 @@ function browserStore(): Store | null {
   }
 }
 
-function announced(store: Store): string[] {
+function announced(store: Store, key: string): string[] {
   try {
-    const held: unknown = JSON.parse(store.getItem(ANNOUNCED_KEY) ?? "[]");
+    const held: unknown = JSON.parse(store.getItem(key) ?? "[]");
     return Array.isArray(held)
       ? held.filter((id): id is string => typeof id === "string")
       : [];
@@ -63,32 +63,41 @@ function announced(store: Store): string[] {
   }
 }
 
-function keep(store: Store, ids: string[]) {
+function keep(store: Store, ids: string[], key: string) {
   try {
-    store.setItem(ANNOUNCED_KEY, JSON.stringify(ids.slice(-ANNOUNCED_MAX)));
+    store.setItem(key, JSON.stringify(ids.slice(-ANNOUNCED_MAX)));
   } catch {
     // Storage full or blocked: the page's own memory still announces each run once.
   }
 }
 
-/** True when this page is the first in the browser to announce the run; it is then marked. */
+/**
+ * True when this page is the first in the browser to announce the run; it is then marked. `key`:
+ * the list it is kept in, another for what is not a run (the apply agent's asks, A25).
+ */
 export function claimRun(
   id: string,
   store: Store | null = browserStore(),
+  key = ANNOUNCED_KEY,
 ): boolean {
   if (!store) return true;
-  const ids = announced(store);
+  const ids = announced(store, key);
   if (ids.includes(id)) return false;
-  keep(store, [...ids, id]);
+  keep(store, [...ids, id], key);
   return true;
 }
 
 /** Gives a claim back, when the run's summary could not be read: a later count tries again. */
-export function releaseRun(id: string, store: Store | null = browserStore()) {
+export function releaseRun(
+  id: string,
+  store: Store | null = browserStore(),
+  key = ANNOUNCED_KEY,
+) {
   if (!store) return;
   keep(
     store,
-    announced(store).filter((one) => one !== id),
+    announced(store, key).filter((one) => one !== id),
+    key,
   );
 }
 

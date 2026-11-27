@@ -55,6 +55,10 @@ export const kindWords = (kind: string) =>
  */
 export const TYPED_IN_BROWSER: ReadonlySet<string> = new Set(["code"]);
 
+/** Under the box: an answer goes to the model, so a code too until the api's next slice types it. */
+export const NO_CODE_HERE =
+  "Type codes and passwords in the browser yourself, never in this box.";
+
 export const CODE_IN_BROWSER =
   "Type the code in the browser yourself: open the browser below, choose Use the browser myself, type it, then choose Let the assistant continue.";
 
@@ -81,10 +85,13 @@ export const SHOWN_MAX = 600;
 const hidden = (code: number) =>
   code < 0x20 ||
   (code >= 0x7f && code <= 0x9f) ||
+  code === 0x061c ||
+  code === 0x180e ||
   code === 0x200b ||
   code === 0x200e ||
   code === 0x200f ||
   (code >= 0x202a && code <= 0x202e) ||
+  (code >= 0x2060 && code <= 0x2064) ||
   (code >= 0x2066 && code <= 0x2069) ||
   code === 0xfeff;
 
@@ -133,12 +140,12 @@ export function stoppedLine(chat: readonly ChatLine[] | undefined): string {
 export const AFTER_SEND_WAIT =
   "A send button had been clicked before it asked, so the site may already have the application.";
 
+/** The run waits, and the detail carries no ask of the assistant's to show. */
+export const ASK_NOT_SHOWN =
+  "What the assistant asks could not be shown here. Cancel the application, or let it stop waiting by itself.";
+
 export const NO_PASSWORD =
   "The assistant never needs your password. Type passwords only in the browser yourself.";
-
-/** The answer came after the wait ended (409): it was not given to the assistant. */
-export const LATE_ANSWER =
-  "Your answer came after the assistant stopped waiting, so it did not get it.";
 
 /**
  * What the assistant said with `apply_done` when its run ended (api applier, the `agent_done`
