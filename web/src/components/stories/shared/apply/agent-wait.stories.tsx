@@ -26,8 +26,8 @@ const WAITS = fakeApplication("needs_person", {
 /** The detail the card reads: the application, the assistant's ask and the chat. */
 function detail(
   application: Application,
-  question: Question,
-  chat: ChatLine[] = chatWith(question),
+  question: Question | null,
+  chat: ChatLine[] = question ? chatWith(question) : [],
 ) {
   server.use(
     http.get("*/api/applications/:id", () =>
@@ -58,7 +58,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The apply agent waits for the person (A25), on the application's card and in Your application: the conversation, with the assistant's sentence as its own words in plain text, what it asks for, the time it still waits, a box to answer (none for a code, typed in the browser), and the browser behind Watch the browser. Once the wait ended it says why.",
+          "The apply agent waits for the person (A25), on the application's card and in Your application: the conversation, with the assistant's sentence as its own words in plain text, what it asks for, the time it still waits, a box to answer (none for a code, typed in the browser), and the browser behind Watch the browser. Once the wait ended it says why; a wait with no ask to show says so.",
       },
     },
   },
@@ -125,5 +125,12 @@ export const StoppedWaiting: Story = {
       { ...SIGNIN_ASK, live: false },
       chatWith(SIGNIN_ASK, "person_late"),
     );
+  },
+};
+
+/** The run waits, but its detail carries no ask: one sentence, and the page's Cancel. */
+export const NoAskToShow: Story = {
+  beforeEach: () => {
+    detail(WAITS, null);
   },
 };
