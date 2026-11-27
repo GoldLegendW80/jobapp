@@ -38,10 +38,12 @@ from tests.identity.api_helpers import Api
 
 BOX = "e10"  # the site's one time code box on step 1
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "browser"))
-try:  # browserd's own mask (pure Python), so the planted code test proves it
-    from browserd.tools import codes
+try:  # browserd's own tools on fake pages (pure Python), so the planted code tests prove it
+    from browserd.tools import actions, codes
+
+    from tests.browser import a25_pages as pages_fake
 except ImportError:  # the repository root is not mounted here
-    codes = None
+    actions = codes = pages_fake = None  # type: ignore[assignment]
 
 
 class CodeSite(AskSite):
@@ -67,7 +69,7 @@ class CodeSite(AskSite):
             return False
         self.code = code
         if self.shown is not None:
-            self.shown.add(code, "")
+            self.shown.add(code)
         return True
 
     def erase(self, _: str) -> None:
@@ -79,7 +81,9 @@ class CodeSite(AskSite):
 
     def act(self, name: str, args: dict[str, Any], capability: Any) -> dict[str, Any]:
         answer = self._act(name, args, capability)
-        return self.shown.hide(answer) if self.shown is not None else answer  # as browserd's run
+        if self.shown is not None and self.shown.found(answer):  # as browserd's run
+            return {"ok": False, "error": "code_shown", "message": "The code showed again."}
+        return answer
 
     def _act(self, name: str, args: dict[str, Any], capability: Any) -> dict[str, Any]:
         if name == "browser_type_code":
@@ -89,7 +93,7 @@ class CodeSite(AskSite):
             if args.get("ref") != BOX:
                 return {"ok": False, "error": "not_code_box", "message": "Not a code box."}
             self.typed.append(code)
-            return {"ok": True, "url": self.page, "code_typed": True}
+            return {"ok": True, "code": "taken"}
         if name not in ("browser_snapshot", "browser_wait_for"):
             self.code = None
         if name == "browser_type" and args.get("ref") == BOX:
@@ -97,9 +101,11 @@ class CodeSite(AskSite):
         return super().act(name, args, capability)
 
     def text(self) -> str:
-        """The page's text, the code box's value included, as Playwright's snapshot writes it."""
+        """The page's text, the code box's value hidden by the element once typed into, as
+        browserd's snapshot writes it (actions.boxes_hidden)."""
         shown = super().text()
-        box = f'\n- textbox "Verification code" [ref={BOX}]: {"".join(self.typed[-1:])}'
+        value = "[hidden: a box the app typed the person's code into]" if self.typed else ""
+        box = f'\n- textbox "Verification code" [ref={BOX}]: {value}'
         return shown + box if "e8" in shown else shown
 
 
@@ -210,7 +216,7 @@ def test_the_code_typed_at_once_reaches_the_box_once_and_a_second_use_is_refused
     site, script = CodeSite({1: during}), coding()
     go_apply(svc(factory, site, script), app_id)
     assert site.typed == [planted]
-    assert json.loads(script.typed[0])["code_typed"] is True
+    assert json.loads(script.typed[0])["code"] == "taken"
     assert json.loads(script.again[0])["error"] == "no_code"
     assert json.loads(script.own[0])["error"] == "credential"  # its own typing, refused as ever
     assert site.erased == 1  # the run's end asks browserd to drop what is left
@@ -320,7 +326,7 @@ def test_a_planted_code_given_through_the_api_is_in_no_row_log_answer_or_model_m
     caplog: pytest.LogCaptureFixture,
 ) -> None:  # fmt: skip
     if codes is None:
-        pytest.skip("browserd's mask is not mounted here")
+        pytest.skip("browserd's finder is not mounted here")
     _password(factory, person_a, person_b)
     app_id = started(db, person_a, Mode.direct)
     planted = f"Q{secrets.randbelow(10**9):09d}"
@@ -366,6 +372,96 @@ def test_a_planted_code_given_through_the_api_is_in_no_row_log_answer_or_model_m
         assert planted not in json.dumps(record.__dict__, default=str)
     assert not any(planted in row for row in tables(db))
     assert "person_answered" in kinds(db, app_id)
+
+
+class PagesSite(AskSite):
+    """A25's site whose browser is browserd's own tools (`actions.run`) on a fake page of
+    api/tests/browser/a25_pages.py: the code kept, typed, sent and found as browserd does."""
+
+    def __init__(self, shape: str, length: int, monkeypatch: Any) -> None:
+        super().__init__()
+        self.fake = pages_fake.FakePage(shape, length)
+        self.tab = pages_fake.tab_on(self.fake, monkeypatch)
+        self.client = self  # agent_act's capability call: `client._tool`
+
+    async def ask_begin(self, left_s: int, ask: str = "", code: bool = False) -> str:
+        self.tab.state.drop_code()
+        return await super().ask_begin(left_s, ask, code)
+
+    def give(self, lease_id: str, ask_id: str, code: str) -> bool:
+        if (lease_id, ask_id, self.takes_code) != (self.lease_id, self.ask, True):
+            return False
+        if self.tab.state.code is not None:
+            return False
+        pages_fake.give(self.tab, code)
+        return True
+
+    def erase(self, _: str) -> None:
+        self.tab.state.drop_code()
+
+    async def erase_code(self) -> None:
+        await super().erase_code()
+        self.tab.state.drop_code()
+
+    async def call(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await self._tool(self.lease_id, "t", name, args or {}, None)
+
+    async def _tool(
+        self, lease_id: str, token: str, name: str, args: dict[str, Any], capability: Any
+    ) -> dict[str, Any]:
+        self.tab.gate = capability is not None
+        return await actions.run(self.tab, name, args)
+
+
+def on_pages(site: PagesSite) -> Any:
+    """Opens the code's page, asks for the code, types it with its button, reads three times."""
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        go.seen = [message]  # type: ignore[attr-defined]
+
+        async def told(result: Any) -> None:
+            go.seen.append(json.dumps(result, ensure_ascii=False))  # type: ignore[attr-defined]
+
+        await told(await session.navigate(pages_fake.VERIFY))
+        await told(await session.ask_person("code", SENTENCE))
+        verify = site.fake.verify
+        await told(await session.type_code(site.fake.boxes[0].ref, verify and verify.ref))
+        for _ in range(3):
+            await told(await session.snapshot())
+        if not session.stopped:
+            session.finish("failed", "Stopped.", "", sent="unsure")
+        return applier.Ran(5, 1)
+
+    return go
+
+
+@pytest.mark.skipif(codes is None, reason="browserd is not mounted here")
+@pytest.mark.parametrize("shape", pages_fake.SHAPES if pages_fake else [])
+def test_a_whole_exchange_on_each_page_shape_keeps_the_code_out_of_answers_events_logs_and_rows(
+    db: Session, factory: sessionmaker[Session], person_a: Person, shape: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:  # fmt: skip
+    app_id = started(db, person_a, Mode.direct)
+    planted = "".join(secrets.choice("GHJKMNPQRSTVWXYZ") for _ in range(10))
+    site = PagesSite(shape, len(planted), monkeypatch)
+    site.hooks[1] = lambda s: give(factory, person_a, app_id, planted, s)  # type: ignore[arg-type]
+    caplog.set_level(logging.DEBUG)
+    script = on_pages(site)
+    go_apply(svc(factory, site, script), app_id)
+    assert site.fake.code_seen in (planted, "")  # the site got it, or kept its emptied box
+    assert site.tab.state.code_closed is (shape in ("get", "stuck", "later"))
+    for text in script.seen:
+        assert planted not in text
+        assert not site.tab.state.shown.found(text)
+    for record in caplog.records:
+        assert planted not in record.getMessage()
+        assert planted not in json.dumps(record.__dict__, default=str)
+    assert not any(planted in row for row in tables(db))
+    if site.tab.state.code_closed:
+        with factory() as s:
+            report = s.get(ApplicationAnswer, (app_id, applier.REPORT_KEY))
+            assert report is not None
+            assert report.value["summary"] == applier.CODE_SHOWN_SAID
 
 
 def test_two_code_answers_at_once_give_one_code_and_the_second_erases_nothing(
