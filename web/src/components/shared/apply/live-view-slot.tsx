@@ -89,7 +89,8 @@ function useApplicationLease(
  * agent after the Confirm). `stopped`: nothing runs, so no spinner. `namedOnly`: the application
  * fills nothing now, so a fill lease that names no application is not its own. `label` (and
  * `detail`): the view of a grid of views (LiveViews, the Applications page), named and with its
- * state; a sign in hand off then stays on the application's card (FillHandoff).
+ * state; a sign in hand off then stays on the application's card (FillHandoff). `assistantWaits`:
+ * the apply agent waits on the person, so a take over's line says it has the browser back after.
  */
 export function LiveViewSlot({
   idle,
@@ -100,6 +101,7 @@ export function LiveViewSlot({
   namedOnly = false,
   label,
   detail,
+  assistantWaits = false,
 }: {
   idle: string;
   leaseOf: LeaseOf;
@@ -109,6 +111,7 @@ export function LiveViewSlot({
   namedOnly?: boolean;
   label?: string;
   detail?: string;
+  assistantWaits?: boolean;
 }) {
   const lease = useApplicationLease(leaseOf, APPLY_PURPOSES, namedOnly);
   const statusOf = (purpose: string) =>
@@ -143,7 +146,7 @@ export function LiveViewSlot({
     // input for it, so the view is theirs, without Take over; it is the assistant's again after.
     const person = personOwnsInput(lease);
     const ask = askText(lease);
-    const yours = takeoverLine(lease);
+    const yours = takeoverLine(lease, assistantWaits);
     return (
       <div data-testid="live-view-slot" className="flex flex-col gap-2">
         <LiveBrowser

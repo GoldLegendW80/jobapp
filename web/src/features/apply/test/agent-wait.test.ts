@@ -144,13 +144,19 @@ describe("the apply agent's wait, in words (A25)", () => {
       /^The assistant waits for you/,
     );
     expect(
-      takeoverLine({ wait_reason: "takeover", wait_minutes_left: 12 }),
+      takeoverLine({ wait_reason: "takeover", wait_minutes_left: 12 }, true),
     ).toBe(
       "The browser is yours until you choose Let the assistant continue, for 12 more minutes at most: then the assistant has it back.",
     );
     expect(
-      takeoverLine({ wait_reason: "takeover", wait_minutes_left: 1 }),
+      takeoverLine({ wait_reason: "takeover", wait_minutes_left: 1 }, true),
     ).toMatch(/for 1 more minute at most/);
+    // An adapter's fill taken over: no assistant waits to have it back.
+    expect(
+      takeoverLine({ wait_reason: "takeover", wait_minutes_left: 12 }),
+    ).toBe(
+      "The browser is yours until you choose Let the assistant continue, for 12 more minutes at most.",
+    );
     expect(
       takeoverLine({ wait_reason: "ask_person", wait_minutes_left: 12 }),
     ).toBeNull();
@@ -164,6 +170,7 @@ describe("the apply agent's wait, in words (A25)", () => {
       waitStatusLine(waits()),
       waitStatusLine(waits({ needs: "agent_asked" })),
       stoppedLine(chatWith(SIGNIN_ASK, "interrupted")),
+      takeoverLine({ wait_reason: "takeover", wait_minutes_left: 3 }, true),
       takeoverLine({ wait_reason: "takeover", wait_minutes_left: 3 }),
     ])
       expect(line).not.toMatch(SEPARATOR);

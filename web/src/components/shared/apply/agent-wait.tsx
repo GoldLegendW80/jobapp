@@ -220,6 +220,7 @@ function WaitBrowser({
         leaseOf={{ application: application.id }}
         status={(purpose) => liveStatus(purpose, application)}
         namedOnly
+        assistantWaits={agentWaits(application)}
       />
     </LiveViews>
   );
