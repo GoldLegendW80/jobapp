@@ -671,3 +671,9 @@ def test_two_websites_of_one_search_on_one_host_open_a_posting_once(monkeypatch)
     assert second.opened() == [job(3)]
     assert [p.job_id.int for p in commits.saved] == [3]
     assert done["read"] == 1
+
+
+def test_the_summary_knows_every_end() -> None:
+    from app.jobs import sweep_router
+
+    assert sweep_router.LISTED_ENDS == listed_pages.ENDS

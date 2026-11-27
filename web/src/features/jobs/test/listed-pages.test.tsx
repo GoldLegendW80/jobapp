@@ -41,6 +41,9 @@ describe("Jobs J36: the pages of the postings seen in a list, read after the sea
     expect(listedPagesSentence(pages({ left: 1, ended: "walled" }))).toBe(
       "1 posting seen only in a list still waits for its page: the website showed a sign in page or a security check.",
     );
+    expect(listedPagesSentence(pages({ left: 2, ended: "no_tab" }))).toBe(
+      "2 postings seen only in a list still wait for their page: the browser could not open a tab for the app.",
+    );
   });
 
   it("says nothing when nothing was there, and reads an end it does not know as a problem", () => {
