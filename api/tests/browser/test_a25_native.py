@@ -1,9 +1,11 @@
 """A25 on real Chromium in the browser container: the code the person gave in the app, typed by
-browserd into the one time code box of a GET form (tests/browser_pages/a25/), is never in an answer
-of the lease: masked right after typing, after back then forward (Chromium puts the value back in
-a new box), in the address, the text and the title of the page the form's GET submit loads, and
-after back from there; a screenshot is refused all along. Needs an existing BROWSER_TEST_IMAGE;
-never builds or pulls one."""
+browserd and sent in one call (`browser_type_code` with the box and the button that sends it),
+on the pages of tests/browser_pages/a25/: one box under six slots that show it (sent, kept with
+"That code is wrong", or a box hidden in place), six boxes of one character, a box the page sends
+by itself, and a GET form whose next page shows it again. The call answers `taken` or `kept`
+only; no answer of the lease holds the code (the tools close instead, `code_shown`); a kept box
+and its slots are empty; back, forward and a screenshot are refused. Needs an existing
+BROWSER_TEST_IMAGE; never builds or pulls one."""
 
 import json
 import os
@@ -17,8 +19,7 @@ from tests.browser.test_b5_container import Lease, ref
 from tests.browser.test_browser_container import ROOT, Stack
 
 pytestmark = pytest.mark.docker
-VERIFY = "http://pages:8080/a25/verify.html"
-MASK = "[the code the person gave]"
+PAGES = "http://pages:8080/a25"
 
 
 @pytest.fixture(scope="module")
@@ -38,51 +39,69 @@ def a25(tmp_path_factory):
         stack.run("down", "-v", "--remove-orphans", "--timeout", "0", check=False)
 
 
+JSON = {"Content-Type": "application/json"}
+
+
 def control(lease: Lease, path: str, body: dict[str, Any]) -> int:
     sent = lease.raw("POST", f"/leases/{lease.id}/{path}", json.dumps(body), **JSON)
     return sent["status"]
 
 
-JSON = {"Content-Type": "application/json"}
+# Each page, the outcome of the code's call, and whether the tools close at that call.
+SHAPES = [
+    ("slots.html", "taken"),
+    ("slots.html?mode=wrong", "kept"),
+    ("slots.html?mode=hide", "taken"),
+    ("six.html", "taken"),
+    ("auto.html", "taken"),
+    ("verify.html", "code_shown"),
+]
 
 
-def test_the_code_stays_masked_on_real_chromium(a25) -> None:
-    code = f"Q{secrets.randbelow(10**10):010d}"
+@pytest.mark.parametrize(("page", "outcome"), SHAPES)
+def test_the_code_is_typed_sent_and_never_answered_on_real_chromium(
+    a25, page: str, outcome: str
+) -> None:
+    code = "".join(secrets.choice("GHJKMNPQRSTVWXYZ") for _ in range(6))
     lease = Lease(a25, "apply_agent")
     a25.redactions += [lease.token, lease.capability]
+    said: list[str] = []
 
     def seen(name: str, capability: str | None = None, **args: Any) -> dict[str, Any]:
         answer = lease.tool(name, capability, **args)
-        text = json.dumps(answer)
-        assert code not in text, name
-        assert code.lower() not in text, name
+        said.append(json.dumps(answer))
+        assert code.casefold() not in said[-1].casefold(), name
         return answer
 
     try:
-        assert seen("browser_navigate", url=VERIFY)["ok"]
+        assert seen("browser_navigate", url=f"{PAGES}/{page}")["ok"]
         ask = secrets.token_hex(8)
         assert control(lease, "ask/begin", {"left_s": 300, "ask": ask, "code": True}) == 200
-        given = {"user_id": "e2e-b5", "ask": ask, "code": code}
-        assert control(lease, "code", given) == 200
+        assert control(lease, "code", {"user_id": "e2e-b5", "ask": ask, "code": code}) == 200
         assert control(lease, "ask/resume", {}) == 200
-        box = ref(seen("browser_snapshot")["snapshot"], "textbox", "Verification code")
-        assert seen("browser_type_code", ref=box).get("code_typed") is True
-        assert MASK in seen("browser_snapshot")["snapshot"]
-        assert seen("browser_take_screenshot")["error"] == "code_on_page"
-        # Back, then forward: Chromium restores the value in a new box.
-        assert seen("browser_navigate_back")["ok"]
-        assert seen("browser_navigate_forward")["ok"]
-        page = seen("browser_snapshot")["snapshot"]
-        assert MASK in page
-        # The form's GET submit (the gate's click): the code in the next address, text and title.
-        sent = seen("browser_click", lease.capability, ref=ref(page, "button", "Verify"))
-        assert MASK in sent["url"]
+        shot = seen("browser_snapshot")["snapshot"]
+        name = "Digit 1" if page.startswith("six") else "Verification code"
+        args = {"ref": ref(shot, "textbox", name)}
+        if not page.startswith("auto"):
+            args["submit"] = ref(shot, "button", "Verify")
+            # Without the capability the Verify button is refused before the first key, and
+            # the code stays for the same call with it (the api reads the emergency stop first).
+            assert seen("browser_type_code", **args)["error"] == "submit_permit"
+        typed = seen("browser_type_code", lease.capability, **args)
+        assert typed.get("code", typed.get("error")) == outcome, typed
+        assert set(typed) <= {"ok", "code", "error", "message", "rule", "submit_clicked"}
         after = seen("browser_snapshot")
-        assert MASK in after["url"]
-        assert f"You entered {MASK}" in after["snapshot"]
-        assert MASK in after["title"]
-        assert seen("browser_navigate_back")["ok"]
-        assert MASK in seen("browser_snapshot")["snapshot"]
+        if outcome == "code_shown":
+            assert after["error"] == "code_shown"
+            assert seen("browser_tabs", action="list")["error"] == "code_shown"
+            return
+        assert after["ok"]
+        if outcome == "kept":
+            assert "That code is wrong" in after["snapshot"]
+            assert 'textbox "Verification code"' in after["snapshot"]
         assert seen("browser_take_screenshot")["error"] == "code_on_page"
+        assert seen("browser_navigate_back")["error"] == "code_history"
+        assert seen("browser_navigate_forward")["error"] == "code_history"
     finally:
         lease.end()
+    assert not any(code.casefold() in text.casefold() for text in said)

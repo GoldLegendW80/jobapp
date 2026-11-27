@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Enter your code</title>
+    <style>
+      .otp { position: relative; display: inline-flex; gap: 4px; }
+      .slot { width: 32px; height: 40px; border: 1px solid #888; display: flex; }
+      .otp input { position: absolute; inset: 0; opacity: 0; width: 100%; }
+    </style>
+  </head>
+  <body>
+    <h1>Enter the code we sent</h1>
+    <!-- The shape of shadcn's InputOTP: one box under six slots that show its characters. -->
+    <form id="form">
+      <div class="otp">
+        <div class="slot"></div>
+        <div class="slot"></div>
+        <div class="slot"></div>
+        <div class="slot"></div>
+        <div class="slot"></div>
+        <div class="slot"></div>
+        <input id="otp" aria-label="Verification code" autocomplete="one-time-code" maxlength="6" />
+      </div>
+      <button type="submit">Verify</button>
+      <p id="said"></p>
+    </form>
+    <script>
+      const box = document.getElementById("otp");
+      const slots = document.querySelectorAll(".slot");
+      const mode = new URLSearchParams(location.search).get("mode") || "accept";
+      box.addEventListener("input", () =>
+        slots.forEach((slot, i) => (slot.textContent = box.value[i] || "")),
+      );
+      document.getElementById("form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const said = document.getElementById("said");
+        if (mode === "wrong") said.textContent = "That code is wrong. Try again.";
+        else if (mode === "hide") {
+          box.parentElement.style.display = "none";
+          said.textContent = "Code accepted.";
+        } else location.href = "done.html";
+      });
+    </script>
+  </body>
+</html>
