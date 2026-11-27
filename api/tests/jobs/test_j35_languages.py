@@ -184,9 +184,10 @@ def test_the_words_of_a_welcome_language(quote: str, welcome: bool) -> None:
 
 
 # The badge's side (module docstring, rules 1 to 4): the reader says required, and the quote holds
-# no welcome word and no negation, names no other language she declares, names the language as a
-# language and holds a level or requirement word close to it. The person: French native, English
-# C1, no German (the review of #860). Every quote is a refuse when the reader says not required.
+# no welcome word and no negation, offers no other language she declares as an alternative, names
+# the language as a language and holds a level or requirement word close to it. The person: French
+# native, English C1, no German (the reviews of #860). Every quote is a refuse when the reader says
+# not required.
 THEIRS = frozenset({"French", "English"})
 
 REQUIRED = [
@@ -230,6 +231,54 @@ REQUIRED = [
     ("German", "verhandlungssicher deutschsprachig"),
     ("Italian", "Italienisch verhandlungssicher"),
     ("Dutch", "Niederländischkenntnisse sind Voraussetzung"),
+    # Rule 2: joined by "and" to a language she lists, the quote asks for both (round 2 of #860).
+    ("German", "Fluent German and English"),
+    ("German", "fluent German and English required"),
+    ("German", "Fluent in German and English"),
+    ("German", "Excellent English and German skills"),
+    ("German", "You speak German and English fluently"),
+    ("German", "Fluency in German and French"),
+    ("German", "Fluent German & English"),
+    ("German", "Fluent German as well as English"),
+    ("Dutch", "Fluent Dutch and English required"),
+    ("German", "anglais et allemand courants exigés"),
+    ("German", "anglais ainsi que l'allemand exigés"),
+    ("German", "allemand ainsi que néerlandais exigés"),
+    ("Dutch", "allemand ainsi que néerlandais exigés"),
+    ("German", "Sehr gute Deutsch- und Englischkenntnisse"),
+    ("German", "Gute Deutsch- und Englischkenntnisse"),
+    ("German", "Fließende Deutsch- und Englischkenntnisse in Wort und Schrift"),
+    ("German", "Deutsch sowie Englisch verhandlungssicher"),
+    ("German", "Sowohl Deutsch als auch Englisch fließend"),
+    ("German", "Speaking English and German is a must"),
+    ("German", "Must be English and German speaking"),
+    # "speaking" on the person, a skill noun, a level after "at least", a verb of mastery.
+    ("German", "German-speaking candidate"),
+    ("German", "German speaking is a must"),
+    ("German", "German-speaking role"),
+    ("German", "German-speaking applicant required"),
+    ("German", "Must be German-speaking"),
+    ("German", "Strong German communication skills"),
+    ("German", "Excellent written and verbal German communication skills"),
+    ("German", "Deutschkenntnisse (mind. B2)"),
+    ("German", "Deutsch (mindestens C1)"),
+    ("German", "Deutsch (min. B2)"),
+    ("German", "German (at least B2)"),
+    ("German", "Vous maîtrisez l'allemand"),
+    ("German", "Du beherrschst Deutsch"),
+    ("German", "Du sprichst sicher Deutsch"),
+    ("German", "Du kommunizierst sicher auf Deutsch"),
+    ("German", "Sie kommunizieren sicher in Deutsch"),
+    ("German", "German is absolutely required"),
+    ("German", "Deutsch unbedingt erforderlich"),
+    # A dash alone or a colon between a name and its level is a label.
+    ("German", "German – fluent"),
+    ("German", "• Deutsch - verhandlungssicher"),
+    ("German", "German: fluent"),
+    # "Polish" at a clause's start, before a level.
+    ("Polish", "Polish (C1)"),
+    ("Polish", "Polish: native"),
+    ("Polish", "Native Polish speaker"),
 ]
 
 NOT_REQUIRED = [
@@ -276,14 +325,47 @@ NOT_REQUIRED = [
     ("German", "Deutsch nicht erforderlich"),
     ("German", "keine Deutschkenntnisse nötig"),
     ("German", "Ohne Deutschkenntnisse"),
-    # Rule 2, another language she declares: an alternative the reader may have split.
+    # Rule 2, another language she declares: an alternative the reader may have split, a slash, an
+    # alternative word, or a word other than "and" between them.
     ("German", "fluent in German or French"),
     ("German", "German and/or English"),
     ("German", "Fluent German or English required"),
     ("German", "Allemand ou anglais courant exigé"),
     ("German", "Deutsch oder Englisch fließend"),
-    ("German", "Gute Deutsch- und Englischkenntnisse"),
+    ("German", "Deutsch bzw. Englisch fließend"),
+    ("German", "German/English fluent"),
+    ("German", "Fluent German and / English"),
+    ("German", "Bilingue anglais/allemand"),
+    ("German", "Bilingue français allemand"),
+    ("German", "Bilingue français-allemand"),
+    ("German", "either German or English required"),
+    ("German", "German or English, fluent"),
+    ("German", "Fluent English and German or Dutch"),
+    ("German", "English & German or Dutch, fluent"),
+    ("German", "Deutsch, alternativ Englisch, fließend"),
+    ("German", "Une des langues suivantes : allemand, anglais"),
+    ("German", "One of: German, English, French, fluent"),
+    ("German", "Fluent English and German speaking clients"),
+    ("German", "Fluent English and German market experience"),
+    ("German", "Our team speaks English and German"),
+    ("German", "English and German are spoken in the office"),
+    ("German", "Documents in English and German"),
+    ("German", "German and French clients required"),
+    ("German", "Fluent English; German and Dutch clients"),
+    ("German", "Clients in English and German speaking countries"),
+    ("German", "Fluent English as well as German clients"),
     ("German", "Deutschkenntnisse für unsere französischen Kunden"),
+    ("German", "Fluent English, German"),
+    ("German", "Fluent English – German"),
+    ("German", "Fluent English and possibly German"),
+    ("German", "Fluent English with some German"),
+    ("German", "Englisch und ggf. Deutsch"),
+    ("German", "Englisch und gerne Deutsch"),
+    ("German", "Fluent English, German a plus"),
+    ("German", "Fluent English (German an asset)"),
+    ("German", "Deutschkenntnisse sind hilfreich"),
+    ("German", "Deutsch wäre schön"),
+    ("German", "L'allemand serait utile"),
     # Rule 3, a people, a market, a place, a company or another word, not the language.
     ("German", "experience of the German market"),
     ("German", "Knowledge of the German market is required"),
@@ -310,12 +392,42 @@ NOT_REQUIRED = [
     ("Catalan", "une entreprise catalane"),
     ("Polish", "you will polish the UI"),
     ("Polish", "Must polish, test and ship"),
+    ("Polish", "Polish the required UI flows"),
+    ("Polish", "Polish your skills in React"),
+    ("Polish", "Polish the advanced features"),
+    ("Polish", "Polish required UI flows"),
+    ("Polish", "Polish, test and ship: required"),
+    ("Polish", "POLISH THE UI: REQUIRED"),
     ("Spanish", "Espagne, anglais courant exigé"),
+    # "speaking" before another word, a team or a market: not the person.
+    ("German", "German-speaking clients"),
+    ("German", "German-speaking markets are a must"),
+    ("German", "German speaking team required"),
+    ("German", "German-speaking region required"),
+    ("German", "German-speaking business partners"),
+    ("German", "German-speaking role models required"),
+    ("German", "Serve German-speaking customers, fluent English required"),
+    # Not the language: another noun, a wage, a verb in the future, a dash before another word.
+    ("German", "German communication agency experience required"),
+    ("German", "German market communication skills"),
+    ("German", "German minimum wage law knowledge required"),
+    ("German", "Vous maîtriserez l'allemand grâce à nos cours"),
+    ("German", "German – Austrian clients"),
+    ("German", "Deutsch - Kunden betreuen"),
+    # A nationality: a requirement on the person that names no language skill.
+    ("German", "Must be German"),
+    ("German", "Must be German national"),
+    ("German", "German or Swiss citizenship required"),
+    ("German", "Candidates must be German or Austrian"),
+    ("German", "You are German"),
+    ("German", "Vous êtes allemand"),
+    ("German", "Sie sind Deutscher"),
     # Rule 4, no level or requirement word close to it.
     ("German", "German"),
     ("German", "Deutsch"),
     ("German", "Allemand"),
     ("German", "German speaker"),
+    ("German", "German-speaking"),
     ("German", "Our clients speak German"),
     ("German", "Documents are written in German"),
     ("German", "German is spoken in the office"),
@@ -631,6 +743,13 @@ def test_what_is_required_gives_the_badge(name: str, quote: str) -> None:
         ("Brazilian Portuguese", "Portuguese"),
         ("Mandarin (Putonghua)", "Chinese"),
         ("LSF", "French Sign Language"),
+        # Latin and the main languages of France's communities.
+        ("Latin", "Latin"),
+        ("Latein", "Latin"),
+        ("Kabyle", "Kabyle"),
+        ("Taqbaylit", "Kabyle"),
+        ("Bambara", "Bambara"),
+        ("Darija", "Arabic"),
     ],
 )
 def test_her_spellings_of_a_listed_language(entry: str, name: str) -> None:
@@ -647,9 +766,34 @@ def test_an_entry_the_list_cannot_read_gives_a_notice_not_the_badge(entry: str) 
     assert missing(stored(asked("German", "fluent")), mine) == []
 
 
-def test_an_entry_of_no_word_is_no_language() -> None:
-    mine = (Spoken("Français", "natif"), Spoken("---", "C1"))
+@pytest.mark.parametrize(
+    "entry", ["---", "-", "", "  ", "N/A", "n/a", "NA", "None", "Aucune", "Keine"]
+)
+def test_an_entry_that_names_no_language_is_no_entry(entry: str) -> None:
+    mine = (Spoken("Français", "natif"), Spoken(entry, "C1"))
+    assert languages.absent(entry)
     assert missing(stored(asked("German", "fluent")), mine) == ["German"]
+    assert languages.unread(mine) == []
+    assert compare(stored(asked("German", "fluent")), (Spoken(entry),)) == []
+
+
+@pytest.mark.parametrize("entry", ["Latin", "Kabyle", "Nauru", "Norsk", "Nein danke"])
+def test_a_word_of_no_language_inside_a_name_is_not_absent(entry: str) -> None:
+    assert not languages.absent(entry)
+
+
+def test_unread_names_each_entry_the_list_cannot_read_once() -> None:
+    mine = (
+        Spoken("Français", "natif"),
+        Spoken(" Klingon ", "C1"),
+        Spoken("UK"),
+        Spoken("N/A"),
+        Spoken("klingon"),
+        Spoken("Klingon"),
+        Spoken("Latin"),
+    )
+    assert languages.unread(mine) == ["Klingon", "UK"]
+    assert languages.unread(()) == []
 
 
 def test_a_profile_of_known_names_still_gives_the_badge() -> None:
@@ -687,3 +831,7 @@ def test_a_long_input_stays_linear() -> None:
     assert languages.Asked("German", None, True, (), glued).status() == "unsure"
     many = " ".join(["the German market of"] * 500)
     assert languages.Asked("German", None, True, (), many).status() == "unsure"
+    joined = " und ".join(["fließend Deutsch", "Englisch"] * 250)
+    assert languages.Asked("German", None, True, (), joined).status(THEIRS) == "unsure"
+    names = " ".join(["Deutsch"] * 2000)
+    assert languages.Asked("German", None, True, (), names).status(THEIRS) == "unsure"

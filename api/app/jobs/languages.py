@@ -17,23 +17,37 @@ and linear in the length of what it reads:
   the language with an inflection or a skill glued to it ("Deutsche", "Deutschkenntnisse",
   "deutschsprachig"), never with another word ("Deutschland", "deutschlandweit"). The person's
   side also reads the names in Spanish, Italian, Portuguese and Dutch ("Inglés", "Tedesco") and the
-  ISO 639 codes ("EN", "deu") as a whole entry, a level aside. A name the list does not hold is
-  compared as written, case, accents and punctuation aside.
+  ISO 639 codes ("EN", "deu") as a whole entry, a level aside; an entry that names no language
+  ("N/A", "none", a dash) is no entry. A name the list does not hold is compared as written, case,
+  accents and punctuation aside.
 - Required (the badge's side), for one language asked: the reader says so, and its quote
   1. holds no welcome word (WELCOME: "a plus", "un atout", "von Vorteil") and no negation (NOT:
      "no", "pas", "kein");
-  2. names no other language the person declares (an alternative the reader split in two:
-     "German or French");
+  2. offers no other language the person declares as an alternative (one the reader split in
+     two): when the quote names one, it holds no slash and no alternative word (OR: "or", "oder",
+     "ou", "bzw", "one of") and only "and", "und", "et", "sowie", "ainsi que", a short link
+     (JOINS) or another language's name stands between the two names, never nothing ("Fluent
+     German and English" asks for both; "German or English", "German/English", "Bilingue
+     français allemand", "Fluent English, German" are unsure);
   3. names the language as a language: a spelling of it whose word before and word after are each
      a clause's edge, a linking word (LINKS: "of", "l'", "in"), a level, a requirement word,
      a language noun ("speaker", "niveau") or another language's name. So the people, the place,
      the market and the company are not the language: "the German market", "Deutsche Bank",
-     "German speaking clients", "Pays basque", "une entreprise catalane". A spelling that is also
-     a place in a posting's language ("Italien": Italy in German, "Corse": Corsica) never counts,
-     nor "polish" without its capital letter: the code cannot tell them apart;
+     "German speaking clients", "Pays basque", "une entreprise catalane". "speaking" after a name
+     is a language noun only before an edge, a level, a requirement word, "is" or a person
+     ("German-speaking candidate"); a dash alone between a name and a level is a label, as a colon
+     is ("German: fluent", "Deutsch - verhandlungssicher"); "mind.", "at least" before a level are
+     links. After "be", "are", "sind" or "êtes", a name needs a level, a requirement word or a noun
+     after it, else it is a nationality ("Must be German"). A spelling that is also a place in a
+     posting's language ("Italien": Italy in German, "Corse": Corsica) never counts, nor "polish"
+     without its capital letter: the code cannot tell them apart; at a clause's start, where a
+     verb has a capital too ("Polish the required UI flows"), "Polish" needs an edge, a level or a
+     noun after it and a level close to it;
   4. holds a level word or a requirement word (REQUIRED: "required", "exigé", "zwingend",
-     "Kenntnisse") within GAP words of that spelling, only linking words, names and nouns between
-     them and no clause's edge; a skill glued to a German stem is one ("Deutschkenntnisse").
+     "Kenntnisse", "communication skills"; a verb of mastery is a level, "maîtrisez",
+     "beherrschst", "sicher") within GAP words of that spelling, only linking words, names and
+     nouns between them and no clause's edge; a skill glued to a German stem is one
+     ("Deutschkenntnisse").
   Welcome: the reader says it is not required and the quote holds a welcome word. Anything else
   is unsure: a notice, never the badge.
 - Levels: each side read on one scale (LEVELS: CEFR letters A1 to C2, then native), from the
@@ -85,7 +99,7 @@ _KNOWN: dict[str, tuple[str, ...]] = {
     ),
     "Spanish": (
         "spanish", "espagnol", "espagnole", "hispanophone", "spanisch*", "espanol", "castellano",
-        "castilian", "castillan",
+        "castilian", "castillan", "latin american spanish",
     ),
     "Italian": ("italian", "italien", "italienne", "italophone", "italienisch*", "italiano"),
     "Portuguese": (
@@ -137,7 +151,8 @@ _KNOWN: dict[str, tuple[str, ...]] = {
     "Creole": ("creole", "kreolisch*", "kreyol"),
     "Yiddish": ("yiddish", "jiddisch*"),
     "Esperanto": ("esperanto",),
-    "Arabic": ("arabic", "arabe", "arabophone", "arabisch*", "العربية"),
+    "Latin": ("latin", "latein*"),
+    "Arabic": ("arabic", "arabe", "arabophone", "arabisch*", "العربية", "darija", "derja"),
     "Hebrew": ("hebrew", "hebreu", "hebraisch*", "עברית"),
     "Persian": ("persian", "farsi", "persan", "persisch*"),
     "Kurdish": ("kurdish", "kurde", "kurdisch*"),
@@ -162,6 +177,8 @@ _KNOWN: dict[str, tuple[str, ...]] = {
     "Swahili": ("swahili", "kiswahili"),
     "Amharic": ("amharic", "amharique", "amharisch*"),
     "Wolof": ("wolof",),
+    "Bambara": ("bambara", "bamanankan"),
+    "Kabyle": ("kabyle", "kabylisch*", "taqbaylit"),
     "Lingala": ("lingala",),
     "Malagasy": ("malagasy", "malgache", "madagassisch*"),
     "Afrikaans": ("afrikaans",),
@@ -229,8 +246,10 @@ _WELCOME = (
     "nice to have", "good to have", "great to have", "would be great", "would be nice",
     "optional*", "welcome*", "appreci*", "helpful", "useful",
     "atout*", "souhait*", "bienvenu*", "optionnel*", "facultati*", "de preference",
+    "utile*",
     "vorteil*", "wunschenswert", "erwunscht", "willkommen", "bevorzugt*", "gerne gesehen",
-    "gern gesehen", "pluspunkt*",
+    "gern gesehen", "pluspunkt*", "hilfreich*", "nutzlich*", "von nutzen", "ware schon",
+    "waren schon",
 )  # fmt: skip
 _PLUS_AFTER = frozenset({"a", "an", "un", "ein", "is", "est", "als"})
 # Words that make a quote a negation: never the badge.
@@ -243,7 +262,8 @@ _NOT = (
 _REQUIRED = (
     "required", "requires", "requirement*", "must", "mandatory", "essential", "needed",
     "necessary", "prerequisite*", "proficiency", "command", "knowledge", "skill", "skills",
-    "language", "languages",
+    "language", "languages", "communication skill", "communication skills",
+    "communications skills",
     "exige*", "requis", "requise*", "indispensable*", "obligatoire*", "imperati*", "necessaire*",
     "connaissance*", "langue*",
     "erforderlich*", "zwingend*", "voraussetzung*", "vorausgesetzt", "unabdingbar*",
@@ -255,13 +275,18 @@ _REQUIRED = (
 # German", "Documents are written in German").
 _LINKS = frozenset({
     "the", "of", "in", "a", "an", "and", "or", "is", "are", "be", "with", "at", "to", "very",
-    "also", "both", "either", "your", "speak", "write", "written", "spoken",
+    "also", "both", "either", "your", "speak", "write", "written", "spoken", "verbal", "absolutely",
+    "strictly", "really", "definitely",
     "l", "le", "la", "les", "de", "d", "du", "des", "en", "et", "ou", "est", "sont", "un", "une",
     "au", "aux", "avec", "tres", "aussi", "votre", "parler", "parlez", "parle", "parlee", "ecrit",
-    "ecrite", "oral", "orale",
-    "im", "und", "oder", "ist", "sind", "auf", "mit", "sehr", "auch", "als", "sowie",
-    "sprechen", "sprechend", "schreiben",
+    "ecrite", "oral", "orale", "absolument", "vraiment",
+    "im", "und", "oder", "ist", "sind", "auf", "mit", "sehr", "auch", "als", "sowie", "sowohl",
+    "sprechen", "sprechend", "schreiben", "absolut", "unbedingt", "wirklich",
 })  # fmt: skip
+# Links of more than one word ("allemand ainsi que néerlandais").
+_LINK_PHRASES = ("ainsi que", "as well as", "als auch")
+# Words that bring a level ("Deutschkenntnisse (mind. B2)"): a link only right before a level.
+_AT_LEAST = ("mind", "mindestens", "min", "minimum", "at least", "au moins", "au minimum")
 # Nouns of a language that may follow its name ("German speaker", "allemand niveau C1").
 _NOUNS = frozenset({
     "speaker", "speakers", "level", "locuteur", "locutrice", "locuteurs", "niveau",
@@ -269,8 +294,32 @@ _NOUNS = frozenset({
 })  # fmt: skip
 # Level words that are also nouns a name qualifies ("German business culture"): never after it.
 _LEVEL_NOUNS = frozenset({"business", "professional"})
+# "German speaking" is the person's language before an edge, a level, a requirement word, "is",
+# or one of these, a requirement on the person ("German-speaking candidate"); never before
+# another word ("German speaking clients", "German-speaking market").
+_SPEAKING_WORD = "speaking"
+_SPEAKING_COPULAS = frozenset({"is", "ist", "est"})
+_PERSONS = frozenset({
+    "candidate", "candidates", "applicant", "applicants", "person", "individual", "profile",
+    "role", "position",
+})  # fmt: skip
+# A name after these, with no level, requirement word or noun after it, is a nationality ("Must
+# be German", "Vous êtes allemand").
+_COPULAS = frozenset({"be", "being", "are", "etre", "etes", "sein", "sind", "bist", "seid"})
 # At most this many words between a language's name and its requirement word (rule 4).
 GAP = 3
+
+# Rule 2: words that make another language she lists an alternative to the one asked, anywhere in
+# the quote ("German or English"); a slash does too ("German/English", "and/or").
+_OR = (
+    "or", "either", "one of", "any of", "alternativ*", "otherwise", "else",
+    "ou", "soit", "voire", "sinon", "au choix", "l une des", "une des", "un des", "l un des",
+    "oder", "entweder", "bzw", "beziehungsweise", "respektive", "wahlweise", "ansonsten",
+    "andernfalls", "eine der", "einer der", "eine dieser", "einer dieser",
+)  # fmt: skip
+# Rule 2: what may stand between the language asked and another she lists, so that the quote asks
+# for both ("Fluent German and English"): these, _LINK_PHRASES and another language's name.
+_JOINS = frozenset({"and", "of", "in", "the", "und", "sowie", "et", "de", "l", "d", "en"})
 
 NATIVE = 7
 # The scale: 1 to 6 are the CEFR's A1 to C2, 7 native. A trailing "*" is a stem (German, French
@@ -290,7 +339,8 @@ _LEVELS: dict[int, tuple[str, ...]] = {
     4: (
         "b2", "upper intermediate", "good", "bon", "bonne*", "bon niveau", "bonnes connaissances",
         "professional working proficiency", "operational", "operationnel*", "autonome",
-        "sehr gute kenntnisse", "gut", "gute*", "solid", "solide",
+        "sehr gute kenntnisse", "gut", "gute*", "solid", "solide", "sicher", "sichere",
+        "sicheren", "sicherer", "sicheres",
     ),
     5: (
         "c1", "fluent", "fluently", "fluency", "courant*", "couramment", "fliessend*", "fluide",
@@ -298,7 +348,8 @@ _LEVELS: dict[int, tuple[str, ...]] = {
         "professionnel*", "niveau professionnel", "full professional proficiency", "excellent*",
         "excellen*", "tres bon*", "tres bonne*", "tres bon niveau",
         "tres bonnes connaissances", "sehr gut*", "strong", "maitrise", "proficient",
-        "ausgezeichnet*",
+        "ausgezeichnet*", "maitrisez", "maitrises", "maitrisant", "beherrschst", "beherrschen",
+        "beherrscht",
     ),
     6: (
         "c2", "bilingual", "bilingue", "zweisprachig*", "near native", "quasi natif",
@@ -409,6 +460,9 @@ _LEVEL_TABLE = _table((point, s) for point, spellings in _LEVELS.items() for s i
 _WELCOME_TABLE = _table((True, s) for s in _WELCOME)
 _NOT_TABLE = _table((True, s) for s in _NOT)
 _REQUIRED_TABLE = _table((True, s) for s in _REQUIRED)
+_OR_TABLE = _table((True, s) for s in _OR)
+_LINK_PHRASE_TABLE = _table((True, s) for s in _LINK_PHRASES)
+_AT_LEAST_TABLE = _table((True, s) for s in _AT_LEAST)
 
 
 def _split(text: str) -> list[str]:
@@ -450,36 +504,50 @@ def display(name: str) -> str:
 # --- a quote's words --------------------------------------------------------------------------
 
 # A clause's edge in a quote: what separates a list's items or sentences. A colon and brackets
-# are not one ("German: C1", "German (C1)").
-_EDGES = re.compile(r"[,;.!?\n\r\u2022\u00b7|]+|\s[-\u2013\u2014]+\s|[\u2013\u2014]")
+# are not one ("German: C1", "German (C1)"), nor the period of an abbreviation ("mind. B2").
+_EDGES = re.compile(r"([,;.!?\n\r\u2022\u00b7|]+|\s[-\u2013\u2014]+\s|[\u2013\u2014])")
+_DASH = re.compile(r"\s*[-\u2013\u2014]+\s*")
+_ABBREVIATIONS = re.compile(r"\b(mind|min|bzw|ggf|ggfs|evtl|inkl|ca|resp)\.", re.IGNORECASE)
 _WORD = re.compile(r"[^\W_]+")
 EDGE = ""
 
 
 @dataclass(frozen=True)
 class _Said:
-    """A quote as its words, EDGE between clauses, and whether each word had a capital."""
+    """A quote as its words, EDGE between clauses, whether each word had a capital, and whether
+    each EDGE is a dash alone ("German, a dash, fluent")."""
 
     words: tuple[str, ...]
     capital: tuple[bool, ...]
+    dash: tuple[bool, ...]
 
 
 @functools.lru_cache(maxsize=4096)
 def _said(quote: str) -> _Said:
     words: list[str] = []
     capital: list[bool] = []
-    for clause in _EDGES.split(unicodedata.normalize("NFKC", quote)):
-        if words and words[-1] != EDGE:
-            words.append(EDGE)
-            capital.append(False)
-        for piece in _WORD.findall(clause):
-            for index, word in enumerate(_split(piece)):
+    dash: list[bool] = []
+    text = _ABBREVIATIONS.sub(r"\1", unicodedata.normalize("NFKC", quote)).replace("&", " and ")
+    for index, part in enumerate(_EDGES.split(text)):
+        if index % 2:
+            alone = bool(_DASH.fullmatch(part))
+            if words and words[-1] == EDGE:
+                dash[-1] = dash[-1] and alone
+            elif words:
+                words.append(EDGE)
+                capital.append(False)
+                dash.append(alone)
+            continue
+        for piece in _WORD.findall(part):
+            for at, word in enumerate(_split(piece)):
                 words.append(word)
-                capital.append(index == 0 and piece[0].isupper())
+                capital.append(at == 0 and piece[0].isupper())
+                dash.append(False)
     while words and words[-1] == EDGE:
         words.pop()
         capital.pop()
-    return _Said(tuple(words), tuple(capital))
+        dash.pop()
+    return _Said(tuple(words), tuple(capital), tuple(dash))
 
 
 def welcome_said(quote: str) -> bool:
@@ -505,26 +573,54 @@ _BETWEEN = frozenset({"name", "link", "noun"})
 
 @dataclass(frozen=True)
 class _Reading:
-    """What rule 3 and 4 read of a quote: each word's kind and the known languages it names."""
+    """What rules 2 to 4 read of a quote: each word's kind, the known languages it names, and the
+    words of a link phrase ("ainsi que")."""
 
     said: _Said
     kinds: tuple[Kind, ...]
     names: tuple[_Hit[str], ...]
+    joined: frozenset[int]
 
 
 @functools.lru_cache(maxsize=4096)
 def _reading(quote: str) -> _Reading:
     said = _said(quote)
-    kinds = [_word_kind(word) for word in said.words]
-    for hit in _hits(_REQUIRED_TABLE, said.words):
+    words = said.words
+    kinds: list[Kind] = [_word_kind(word) for word in words]
+    for hit in _hits(_REQUIRED_TABLE, words):
         kinds[hit.start : hit.start + hit.size] = ["need"] * hit.size
-    for hit in _hits(_LEVEL_TABLE, said.words):
-        noun = hit.size == 1 and said.words[hit.start] in _LEVEL_NOUNS
+    for hit in _hits(_LEVEL_TABLE, words):
+        noun = hit.size == 1 and words[hit.start] in _LEVEL_NOUNS
         kinds[hit.start : hit.start + hit.size] = ["level_noun" if noun else "level"] * hit.size
-    names = tuple(_hits(_NAMES, said.words))
+    joined: set[int] = set()
+    for hit in _hits(_LINK_PHRASE_TABLE, words):
+        kinds[hit.start : hit.start + hit.size] = ["link"] * hit.size
+        joined.update(range(hit.start, hit.start + hit.size))
+    for hit in _hits(_AT_LEAST_TABLE, words):
+        if _kind_in(kinds, hit.start + hit.size) == "level":
+            kinds[hit.start : hit.start + hit.size] = ["link"] * hit.size
+    names = tuple(_hits(_NAMES, words))
     for hit in names:
         kinds[hit.start : hit.start + hit.size] = ["name"] * hit.size
-    return _Reading(said, tuple(kinds), names)
+    for hit in names:
+        _after_name(kinds, said, hit.start + hit.size)
+    return _Reading(said, tuple(kinds), names, frozenset(joined))
+
+
+def _after_name(kinds: list[Kind], said: _Said, at: int) -> None:
+    """The word after a name: a dash alone before a level is a label ("Deutsch - fließend"), and
+    "speaking" a noun of the language where _SPEAKING_WORD's comment says."""
+    if at >= len(kinds):
+        return
+    word, then = said.words[at], _kind_in(kinds, at + 1)
+    following = said.words[at + 1] if at + 1 < len(kinds) else EDGE
+    if word == EDGE and said.dash[at] and then == "level":
+        kinds[at] = "link"
+    elif word == _SPEAKING_WORD and kinds[at] == "other":
+        if then in ("edge", "level", "need") or following in _SPEAKING_COPULAS:
+            kinds[at] = "noun"
+        elif following in _PERSONS and _kind_in(kinds, at + 2) in ("edge", "link", "level", "need"):
+            kinds[at : at + 2] = ["noun", "need"]
 
 
 def _word_kind(word: str) -> Kind:
@@ -535,32 +631,83 @@ def _word_kind(word: str) -> Kind:
     return "noun" if word in _NOUNS else "other"
 
 
+def _kind_in(kinds: Sequence[Kind], at: int) -> Kind:
+    return kinds[at] if 0 <= at < len(kinds) else "edge"
+
+
 def _kind(reading: _Reading, at: int) -> Kind:
-    return reading.kinds[at] if 0 <= at < len(reading.kinds) else "edge"
+    return _kind_in(reading.kinds, at)
 
 
 def _as_language(reading: _Reading, start: int, size: int, spelling: str) -> bool:
-    """Rule 3: the spelling at `start` names the language, not a place, a people or a word."""
+    """Rule 3: the spelling at `start` names the language, not a place, a people, a nationality
+    or a word."""
     if spelling in _ALSO_PLACE:
         return False
-    if spelling in _CAPITAL_ONLY and not reading.said.capital[start]:
+    before, after = _kind(reading, start - 1), _kind(reading, start + size)
+    if spelling in _CAPITAL_ONLY and not _capital_language(reading, start, size, before, after):
         return False
-    return _kind(reading, start - 1) in _BEFORE and _kind(reading, start + size) in _AFTER
+    if start > 0 and reading.said.words[start - 1] in _COPULAS and after not in _AFTER_COPULA:
+        return False
+    return before in _BEFORE and after in _AFTER
 
 
-def _close(reading: _Reading, start: int, size: int) -> bool:
+_AFTER_COPULA = frozenset({"level", "need", "noun"})
+_AFTER_CAPITAL = frozenset({"edge", "level", "noun"})
+
+
+def _capital_language(reading: _Reading, start: int, size: int, before: Kind, after: Kind) -> bool:
+    """A _CAPITAL_ONLY spelling names the language with its capital; at a clause's start, where a
+    verb takes one too ("Polish the required UI flows"), only before an edge, a level or a noun,
+    with a level close to it."""
+    if not reading.said.capital[start]:
+        return False
+    if before != "edge":
+        return True
+    return after in _AFTER_CAPITAL and _close(reading, start, size, frozenset({"level"}))
+
+
+def _close(reading: _Reading, start: int, size: int, signals: frozenset[Kind] = _SIGNALS) -> bool:
     """Rule 4: a level or requirement word within GAP words of the spelling, in its clause."""
     for step, at in ((-1, start - 1), (1, start + size)):
         between = 0
         while between <= GAP:
             kind = _kind(reading, at)
-            if kind in _SIGNALS:
+            if kind in signals:
                 return True
             if kind not in _BETWEEN:
                 break
             at += step
             between += 1
     return False
+
+
+def _joined(reading: _Reading, low: int, high: int) -> bool:
+    words = reading.said.words
+    return low < high and all(
+        words[at] in _JOINS or at in reading.joined for at in range(low, high)
+    )
+
+
+def _alternative(
+    reading: _Reading, quote: str, spots: Sequence[tuple[int, int]], others: Sequence[_Hit[str]]
+) -> bool:
+    """Rule 2: whether another language she lists (`others`) may be accepted instead of the one
+    asked (at `spots`): a slash or an alternative word anywhere in the quote, or a word other
+    than _JOINS between them (nothing between them, too: "Bilingue français allemand")."""
+    if not others:
+        return False
+    if "/" in quote or _hits(_OR_TABLE, reading.said.words):
+        return True
+    marks = sorted({*spots, *((hit.start, hit.size) for hit in reading.names)})
+    run_of: dict[int, int] = {}
+    run, end = 0, None
+    for start, size in marks:
+        if end is not None and not _joined(reading, end, start):
+            run += 1
+        run_of[start] = run
+        end = start + size
+    return len({run_of[start] for start, _ in spots} | {run_of[hit.start] for hit in others}) > 1
 
 
 def _plain_spots(reading: _Reading, name: str) -> list[tuple[int, int]]:
@@ -612,8 +759,6 @@ class Asked:
             return "unsure"
         reading = _reading(self.quote)
         own = frozenset().union(*(keys_of(name) for name in self.names))
-        if any(hit.tag in theirs and hit.tag not in own for hit in reading.names):
-            return "unsure"
         spots = [
             (hit.start, hit.size, hit.spelling, hit.ending in _SKILLS)
             for hit in reading.names
@@ -622,6 +767,9 @@ class Asked:
         for name in self.names:
             if not _known(name):
                 spots.extend((at, size, "", False) for at, size in _plain_spots(reading, name))
+        others = [hit for hit in reading.names if hit.tag in theirs and hit.tag not in own]
+        if _alternative(reading, self.quote, [spot[:2] for spot in spots], others):
+            return "unsure"
         for start, size, spelling, skill in spots:
             if _as_language(reading, start, size, spelling) and (
                 skill or _close(reading, start, size)
@@ -683,6 +831,30 @@ def spoken_of(db: Session, user_id: uuid.UUID) -> tuple[Spoken, ...]:
     return spoken_from(sections)
 
 
+# Entries of her profile that name no language ("N/A", "none", "aucune"): as no entry at all.
+_NO_LANGUAGE = frozenset({
+    "n a", "na", "none", "no", "nothing", "nil", "null", "not applicable", "tbd", "x",
+    "aucun", "aucune", "rien", "neant", "non", "non applicable", "sans",
+    "keine", "kein", "nichts", "nein",
+})  # fmt: skip
+
+
+def absent(name: str) -> bool:
+    """Whether an entry of her profile names no language: no word, or one of _NO_LANGUAGE."""
+    plain = _words(name)
+    return not plain or plain in _NO_LANGUAGE
+
+
+def unread(spoken: Sequence[Spoken]) -> list[str]:
+    """Her entries the list cannot read, each once, as she first wrote it: each turns a badge
+    into a notice."""
+    found: dict[str, str] = {}
+    for one in spoken:
+        if not absent(one.name) and hers(one.name) is None:
+            found.setdefault(_words(one.name), " ".join(one.name.split()))
+    return list(found.values())
+
+
 def hers(name: str) -> frozenset[str] | None:
     """The languages one entry of her profile names, None when the list cannot read it: its
     known names, or an ISO code standing alone or before level words."""
@@ -708,14 +880,13 @@ class _Profile:
 
 @functools.lru_cache(maxsize=256)
 def _profile(spoken: tuple[Spoken, ...]) -> _Profile:
+    """Her entries read, `absent` ones already left out by `compare`."""
     keys: list[frozenset[str]] = []
-    unread: str | None = None
     for one in spoken:
         read = hers(one.name)
-        if read is None and unread is None and _words(one.name):
-            unread = " ".join(one.name.split())
         keys.append(read if read is not None else keys_of(one.name))
-    return _Profile(tuple(keys), frozenset().union(*keys), unread)
+    first = unread(spoken)
+    return _Profile(tuple(keys), frozenset().union(*keys), first[0] if first else None)
 
 
 # --- the comparison ---------------------------------------------------------------------------
@@ -780,6 +951,7 @@ def compare(stored: object, spoken: Sequence[Spoken]) -> list[Gap]:
     """The posting's languages against the person's (module docstring), in the posting's order,
     the ad's language last; [] when she declares none or the posting was never read."""
     read = read_stored(stored)
+    spoken = [one for one in spoken if not absent(one.name)]
     if not spoken or read is None:
         return []
     profile = _profile(tuple(spoken))
