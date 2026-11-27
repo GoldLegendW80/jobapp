@@ -24,7 +24,8 @@
   an ask hold no code (422).
 - POST /api/applications/{id}/messages `{text}` is the person's message to the apply agent at
   work (A25, `applier.post_message`): 201 with its chat line, 409 when no run works on it, 429
-  past the rate, 422 not plain text, too long, or code like while an ask of kind code waits.
+  past the rate or the cap of an application, 422 not plain text, too long, or code like while
+  an ask of kind code waits or the code the person gave waits to be typed.
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 posting or application answers 404, as a missing one. Every answer is `Cache-Control: no-store`.
