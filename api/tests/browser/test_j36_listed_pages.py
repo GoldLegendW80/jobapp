@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from app.browser import finder, sources
+from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.browser.sources import interactive, listed_pages
 from app.jobs import sweep
@@ -28,18 +29,40 @@ def job(n: int) -> str:
     return f"{START}jobs/{n}"
 
 
+# A posting's text as long as a posting's is (service.TEXT_MIN_CHARS, 300), invented.
+BODY = (
+    "- paragraph: Build invented robot arms with Python for Example Robotics, Paris. You design "
+    "the welding cells of an invented factory, write the control software that drives them, test "
+    "it on the bench with the team, and ship it to the line. You know Python, a robot framework "
+    "and the safety rules of a workshop. Hybrid, two days a week on site, full time."
+)
+
+
 def posting(title: str) -> str:
-    return (
-        f'- heading "{title}" [level=1]\n'
-        "- paragraph: Build invented robot arms with Python for Example Robotics, Paris."
-    )
+    return f'- heading "{title}" [level=1]\n{BODY}'
 
 
 SIGNIN = '- heading "Sign in" [level=1]\n- textbox "Email" [ref=e1]'
 CHECK = '- heading "Just a moment" [level=1]\n- paragraph: Checking your browser'
 CLOSED = '- heading "Robot Welder" [level=1]\n- paragraph: This job is no longer available.'
-HINTED = '- heading "Robot Welder" [level=1]\n- paragraph: Applications closed'
+HINTED = f'- heading "Robot Welder" [level=1]\n- paragraph: Applications closed\n{BODY}'
 ELSEWHERE = '- heading "Robot jobs" [level=1]\n- paragraph: 12 jobs found'
+SHORT = '- heading "Robot Welder" [level=1]\n- paragraph: Build invented robot arms in Paris.'
+# A wall whose own heading holds the posting's title (review of PR 864, item 4).
+TITLED_SIGNIN = f'- heading "Robot Welder" [level=1]\n{SIGNIN.replace("level=1", "level=2")}'
+TITLED_CHECK = f'- heading "Robot Welder" [level=2]\n{CHECK}\n{BODY}'
+GUEST = f'- heading "Robot Welder" [level=1]\n- heading "Join LinkedIn" [level=2]\n{BODY}'
+TITLES = ("Robot Welder", "Robot Painter", "Robot Arm Engineer", "Robot Tester", "Robot Pilot",
+          "Robot Fitter")  # fmt: skip
+# The website's search page listing the posting's title among six cards (review, item 3).
+LIST_PAGE = "\n".join(
+    ['- heading "Robot jobs near Paris" [level=1]', "- list:"]
+    + [
+        f'  - listitem:\n    - heading "{t}" [level=3]\n    - link "{t}" [ref=e{i}]:\n'
+        f"      - /url: /jobs/{40 + i}"
+        for i, t in enumerate(TITLES)
+    ]
+)
 
 
 class NoTools:
@@ -67,15 +90,35 @@ VERDICTS = [
     (200, A, posting("Senior Robot Welder (Stage)"), "Robot Welder", "custom", "read"),
     (200, A, posting("robot  welder"), "Robot Welder", "custom", "read"),  # case, spacing
     (200, job(1) + "?ref=list", posting("Robot Welder"), "Robot Welder", "custom", "read"),
+    # Another page than its own, though it shows the title: never read (review, item 3).
     (
         200,
         START + "careers/robot-welder",
         posting("Robot Welder"),
         "Robot Welder",
         "custom",
-        "read",
+        "unread",
+    ),
+    (200, START + "search?q=robot", LIST_PAGE, "Robot Welder", "custom", "unread"),
+    (200, job(2), posting("Robot Welder"), "Robot Welder", "custom", "unread"),
+    (
+        200,
+        "https://other.example.test/jobs/1",
+        posting("Robot Welder"),
+        "Robot Welder",
+        "custom",
+        "unread",
     ),
     (200, A, HINTED, "Robot Welder", "custom", "read"),  # a closure naming nothing: read
+    # A wall is never read, whatever its headings or its text hold (review, item 4).
+    (200, A, TITLED_SIGNIN, "Robot Welder", "custom", "walled"),
+    (200, A, TITLED_SIGNIN + "\n" + BODY, "Robot Welder", "custom", "walled"),
+    (200, A, TITLED_CHECK, "Robot Welder", "custom", "walled"),
+    (200, A, GUEST, "Robot Welder", "linkedin", "walled"),
+    (403, A, GUEST, "Robot Welder", "custom", "walled"),
+    # Under service.TEXT_MIN_CHARS of text, the title alone is no posting's page.
+    (200, A, SHORT, "Robot Welder", "custom", "unread"),
+    (200, A, '- heading "Robot Welder" [level=1]', "Robot Welder", "custom", "unread"),
     (401, A, posting("Robot Welder"), "Robot Welder", "custom", "walled"),
     (403, A, posting("Robot Welder"), "Robot Welder", "custom", "walled"),
     (429, A, posting("Robot Welder"), "Robot Welder", "custom", "walled"),
@@ -119,10 +162,79 @@ VERDICTS = [
 def test_what_a_page_answers(status, landed, snapshot, title, platform, expected) -> None:
     read = bool(landed) and (status is None or status < 400)
     page = page_of(landed, snapshot) if read else None
-    opened = finder.AppOpen(landed, status, read, True)
+    opened = finder.AppOpen(landed, status, read, True, True)
     found, closed = listed_pages.verdict(opened, A, page, snapshot, title, platform)
     assert found == expected
     assert (closed is not None) == (expected == "gone")
+
+
+def test_a_list_the_session_read_is_never_read_as_the_posting() -> None:
+    page = page_of(A, posting("Robot Welder"))
+    opened = finder.AppOpen(A, 200, True, True, True)
+    snapshot = posting("Robot Welder")
+    assert listed_pages.verdict(opened, A, page, snapshot, "Robot Welder", "custom")[0] == "read"
+    found, _ = listed_pages.verdict(opened, A, page, snapshot, "Robot Welder", "custom", lists={A})
+    assert found == "unread"
+
+
+LI = "http://www.linkedin.test:8080/jobs/view/1234567890/"
+IN = "http://fr.indeed.test:8080/viewjob?jk=0123456789abcdef"
+# Whether the page the app landed on is the posting's own: (requested, landed, own).
+OWN_PAGES = [
+    (A, A, True),
+    (A, A + "?ref=list", True),
+    (A, A + "/", True),
+    (A, job(2), False),
+    (A, START + "search?q=robot+welder", False),
+    (A, START + "jobs", False),
+    (A, "https://other.example.test/jobs/1", False),
+    (LI, LI, True),
+    (LI, LI + "?trk=public_jobs", True),
+    (LI, "http://www.linkedin.test:8080/jobs/view/robot-welder-at-example-1234567890/", True),
+    (LI, "http://www.linkedin.test:8080/jobs/search/?currentJobId=1234567890", False),
+    (LI, "http://www.linkedin.test:8080/jobs/view/1234567891/", False),
+    (LI, "http://www.linkedin.test:8080/feed/", False),
+    (IN, IN + "&from=serp", True),
+    (IN, "http://fr.indeed.test:8080/viewjob?jk=fedcba9876543210", False),
+    (IN, "http://fr.indeed.test:8080/cmp/example/jobs?jk=0123456789abcdef", False),
+    (IN, "http://fr.indeed.test:8080/jobs?q=robot&vjk=0123456789abcdef", False),
+    ("http://fr.indeed.test:8080/viewjob", "http://fr.indeed.test:8080/viewjob", False),  # no id
+]
+
+
+@pytest.mark.parametrize(("requested", "landed", "own"), OWN_PAGES)
+def test_the_posting_own_page(requested: str, landed: str, own: bool) -> None:
+    assert listed_pages.own_page(requested, landed) is own
+
+
+WTTJ = "http://www.welcometothejungle.test:8080/"
+INDEED = "http://www.indeed.test:8080/"
+# A posting's address on a website's own hosts (finder.lease_hosts): (address, start, on).
+ON_HOSTS = [
+    (job(1), START, True),
+    ("http://jobs.example.test/jobs/1", START, True),
+    ("https://JOBS.example.test/jobs/1", START, True),
+    ("https://sub.jobs.example.test/jobs/1", START, False),
+    ("https://example.test/jobs/1", START, False),
+    ("https://www.other-board.test/viewjob?jk=1", START, False),
+    ("https://jobs.example.test.evil.test/jobs/1", START, False),
+    ("", START, False),
+    ("javascript:alert(1)", START, False),
+    (IN, INDEED, True),
+    ("http://indeed.test:8080/viewjob?jk=0123456789abcdef", INDEED, True),
+    ("http://a.b.indeed.test:8080/viewjob", INDEED, False),
+    ("http://fra.indeed.test:8080/viewjob", INDEED, False),
+    ("https://fr.indeed.test/viewjob", INDEED, False),
+    (LI, INDEED, False),
+    (WTTJ + "fr/companies/example/jobs/robot-welder", WTTJ, True),
+    ("http://welcometothejungle.test:8080/fr/x", WTTJ, True),
+    ("http://fr.welcometothejungle.test:8080/fr/x", WTTJ, False),
+]
+
+
+@pytest.mark.parametrize(("url", "start", "on"), ON_HOSTS)
+def test_a_posting_on_the_websites_own_hosts(url: str, start: str, on: bool) -> None:
+    assert finder.on_lease_hosts(url, start) is on
 
 
 class Board(TabSite):
@@ -132,18 +244,37 @@ class Board(TabSite):
     def __init__(self, pages: dict[str, str], **kw: Any) -> None:
         self.statuses: dict[str, int] = kw.pop("statuses", {})
         self.closes: set[str] = set(kw.pop("closes", ()))
+        # The addresses whose navigate loads after the memory guard closed the app's tab during
+        # its pause (browserd opens it again and names the close in its answer).
+        self.reopens: set[str] = set(kw.pop("reopens", ()))
+        # Where a navigate lands instead of the address asked for (a redirect).
+        self.redirects: dict[str, str] = kw.pop("redirects", {})
+        # browserd's answer to `browser_tabs new` when it makes no tab, or the error it raises.
+        self.no_tab: Any = kw.pop("no_tab", None)
         super().__init__({kw.pop("start", START): HOME, **pages}, **kw)
 
     async def call(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         url = args.get("url")
+        if name == "browser_tabs" and args.get("action") == "new" and self.no_tab is not None:
+            args.pop("_discovery"), args.pop("_discovery_scope")
+            self.calls.append((name, dict(args)))
+            if isinstance(self.no_tab, Exception):
+                raise self.no_tab
+            return self.no_tab
         if name == "browser_navigate" and url in self.closes:
             args.pop("_discovery"), args.pop("_discovery_scope")
             self.calls.append((name, dict(args)))
             close = {"id": "0000beef", "reason": "memory", "used_mib": 1870}
             return {"ok": False, "error": "tab_closed", "tab_closed": close}
-        answer = await super().call(name, args)
+        if name == "browser_navigate" and url in self.redirects:
+            answer = await super().call(name, {**args, "url": self.redirects[url]})
+            self.calls[-1] = (name, {**self.calls[-1][1], "url": url})
+        else:
+            answer = await super().call(name, args)
         if name == "browser_navigate" and answer.get("ok") and url in self.statuses:
             answer["status"] = self.statuses[url]
+        if name == "browser_navigate" and answer.get("ok") and url in self.reopens:
+            answer["tab_closed"] = {"id": "0000cafe", "reason": "memory", "used_mib": 1900}
         return answer
 
     def opened(self) -> list[str]:
@@ -172,9 +303,15 @@ class Commits:
     """The run's commits as the phase uses them: what was saved, a store that fails at a
     given save, the postings whose failed reading is their last try."""
 
-    def __init__(self, fail_at: int | None = None, last_try: set[uuid.UUID] | None = None):
+    def __init__(
+        self,
+        fail_at: int | None = None,
+        last_try: set[uuid.UUID] | None = None,
+        left_as_is: set[uuid.UUID] | None = None,
+    ):
         self.saved: list[sweep.ListedPage] = []
         self.fail_at, self.last_try = fail_at, last_try or set()
+        self.left_as_is = left_as_is or set()  # postings the store leaves as they are
         self.unsettled = False
         self.sessions = None
         self.after: Any = None
@@ -183,7 +320,9 @@ class Commits:
         assert (source_id, source, batch, set_aside) == ("src", HOST, None, ())
         if self.fail_at == len(self.saved):
             raise sweep.StoreRefusedError
-        listed.given_up = listed.outcome == "unread" and listed.job_id in self.last_try
+        done = {"read": "read", "gone": "closed", "unread": "unread"}[listed.outcome]
+        listed.done = "" if listed.job_id in self.left_as_is else done
+        listed.given_up = listed.done == "unread" and listed.job_id in self.last_try
         self.saved.append(listed)
         if self.after is not None:
             self.after(len(self.saved))
@@ -215,19 +354,24 @@ def phase(
     bound_s: float = 600.0,
     stopped: str = "",
     ran: str = "",
-    carded: tuple[str, ...] = (),
+    carded: tuple[int, ...] = (),
     step_s: float = 0.0,
+    tried: set[uuid.UUID] | None = None,
 ) -> tuple[dict[str, Any] | None, Commits, dict[str, Any]]:
     """The website's reading of pages after its agent, on `board`, for the postings `held`."""
     clock = [0.0]
     asked: dict[str, Any] = {}
 
-    def postings(sessions, user_id, host, first):
-        asked.update(host=host, first=list(first))
+    def postings(sessions, user_id, host, on_site, first):
+        asked.update(host=host, first=set(first), on_site=on_site)
         return list(held)
 
+    def left(sessions, user_id, host, on_site):
+        asked.update(left_on_site=on_site)
+        return 7
+
     monkeypatch.setattr(sweep, "listed_postings", postings)
-    monkeypatch.setattr(sweep, "listed_left", lambda sessions, user_id, host: 7)
+    monkeypatch.setattr(sweep, "listed_left", left)
 
     async def sleep(seconds: float) -> None:
         asked.setdefault("pauses", []).append(seconds)
@@ -251,9 +395,13 @@ def phase(
         source_id="src",
         host=HOST,
     )
-    site.carded = dict.fromkeys(carded)
     commits = commits or Commits()
-    plan = SimpleNamespace(commits=commits, user_id=uuid.UUID(int=99))
+    plan = SimpleNamespace(
+        commits=commits,
+        user_id=uuid.UUID(int=99),
+        known=SimpleNamespace(carded={uuid.UUID(int=n) for n in carded}),
+        listed_tried=set() if tried is None else tried,
+    )
     runner = SimpleNamespace(
         monotonic=monotonic, listed_pages_s=bound_s, leases=leases or Leases(), base_url=None
     )
@@ -271,7 +419,7 @@ def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
         statuses={job(2): 404},
     )
     held = [listed(1), listed(2), listed(3), listed(4), listed(5)]
-    done, commits, asked = phase(monkeypatch, board, held, carded=(job(3),))
+    done, commits, asked = phase(monkeypatch, board, held, carded=(3,))
     assert done == {
         "read": 1,
         "closed": 1,
@@ -295,7 +443,10 @@ def test_pages_that_read_a_wall_and_a_gone_page(monkeypatch) -> None:
     assert "invented robot arms" in read.text
     assert commits.saved[1].closed.verdict == "closed"
     assert asked["host"] == HOST
-    assert asked["first"] == [job(3)]
+    assert asked["first"] == {uuid.UUID(int=3)}
+    for on_site in (asked["on_site"], asked["left_on_site"]):  # the website's own hosts only
+        assert on_site(job(1)) is True
+        assert on_site("https://www.other-board.test/viewjob?jk=1") is False
     assert asked["session"].opened_by_app == 0  # B27's counter counts the agent's reports only
 
 
@@ -441,3 +592,82 @@ def test_when_it_runs_after_the_agent(monkeypatch, stopped: str, ran: str, runs:
     assert (done is not None) == runs
     assert len(commits.saved) == runs
     assert asked["session"].stopped == stopped  # the agent's stop stays the website's
+
+
+@pytest.mark.parametrize(
+    "no_tab",
+    [
+        {"ok": False, "error": "too_many_tabs"},  # the agent left its 3 tabs open
+        BrowserError("busy"),
+        {"ok": False, "error": "person_input"},  # the person holds the input
+        {"ok": True, "tabs": [{"index": 0, "url": START, "current": True}]},  # a tab it cannot name
+    ],
+)
+def test_no_tab_of_its_own_stores_nothing_and_ends_the_reading(monkeypatch, no_tab) -> None:
+    """Review of PR 864, item 1: browserd made no tab, so no page was opened: nothing is stored
+    against any posting, and the reading ends with a reason the summary says."""
+    board = Board({job(n): posting("Robot Welder") for n in (1, 2, 3)}, no_tab=no_tab)
+    done, commits, asked = phase(monkeypatch, board, [listed(1), listed(2), listed(3)])
+    assert done == {
+        "read": 0, "closed": 0, "unread": 0, "given_up": 0, "ended": "no_tab", "left": 7,
+    }  # fmt: skip
+    assert commits.saved == []
+    assert board.opened() == []
+    assert [a["action"] for n, a in board.calls if n == "browser_tabs"].count("new") == 1
+    assert "pauses" not in asked
+    assert asked["session"].stopped == ""
+
+
+def test_a_redirect_to_a_list_or_to_another_posting_is_never_read(monkeypatch) -> None:
+    """Review of PR 864, item 3: the posting's address redirects to the website's search page
+    listing its title, or to another posting's page holding it: no page is read as the
+    posting, each is a failed reading."""
+    search = START + "search?q=robot"
+    board = Board(
+        {search: LIST_PAGE, job(9): posting("Robot Welder")},
+        redirects={job(1): search, job(2): job(9)},
+    )
+    done, commits, _ = phase(monkeypatch, board, [listed(1), listed(2)])
+    assert [(p.outcome, p.finding) for p in commits.saved] == [("unread", None)] * 2
+    assert (done["read"], done["unread"], done["ended"]) == (0, 2, "done")
+    assert board.opened() == [job(1), job(2)]
+
+
+def test_a_close_for_memory_named_by_a_navigate_that_loaded_ends_the_reading(monkeypatch) -> None:
+    """Review of PR 864, follow up 5: the memory guard closed the app's tab during its pause and
+    the navigate that followed loaded the page: the close is counted and ends the reading."""
+    board = Board(
+        {job(1): posting("Robot Welder"), job(2): posting("Robot Welder")}, reopens={job(1)}
+    )
+    done, commits, asked = phase(monkeypatch, board, [listed(1), listed(2)])
+    assert asked["session"].tab_closed["memory"] == 1
+    assert done["ended"] == "memory"
+    assert board.opened() == [job(1)]
+    assert [p.outcome for p in commits.saved] == ["read"]  # its page loaded and was read
+
+
+def test_the_counts_are_what_the_store_did(monkeypatch) -> None:
+    """Review of PR 864, item 5: a page the store left as it was (read meanwhile, its address
+    changed, a posting the app closed before) is counted in nothing."""
+    board = Board({job(1): posting("Robot Welder"), job(2): "", job(3): ELSEWHERE},
+                  statuses={job(2): 404})  # fmt: skip
+    kept = {uuid.UUID(int=n) for n in (1, 2, 3)}
+    done, commits, _ = phase(
+        monkeypatch, board, [listed(1), listed(2), listed(3)], commits=Commits(left_as_is=kept)
+    )
+    assert [p.outcome for p in commits.saved] == ["read", "gone", "unread"]
+    assert (done["read"], done["closed"], done["unread"], done["ended"]) == (0, 0, 0, "done")
+
+
+def test_two_websites_of_one_search_on_one_host_open_a_posting_once(monkeypatch) -> None:
+    """Review of PR 864, follow up 6: two saved addresses of one website in one search: the
+    second website's reading opens none of the postings the first opened."""
+    tried: set[uuid.UUID] = set()
+    first = Board({job(n): posting("Robot Welder") for n in (1, 2)})
+    phase(monkeypatch, first, [listed(1), listed(2)], tried=tried)
+    second = Board({job(n): posting("Robot Welder") for n in (1, 2, 3)})
+    done, commits, _ = phase(monkeypatch, second, [listed(1), listed(2), listed(3)], tried=tried)
+    assert first.opened() == [job(1), job(2)]
+    assert second.opened() == [job(3)]
+    assert [p.job_id.int for p in commits.saved] == [3]
+    assert done["read"] == 1

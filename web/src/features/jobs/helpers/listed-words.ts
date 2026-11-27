@@ -86,6 +86,7 @@ export const LISTED_PAGES_ENDS: Record<string, string> = {
   permission: "the website's permission was taken back",
   store_failed: "the search ended",
   browser_lost: "the browser was no longer available",
+  no_tab: "the browser could not open a tab for the app",
   failed: "the app met a problem",
 };
 

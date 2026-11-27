@@ -554,6 +554,8 @@ class Known:
         self.cross: dict[tuple[str, str, str], tuple[uuid.UUID, date]] = {}
         # Jobs J31: the jobs seen only in a list, their own page not read (`Job.list_url`).
         self.listed: set[uuid.UUID] = set()
+        # Jobs J36: the jobs this sweep stored or found again from a card, new or a duplicate.
+        self.carded: set[uuid.UUID] = set()
         rows = db.execute(
             sa.select(
                 Job.company, Job.title, Job.location, Job.url, Job.slug, Job.id, Job.source,
@@ -633,7 +635,7 @@ class Known:
         other.urls, other.identities = set(self.urls), set(self.identities)
         other.slugs, other.jobs = set(self.slugs), dict(self.jobs)
         other.sources, other.cross = dict(self.sources), dict(self.cross)
-        other.listed = set(self.listed)
+        other.listed, other.carded = set(self.listed), set(self.carded)
         return other
 
     def job_of(self, key: slugs.PostingKey) -> uuid.UUID | None:
@@ -701,6 +703,9 @@ class Plan:
     # Jobs J22: every saved title and place pair LinkedIn's public job search did not search,
     # by source id (its summary lists the first SEARCHES_LISTED): what its public page reads.
     linkedin_not_searched: dict[str, list[tuple[str, str | None]]] = field(default_factory=dict)
+    # Jobs J36: the postings whose page a website's reading opened in this run, so two websites
+    # of the search on one host never both open one.
+    listed_tried: set[uuid.UUID] = field(default_factory=set)
 
     @property
     def criteria(self) -> criteria_badge.Criteria:
@@ -1645,12 +1650,15 @@ def commit_verified(
             _store_finding(db, staged, source_id, source, finding, delta, now)
         for finding, excluded in set_aside:
             _store_finding(db, staged, source_id, source, finding, delta, now, excluded)
+        did = ("", False)
         if listed is not None:
-            _listed_page(db, staged, source, listed, delta, now)
+            did = _listed_page(db, staged, source, listed, delta, now)
         _counted(snapshot, source_id, delta, len(findings))
         snapshot.heartbeat_at = now.isoformat()
         row.stats = _stats_json(row, snapshot)
         db.commit()
+    if listed is not None:
+        listed.done, listed.given_up = did
     return delta
 
 
@@ -1783,6 +1791,7 @@ def _store_finding(
             delta.outside += bool(new.row["outside_criteria"])
             if list_url:
                 plan.known.listed.add(new.row["id"])
+                plan.known.carded.add(new.row["id"])
                 delta.listed += 1
             return
         # Another request stored this address or took this slug meanwhile: learn the person's
@@ -1796,6 +1805,8 @@ def _store_finding(
             plan.known.add_stored(company_, title, location, url, slug, job_id, noted)
     delta.duplicates += 1
     job_id = plan.known.job_of(key) or plan.known.cross_job(cross, today)
+    if job_id is not None and list_url:
+        plan.known.carded.add(job_id)
     joined = plan.known.note(job_id, source) if job_id is not None else None
     if joined is not None:
         db.execute(
@@ -1820,7 +1831,7 @@ def _page_read(
     now: datetime,
     delta: Stats,
     excluded: str = "",
-) -> None:
+) -> bool:
     """Jobs J31: a posting kept from a card of a list whose own page a source read since: the
     page's text replaces the card's, and its address the card's when it was found by the cross
     board key (the page that opens is the one Apply needs); the posting is scored again (a fit
@@ -1830,7 +1841,8 @@ def _page_read(
     title and company as at any store, else the exclusion that set the page aside (`excluded`):
     a posting still `found` is skipped with it as its note, and the mention removed, with a
     `sweep` event naming the list. Its badge follows (`_badge_again`). Counted in `delta` when
-    it wrote (never for a row gone or whose page was read already), its skip by a rule too."""
+    it wrote (never for a row gone or whose page was read already), its skip by a rule too;
+    whether it wrote."""
     plan.known.listed.discard(job_id)
     posting, company, stated = page
     job = db.execute(
@@ -1840,7 +1852,7 @@ def _page_read(
         .with_for_update()
     ).scalar_one_or_none()
     if job is None or job.list_url is None:
-        return
+        return False
     read: dict[str, Any] = {"list_url": job.list_url}
     was = job.url
     if posting.url and posting.url != was and _moved(db, plan, job, posting.url):
@@ -1863,6 +1875,7 @@ def _page_read(
     job.updated_at = now
     db.flush()
     delta.listed_read += 1
+    return True
 
 
 @dataclass(eq=False)
@@ -1870,8 +1883,9 @@ class ListedPage:
     """Jobs J36: what the app's read of the page of a posting kept from a card found, for that
     posting (`job_id`, at the address it opened, `url`): `read` (the page's `finding`, with the
     person's exclusion that set it aside, `excluded`), `gone` (the liveness `closed` finding
-    that closes it), else `unread`. `given_up`: set by the store when that failed reading was the
-    posting's last try (service.PAGE_TRIES_DAYS)."""
+    that closes it), else `unread`. Set by the store once it committed: what it did (`done`:
+    `read`, `closed`, `unread`, or "" when it left the posting as it was) and whether that
+    failed reading was the posting's last try (`given_up`, service.PAGE_TRIES_DAYS)."""
 
     job_id: uuid.UUID
     url: str
@@ -1879,6 +1893,7 @@ class ListedPage:
     finding: Any = None
     excluded: str = ""
     closed: Any = None
+    done: str = ""
     given_up: bool = False
 
 
@@ -1898,7 +1913,11 @@ LISTED_MAX = 200  # the postings one website's reading of pages loads at once
 
 def _listed_rows(user_id: uuid.UUID, host: str) -> sa.Select[Any]:
     """The person's postings kept from a card that a website (`host`, a source the store names)
-    found, still open to work on, and not given up (service.given_up)."""
+    found, still open to work on, not given up (service.given_up), and never closed by the app
+    (a posting the person reopened after the app closed it: her reopen stands); `_listed` keeps
+    those whose source names `host` exactly."""
+    from app.jobs import liveness_check
+
     return sa.select(Job.id, Job.url, Job.title, Job.company, Job.location, Job.source).where(
         Job.user_id == user_id,
         Job.list_url.is_not(None),
@@ -1906,60 +1925,77 @@ def _listed_rows(user_id: uuid.UUID, host: str) -> sa.Select[Any]:
         Job.status.in_((JobStatus.found, JobStatus.shortlisted)),
         Job.source.contains(host, autoescape=True),
         Job.id.not_in(service.given_up(user_id)),
+        Job.id.not_in(liveness_check.closed_by_the_app(user_id)),
     )
 
 
+LISTED_ROWS_AT_ONCE = 500  # the rows streamed at a time while the exact filters pick them
+
+
+def _listed(row: Any, host: str, on_site: Callable[[str], bool]) -> bool:
+    """A row of `_listed_rows` the website's reading opens: its source names `host` (not only a
+    host that holds it) and its address is on the website's own hosts (`on_site`)."""
+    return host in noted_sources(row.source) and on_site(row.url)
+
+
 def listed_postings(
-    sessions: sessionmaker[Session], user_id: uuid.UUID, host: str, first: Sequence[str]
+    sessions: sessionmaker[Session],
+    user_id: uuid.UUID,
+    host: str,
+    on_site: Callable[[str], bool],
+    first: set[uuid.UUID],
 ) -> list[Listed]:
-    """Jobs J36: the postings a website's reading of pages tries, in order: those whose address
-    is one of `first` (the cards this search kept), then the others, the oldest first; at most
-    LISTED_MAX."""
-    mine = sa.case((Job.url.in_(list(first)[:LISTED_MAX]), 0), else_=1)
+    """Jobs J36: the postings a website's reading of pages tries (`_listed`), in order: those of
+    `first` (the jobs this search stored or found again from a card, Known.carded), then the
+    others, the oldest first; at most LISTED_MAX of them."""
+    mine = sa.case((Job.id.in_(sorted(first)), 0), else_=1) if first else sa.literal(1)
+    statement = _listed_rows(user_id, host).order_by(mine, Job.created_at, Job.id)
+    picked: list[Listed] = []
     with sessions() as db:
-        rows = db.execute(
-            _listed_rows(user_id, host).order_by(mine, Job.created_at, Job.id).limit(LISTED_MAX)
-        ).all()
-    return [
-        Listed(row.id, row.url, row.title, row.company, row.location)
-        for row in rows
-        if host in noted_sources(row.source)
-    ]
+        for row in db.execute(statement.execution_options(yield_per=LISTED_ROWS_AT_ONCE)):
+            if _listed(row, host, on_site):
+                picked.append(Listed(row.id, row.url, row.title, row.company, row.location))
+                if len(picked) >= LISTED_MAX:
+                    break
+    return picked
 
 
-def listed_left(sessions: sessionmaker[Session], user_id: uuid.UUID, host: str) -> int:
+def listed_left(
+    sessions: sessionmaker[Session], user_id: uuid.UUID, host: str, on_site: Callable[[str], bool]
+) -> int:
     """Jobs J36: how many of the person's postings kept from a card a website's reading of pages
-    would still try."""
+    would still try (`_listed`)."""
+    statement = _listed_rows(user_id, host).execution_options(yield_per=LISTED_ROWS_AT_ONCE)
     with sessions() as db:
-        sources = db.scalars(_listed_rows(user_id, host).with_only_columns(Job.source)).all()
-    return sum(host in noted_sources(source) for source in sources)
+        return sum(_listed(row, host, on_site) for row in db.execute(statement))
 
 
 def _listed_page(
     db: Session, plan: Plan, source: str, page: ListedPage, delta: Stats, now: datetime
-) -> None:
-    """Jobs J36: store what the app's read of a page found. A page that shows the posting is
-    read as a search's report of it (`_page_read`, its badge again); a gone page closes it as
-    the liveness check does (`liveness_check.store`); a failed reading is a `sweep` event with
-    service.PAGE_UNREAD, once a day, and `page.given_up` says whether it was the last try. A
-    posting whose page was read meanwhile, or gone, is left as it is."""
+) -> tuple[str, bool]:
+    """Jobs J36: store what the app's read of a page found; what it did (ListedPage.done) and
+    whether it was the posting's last try. A page that shows the posting is read as a search's
+    report of it (`_page_read`, its badge again); a gone page closes it as the liveness check
+    does (`liveness_check.store`, never a posting the app closed before); a failed reading is a
+    `sweep` event with service.PAGE_UNREAD, once a day. A posting whose page was read
+    meanwhile, whose address changed, or that the liveness rule leaves open is left as it is."""
     from app.jobs import liveness_check
 
     if page.outcome == "read":
         posting, company, _cleaned, contract, stated = _read_of(page.finding)
         said = contract or kind(posting.title, posting.location, posting.url) if stated else None
-        _page_read(
+        wrote = _page_read(
             db, plan, page.job_id, (posting, company, said), source, now, delta, page.excluded
         )
-        _badge_again(db, plan, page.job_id)
-        return
+        if wrote:
+            _badge_again(db, plan, page.job_id)
+        return ("read" if wrote else ""), False
     job = service.lock_job(db, plan.user_id, page.job_id)
     if job is None or job.list_url is None:
-        return
+        return "", False
     if page.outcome == "gone":
-        if job.url == page.url:
-            liveness_check.store(db, job, page.closed, now)
-        return
+        moved = job.url == page.url and liveness_check.store(db, job, page.closed, now)["moved"]
+        return ("closed" if moved else ""), False
     days = set(
         db.scalars(
             sa.select(service.unread_day()).where(
@@ -1972,11 +2008,11 @@ def _listed_page(
     )
     today = now.astimezone(SWEEP_TZ).date()
     if today in days:
-        return
+        return "unread", False  # today's failed reading is written already
     unread = {"list_url": job.list_url, "tries": len(days) + 1}
     data = {"sweep_id": str(plan.sweep_id), "board": source, service.PAGE_UNREAD: unread}
     service.add_event(db, job, JobEventKind.sweep, data, now)
-    page.given_up = len(days) + 1 >= service.PAGE_TRIES_DAYS
+    return "unread", len(days) + 1 >= service.PAGE_TRIES_DAYS
 
 
 def _moved(db: Session, plan: Plan, job: Job, url: str) -> bool:
@@ -2118,6 +2154,7 @@ class Commits:
             return
         if self.unsettled:
             return
+        known.carded |= self.plan.known.carded  # J36: an order only, kept from this run
         for name, value in counters.items():
             setattr(self.stats, name, max(getattr(self.stats, name), value))
         for entry in self.stats.sources:

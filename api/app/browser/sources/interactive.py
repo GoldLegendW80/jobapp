@@ -356,9 +356,8 @@ class _Site:
     results_read: int | None = None
     # Jobs J31: the cards report_listing refused, by reason (the evidence rule).
     cards_refused: Counter[str] = field(default_factory=Counter)
-    # Jobs J36: the addresses of the postings this search kept from a card, in order, and what
-    # the app's reading of the pages of the postings seen only in a list did (listed_pages).
-    carded: dict[str, None] = field(default_factory=dict)
+    # Jobs J36: what the app's reading of the pages of the postings seen only in a list did
+    # (listed_pages).
     listed_pages: dict[str, Any] | None = None
     reads_pages: bool = True  # False on a retry (B24) after an attempt that read them
 
@@ -430,7 +429,6 @@ class _Site:
         if kept or aside:
             # Marked before the commit: a commit whose caller is cancelled still lands.
             self.sent.update(finding.url for finding in kept)
-            self.carded.update((f.url, None) for f in kept if f.list_url is not None)
             found = finder.VerifiedBatch(tuple(kept)) if kept else None
             await self.commits.save(self.source_id, self.host, found, aside)
 
@@ -857,6 +855,7 @@ async def _search(
     search found ended is marked (`_signed_out`). `listed` runs after the agent, its result
     decided (jobs J36: the pages of the postings seen in a list)."""
     session = None
+    agent_pages: int | None = None
     cap = asyncio.timeout(None)  # B20: no time cap; the run's Cancel stops it
     try:
         async with cap:
@@ -920,6 +919,7 @@ async def _search(
             signed_out = await _signed_out(pages, session, base_url)
             code = _ended(session, ran, signed_out)
             if listed is not None:
+                agent_pages = pages.count  # the pages read after the agent are not its website's
                 await listed(session, ran.stopped)
             return code
     except TimeoutError:
@@ -927,7 +927,7 @@ async def _search(
     except SourceError as exc:
         return exc.code
     finally:
-        site.pages = pages.count
+        site.pages = pages.count if agent_pages is None else agent_pages
         if session:
             site.keep(session)
 

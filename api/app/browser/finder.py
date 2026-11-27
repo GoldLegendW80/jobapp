@@ -774,6 +774,20 @@ def lease_hosts(start: str) -> list[str]:
     return [domain, f"*.{domain}" if countries else f"www.{domain}"]
 
 
+def on_lease_hosts(url: str, start: str) -> bool:
+    """Whether an address is on the hosts a website's lease opens (`lease_hosts`), as browserd
+    matches them: a family's when the start is on one (its `*.` names narrowed to the family,
+    `family_of`), else the start's host alone (jobs J36)."""
+    address = canonical(url)
+    host = urlsplit(address).hostname if address else None
+    if not host:
+        return False
+    family = family_of(canonical(start))
+    if family is not None:
+        return family_of(address) == family
+    return host in lease_hosts(start)
+
+
 def _item_ids(one: dict[str, Any], board: Board) -> dict[str, str]:
     """The posting id an object of a script's result gives in its own fields (B31): a field the
     board names (`Board.fields`) holding an id of the board's shape, a number, or a value naming
@@ -824,13 +838,14 @@ Units = tuple[str | None, ...]
 class AppOpen:
     """What the app's own open of an address answered (`FinderSession.open_page`): where it
     landed ("" when the page did not load or browserd refused it), browserd's HTTP status, whether
-    its page was read (a status that is no error), and whether the agent's tab was selected
-    again."""
+    its page was read (a status that is no error), whether the agent's tab was selected again,
+    and whether browserd's navigate was called (`tried`: False when no tab of its own was made)."""
 
     landed: str = ""
     status: int | None = None
     read: bool = False
     restored: bool = False
+    tried: bool = False
 
 
 @dataclass(frozen=True)
@@ -3201,9 +3216,11 @@ class FinderSession:
             await self._restore_tab(None)
             return AppOpen()
         result: dict[str, Any] = {}
+        tried = False
 
         async def go() -> dict[str, Any]:
-            nonlocal result
+            nonlocal result, tried
+            tried = True
             result = await tools.call("browser_navigate", {"url": url, **scope})
             return result
 
@@ -3219,7 +3236,6 @@ class FinderSession:
                 await self._read_off_loop(landed, self.pages.last_text)
                 read = True
         except SourceError as exc:
-            self._closed(result, agent=False)  # B29: a close its navigate names, counted once
             # As `navigate`: a page that did not load, or an address browserd refused, leaves
             # the posting to the agent; browserd's guard_failed and every other code stop.
             if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
@@ -3227,8 +3243,9 @@ class FinderSession:
             elif exc.code != "page_failed":
                 self._stop_with(exc.code)
         finally:
+            self._closed(result, agent=False)  # B29: a close its navigate names, counted once
             restored = await self._restore_tab(made_tab)
-        return AppOpen(landed, status, read, restored)
+        return AppOpen(landed, status, read, restored, tried)
 
     async def _restore_tab(self, made: int | None) -> bool:
         """Close the tab `_open_for_report` made (`made`, never the agent's) and select the

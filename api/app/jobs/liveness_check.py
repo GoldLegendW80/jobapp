@@ -405,19 +405,20 @@ def fresh(stored: dict[str, Any] | None, now: datetime) -> bool:
         return False
 
 
-def _closed_by_the_app_before(db: Session, job: Job) -> bool:
-    return bool(
-        db.scalar(
-            sa.select(
-                sa.exists().where(
-                    JobEvent.job_id == job.id,
-                    JobEvent.user_id == job.user_id,
-                    JobEvent.kind == JobEventKind.status,
-                    JobEvent.data["via"].astext == "liveness",
-                )
-            )
-        )
+def closed_by_the_app(user_id: uuid.UUID) -> sa.Select[tuple[uuid.UUID]]:
+    """The person's postings the app closed once (a status event `via` liveness): never closed
+    again, and their page no longer opened by a search's reading (jobs J36): a reopen by the
+    person stands."""
+    return sa.select(JobEvent.job_id).where(
+        JobEvent.user_id == user_id,
+        JobEvent.kind == JobEventKind.status,
+        JobEvent.data["via"].astext == "liveness",
     )
+
+
+def _closed_by_the_app_before(db: Session, job: Job) -> bool:
+    found = closed_by_the_app(job.user_id).where(JobEvent.job_id == job.id)
+    return bool(db.scalar(sa.select(found.exists())))
 
 
 def record(
