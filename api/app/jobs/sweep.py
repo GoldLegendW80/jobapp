@@ -1830,54 +1830,26 @@ def _page_read(
     ).scalar_one_or_none()
     if job is None or job.list_url is None:
         return
-    text = posting.text[:POSTING_TEXT_MAX]
     read: dict[str, Any] = {"list_url": job.list_url}
     was = job.url
     if posting.url and posting.url != was and _moved(db, plan, job, posting.url):
         read["url_was"] = was
-    events: list[tuple[JobEventKind, dict[str, Any]]] = [
-        (
-            JobEventKind.sweep,
-            {"sweep_id": str(plan.sweep_id), "board": source, "page_read": read},
-        )
-    ]
-    rule = next((r for r in plan.rules if r.matches(company, posting.title)), None)
-    note, via = (rule.text, "never_apply") if rule is not None else (excluded, "unwanted")
-    if note and job.status is JobStatus.found:
-        events.append((JobEventKind.status, {"from": "found", "to": "skipped", "via": via}))
-        job.status = JobStatus.skipped
-        delta.skipped_by_rule += rule is not None
-        if not job.notes:
-            events.append((JobEventKind.note, {"from": "", "to": note, "via": via}))
-            job.notes = note
-    job.list_url = None
-    job.posting_text = text or None
-    job.description = text[:DESCRIPTION_CHARS] or None
-    for name, value in signals.stored(text).items():
-        setattr(job, name, value)
-    job.published_on = job.published_on or published_date(posting.published)
-    if stated is not None and not job.contract_stated:  # a contract the person set is stated
-        job.contract_type = stated
-        job.contract_stated = True
-    job.read_at = None
-    job.read_attempts = 0
-    score = (
-        scoring.score(text, plan.skills, title=job.title, search=plan.search)
-        if plan.skills is not None and text.strip()
-        else None
+    # The steps are shared with the person's paste of the text (`service.set_listed_text`).
+    delta.skipped_by_rule += service.page_text(
+        db,
+        job,
+        posting.text[:POSTING_TEXT_MAX],
+        (JobEventKind.sweep, {"sweep_id": str(plan.sweep_id), "board": source, "page_read": read}),
+        now,
+        rule=next((r for r in plan.rules if r.matches(company, posting.title)), None),
+        excluded=excluded,
+        skills=plan.skills,
+        search=plan.search,
+        via="sweep",
+        published=published_date(posting.published),
+        stated=stated,
     )
-    if score is not None and not job.fit_overridden:
-        if job.fit != score.fit:
-            events.append(
-                (
-                    JobEventKind.fit,
-                    {"from": job.fit, "to": score.fit, "manual": False, "via": "sweep"},
-                )
-            )
-        job.fit, job.competencies, job.gaps = score.fit, list(score.competencies), list(score.gaps)
     job.updated_at = now
-    for kind_, payload in events:
-        db.add(JobEvent(job_id=job.id, user_id=plan.user_id, at=now, kind=kind_, data=payload))
     db.flush()
     delta.listed_read += 1
 

@@ -105,6 +105,7 @@ from app.jobs.schemas import (
     JobListPage,
     JobPatchIn,
     JobsImportDocument,
+    JobTextIn,
     MissingOut,
     RescoreIn,
     RescoreOut,
@@ -611,6 +612,46 @@ def edit_job(job_id: str, body: JobPatchIn, user: CurrentUser, request: Request,
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=DUPLICATE) from None
+    return _detail(db, user, job, _today(request))
+
+
+SEARCH_UNREADABLE = (
+    "Your search settings could not be read: open Settings, Search and save them again."
+)
+
+
+@router.put(
+    "/{job_id}/text",
+    response_model=JobDetail,
+    responses={
+        **_401,
+        **_404,
+        409: {"model": ErrorOut, "description": "Its page was read, or its search is unreadable"},
+        **_422,
+    },
+    dependencies=[Depends(_no_store)],
+)
+def set_text(job_id: str, body: JobTextIn, user: CurrentUser, request: Request, db: Db) -> Any:
+    """Jobs J31b: the text the person pasted for a posting seen only in a list replaces its
+    card's, as a later search's read of its page does (`service.set_listed_text`): scored again,
+    read again by the posting reader, the never apply rules and the unwanted titles and places
+    met, the mention removed. 409 with `code` `page_read` when it is no longer seen in a list,
+    `search_unreadable` when its search no longer reads; 422 `text_too_short` for a text too
+    short to be a posting's."""
+    target = _uuid_or_404(job_id, NOT_FOUND)
+    try:
+        job = service.set_listed_text(db, user.id, target, body.text, deps.clock(request))
+    except service.TextRefusedError as exc:
+        db.rollback()
+        content = {"detail": exc.detail, "code": exc.code}
+        return JSONResponse(status_code=exc.status, content=content, headers=NO_STORE)
+    except service.SearchUnreadableError:
+        db.rollback()
+        content = {"detail": SEARCH_UNREADABLE, "code": "search_unreadable"}
+        return JSONResponse(status_code=409, content=content, headers=NO_STORE)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND)
+    db.commit()
     return _detail(db, user, job, _today(request))
 
 

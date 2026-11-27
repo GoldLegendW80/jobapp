@@ -659,6 +659,18 @@ class UndoOut(BaseModel):
     skipped: list[uuid.UUID]
 
 
+# Jobs J31b: sweep.POSTING_TEXT_MAX, the longest text a posting keeps.
+PASTED_MAX = 200_000
+
+
+class JobTextIn(BaseModel):
+    """PUT /api/jobs/{id}/text (jobs J31b): the posting's text the person pasted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: Annotated[str, StringConstraints(max_length=PASTED_MAX)]
+
+
 class JobCreateIn(BaseModel):
     """POST /api/jobs: a posting added by hand. The contract type, when not given, is read from
     the title, location and url as the engine did."""
