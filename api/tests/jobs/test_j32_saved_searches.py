@@ -234,6 +234,7 @@ def test_another_persons_search_answers_404_everywhere(
         ({"criteria": {"days": 0}}, "criteria.days"),
         ({"criteria": {"interactive_sites": [{**SITE, "mode": "fixed"}]}}, "interactive_sites"),
         ({"schedule": {"enabled": True, "times": ["25:00"]}}, "HH:MM"),
+        ({"schedule": {"enabled": True, "times": ["06:17\n"]}}, "at most 5 characters"),
         ({"schedule": {"enabled": True, "timezone": "UTC"}}, "timezone"),
     ],
 )

@@ -230,6 +230,11 @@ def schema_bound(schema: dict[str, Any], defs: dict[str, Any], depth: int = 0) -
     return 0, False
 
 
+SEARCH_CRITERIA = (
+    "criteria is checked by the profile's search schema (searches.criteria_of): four lists of "
+    "300 terms of up to 500 characters, more than the class takes, as for the profile's own "
+    "search section (PUT /api/profile/{section}); the 1 MiB default class bounds it"
+)
 # Routes whose schema does not bound its own size, so the class is the bound: each with what
 # does limit it. A new one must be looked at and added here.
 UNBOUNDED_SCHEMAS = {
@@ -242,6 +247,11 @@ UNBOUNDED_SCHEMAS = {
         "text is bounded by applier.post_message (1,000 characters), whose refusal never "
         "repeats it as a schema's would; the 1 MiB default class bounds it"
     ),
+    ("POST", "/api/applications/{application_id}/question"): (
+        "code is bounded by the route (CODE_SENT_MAX, 64 characters) and applier.code_of, whose "
+        "refusals never repeat it as a schema's would; the 1 MiB default class bounds it"
+    ),
+    ("POST", "/api/jobs/searches"): SEARCH_CRITERIA,
     ("POST", "/api/proposals/{proposal_id}/accept"): "the edited fields are free JSON",
     ("PUT", "/api/documents/settings"): (
         "free JSON validated as DocumentSettings (at most 50 phrases of 100 characters) for its "
@@ -251,6 +261,7 @@ UNBOUNDED_SCHEMAS = {
         "content is free JSON validated by app.documents.content, each field and list capped; "
         "its real limit is its own class, the content's raw cap and room for escapes"
     ),
+    ("PUT", "/api/jobs/searches/{search_id}"): SEARCH_CRITERIA,
     ("PUT", "/api/profile/{section}"): (
         "data is validated per section; facts at most 200,000 bytes. Its real limit is the "
         "1 MiB default class, below the 2 MiB the profile import takes"
