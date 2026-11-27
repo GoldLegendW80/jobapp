@@ -433,6 +433,7 @@ def test_b_can_neither_end_as_hand_off_nor_drive_as_lease_with_any_tool(
         tools.ask_begin(60),
         tools.ask_state(),
         tools.ask_resume(),
+        tools.erase_code(),
     ]
 
     # A new public tool of LeaseTools must join the list above, as a new route joins the table.
@@ -444,7 +445,7 @@ def test_b_can_neither_end_as_hand_off_nor_drive_as_lease_with_any_tool(
     assert tool_names == {
         "snapshot", "navigate", "click", "type", "select_option", "check", "upload", "press_key",
         "wait_for", "screenshot", "box", "tabs", "call", "put_file", "ask_signin", "type_empty",
-        "linkedin_open", "ask_begin", "ask_state", "ask_resume",
+        "linkedin_open", "ask_begin", "ask_state", "ask_resume", "erase_code",
     }  # fmt: skip
 
     async def each() -> list[str]:

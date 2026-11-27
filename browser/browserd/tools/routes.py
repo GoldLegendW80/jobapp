@@ -197,7 +197,8 @@ async def call_tool(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
             try:
                 return await actions.run(tab, name, args)
             except ValueError as exc:
-                return actions.failure("bad_args", f"Bad argument: {exc}.")
+                said = actions.failure("bad_args", f"Bad argument: {exc}.")
+                return actions.close_codes(tab, name) if tab.state.shown.found(said) else said
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -277,23 +278,37 @@ async def apply_wait(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any
         return 200, {"lease": lease.public(now)}
 
 
+ASK_ID = re.compile(r"^[0-9a-f]{16}$")
+CODE = re.compile(r"^[0-9A-Za-z]{6,16}$")  # the api's applier.CODE, spaces and hyphens out
+ASK_KEYS = frozenset({"left_s", "ask", "code"})
+
+
+def _begin_body(body: Any) -> bool:
+    if not isinstance(body, dict) or "left_s" not in body or not set(body) <= ASK_KEYS:
+        return False
+    left, ask, code = body["left_s"], body.get("ask", ""), body.get("code", False)
+    if type(left) is not int or not 1 <= left <= ASK_MAX_S or type(code) is not bool:
+        return False
+    return isinstance(ask, str) and (ASK_ID.fullmatch(ask) is not None or (ask == "" and not code))
+
+
 async def agent_ask(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
-    """A25, code owned (never a model tool): `begin` `{left_s}` puts the apply agent's lease in
-    its wait for the person (`ask_person`, the tab's host noted, both timers suspended); a lease
-    the person holds already stays theirs. `resume` `{}` makes it active again after the person's
-    answer in the app; a take over under way keeps it until Give back."""
+    """A25, code owned (never a model tool): `begin` `{left_s, ask, code}` puts the apply agent's
+    lease in its wait for the person (`ask_person`, the tab's host noted, both timers suspended);
+    a lease the person holds already stays theirs. `ask` names the ask, and `code` says whether a
+    code the person gives in the app may answer it (`give_code`); a begin drops a code left from
+    an ask before. `resume` `{}` makes it active again after the person's answer in the app; a
+    take over under way keeps it until Give back. No code is taken after a resume."""
     lease_id, action = match["lease_id"], match["action"]
     lease = svc.manager.check_token(lease_id, req.headers.get("x-lease-token", ""))
     if lease.request.purpose not in ASK_PURPOSES or not lease.request.automation:
         raise LeaseError(403, "wrong_purpose")
     body = req.json()
-    left = body.get("left_s") if isinstance(body, dict) else None
-    if action == "begin" and (
-        set(body) != {"left_s"} or type(left) is not int or not 1 <= left <= ASK_MAX_S
-    ):
+    if action == "begin" and not _begin_body(body):
         raise LeaseError(400, "bad_args")
     if action == "resume" and body != {}:
         raise LeaseError(400, "bad_args")
+    state = state_of(lease)
     async with _lock(lease, _held_ids(svc)):
         if svc.manager.get(lease.lease_id) is not lease:
             raise LeaseError(410, "lease_ended")
@@ -301,16 +316,67 @@ async def agent_ask(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]
         if reason := lease.expired(now):
             await svc.manager.release(lease_id, reason)
             raise LeaseError(410, "lease_ended", reason=reason)
-        if action == "begin" and lease.state == "active":
-            page = state_of(lease).page
+        if action == "begin":
             host = ""
             with contextlib.suppress(Exception):
-                if page is not None and not page.is_closed():
-                    host = (urlsplit(page.url).hostname or "")[:253]
-            lease.wait_person(now, "ask_person", host, left)
-        elif action == "resume" and lease.wait_reason == "ask_person":
-            lease.resume(now)
+                if state.page is not None and not state.page.is_closed():
+                    host = (urlsplit(state.page.url).hostname or "")[:253]
+            if state.shown.found(host):  # an answer to the api, which shows it: never a code
+                host, state.code_closed = "", True
+            state.drop_code()
+            state.ask_id, state.ask_host = body.get("ask", ""), host
+            state.ask_code = body.get("code", False)
+            if lease.state == "active":
+                lease.wait_person(now, "ask_person", host, body["left_s"])
+        else:
+            state.ask_code = False
+            if lease.wait_reason == "ask_person":
+                lease.resume(now)
         return 200, {"lease": lease.public(now)}
+
+
+async def give_code(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """A25, the api's code path only (the control secret, no lease token, never a model tool):
+    `{user_id, ask, code}` keeps the code the person gave in the app on their apply agent's lease
+    while its ask `ask` waits for one (`agent_ask` begin with `code`), bound to the host of that
+    ask's page, until `type_code` takes it, the next act or ask, `erase_code` or the lease's end;
+    one code per ask. No answer of the lease holds it until the lease ends (`State.shown`).
+    404 another lease or person, 403 another purpose, 409 no such ask waits or a code waits
+    already, 400 a malformed body. Its answer, its refusals and its log line hold no code."""
+    lease = svc.manager.get(match["lease_id"])
+    body = req.json()
+    if not isinstance(body, dict) or set(body) != {"user_id", "ask", "code"}:
+        raise LeaseError(400, "bad_args")
+    if lease is None or body["user_id"] != lease.request.user_id:
+        raise LeaseError(404, "not_found")
+    if lease.request.purpose not in ASK_PURPOSES or not lease.request.automation:
+        raise LeaseError(403, "wrong_purpose")
+    if not isinstance(body["code"], str) or not CODE.fullmatch(body["code"]):
+        raise LeaseError(400, "bad_args")
+    state = state_of(lease)
+    async with _lock(lease, _held_ids(svc)):
+        waits = lease.state == "waiting_person" and lease.wait_reason in ("ask_person", "takeover")
+        if not (waits and state.ask_code and state.ask_id and body["ask"] == state.ask_id):
+            raise LeaseError(409, "not_waiting")
+        if state.code is not None or not state.shown.add(body["code"]):
+            raise LeaseError(409, "not_waiting")
+        state.code, state.code_host = body["code"], state.ask_host
+    log.info("lease %s: the person gave a code", lease.lease_id[:8])
+    return 200, {"ok": True}
+
+
+async def erase_code(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
+    """A25, the api's and the worker's: `{user_id}` drops the code the person gave, if any (an
+    answer the api could not record, the run's end); no answer holds it until the lease ends. 404
+    another lease or person."""
+    lease = svc.manager.get(match["lease_id"])
+    body = req.json()
+    if not isinstance(body, dict) or set(body) != {"user_id"}:
+        raise LeaseError(400, "bad_args")
+    if lease is None or body["user_id"] != lease.request.user_id:
+        raise LeaseError(404, "not_found")
+    state_of(lease).drop_code()
+    return 200, {"ok": True}
 
 
 async def put_file(svc: Any, req: Any, match: re.Match[str]) -> tuple[int, Any]:
@@ -376,6 +442,8 @@ ROUTES = [
      apply_wait, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/linkedin/open"), linkedin_open, 128),
     ("POST", re.compile(rf"/leases/{LEASE_ID}/ask/(?P<action>begin|resume)"), agent_ask, 128),
+    ("POST", re.compile(rf"/leases/{LEASE_ID}/code"), give_code, 256),
+    ("POST", re.compile(rf"/leases/{LEASE_ID}/code/erase"), erase_code, 128),
     # B27: a discovery's script of 40,000 characters, JSON escaped, and its scope of 32 KiB.
     ("POST", re.compile(rf"/leases/{LEASE_ID}/tools/(?P<name>[a-z_]{{1,48}})"), call_tool,
      320 * 1024),

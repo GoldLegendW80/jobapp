@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Enter your code</title>
+  </head>
+  <body>
+    <h1>Enter the code we sent</h1>
+    <!-- Six boxes of one character: the page moves the focus on after each. -->
+    <form id="form">
+      <input aria-label="Digit 1" autocomplete="one-time-code" maxlength="1" />
+      <input aria-label="Digit 2" maxlength="1" />
+      <input aria-label="Digit 3" maxlength="1" />
+      <input aria-label="Digit 4" maxlength="1" />
+      <input aria-label="Digit 5" maxlength="1" />
+      <input aria-label="Digit 6" maxlength="1" />
+      <button type="submit">Verify</button>
+    </form>
+    <script>
+      const boxes = [...document.querySelectorAll("input")];
+      boxes.forEach((box, i) =>
+        box.addEventListener("input", () => {
+          if (box.value && boxes[i + 1]) boxes[i + 1].focus();
+        }),
+      );
+      document.getElementById("form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        location.href = "done.html";
+      });
+    </script>
+  </body>
+</html>

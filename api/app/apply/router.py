@@ -18,17 +18,21 @@
   page's countdown never reads the page's clock. A25: `question` is the apply agent's ask
   (`said_by` assistant, its kind, its sentence, `until`, `live` while the run waits) and `chat`
   the asks and the person's answers in order, each with who said it.
-- POST /api/applications/{id}/question `{answer}` answers the ask the run waits on (A25; never a
-  code: 409 with the sentence to type it in the browser), or an A19 question left from before.
+- POST /api/applications/{id}/question `{answer}` answers the ask the run waits on (A25), or an
+  A19 question left from before; `{code}` gives the code an ask of kind code waits for, which
+  browserd keeps on the run's lease and types for the agent (`applier.answer_code`); words to such
+  an ask hold no code (422).
 
 The user always comes from the session (default deny, CSRF on every write); another person's
 posting or application answers 404, as a missing one. Every answer is `Cache-Control: no-store`.
 """
 
+import contextlib
 import uuid
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
+import anyio.from_thread
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -37,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from app.apply import caps, full_auto, guardrails, likes, service
 from app.apply.models import Application, ApplicationAnswer, ApplicationEvent, Mode, State
+from app.browser.client import BrowserdClient, BrowserError
 from app.db import get_session
 from app.documents import store
 from app.identity import deps
@@ -49,6 +54,7 @@ NOT_FOUND = "No such posting."
 NO_APPLICATION = "No such application."
 NO_STORE = {"Cache-Control": "no-store"}
 BUSY = "This posting is busy with another change. Try again in a moment."
+CODE_SENT_MAX = 64  # A25: a code as the person types it, spaces and hyphens included
 
 
 def _no_store(response: Response) -> None:
@@ -139,6 +145,9 @@ class QuestionIn(BaseModel):
 
     answer: str = Field(default="", max_length=5000)
     remember: bool = False
+    # A25: the code an ask of kind code waits for, never with an answer. Checked by the route,
+    # whose refusals never echo it (a validation error would).
+    code: str | None = None
 
 
 class StartedOut(ApplicationOut):
@@ -375,26 +384,57 @@ def _agent(db: Session, application: Application) -> bool:
     return application.mode is Mode.direct and applier.ran_agent(db, application)
 
 
+def browserd_client(request: Request) -> BrowserdClient:
+    """A25: browserd's client for the code the person gives in the app."""
+    settings = request.app.state.settings
+    secret = settings.browser_control_secret
+    value = secret.get_secret_value() if secret is not None else None
+    return BrowserdClient(settings.browser_url, value)
+
+
+def _code_calls(browserd: BrowserdClient, user: User) -> tuple[Any, Any]:
+    """browserd's calls of `applier.answer_code`, run on the app's event loop from this route's
+    worker thread."""
+
+    def give(lease_id: str, ask_id: str, code: str) -> bool:
+        return anyio.from_thread.run(browserd.give_code, lease_id, str(user.id), ask_id, code)
+
+    def erase(lease_id: str) -> None:
+        with contextlib.suppress(BrowserError):
+            anyio.from_thread.run(browserd.erase_code, lease_id, str(user.id))
+
+    return give, erase
+
+
 @router.post(
     "/api/applications/{application_id}/question",
     response_model=ApplicationOut,
     responses={**_404, 409: {"model": ErrorOut, "description": "No question waits"}},
 )
 def answer_question(
-    application_id: str, body: QuestionIn, request: Request, user: CurrentUser, db: Db
+    application_id: str,
+    body: QuestionIn,
+    request: Request,
+    user: CurrentUser,
+    db: Db,
+    browserd: Annotated[BrowserdClient, Depends(browserd_client)],
 ) -> dict[str, Any]:
-    """The person's answer to One click Apply's question (A19): the application goes on."""
+    """The person's answer to One click Apply's question (A19): the application goes on. A25:
+    a code goes to the lease of the run that waits for it, never to a row or the model."""
     from app.apply import applier
 
+    found = _uuid_or_404(application_id, NO_APPLICATION)
+    if body.code is not None and (body.answer or body.remember or len(body.code) > CODE_SENT_MAX):
+        raise HTTPException(status_code=422, detail=applier.CODE_FORM)
     try:
-        application = applier.answer_question(
-            db,
-            user.id,
-            _uuid_or_404(application_id, NO_APPLICATION),
-            body.answer,
-            body.remember,
-            deps.clock(request),
-        )
+        if body.code is not None:
+            application = applier.answer_code(
+                db, user.id, found, body.code, deps.clock(request), *_code_calls(browserd, user)
+            )
+        else:
+            application = applier.answer_question(
+                db, user.id, found, body.answer, body.remember, deps.clock(request)
+            )
     except applier.QuestionError as exc:
         db.rollback()
         detail = NO_APPLICATION if exc.status == 404 else exc.detail
