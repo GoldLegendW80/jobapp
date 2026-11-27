@@ -41,10 +41,12 @@ import { describeError } from "@/lib/api";
 import { FitBadge, StatusBadge } from "@/components/shared/jobs/badges";
 import { formatDateTime } from "@/features/jobs/helpers/format";
 import { isJobFeed } from "@/features/jobs/helpers/job-feeds";
+import { keptParts } from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
 import { ScheduleDialog } from "./schedule-dialog";
 import { sourceLabel, sourceName } from "@/features/jobs/helpers/labels";
 import { SweepBrowsers } from "./sweep-browsers";
+import { SweepAssistantWords } from "./sweep-assistant-words";
 import { SweepSources } from "./sweep-sources";
 import { SearchSetup } from "./search-setup/search-setup";
 import { type Sweep } from "@/features/jobs/api/sweeps-api";
@@ -209,8 +211,32 @@ function boardsRead(sweep: Sweep): string[] {
     : [];
 }
 
+/** What the sources of a sweep reported and the search did with it (jobs J30), added up: set
+ * aside by the person's exclusions, refused by the app's check, opened by the app itself. */
+function reportedTotals(sweep: Sweep): string[] {
+  const sum = (count: (source: Sweep["sources"][number]) => number) =>
+    sweep.sources.reduce((total, source) => total + count(source), 0);
+  const unwanted = sum((source) => source.unwanted ?? 0);
+  const refused = sum((source) =>
+    Object.values(source.refused ?? {}).reduce((total, n) => total + n, 0),
+  );
+  const opened = sum((source) => source.opened_by_app ?? 0);
+  return [
+    unwanted
+      ? `${plural(unwanted, "posting")} set aside by your unwanted titles and places.`
+      : "",
+    refused
+      ? `${plural(refused, "posting")} refused by the app's check: each source below says why.`
+      : "",
+    opened ? `The app opened ${plural(opened, "posting")} itself.` : "",
+  ].filter((part) => part !== "");
+}
+
+/** The summary's sentences: what the sweep searched, then what it kept and why the rest was not
+ * (jobs J30, in place of the postings "seen" and "matched", which counted only what was kept, for
+ * every sweep, older ones included). */
 function summaryLine(sweep: Sweep): string {
-  const parts = [
+  const searched = [
     // A sweep that read no board (every sweep since the owner's decision of 2026-10-28, which
     // searches the ticked websites alone) counts the websites it searched instead.
     sweep.boards_total > 0
@@ -218,12 +244,19 @@ function summaryLine(sweep: Sweep): string {
       : `${plural(sweep.sources.filter(isWebsite).length, "website")} searched`,
     ...feedsRead(sweep),
     ...boardsRead(sweep),
-    `${plural(sweep.seen, "posting")} seen`,
-    `${sweep.matched.toLocaleString("en-GB")} matched your search`,
-    plural(sweep.new, "new posting"),
   ];
-  return `${parts.join(", ")}.`;
+  const kept = keptParts(sweep);
+  return [
+    `${searched.join(", ")}.`,
+    kept.length ? `${capitalised(kept.join("; "))}.` : "No new posting kept.",
+    ...reportedTotals(sweep),
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
 }
+
+const capitalised = (text: string) =>
+  text.charAt(0).toUpperCase() + text.slice(1);
 
 export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
   const sweep = runner.summary;
@@ -249,9 +282,6 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
           <DialogDescription>
             {sweep.search ? `${sweep.search.name}: ` : ""}
             {summaryLine(sweep)}
-            {sweep.duplicates
-              ? ` ${plural(sweep.duplicates, "match", "matches")} already in your list.`
-              : ""}
           </DialogDescription>
         </DialogHeader>
         {sweep.error ? (
@@ -313,6 +343,16 @@ export function SweepSummaryDialog({ runner }: { runner: SweepRunner }) {
           </section>
         ) : null}
         <SweepSources sources={sweep.sources} />
+        {sweep.sources.some(
+          (source) => source.mode === "llm_browser" || source.mode === "web",
+        ) ? (
+          <SweepAssistantWords
+            sweepId={sweep.id}
+            onLeave={() => {
+              runner.showSummary(null);
+            }}
+          />
+        ) : null}
         {sweep.boards_failed.length ? (
           <section aria-label="Failed boards" className="flex flex-col gap-1">
             <h3 className="flex items-center gap-1.5 text-sm font-medium">

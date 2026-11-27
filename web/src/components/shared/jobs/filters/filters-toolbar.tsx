@@ -29,6 +29,7 @@ import { FilterChips } from "./filter-chips";
 import { FitRange } from "./fit-range";
 import {
   ApplicationMenu,
+  CriteriaFilter,
   FilterPresets,
   PayFilter,
   PlaceFilter,
@@ -64,7 +65,7 @@ export interface FiltersSummary {
  * The toolbar of both Jobs views, List and Map: the search box, a Filters button, the status
  * toggles with their counts, then one chip per active filter. The button counts the filters set
  * in its sheet (the search shows itself) and opens them, in the order a person narrows a list:
- * two presets, place, work mode, contract, website, published, pay, the fit range with its
+ * two presets, place, work mode, contract, criteria, website, published, pay, the fit range with its
  * histogram, application, status, the found dates, company, then the sort. Every change applies
  * at once, as the URL changes; the sheet's last button only closes it, naming how many postings
  * the view now holds.
@@ -134,6 +135,7 @@ export function FiltersToolbar({
                 />
                 <WorkModeMenu filters={filters} onChange={onChange} />
                 <TypeMenu filters={filters} onChange={onChange} />
+                <CriteriaFilter filters={filters} onChange={onChange} />
                 <WebsiteMenu
                   filters={filters}
                   onChange={onChange}

@@ -11,6 +11,7 @@ import type {
   Approval,
   ApprovalDocument,
 } from "../api/apply-api";
+import { waitStatusLine } from "./agent-wait";
 
 export const APPLY_POLL_MS = 1500;
 
@@ -194,6 +195,8 @@ export function statusLine(
     application.error_code === SENT_BEFORE_CANCEL
   )
     return "Applied: your Cancel came after the site had already confirmed it.";
+  const wait = waitStatusLine(application);
+  if (wait) return wait;
   if (application.mode === "direct" && application.state in DIRECT_LINES)
     return DIRECT_LINES[application.state];
   switch (application.state) {
@@ -304,6 +307,8 @@ const REVIEW_REASONS: Record<string, string> = {
     "LinkedIn's limit of applications in 24 hours is reached, so it waits for you.",
   below_min_fit:
     "This posting's fit is below your threshold for Full auto, so it waits for you.",
+  outside_criteria:
+    "This posting is outside the criteria of your search, so it waits for you.",
   unsupported_source:
     "Full auto does not apply on this site yet, so it waits for you.",
   full_auto_off:

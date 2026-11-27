@@ -92,6 +92,37 @@ export const FilterThePostings: Story = {
   },
 };
 
+/** As a job seeker, I want every posting a search kept, those outside my criteria marked with what is outside, and a filter for them, so that I see every job without taking one for a match. */
+export const SeePostingsOutsideMyCriteria: Story = {
+  beforeEach: () => {
+    const [first, second, ...rest] = POSTINGS;
+    postings([
+      ...(first ? [first] : []),
+      ...(second
+        ? [
+            {
+              ...second,
+              contract_type: "Freelance",
+              work_mode: "remote",
+              outside_criteria: ["contract", "work_mode"],
+            },
+          ]
+        : []),
+      ...rest,
+    ]);
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const list = await page.findByRole("list", { name: "Postings" });
+    await expect(
+      await within(list).findByText(
+        "Outside your criteria: freelance mission, remote",
+      ),
+    ).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: /^Filters/ }));
+  },
+};
+
 /** As a job seeker, I want to see the postings of one status with their count in one click, so that I can work through my pipeline a stage at a time. */
 export const PickAStatus: Story = {
   beforeEach: () => {

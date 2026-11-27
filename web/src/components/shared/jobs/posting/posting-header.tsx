@@ -8,6 +8,7 @@ import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import type { Save } from "@/features/jobs/api/use-job-editor";
 import { payWords } from "@/features/jobs/helpers/pay-words";
 import { PayText } from "../badges";
+import { CriteriaBadge } from "../criteria-badge";
 import { LivenessBadge } from "../liveness-badge";
 import { EditDetailsButton } from "../job-editor/edit-details-button";
 
@@ -68,7 +69,8 @@ export function PostingHeader({
   );
 }
 
-/** "Lumen Freight, Lyon, France, 55,000 to 65,000 EUR a year": the pay stands out, or says it is not given. */
+/** "Lumen Freight, Lyon, France, 55,000 to 65,000 EUR a year": the pay stands out, or says it is
+ * not given; then what is outside the criteria of its search (jobs J30). */
 function PostingSummary({ job }: { job: JobDetail }) {
   const where = [job.company, job.location].filter(Boolean).join(", ");
   return (
@@ -85,6 +87,7 @@ function PostingSummary({ job }: { job: JobDetail }) {
         status={job.status}
         className="ml-2"
       />
+      <CriteriaBadge job={job} className="ml-2 align-middle" />
     </>
   );
 }

@@ -186,6 +186,52 @@ describe("the Filters panel of jobs J29", () => {
     );
   });
 
+  // Jobs J30: every posting by default; the Criteria entry keeps those within or outside.
+  it("filters on the criteria of the search, as a chip, counted by Show, with the badge on the row", async () => {
+    fakeSession(admin);
+    const api = fakeJobsApi([
+      makeJob(1),
+      makeJob(2, {
+        contract_type: "Freelance",
+        work_mode: "remote",
+        outside_criteria: ["contract", "work_mode"],
+      }),
+      makeJob(3),
+    ]);
+    const { app, user, sheet } = await openSheet();
+    expect(api.requests.at(-1)?.has("criteria")).toBe(false);
+    expect(
+      within(sheet).getByRole("button", { name: "Show 3 postings" }),
+    ).toBeInTheDocument();
+    const criteria = within(sheet).getByLabelText("Criteria");
+    expect(criteria).toHaveDisplayValue("All postings");
+    await user.selectOptions(criteria, "Outside your criteria");
+    expect(app.location()).toBe("/jobs?criteria=outside");
+    expect(api.requests.at(-1)?.get("criteria")).toBe("outside");
+    await user.click(
+      await within(sheet).findByRole("button", { name: "Show 1 posting" }),
+    );
+    const chips = await screen.findByRole("list", { name: "Active filters" });
+    expect(
+      within(chips).getByText("Outside your criteria"),
+    ).toBeInTheDocument();
+    const list = screen.getByRole("list", { name: "Postings" });
+    expect(
+      await within(list).findByText(
+        "Outside your criteria: freelance mission, remote",
+      ),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Filters/ }));
+    await user.selectOptions(
+      await screen.findByLabelText("Criteria"),
+      "Within your criteria",
+    );
+    expect(app.location()).toBe("/jobs?criteria=within");
+    expect(
+      await screen.findByRole("button", { name: "Show 2 postings" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows the postings of one search from the toast's address", async () => {
     const { api } = setUp();
     renderApp(`/jobs?sweep=${SWEEP}`);

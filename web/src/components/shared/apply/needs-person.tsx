@@ -13,6 +13,7 @@ import type {
 } from "@/features/apply/api/apply-api";
 import { LiveViewSlot } from "./live-view-slot";
 import { useNeedsCount } from "@/features/apply/api/use-queue";
+import { showsAsk } from "@/features/apply/helpers/agent-wait";
 import {
   needOf,
   ON_PAGE,
@@ -44,6 +45,8 @@ export function NeedsPerson({
     return <ClosedProposal job={job} />;
   }
   if (application?.state !== "needs_person") return null;
+  // A25: the apply agent's wait has its own card (AgentWait).
+  if (showsAsk(application)) return null;
   const need = needOf(application);
   return (
     <div className="flex flex-col gap-3" data-testid="needs-person">

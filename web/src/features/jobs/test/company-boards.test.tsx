@@ -393,8 +393,8 @@ it("lists each board of a sweep with what it kept or why it was not read", () =>
     .map((item) => item.textContent);
   expect(lines).toEqual([
     // Named by the company frozen with the sweep, else by its ATS and id (an older sweep).
-    "Example Robotics: 3 postings matched, 2 new.",
-    "ashby:example-two: 0 postings matched, 0 new. The ATS asked the app to slow down, so its other boards wait for the next search.",
+    "Example Robotics: 3 postings found: 2 new postings kept.",
+    "ashby:example-two: No posting kept. The ATS asked the app to slow down, so its other boards wait for the next search.",
     "ashby:example-three: Its ATS asked the app to slow down earlier in this search, so this board waits for the next one.",
   ]);
 });

@@ -73,7 +73,7 @@ export const SendRefused: Story = {
   },
 };
 
-/** The app could not confirm the send: look in Sent, then It was submitted or Try again. */
+/** The app could not confirm the send: look in Sent, then It was sent or Try again. */
 export const SendNotConfirmed: Story = {
   name: "The send could not be confirmed",
   beforeEach: () => {

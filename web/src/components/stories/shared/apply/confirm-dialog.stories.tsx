@@ -14,7 +14,7 @@ const meta = {
       story: { inline: false, height: "360px" },
       description: {
         component:
-          "The second click of every decision on an application that cannot be taken back: Reject, Cancel, It was submitted, Try again. In Your application, the review queue and the Full auto hold.",
+          "The second click of every decision on an application that cannot be taken back: Reject, Cancel, It was sent, Try again. In Your application, the review queue and the Full auto hold.",
       },
     },
   },

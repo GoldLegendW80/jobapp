@@ -169,6 +169,18 @@ describe("an application the old document check stopped (A22)", () => {
     expect(said).not.toMatch(SEPARATOR);
   });
 
+  it("says why Full auto left a posting outside the search's criteria (J30)", () => {
+    const said = reviewReason(
+      fakeApplication("ready", {
+        mode: "review",
+        error_code: "outside_criteria",
+      }),
+    );
+    expect(said).toBe(
+      "This posting is outside the criteria of your search, so it waits for you.",
+    );
+  });
+
   it.each([
     ["back_to_auto", "Back to sending by itself"],
     ["kept_for_approval", "Kept for your approval"],

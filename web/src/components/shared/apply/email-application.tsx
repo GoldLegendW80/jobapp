@@ -33,8 +33,8 @@ export function EmailApplication({ applicationId }: { applicationId: string }) {
         <div className="space-y-2" role="status">
           <p>We could not confirm this was sent. Look in your Sent folder.</p>
           <p className="text-sm">
-            Use “It was submitted” after finding it, or “Try again” to review
-            and approve a new send. A second send may duplicate the application.
+            Use “It was sent” after finding it, or “Try again” to review and
+            approve a new send. A second send may duplicate the application.
           </p>
           <Button
             variant="outline"

@@ -100,8 +100,8 @@ export function fakeApply(initial: {
       { at: "2026-10-15T08:00:00Z", kind: "created", data: {} },
       { at: "2026-10-15T08:01:00Z", kind: "filled", data: {} },
     ] as { at: string; kind: string; data: Record<string, unknown> }[],
-    /** What the detail adds: a Full auto hold's end and the server's time. */
-    detail: {} as { hold_until?: string | null; now?: string },
+    /** What the detail adds: a Full auto hold's end, the server's time, the assistant's ask (A25). */
+    detail: {} as Record<string, unknown>,
     started: 0,
     startRefusal: null as { detail: string; code: string } | null,
     puts: [] as { field: string; body: unknown }[],
