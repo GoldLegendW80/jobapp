@@ -289,6 +289,8 @@ export interface FakeProfile {
   revision: number;
   sections: Partial<Record<SectionName, unknown>>;
   photoEtag: string | null;
+  /** The api's `languages_unread`: her languages the jobs' language rule cannot read. */
+  languagesUnread: string[];
   saves: { section: string; body: { base_revision: number; data: unknown } }[];
   uploads: Blob[];
   deletes: number;
@@ -338,6 +340,7 @@ export function profileBody(state: FakeProfile) {
     completeness: completeness(state.sections),
     has_photo: state.photoEtag !== null,
     photo_etag: state.photoEtag,
+    languages_unread: state.languagesUnread,
   };
 }
 
@@ -350,6 +353,7 @@ export function fakeProfile(
     revision: initial ? revision : 0,
     sections: initial ? structuredClone(initial) : {},
     photoEtag: null,
+    languagesUnread: [],
     saves: [],
     uploads: [],
     deletes: 0,

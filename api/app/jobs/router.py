@@ -80,7 +80,7 @@ from app.db import get_session, read_snapshot
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs import liveness_check, notices, places, service
+from app.jobs import languages, liveness_check, notices, places, service
 from app.jobs import rescore as auto_rescore
 from app.jobs import undo as undo_tokens
 from app.jobs.importer import kind
@@ -162,9 +162,13 @@ def _invalid(field: str, message: str) -> RequestValidationError:
     )
 
 
-def _item(job: Job, file_count: int) -> JobListItem:
-    data = {name: getattr(job, name) for name in JobListItem.model_fields if name != "file_count"}
-    return JobListItem(**data, file_count=file_count)
+_COMPUTED = frozenset({"file_count", "languages_missing"})
+
+
+def _item(job: Job, file_count: int, spoken: tuple[languages.Spoken, ...]) -> JobListItem:
+    data = {name: getattr(job, name) for name in JobListItem.model_fields if name not in _COMPUTED}
+    missing = languages.missing(job.languages, spoken)
+    return JobListItem(**data, file_count=file_count, languages_missing=missing)
 
 
 def _filters(
@@ -256,9 +260,10 @@ def list_jobs(
         raise _invalid("cursor", str(exc)) from None
     counts = service.status_counts(db, user.id, filters)
     buckets, unscored = service.fit_histogram(db, user.id, filters)
+    spoken = languages.spoken_of(db, user.id)
     selected = filters.statuses or tuple(JobStatus)
     return JobListPage(
-        items=[_item(job, files) for job, files in page.rows],
+        items=[_item(job, files, spoken) for job, files in page.rows],
         next_cursor=page.next_cursor,
         total=sum(counts[s] for s in selected),
         counts_by_status=counts,
@@ -387,7 +392,7 @@ def _today(request: Request) -> date:
 def _detail(db: Session, user: User, job: Job, today: date) -> JobDetail:
     files = service.list_files(db, user.id, job.id)
     events, events_total = service.recent_events(db, user.id, job.id, EVENTS_IN_DETAIL)
-    item = _item(job, len(files))
+    item = _item(job, len(files), languages.spoken_of(db, user.id))
     return JobDetail(
         **item.model_dump(),
         posting_text=job.posting_text,

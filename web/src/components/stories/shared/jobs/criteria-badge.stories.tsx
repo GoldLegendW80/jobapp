@@ -88,3 +88,26 @@ export const OnAPhone: Story = {
     ),
   ],
 };
+
+/** Jobs J35: a required language the profile does not list, alone and after another criterion. */
+export const Language: Story = {
+  name: "Requires a language",
+  args: {
+    job: {
+      ...OUTSIDE,
+      outside_criteria: ["language"],
+      languages_missing: ["German"],
+    },
+  },
+};
+
+export const LanguageAndCriterion: Story = {
+  name: "Outside a criterion and requires a language",
+  args: {
+    job: {
+      ...OUTSIDE,
+      outside_criteria: ["work_mode", "language"],
+      languages_missing: ["German", "Italian or Spanish"],
+    },
+  },
+};

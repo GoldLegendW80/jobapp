@@ -57,6 +57,27 @@ export const jobListItemSchema = z.object({
   // Jobs J31: the address of the list it was seen in, its own page not read; null for any other
   // posting and once its page was read. Absent from an older api.
   list_url: z.string().nullable().default(null),
+  // Jobs J35: the languages the posting asks for, as the posting reader read them (null: not read
+  // since), and those it requires that the person's profile does not list ("German", "German or
+  // Dutch"). Absent from an older api.
+  languages: z
+    .object({
+      written_in: z.string().nullable().optional(),
+      asked: z
+        .array(
+          z.object({
+            name: z.string(),
+            level: z.string().nullable().optional(),
+            required: z.boolean(),
+            alternatives: z.array(z.string()).default([]),
+            quote: z.string(),
+          }),
+        )
+        .default([]),
+    })
+    .nullable()
+    .default(null),
+  languages_missing: z.array(z.string()).default([]),
 });
 export type JobListItem = z.infer<typeof jobListItemSchema>;
 

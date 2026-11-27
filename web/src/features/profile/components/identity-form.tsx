@@ -26,6 +26,24 @@ import {
 } from "@/components/shared/profile/section-ui";
 import { useSectionForm } from "../api/use-section-form";
 
+/**
+ * Jobs J35: the saved languages the app cannot read as one (api `languages_unread`). For each, a
+ * posting that requires a language she does not list gets a notice instead of its badge.
+ */
+function UnreadLanguages({ names }: { names: readonly string[] }) {
+  if (!names.length) return null;
+  const quoted = names.map((name) => `"${name}"`);
+  const list =
+    quoted.length < 2
+      ? quoted.join("")
+      : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1] ?? ""}`;
+  return (
+    <p className="mt-3 text-sm text-muted-foreground">
+      {`The app cannot read ${list} as a language, so it cannot tell which postings require a language you do not list. Write each language by its name, in English, French or German.`}
+    </p>
+  );
+}
+
 export function IdentityForm({
   profile,
   onDirtyChange,
@@ -187,6 +205,7 @@ export function IdentityForm({
                   ))}
                 </ol>
               )}
+              <UnreadLanguages names={profile.languages_unread ?? []} />
             </Group>
 
             <Group

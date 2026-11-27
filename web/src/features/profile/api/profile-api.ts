@@ -512,6 +512,8 @@ export const profileSchema = z.object({
   completeness: completenessSchema,
   has_photo: z.boolean(),
   photo_etag: z.string().nullable(),
+  /** Jobs J35: her languages the app cannot read, each a notice in place of a badge. */
+  languages_unread: z.array(z.string()).optional(),
 });
 type RawProfile = z.infer<typeof profileSchema>;
 

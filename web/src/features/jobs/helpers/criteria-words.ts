@@ -1,8 +1,9 @@
 /**
  * Jobs J30 (owner, 2026-11-26, "Garder avec un badge"): what of a posting is outside the criteria
  * of the search that found it, in words. The api computes the codes (`outside_criteria`, in the
- * order contract, work_mode, older; api/app/jobs/criteria_badge.py); this names the posting's own
- * contract and work mode, and the age window of the search.
+ * order contract, work_mode, older, language; api/app/jobs/criteria_badge.py); this names the
+ * posting's own contract and work mode, the age window of the search, and (jobs J35) the languages
+ * it requires that the person's profile does not list.
  */
 import { contractWord, WORK_MODE_WORDS } from "@/lib/wording";
 
@@ -29,6 +30,8 @@ export interface CriteriaFacts {
   work_mode?: string | null;
   published_on: string | null;
   found_on: string;
+  /** Jobs J35: the required languages the profile does not list, as the api names them. */
+  languages_missing?: readonly string[] | null;
 }
 
 function contractPhrase(code: string): string {
@@ -55,12 +58,36 @@ function olderPhrase(job: CriteriaFacts, windowDays: number | null): string {
     : "older than your search's window";
 }
 
-/** Each part of the badge, in the api's order; a code this build does not know is still said. */
+function joinAnd(names: readonly string[]): string {
+  if (names.length < 2) return names.join("");
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1] ?? ""}`;
+}
+
+/**
+ * Jobs J35: "Requires German, which your profile does not list", or null when the badge has no
+ * `language` code. The names are read against her current languages: a code they no longer
+ * name (a posting no longer open keeps the badge of the languages she listed then) says nothing.
+ */
+export function languageWords(job: CriteriaFacts): string | null {
+  if (!(job.outside_criteria ?? []).includes("language")) return null;
+  const missing = [...new Set(job.languages_missing ?? [])];
+  return missing.length
+    ? `Requires ${joinAnd(missing)}, which your profile does not list`
+    : null;
+}
+
+/**
+ * Each part of the badge's criteria, in the api's order, the language aside (`languageWords`); a
+ * code this build does not know is still said.
+ */
 export function outsideParts(
   job: CriteriaFacts,
   windowDays: number | null,
 ): string[] {
-  return (job.outside_criteria ?? []).map((code) => {
+  const codes = (job.outside_criteria ?? []).filter(
+    (code) => code !== "language",
+  );
+  return codes.map((code) => {
     if (code === "contract") return contractPhrase(job.contract_type);
     if (code === "work_mode") {
       const mode = job.work_mode ? WORK_MODE_WORDS[job.work_mode] : undefined;
@@ -71,13 +98,22 @@ export function outsideParts(
   });
 }
 
-/** "Outside your criteria: freelance mission, remote, older than 30 days", or null within. */
+/**
+ * "Outside your criteria: freelance mission, remote, older than 30 days", then the languages
+ * ("Requires German, which your profile does not list"), or null within.
+ */
 export function outsideCriteriaWords(
   job: CriteriaFacts,
   windowDays: number | null,
 ): string | null {
   const parts = [...new Set(outsideParts(job, windowDays))];
-  return parts.length ? `Outside your criteria: ${parts.join(", ")}` : null;
+  const criteria = parts.length
+    ? `Outside your criteria: ${parts.join(", ")}`
+    : null;
+  const languages = languageWords(job);
+  return criteria && languages
+    ? `${criteria}. ${languages}`
+    : (criteria ?? languages);
 }
 
 /**

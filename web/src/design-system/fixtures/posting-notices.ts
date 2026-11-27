@@ -45,3 +45,31 @@ export const NOTICES: Notice[] = [
     job_id: POSTINGS[2]?.id ?? null,
   },
 ];
+
+/** Jobs J35: what the api says of the languages a posting asks for, against the profile's. */
+export const LANGUAGE_NOTICES: Notice[] = [
+  {
+    kind: "signal",
+    code: "language_missing",
+    text: "This posting requires German, which your profile does not list.",
+    quote: "Verhandlungssichere Deutschkenntnisse",
+    level: "warning",
+    job_id: null,
+  },
+  {
+    kind: "signal",
+    code: "language_level",
+    text: "This posting asks for English at “fluent”; your profile lists Anglais at “B2”.",
+    quote: "Fluent English in a team of twelve",
+    level: "warning",
+    job_id: null,
+  },
+  {
+    kind: "signal",
+    code: "language_unread",
+    text: "This posting requires Dutch; your profile lists “Plattdüütsch”, which the app cannot read as a language.",
+    quote: "Fluent Dutch required",
+    level: "warning",
+    job_id: null,
+  },
+];

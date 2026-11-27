@@ -1,7 +1,8 @@
 """The posting reader (jobs J19, issue #764; SPEC-jobs.md, "Posting reader"): an agent reads each
-posting's text and fills its location, pay, work mode, contract type, published date, company and
-clean description. Owner, 2026-11-09: every source is read, during the sweep that stored the
-posting, and every saved posting is read once, except the fields the person set by hand.
+posting's text and fills its location, pay, work mode, contract type, published date, company,
+the languages it asks for (jobs J35, app/jobs/languages.py) and clean description. Owner,
+2026-11-09: every source is read, during the sweep that stored the posting, and every saved
+posting is read once, except the fields the person set by hand.
 
 The agent `posting_reader` (prompts/reader.md) runs on the agents runtime as the ingestion agents
 do: `internal` (started here only), bound in code to at most BATCH_MAX postings of one person
@@ -16,7 +17,10 @@ What `save` stores, under the posting's row lock:
   compares words (app/browser/words.py, a module that registers no agent: case, accents,
   spacing and punctuation aside); a value whose quote is
   not there, or that fails its check (`_location`, `_published`, `_pay`, the enums), is dropped
-  and counted, never stored;
+  and counted, never stored; a language asked is kept only when its quote also names it and
+  holds its level (`_languages`), the first tongues.ASKED_MAX of them, the rest counted; every
+  posting saved stores the languages it kept, none included, so the backlog knows it was read for
+  them, and History tells them unless a first reading found none;
 - the clean description: the text cut from the first match of the agent's start words to the last
   match of its end words after it (`cut`), refused under CUT_MIN_CHARS, and refused when the
   agent was not shown the whole text (`_seen_whole`: shortened to TEXT_SHOWN_MAX, or changed
@@ -40,7 +44,11 @@ when the posting is stored and stay when no reader runs. Two ways a posting is r
   stays for the backlog;
 - by the backlog (`tick`, a cron of the agents queue): one batch of the postings not read yet, as
   its own run_agent job, BACKLOG_RUNS at a time for the whole app, for a person with a
-  credential, no sweep running and no BACKLOG_PAUSE after such a failure (`paused`).
+  credential, no sweep running and no BACKLOG_PAUSE after such a failure (`paused`); with none
+  left, one batch of the open postings read before jobs J35 (`_stale`: no languages), read again
+  at most once every REREAD_EVERY and REREAD_RUNS_PER_DAY times a day per person, only for their
+  languages (`ReaderInput.languages_only`: `save` takes nothing else, cuts nothing, leaves
+  `updated_at` and the fit, and writes the History event only when it found a language).
 Each run given a posting counts an attempt, at most ATTEMPTS_MAX; a run that failed for the
 credential, the provider, the worker or a stopping worker gives it back once ended (`settle`,
 `gives_back`). A posting without text is never read.
@@ -61,7 +69,7 @@ import unicodedata
 import uuid
 import weakref
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -76,6 +84,7 @@ from app.agents.models import AgentRun, RunStatus
 from app.browser.nature import nature_contract
 from app.browser.words import words as _words
 from app.jobs import criteria_badge, service
+from app.jobs import languages as tongues
 from app.jobs.models import (
     ContractType,
     Job,
@@ -126,17 +135,28 @@ BACKLOG_SECOND = 40
 # A person whose last reading run failed for the credential, the provider or the worker is left
 # alone this long by the backlog: one plain pause, the same after every such failure.
 BACKLOG_PAUSE = timedelta(minutes=30)
+# Jobs J35: the open postings read before the languages were read again, BATCH_MAX a run, at most
+# one run every REREAD_EVERY and REREAD_RUNS_PER_DAY in 24 hours per person (600 postings a day,
+# in 10 hours), so a first deploy spreads the person's budget over the day.
+REREAD_EVERY = timedelta(minutes=10)
+REREAD_RUNS_PER_DAY = 60
+# A posting's attempts go on from its first reading's (at most ATTEMPTS_MAX): the second reading
+# gets at least ATTEMPTS_MAX more.
+REREAD_ATTEMPTS_MAX = 2 * ATTEMPTS_MAX
 PROMPT_PATH = Path(__file__).parent / "prompts" / "reader.md"
 FIRST_MESSAGE = (
     "Read the postings with read_postings, save the facts of each one with save_posting_facts, "
     "then answer with one line."
 )
 
-READER_FIELDS = ("location", "work_mode", "contract_type", "published_on", "company", "pay")
+READER_FIELDS = (
+    "location", "work_mode", "contract_type", "published_on", "company", "pay", "languages",
+)  # fmt: skip
 SAVED_ONCE = "This posting is already saved in this run. Go on with the next one."
 BUSY = "This posting is being changed. Leave it and go on with the next one."
 GONE = "This posting no longer exists. Go on with the next one."
 NO_INDEX = "No posting has this index. Use an index read_postings gave."
+LANGUAGES_ONLY = "languages_only"
 
 
 class ReaderInput(BaseModel):
@@ -146,6 +166,8 @@ class ReaderInput(BaseModel):
 
     job_ids: list[uuid.UUID] = Field(min_length=1, max_length=BATCH_MAX)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
+    # Jobs J35: a reading of postings read before, made only to fill their languages (`_reread`).
+    languages_only: bool | None = None
 
 
 def _readable() -> sa.ColumnElement[bool]:
@@ -154,6 +176,18 @@ def _readable() -> sa.ColumnElement[bool]:
 
 def _unread() -> sa.ColumnElement[bool]:
     return sa.and_(Job.read_at.is_(None), Job.read_attempts < ATTEMPTS_MAX, _readable())
+
+
+def _stale() -> sa.ColumnElement[bool]:
+    """Jobs J35: an open posting the reader read before it read the languages asked."""
+    return sa.and_(
+        Job.read_at.is_not(None),
+        Job.languages.is_(None),
+        Job.status.in_(criteria_badge.OPEN),
+        Job.read_run_id.is_(None),
+        Job.read_attempts < REREAD_ATTEMPTS_MAX,
+        _readable(),
+    )
 
 
 def _digest(text: str) -> str:
@@ -166,9 +200,10 @@ def bind_postings(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     digest of each one's text as the run starts (a cut needs the text the agent was shown).
     None when none is left: the run then fails before any model call."""
     try:
-        wanted = list(dict.fromkeys(ReaderInput.model_validate(run.input or {}).job_ids))
+        given = ReaderInput.model_validate(run.input or {})
     except ValidationError:
         return None
+    wanted = list(dict.fromkeys(given.job_ids))
     held = {
         row.id: _digest(row.posting_text or "")
         for row in db.execute(
@@ -180,14 +215,24 @@ def bind_postings(db: Session, run: AgentRun) -> Mapping[str, Any] | None:
     jobs = [job_id for job_id in wanted if job_id in held]
     if not jobs:
         return None
-    return {"jobs": [str(job_id) for job_id in jobs], "texts": [held[job_id] for job_id in jobs]}
+    bound: dict[str, Any] = {
+        "jobs": [str(job_id) for job_id in jobs],
+        "texts": [held[job_id] for job_id in jobs],
+    }
+    if given.languages_only:
+        bound[LANGUAGES_ONLY] = True
+    return bound
+
+
+def _languages_only(binding: Mapping[str, Any] | None) -> bool:
+    return (binding or {}).get(LANGUAGES_ONLY) is True
 
 
 POSTING_READER = definitions.register(
     definitions.AgentDefinition(
         name=NAME,
         description="Reads each posting found and fills its location, pay, work mode, contract, "
-        "published date, company and description from its text.",
+        "published date, company, the languages it asks for and description from its text.",
         system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
         tools=(READ, SAVE),
         input_model=ReaderInput,
@@ -296,6 +341,19 @@ class _Pay(_Strict):
     quote: str = Field(min_length=1, max_length=QUOTE_MAX)
 
 
+class _Asked(_Strict):
+    name: str = Field(min_length=1, max_length=tongues.NAME_MAX)
+    level: str | None = Field(default=None, min_length=1, max_length=tongues.LEVEL_MAX)
+    required: bool
+    alternatives: list[str] = Field(default_factory=list, max_length=tongues.ALTERNATIVES_MAX)
+    quote: str = Field(min_length=1, max_length=QUOTE_MAX)
+
+
+class _Written(_Strict):
+    value: str = Field(min_length=1, max_length=tongues.NAME_MAX)
+    quote: str = Field(min_length=1, max_length=QUOTE_MAX)
+
+
 class _Cut(_Strict):
     start: str = Field(min_length=1, max_length=QUOTE_MAX)
     end: str = Field(min_length=1, max_length=QUOTE_MAX)
@@ -311,6 +369,8 @@ class Facts(_Strict):
     published_on: dict[str, Any] | None = None
     company: dict[str, Any] | None = None
     pay: dict[str, Any] | None = None
+    languages: list[Any] | None = None
+    written_in: dict[str, Any] | None = None
     description: dict[str, Any] | None = None
 
 
@@ -346,6 +406,32 @@ SAVE_SCHEMA: dict[str, Any] = {
                 "quote": {"type": "string"},
             },
             "required": ["min", "max", "currency", "period", "quote"],
+            "additionalProperties": False,
+        },
+        "languages": {
+            "type": "array",
+            "maxItems": tongues.ASKED_MAX,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "level": {"type": "string"},
+                    "required": {"type": "boolean"},
+                    "alternatives": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": tongues.ALTERNATIVES_MAX,
+                    },
+                    "quote": {"type": "string"},
+                },
+                "required": ["name", "required", "quote"],
+                "additionalProperties": False,
+            },
+        },
+        "written_in": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}, "quote": {"type": "string"}},
+            "required": ["value", "quote"],
             "additionalProperties": False,
         },
         "description": {
@@ -399,10 +485,11 @@ class Outcome:
     not_in_text: list[str] = field(default_factory=list)
     invalid: list[str] = field(default_factory=list)
     not_seen: list[str] = field(default_factory=list)  # a cut of a text not shown whole
+    beyond: list[str] = field(default_factory=list)  # languages past the first ASKED_MAX
 
     @property
     def refused(self) -> int:
-        return len(self.not_in_text) + len(self.invalid) + len(self.not_seen)
+        return len(self.not_in_text) + len(self.invalid) + len(self.not_seen) + len(self.beyond)
 
     def answer(self, index: int) -> str:
         parts = [f"Posting {index} saved."]
@@ -417,6 +504,7 @@ class Outcome:
                 "Not cut, you were not shown this posting's whole text, which stays whole",
                 self.not_seen,
             ),
+            (f"Dropped, past the first {tongues.ASKED_MAX} languages", self.beyond),
         ):
             if names:
                 parts.append(f"{label}: {', '.join(names)}.")
@@ -481,7 +569,57 @@ def _checked(facts: Facts, folded: str, now: datetime, outcome: Outcome) -> dict
                 pay_currency=stated.currency,
                 pay_period=PayPeriod(stated.period),
             )
+    values["languages"] = _languages(facts, folded, outcome)
     return values
+
+
+def _in_quote(words: str, quote: str) -> bool:
+    plain = _words(words)
+    return bool(plain) and f" {plain} " in f" {_words(quote)} "
+
+
+def _languages(facts: Facts, folded: str, outcome: Outcome) -> dict[str, Any]:
+    """The languages asked whose quote is in the text and names each of them and holds the level
+    asked, and the language the ad is written in with its quote; what fails is dropped and
+    counted. Stored whole, none asked included (`jobs.languages`)."""
+    asked: list[tongues.Asked] = []
+    given = facts.languages or []
+    outcome.beyond.extend("languages" for _ in given[tongues.ASKED_MAX :])
+    for raw in given[: tongues.ASKED_MAX]:
+        try:
+            item = _Asked.model_validate(raw)
+        except ValidationError:
+            outcome.invalid.append("languages")
+            continue
+        names = [_line(name, tongues.NAME_MAX) for name in (item.name, *item.alternatives)]
+        level = None if item.level is None else _line(item.level, tongues.LEVEL_MAX)
+        if any(name is None for name in names) or (item.level is not None and level is None):
+            outcome.invalid.append("languages")
+            continue
+        named = [name for name in names if name is not None]
+        if (
+            not quoted(item.quote, folded)
+            or not all(tongues.named_in(name, item.quote) for name in named)
+            or (level is not None and not _in_quote(level, item.quote))
+        ):
+            outcome.not_in_text.append("languages")
+            continue
+        asked.append(tongues.Asked(named[0], level, item.required, tuple(named[1:]), item.quote))
+    written: str | None = None
+    if facts.written_in is not None:
+        try:
+            said = _Written.model_validate(facts.written_in)
+        except ValidationError:
+            outcome.invalid.append("written_in")
+        else:
+            line = _line(said.value, tongues.NAME_MAX)
+            if line is None:
+                outcome.invalid.append("written_in")
+            elif not quoted(said.quote, folded):
+                outcome.not_in_text.append("written_in")
+            else:
+                written = line
+    return tongues.as_stored(written, asked)
 
 
 def hand_set(db: Session, job_id: uuid.UUID) -> set[str]:
@@ -577,7 +715,10 @@ def postings(
                     "posting_text_truncated": shortened,
                 }
             )
-    return json.dumps({"postings": listed}, ensure_ascii=False)
+    answer: dict[str, Any] = {"postings": listed}
+    if _languages_only(binding):
+        answer["read_only"] = ["languages", "written_in"]
+    return json.dumps(answer, ensure_ascii=False)
 
 
 @dataclass(frozen=True)
@@ -618,18 +759,25 @@ def save(
         outcome = Outcome()
         text = job.posting_text or ""
         folded, origin = fold_map(text)
-        values = _checked(facts, folded, now, outcome)
+        only = _languages_only(binding)
+        if only:
+            values = {"languages": _languages(facts, folded, outcome)}
+        else:
+            values = _checked(facts, folded, now, outcome)
+        languages = values.pop("languages")
         hand = hand_set(db, job.id)
         _keep(db, job, values, hand, outcome)
         edits = _apply(job, values, outcome)
-        if facts.description is not None:
+        _languages_edit(job.languages, languages, edits, outcome)
+        if facts.description is not None and not only:
             if _seen_whole(binding, facts.index, text, redact):
                 _describe(db, job, facts.description, text, folded, origin, edits, outcome, now)
             else:
                 outcome.not_seen.append("description")
         if edits:
             service.add_event(db, job, JobEventKind.edit, {"changes": edits, "via": VIA}, now)
-            service.touch(job, now)
+            if not only:
+                service.touch(job, now)
         db.flush()
         # Jobs J31: a text replaced since the run was bound (a posting seen in a list whose
         # page a search read) stays to read, so its own words are read too.
@@ -639,9 +787,11 @@ def save(
             and facts.index < len(digests)
             and digests[facts.index] != _digest(text)
         )
-        done: dict[str, Any] = {"updated_at": Job.updated_at}
-        done.update(_badge(db, job, "contract_type" in values))
-        if not replaced:
+        # The languages are written here, never through the row object: a reading made only for
+        # them (`_reread`) leaves `updated_at` as it is.
+        done: dict[str, Any] = {"updated_at": Job.updated_at, "languages": languages}
+        done.update(_badge(db, job, "contract_type" in values, languages))
+        if not replaced and not only:
             done["read_at"] = now
         db.execute(
             sa.update(Job)
@@ -653,16 +803,30 @@ def save(
     return Saved(outcome.answer(facts.index), read=True, refused=outcome.refused)
 
 
-def _badge(db: Session, job: Job, contract_read: bool) -> dict[str, Any]:
-    """Jobs J30: the badge computed again from the fields the reader filled, against the current
-    criteria of the posting's search; a contract it quoted is a stated one. Criteria that cannot be
-    read keep the badge as it is."""
+def _badge(db: Session, job: Job, contract_read: bool, languages: Any) -> dict[str, Any]:
+    """Jobs J30: the badge computed again from the fields the reader filled and the languages it
+    read, against the current criteria of the posting's search; a contract it quoted is a stated
+    one. Criteria that cannot be read keep the badge as it is."""
     stated = {"contract_stated": True} if contract_read else {}
     criteria = criteria_badge.criteria_for(db, job.user_id, job.criteria_search_id)
     if criteria is None:
         return stated
-    badge = criteria_badge.codes(criteria_badge.facts_of(job, contract_read), criteria)
-    return {**stated, "outside_criteria": badge}
+    facts = replace(criteria_badge.facts_of(job, contract_read), languages=languages)
+    return {**stated, "outside_criteria": criteria_badge.codes(facts, criteria)}
+
+
+def _languages_edit(
+    before: Any, after: dict[str, Any], edits: dict[str, Any], outcome: Outcome
+) -> None:
+    """The languages read against those stored: a change for History, except a first reading
+    that found none (no language asked, no ad's language), which tells nothing."""
+    if before == after:
+        outcome.unchanged.append("languages")
+        return
+    outcome.stored.append("languages")
+    if before is None and after == tongues.EMPTY:
+        return
+    edits["languages"] = {"from": _jsonable(before), "to": _jsonable(after)}
 
 
 def _keep(db: Session, job: Job, values: dict[str, Any], hand: set[str], outcome: Outcome) -> None:
@@ -787,6 +951,7 @@ def begin(
     now: datetime,
     script: str | None,
     flow: runs.WorkflowRef | None = None,
+    languages_only: bool = False,
 ) -> tuple[uuid.UUID, int] | str:
     """A queued run of the postings of `ids` another transaction does not hold, each counted as
     an attempt held by the run (`read_run_id`) until its end is settled (`settle`): its id and
@@ -797,14 +962,19 @@ def begin(
     held = list(
         db.scalars(
             sa.select(Job.id)
-            .where(Job.user_id == user_id, Job.id.in_(ids), _unread())
+            .where(
+                Job.user_id == user_id, Job.id.in_(ids), _stale() if languages_only else _unread()
+            )
             .order_by(Job.id)
             .with_for_update(key_share=True, skip_locked=True)
         )
     )
     if not held:
         return "none"
-    data = ReaderInput(job_ids=held, script=script).model_dump(mode="json", exclude_none=True)
+    only = True if languages_only else None
+    data = ReaderInput(job_ids=held, script=script, languages_only=only).model_dump(
+        mode="json", exclude_none=True
+    )
     try:
         run = runs.create_run(db, user_id, NAME, None, data, MODEL, now, flow)
     except runs.ActiveRunsError:
@@ -839,20 +1009,26 @@ def gives_back(error: str | None) -> bool:
 
 
 def settle(db: Session, run_id: uuid.UUID) -> str | None:
-    """Once a reading run ended, its postings let go of it, each still unread getting its
-    attempt back when `gives_back`; once only, as only the postings it holds are changed.
+    """Once a reading run ended, its postings let go of it, each still unread (or, for a reading
+    of the languages only, still without them) getting its attempt back when `gives_back`; once
+    only, as only the postings it holds are changed.
     Returns `failed_for` of a failed run, else None (a run not ended yet changes nothing).
     The caller commits."""
     row = db.execute(
-        sa.select(AgentRun.status, AgentRun.error).where(AgentRun.id == run_id)
+        sa.select(AgentRun.status, AgentRun.error, AgentRun.input).where(AgentRun.id == run_id)
     ).one_or_none()
     if row is None or row.status in (RunStatus.queued, RunStatus.running):
         return None
     failed = row.status is RunStatus.failed
+    only = isinstance(row.input, Mapping) and row.input.get(LANGUAGES_ONLY) is True
     if failed and gives_back(row.error):
         db.execute(
             sa.update(Job)
-            .where(Job.read_run_id == run_id, Job.read_at.is_(None), Job.read_attempts > 0)
+            .where(
+                Job.read_run_id == run_id,
+                Job.languages.is_(None) if only else Job.read_at.is_(None),
+                Job.read_attempts > 0,
+            )
             .values(read_attempts=Job.read_attempts - 1, updated_at=Job.updated_at)
             .execution_options(synchronize_session=False)
         )
@@ -1107,6 +1283,74 @@ def start_backlog(db: Session, now: datetime) -> list[uuid.UUID]:
         )
         if not isinstance(made, str):
             return [made[0]]
+    return _reread(db, now)
+
+
+def _rereads_allowed(db: Session, user_id: uuid.UUID, now: datetime) -> bool:
+    """Whether the person's backlog runs of the last 24 hours leave room for one more read
+    again: fewer than REREAD_RUNS_PER_DAY, the last at least REREAD_EVERY before `now`."""
+    runs_today, latest = db.execute(
+        sa.select(sa.func.count(), sa.func.max(AgentRun.created_at)).where(
+            AgentRun.agent == NAME,
+            AgentRun.user_id == user_id,
+            AgentRun.workflow_trigger == "backlog",
+            AgentRun.created_at > now - timedelta(hours=24),
+        )
+    ).one()
+    return runs_today < REREAD_RUNS_PER_DAY and (latest is None or now - latest >= REREAD_EVERY)
+
+
+def _reread(db: Session, now: datetime) -> list[uuid.UUID]:
+    """Jobs J35, with no posting left unread: one batch of a person's open postings read before
+    the languages were read (`_stale`), newest first, within `_rereads_allowed`, for a person
+    with a credential. They stay read (`read_at` kept), so a run that fails never makes them a
+    full reading's; it counts and gives back attempts as for a posting never read, up to
+    REREAD_ATTEMPTS_MAX, and a run that cannot start leaves them as they were."""
+    last = (
+        sa.select(sa.func.max(AgentRun.created_at))
+        .where(AgentRun.agent == NAME, AgentRun.user_id == Job.user_id)
+        .scalar_subquery()
+    )
+    sweeping = sa.select(Sweep.user_id).where(Sweep.status == SweepStatus.running)
+    people = db.execute(
+        sa.select(Job.user_id, sa.func.count().label("left"))
+        .where(_stale(), Job.user_id.not_in(sweeping))
+        .group_by(Job.user_id)
+        .order_by(sa.nulls_first(sa.func.min(last).asc()), Job.user_id)
+    ).all()
+    for person, left in people:
+        if (
+            credentials.get(db, person) is None
+            or (db.scalar(_active(person)) or 0) > 0
+            or paused(db, person, now)
+            or not _rereads_allowed(db, person, now)
+        ):
+            continue
+        ids = list(
+            db.scalars(
+                sa.select(Job.id)
+                .where(Job.user_id == person, _stale())
+                .order_by(Job.created_at.desc(), Job.id)
+                .limit(BATCH_MAX)
+                .with_for_update(skip_locked=True)
+            )
+        )
+        if not ids:
+            continue
+        flow = runs.WorkflowRef("posting_reading", trigger="backlog")
+        made = begin(db, person, ids, now, None, flow, languages_only=True)
+        if isinstance(made, str):
+            continue
+        logger.info(
+            "open postings read again for their languages",
+            extra={
+                "user_id": str(person),
+                "run_id": str(made[0]),
+                "postings": made[1],
+                "left": left - made[1],
+            },
+        )
+        return [made[0]]
     return []
 
 

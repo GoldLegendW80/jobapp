@@ -49,6 +49,8 @@ export function makeJob(
     updated_at: "2026-10-09T08:00:00Z",
     outside_criteria: [],
     list_url: null,
+    languages: null,
+    languages_missing: [],
     ...overrides,
   };
 }
