@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SIGNIN_ASK, WAIT_NOW } from "@/design-system/fixtures/agent-wait";
+import type { Question } from "@/features/apply/api/apply-api";
 import { claimRun } from "@/features/agents/helpers/run-ends";
 import { queueItem } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
@@ -19,10 +20,22 @@ const ASKING = queueItem(1, "needs_person", {
   needs: "agent_waits",
 });
 const ASKED_KEY = `${ASKING.id}:${SIGNIN_ASK.until ?? ""}`;
+// Read after ASKING: its toast shows once the hook is done with ASKING, so an absence is proved.
+const LATER = queueItem(2, "needs_person", {
+  title: "Drone Pilot",
+  mode: "direct",
+  needs: "agent_waits",
+});
 
 /** The count and the queue as the api answers them now; `needs` and `items` move a test on. */
 function fakeNeeds() {
-  const state = { needs: 0, items: [ASKING], queueReads: 0, detailReads: 0 };
+  const state = {
+    needs: 0,
+    items: [ASKING],
+    questions: {} as Record<string, Question>,
+    queueReads: 0,
+    detailReads: 0,
+  };
   server.use(
     http.get("*/api/apply/queue/count", () =>
       HttpResponse.json({
@@ -42,7 +55,7 @@ function fakeNeeds() {
       return HttpResponse.json({
         ...state.items.find((item) => item.id === params.id),
         events: [],
-        question: SIGNIN_ASK,
+        question: state.questions[String(params.id)] ?? SIGNIN_ASK,
         chat: [],
         now: WAIT_NOW,
       });
@@ -61,6 +74,11 @@ async function openAt(path: string) {
   });
   await act(async () => {});
   return app;
+}
+
+/** LATER's toast, the last the hook can show: every item before it was read and decided. */
+async function laterShown() {
+  expect(await screen.findByText(/^Drone Pilot at /)).toBeVisible();
 }
 
 async function readCount(app: Awaited<ReturnType<typeof openAt>>) {
@@ -97,6 +115,10 @@ describe("the toast The assistant needs you (A25)", () => {
     expect(
       shown.getByRole("link", { name: "Open the application" }),
     ).toHaveAttribute("href", `/jobs/${ASKING.posting_id}`);
+    // The assistant's sentence is the model's words, which a page can steer: never in a toast.
+    expect(
+      title.closest<HTMLElement>("[data-sonner-toast]"),
+    ).not.toHaveTextContent(SIGNIN_ASK.sentence);
 
     // The same ask at the next reads: no second toast, and no read of the queue.
     await readCount(app);
@@ -115,24 +137,31 @@ describe("the toast The assistant needs you (A25)", () => {
   it("leaves out an ask another tab of this browser told of", async () => {
     claimRun(ASKED_KEY, undefined, ASKS_KEY);
     const state = fakeNeeds();
-    state.needs = 1;
+    state.items = [ASKING, LATER];
+    state.needs = 2;
     await openAt("/jobs");
-    await vi.waitFor(() => {
-      expect(state.detailReads).toBe(1);
-    });
-    await act(async () => {});
-    expect(toasts()).toHaveLength(0);
+    await laterShown();
+    expect(toasts()).toHaveLength(1);
+    expect(state.detailReads).toBe(2);
+  });
+
+  it("is not shown for an ask that ended before the read", async () => {
+    const state = fakeNeeds();
+    state.items = [ASKING, LATER];
+    state.questions[ASKING.id] = { ...SIGNIN_ASK, live: false };
+    state.needs = 2;
+    await openAt("/jobs");
+    await laterShown();
+    expect(toasts()).toHaveLength(1);
   });
 
   it("is not shown for an application that needs the person for anything else", async () => {
     const state = fakeNeeds();
-    state.items = [queueItem(2, "needs_person", { needs: "captcha" })];
+    state.items = [queueItem(3, "needs_person", { needs: "captcha" }), LATER];
     const app = await openAt("/jobs");
-    state.needs = 1;
+    state.needs = 2;
     await readCount(app);
-    await vi.waitFor(() => {
-      expect(state.queueReads).toBe(1);
-    });
-    expect(toasts()).toHaveLength(0);
+    await laterShown();
+    expect(toasts()).toHaveLength(1);
   });
 });
