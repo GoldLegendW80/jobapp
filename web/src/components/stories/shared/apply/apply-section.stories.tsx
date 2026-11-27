@@ -23,6 +23,11 @@ import {
   REFUSED_EVENTS,
   SUBMITTED_EVENTS,
 } from "@/design-system/fixtures/shared-apply";
+import {
+  chatWith,
+  SIGNIN_ASK,
+  WAIT_NOW,
+} from "@/design-system/fixtures/agent-wait";
 import { withApp } from "@/design-system/with-app";
 import type { Application } from "@/features/apply/api/apply-api";
 import { fakeApply } from "@/test/apply";
@@ -233,6 +238,34 @@ export const CheckWhatTheAssistantFilled: Story = {
   beforeEach: () => {
     const api = apply(applicationIn("ready"));
     Object.assign(api.detail, { review_agent: true, filled: AGENT_FILLED });
+  },
+};
+
+/** One click Apply's assistant asks for the person (A25): its words, the box, the browser, Cancel. */
+export const TheAssistantWaitsForYou: Story = {
+  name: "The assistant waits for you",
+  beforeEach: () => {
+    const api = apply(
+      applicationIn("needs_person", { mode: "direct", needs: "agent_waits" }),
+    );
+    api.detail = {
+      question: SIGNIN_ASK,
+      chat: chatWith(SIGNIN_ASK),
+      now: WAIT_NOW,
+    };
+  },
+};
+
+/** The person sent the form in the browser during a wait: recorded as theirs. */
+export const SentByYouInTheBrowser: Story = {
+  name: "Sent by you in the browser",
+  beforeEach: () => {
+    apply(
+      applicationIn("submitted", {
+        mode: "direct",
+        error_code: "sent_by_person",
+      }),
+    );
   },
 };
 
