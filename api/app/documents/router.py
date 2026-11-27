@@ -258,7 +258,7 @@ def _unprintable(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _corrections(version: DocumentVersion) -> list[dict[str, Any]]:
     """The version's corrections, without the records of its PDF's check (`pdf_text`)."""
-    return [record for record in version.corrections or [] if not pdf_text.is_record(record)]
+    return pdf_text.split(version.corrections or [])[0]
 
 
 def _summary(version: DocumentVersion) -> dict[str, Any]:

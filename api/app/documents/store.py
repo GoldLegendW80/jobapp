@@ -983,7 +983,7 @@ def attach_pdf(
     found.legacy_file_id = None
     found.fit, found.fit_step, found.pages = fit, fit_step, pages
     if checked is not None:
-        kept = [record for record in found.corrections or [] if not pdf_text.is_record(record)]
+        kept = pdf_text.split(found.corrections or [])[0]
         found.corrections = [*kept, *(record.as_dict() for record in checked)]
     db.flush()
     return found

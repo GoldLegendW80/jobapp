@@ -20,7 +20,8 @@ import sqlalchemy as sa
 from PIL import Image
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.documents import corrections, pdf_text, render_client, render_job, router
+from app.apply import gate, run
+from app.documents import corrections, freeze, pdf_text, render_client, render_job, router
 from app.documents.models import DocumentVersion, FitResult
 from app.documents.render_client import Rendered
 from tests.documents.render_support import RecordingQueue, cv_draft, give_profile
@@ -67,6 +68,7 @@ TABLE = [
     ("notdef", GOOD + "\n.notdef", [pdf_text.GLYPH_NAME]),
     ("unique is a word", GOOD + "\nA unique platform, uniform and united.", []),
     ("an instance name", GOOD + "\nRan g5.xlarge and glyphs of type.", []),
+    ("a printed link", GOOD + "\ngithub.com/g12345 and www.example.org/glyph42", []),
     ("a path", GOOD + "\n/usr/bin and /g/ and lucid ideas", []),
     ("a year and a version", GOOD + "\nPython 3.12 since 2021, u2023 build", []),
     (
@@ -222,3 +224,39 @@ def test_a_layer_not_read_records_nothing(factory: sessionmaker[Session]) -> Non
     version = _render(factory, TextRenderer(None))
     assert version.corrections == []
     assert router._summary(version)["pdf_text"] is None
+
+
+def _sent_and_record(version: DocumentVersion) -> tuple[freeze.SentVersion, dict[str, Any]]:
+    sent = freeze._sent(version, "cv")
+    return sent, run._version_record(sent)
+
+
+def test_a_good_render_reaches_the_apply_module_with_no_correction(
+    factory: sessionmaker[Session],
+) -> None:
+    version = _render(factory, TextRenderer(GOOD))
+    sent, record = _sent_and_record(version)
+    assert sent.corrections == ()
+    assert record["corrections"] == []
+    assert not gate.documents_need_review({"cv": record})
+
+
+def test_a_failed_text_layer_is_not_a_correction_for_the_apply_module(
+    factory: sessionmaker[Session],
+) -> None:
+    version = _render(factory, TextRenderer(GOOD.replace(EMAIL, "")))
+    sent, record = _sent_and_record(version)
+    assert sent.corrections == ()
+    assert record["corrections"] == []
+    assert not gate.documents_need_review({"cv": record})
+    assert router._summary(version)["pdf_text"] == [
+        {"code": pdf_text.EMAIL, "message": corrections.PDF_EMAIL}
+    ]
+
+
+def test_the_split_keeps_the_corrections_and_the_pdf_records_apart() -> None:
+    fix = {"code": "banned_phrase", "field": "summary"}
+    mixed = [fix, *(r.as_dict() for r in pdf_text.records((pdf_text.PHONE,)))]
+    kept, found = pdf_text.split(mixed)
+    assert kept == [fix]
+    assert [r["code"] for r in found] == [pdf_text.CHECKED, pdf_text.PHONE]

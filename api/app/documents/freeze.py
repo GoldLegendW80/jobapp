@@ -46,7 +46,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, undefer
 
-from app.documents import store
+from app.documents import pdf_text, store
 from app.documents.models import (
     Document,
     DocumentPanel,
@@ -74,7 +74,7 @@ RENDERING = "rendering"  # the draft is queued or being rendered
 @dataclass(frozen=True)
 class SentVersion:
     """One version as the apply module and the run report read it. `corrections` are the records
-    stored with the version, `fit` is None while it has no PDF."""
+    stored with the version without those of its PDF's check, `fit` is None while it has no PDF."""
 
     document_id: uuid.UUID
     version_id: uuid.UUID
@@ -145,7 +145,7 @@ def _sent(version: DocumentVersion, kind: Kind) -> SentVersion:
         fit=version.fit,
         fit_step=version.fit_step,
         pages=version.pages,
-        corrections=tuple(dict(record) for record in (version.corrections or [])),
+        corrections=tuple(pdf_text.split(version.corrections or [])[0]),
         pdf_sha256=bytes(version.pdf_sha256) if version.pdf_sha256 is not None else None,
     )
 

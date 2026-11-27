@@ -57,6 +57,8 @@ _GLYPH = re.compile(
     r"|/(?:uni[0-9A-Fa-f]{4,6}|u[0-9A-F]{4,6}|g\d{1,5}|glyph\d{1,5}|afii\d{5}|cid\d{1,5})"
     r"|(?<![\w/])(?:uni[0-9A-F]{4,6}|glyph\d{1,5})(?![\w])"
 )
+# A printed link ("github.com/g12345") holds a slash and a g number that a glyph name also has.
+_LINK = re.compile(r"[^\s/]+\.[A-Za-z]{2,}/\S*")
 
 
 def _flat(text: str) -> str:
@@ -79,7 +81,7 @@ def check(text: str, email: str, phone: str) -> tuple[str, ...]:
         found.append(PHONE)
     if "\ufffd" in text:
         found.append(REPLACEMENT)
-    if _GLYPH.search(text):
+    if _GLYPH.search(_LINK.sub(" ", text)):
         found.append(GLYPH_NAME)
     return tuple(found)
 
@@ -91,6 +93,15 @@ def records(found: Iterable[str]) -> list[Correction]:
 
 def is_record(record: Mapping[str, Any]) -> bool:
     return record.get("code") in CODES
+
+
+def split(
+    stored: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """A version's stored records as (its corrections, the records of its PDF's check): the only
+    way a reader gets the corrections, so that none takes a PDF record for one."""
+    mine = [dict(record) for record in stored]
+    return [r for r in mine if not is_record(r)], [r for r in mine if is_record(r)]
 
 
 def summary(stored: Iterable[Mapping[str, Any]]) -> list[dict[str, str]] | None:

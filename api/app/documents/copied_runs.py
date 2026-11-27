@@ -76,7 +76,7 @@ class _Automaton:
     lengths: tuple[int, ...]
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=2)
 def _automaton(posting: tuple[str, ...]) -> _Automaton:
     """The suffix automaton of the posting's words: every run of the posting is a path."""
     moves: list[dict[str, int]] = [{}]
