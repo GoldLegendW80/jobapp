@@ -24,6 +24,7 @@ import {
   written,
 } from "@/design-system/fixtures/follow-ups";
 import {
+  AT_WORK_CHAT,
   chatWith,
   CODE_ASK,
   SIGNIN_ASK,
@@ -238,10 +239,39 @@ export const AnswerTheAssistant: Story = {
   beforeEach: () => assistantWaits(SIGNIN_ASK),
 };
 
+/** As a job seeker, I want to give the code the site sent me in the app, so that the app types it on the site and the assistant never sees it. */
+export const GiveACodeInTheApp: Story = {
+  beforeEach: () => assistantWaits(CODE_ASK),
+};
+
 /** As a job seeker, I want to type a code the site sent me in the browser myself, so that the assistant goes on from the same page. */
 export const TypeACodeInTheBrowser: Story = {
   beforeEach: () => assistantWaits(CODE_ASK),
   play: watch,
+};
+
+/** As a job seeker, I want to write to the assistant while it fills my application and see whether it read my message, so that it knows what I want without waiting for a question. */
+export const WriteToTheAssistant: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    const item = application(3, "filling", 2, { mode: "direct" });
+    const queue = fakeQueue([item]);
+    queue.now = WAIT_NOW;
+    queue.details[item.id] = { chat: AT_WORK_CHAT, agent: true };
+  },
+};
+
+/** As a job seeker, I want to know why the assistant stopped when a page showed my code again, so that I check the site, then finish in the browser or apply again. */
+export const TheCodeShowedAgain: Story = {
+  beforeEach: () => {
+    fakeSession(member);
+    fakeQueue([
+      application(3, "submit_unknown", 2, {
+        mode: "direct",
+        error_code: "code_shown",
+      }),
+    ]);
+  },
 };
 
 /** As a job seeker, I want to know that the browser is mine until I give it back and for how long, so that I finish what the site asks in time. */

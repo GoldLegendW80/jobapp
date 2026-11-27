@@ -24,7 +24,9 @@ import {
   SUBMITTED_EVENTS,
 } from "@/design-system/fixtures/shared-apply";
 import {
+  AT_WORK_CHAT,
   chatWith,
+  CODE_ASK,
   SIGNIN_ASK,
   WAIT_NOW,
 } from "@/design-system/fixtures/agent-wait";
@@ -369,6 +371,44 @@ export const RefusedBySite: Story = {
       { id: "shot-before", kind: "before", created_at: "2026-11-05T08:01:03Z" },
       { id: "shot-after", kind: "after", created_at: "2026-11-05T08:07:12Z" },
     ];
+  },
+};
+
+/** One click Apply's assistant asks for a code (A25c): the code box, typed on the site by the app. */
+export const TheAssistantAsksForACode: Story = {
+  name: "The assistant asks for a code",
+  beforeEach: () => {
+    const api = apply(
+      applicationIn("needs_person", { mode: "direct", needs: "agent_waits" }),
+    );
+    api.detail = {
+      question: CODE_ASK,
+      chat: chatWith(CODE_ASK),
+      now: WAIT_NOW,
+    };
+  },
+};
+
+/** The assistant fills the form: write to it, and see whether it read each message (A25c). */
+export const WriteToTheAssistant: Story = {
+  name: "Write to the assistant",
+  beforeEach: () => {
+    const api = apply(applicationIn("filling", { mode: "direct" }));
+    api.detail = { chat: AT_WORK_CHAT, now: WAIT_NOW };
+  },
+};
+
+/** A page showed the code the person gave again: the run stopped, with the api's sentence. */
+export const TheCodeShowedAgain: Story = {
+  name: "Stopped: the code showed again",
+  beforeEach: () => {
+    const api = apply(
+      applicationIn("failed", { mode: "direct", error_code: "code_shown" }),
+    );
+    api.detail = {
+      summary:
+        "The code you gave showed again, on the site or in the assistant's own call, so the assistant stopped: finish in the browser, or apply again.",
+    };
   },
 };
 
