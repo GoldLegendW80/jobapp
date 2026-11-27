@@ -55,9 +55,9 @@ import { ShotView } from "@/components/shared/apply/shot-view";
  * here; Reject asks first and can also skip the posting. A Full auto item in its hold shows the
  * countdown with Cancel (`offset`: the server's clock minus the page's), and a rehearsal asks
  * "Does this look right?" over its answers, read only. After the click, an item the app could
- * not confirm or the site refused offers "It was submitted" and "Try again" with the posting
+ * not confirm or the site refused offers "It was sent" and "Try again" with the posting
  * page's confirmations and calls. `onLeave` is called when the card is gone after a Reject, a
- * Cancel or an "It was submitted" of its own.
+ * Cancel or an "It was sent" of its own.
  */
 export function QueueCard({
   item,

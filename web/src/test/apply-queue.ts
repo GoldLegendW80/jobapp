@@ -39,7 +39,7 @@ type Refusal = { detail: string; code: string };
 
 /**
  * The queue routes and A6's approval routes as the api answers them, in memory: Reject, Cancel
- * and "It was submitted" take the item out of the queue, Approve moves it under way, "Try again"
+ * and "It was sent" take the item out of the queue, Approve moves it under way, "Try again"
  * brings it back `ready` for a new approval, an answer saved changes the hash. Every write is
  * recorded; `next` makes the next decision answer 409 with that refusal.
  */
@@ -59,7 +59,7 @@ export function fakeQueue(
     remembers: [] as { id: string; field_key: string; value: unknown }[],
     rejects: [] as { id: string; skip_posting: boolean }[],
     cancels: [] as string[],
-    /** "It was submitted", "It was not sent" and "Try again", in order. */
+    /** "It was sent", "It was not sent" and "Try again", in order. */
     decisions: [] as {
       id: string;
       action: "submitted" | "not-sent" | "retry";
@@ -79,12 +79,15 @@ export function fakeQueue(
       sent_to_review: [],
     } as Summary,
     rehearsals: [] as { id: string; answer: string }[],
+    /** What an item's detail adds (A25: the assistant's `question`, the `chat`, the `events`). */
+    details: {} as Record<string, Record<string, unknown>>,
     hash: (id: string) => `hash-${id}-${state.versions[id] ?? 1}`,
     waiting: () =>
       state.items.filter(
         (item) =>
           (WAITING.includes(item.state) &&
             !(item.state === "ready" && item.mode === "full_auto")) ||
+          (item.state === "submitting" && item.needs === "agent_waits") ||
           item.rehearsal,
       ).length,
     view: (id: string) => ({
@@ -149,6 +152,21 @@ export function fakeQueue(
       }),
     ),
     http.get("*/api/apply/summary", () => HttpResponse.json(state.summary)),
+    http.get("*/api/applications/:id", ({ params }) => {
+      const id = String(params.id);
+      const item = state.items.find((one) => one.id === id);
+      if (!item)
+        return HttpResponse.json(
+          { detail: "No such application." },
+          { status: 404 },
+        );
+      return HttpResponse.json({
+        ...item,
+        events: [],
+        now: state.now ?? "2026-10-15T08:02:00Z",
+        ...state.details[id],
+      });
+    }),
     http.get("*/api/apply/settings", () =>
       HttpResponse.json({
         mode_after_like: state.mode,

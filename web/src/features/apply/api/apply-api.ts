@@ -279,7 +279,7 @@ export const rejectApplication = (applicationId: string) =>
   decide(applicationId, "reject");
 export const cancelApplication = (applicationId: string) =>
   decide(applicationId, "cancel");
-/** "It was submitted": the person confirms what the app could not. */
+/** "It was sent": the person confirms what the app could not. */
 export const confirmSubmitted = (applicationId: string) =>
   decide(applicationId, "submitted");
 /** "It was not sent": the person's own word ends it, and they may apply again (A24). */

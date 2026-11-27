@@ -583,7 +583,7 @@ describe("the destructive buttons", () => {
     ],
     [
       "submit_unknown",
-      "It was submitted",
+      "It was sent",
       "Mark this application as submitted?",
       "It cannot be undone, and the app will refuse another application for this posting.",
     ],
@@ -992,7 +992,7 @@ describe("after the click", () => {
     ).toBeNull();
   });
 
-  it("offers It was submitted and Try again when the outcome is unknown", async () => {
+  it("offers It was sent and Try again when the outcome is unknown", async () => {
     const api = fakeApply({
       application: fakeApplication("submit_unknown"),
       answers: filled().slice(0, 2),
@@ -1005,7 +1005,7 @@ describe("after the click", () => {
       within(section).getByRole("button", { name: "Try again" }),
     ).toBeInTheDocument();
     await user.click(
-      within(section).getByRole("button", { name: "It was submitted" }),
+      within(section).getByRole("button", { name: "It was sent" }),
     );
     expect(api.decisions).toEqual([]);
     await confirm(user, "Mark as submitted");
@@ -1308,7 +1308,7 @@ describe("the submit lease on the job page", () => {
         "You stopped it after a send button had been clicked. Check the site or your mail.",
       ),
     ).toBeInTheDocument();
-    for (const name of ["It was submitted", "It was not sent", "Try again"]) {
+    for (const name of ["It was sent", "It was not sent", "Try again"]) {
       expect(within(section).getByRole("button", { name })).toBeEnabled();
     }
   });
