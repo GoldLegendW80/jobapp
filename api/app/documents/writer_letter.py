@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.agents import definitions
 from app.agents.models import AgentRun, CredentialKind
+from app.documents import content as c
 from app.documents import panel_hold, writer_cv
 from app.documents.models import Kind
 
@@ -79,6 +80,7 @@ class LetterWriter(definitions.AgentDefinition):
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         language = writer_cv.LANGUAGES.get(str(data.get("language")), "English")
         limits = writer_cv.limits_line(data.get("limits") or {})
+        limits = f"{limits} The paragraphs together: about {c.LETTER_WORDS} words.".strip()
         if data.get("mode") == "panel":
             text = (
                 f"{panel_hold.read(data.get('panel'))}\n\n"

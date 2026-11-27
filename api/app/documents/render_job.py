@@ -206,11 +206,15 @@ def read_context(db: Session, document: Document, at: datetime) -> Context:
     posting = None
     if document.posting_id is not None:
         row = db.execute(
-            sa.select(Job.company, Job.title).where(
+            sa.select(Job.company, Job.title, Job.posting_text, Job.description).where(
                 Job.user_id == user_id, Job.id == document.posting_id
             )
         ).one_or_none()
-        posting = PostingView(company=row[0] or "", title=row[1] or "") if row else None
+        posting = (
+            PostingView(company=row[0] or "", title=row[1] or "", text=row[2] or row[3] or "")
+            if row
+            else None
+        )
     photo = None
     if template.photo != "none":
         stored = profile_service.get_photo(db, user_id)

@@ -67,6 +67,8 @@ FILLED_IN = "Filled in because nothing was left"
 KEPT = "Kept as written, for you to check"
 NOT_PRINTABLE_REASON = "A character this template cannot print"
 PLACEHOLDER_REASON = "A fact your profile does not hold: asked in the hiring panel"
+COPIED = "Words copied from the posting"
+COPIED_KEPT = "Words copied from the posting, kept for you to put in your own words"
 REASONS: tuple[str, ...] = (
     NOT_IN_PROFILE,
     NUMBER_NOT_STATED,
@@ -76,6 +78,8 @@ REASONS: tuple[str, ...] = (
     KEPT,
     NOT_PRINTABLE_REASON,
     PLACEHOLDER_REASON,
+    COPIED,
+    COPIED_KEPT,
 )
 
 FALLBACK = "fallback"
@@ -143,6 +147,8 @@ def reason_for(code: str) -> str:
         return NOT_PRINTABLE_REASON
     if code == PLACEHOLDER:
         return PLACEHOLDER_REASON
+    if code == rules.COPIED_RUN:
+        return COPIED
     return NOT_IN_PROFILE
 
 
@@ -849,7 +855,14 @@ def remove_remaining(
         # The ambiguous claims no token cut could take: the sentence stays as written, and the
         # record shows the person the claim (the model rewrite of D7 comes first when it runs).
         records += [
-            Correction(path, sentence, sentence, code, "code", KEPT)
+            Correction(
+                path,
+                sentence,
+                sentence,
+                code,
+                "code",
+                COPIED_KEPT if code == rules.COPIED_RUN else KEPT,
+            )
             for i, code in sorted(kept_for_check.items())
             if i not in removed
             for sentence in [text[spans[i][0] : spans[i][1]].strip()]
