@@ -33,6 +33,7 @@ import { FillHandoff } from "@/components/shared/apply/live-view-slot";
 import { AgentWait } from "@/components/shared/apply/agent-wait";
 import { useAgentWait } from "../api/use-agent-wait";
 import {
+  assistantWorks,
   isAsk,
   SAID_NOTHING_SENT,
   saidNothingSent,
@@ -82,7 +83,8 @@ export function QueueCard({
   const withAnswers = (reviewable || rehearsal) && !signingIn && !agentList;
   // A25: the apply agent's ask and chat; after an unconfirmed send, what the assistant said.
   const asking = showsAsk(item);
-  const detail = useAgentWait(item).detail.data;
+  const works = assistantWorks(item, agentList);
+  const detail = useAgentWait(item, works).detail.data;
   const ask = isAsk(detail?.question) ? detail?.question : null;
   const notSentFirst = saidNothingSent(item, detail?.events);
 
@@ -124,7 +126,9 @@ export function QueueCard({
 
         <CardContent className="@container flex flex-col gap-4">
           <p className="text-sm">{statusLine(item, agentList)}</p>
-          {asking ? <AgentWait application={item} /> : null}
+          {asking || works ? (
+            <AgentWait application={item} works={works} />
+          ) : null}
           {notSentFirst ? <p className="text-sm">{SAID_NOTHING_SENT}</p> : null}
           {item.state === "filling" && item.mode !== "manual" ? (
             <FillHandoff applicationId={item.id} />

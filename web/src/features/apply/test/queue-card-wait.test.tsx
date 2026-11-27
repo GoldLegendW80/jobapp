@@ -8,11 +8,12 @@ import {
   SIGNIN_ASK,
   WAIT_NOW,
 } from "@/design-system/fixtures/agent-wait";
+import { SAID } from "@/test/agent-wait";
 import { fakeQueue, queueItem } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
 
-import { ASK_NOT_SHOWN, CODE_IN_BROWSER } from "../helpers/agent-wait";
+import { ASK_NOT_SHOWN, CODE_BY_HAND } from "../helpers/agent-wait";
 import { DECISIONS } from "../helpers/decisions";
 
 beforeEach(() => {
@@ -60,7 +61,10 @@ describe("the apply agent's wait on the Applications page (A25)", () => {
     ).toBeInTheDocument();
 
     const second = await card(/Drone Pilot/);
-    expect(await second.findByText(CODE_IN_BROWSER)).toBeInTheDocument();
+    expect(
+      await second.findByLabelText("The code the site sent you"),
+    ).toBeInTheDocument();
+    expect(second.getByText(CODE_BY_HAND)).toBeInTheDocument();
     // Both wait for the person: the api lists them first, and so does the page.
     const waiting = screen
       .getByRole("heading", { name: "Waiting for you (2)" })
@@ -115,5 +119,69 @@ describe("the apply agent's wait on the Applications page (A25)", () => {
     await waitFor(() => {
       expect(fake.decisions).toEqual([{ id: asked.id, action: "retry" }]);
     });
+  });
+
+  it("gives a code from the card, the box emptied at once, and shows the api's line of it", async () => {
+    const user = userEvent.setup();
+    const asking = queueItem(1, "needs_person", {
+      title: "Robot Arm Engineer",
+      mode: "direct",
+      needs: "agent_waits",
+    });
+    const fake = fakeQueue([asking]);
+    fake.now = WAIT_NOW;
+    fake.details[asking.id] = { question: CODE_ASK, chat: chatWith(CODE_ASK) };
+    renderApp("/applications");
+    const one = await card(/Robot Arm Engineer/);
+    const box = await one.findByLabelText("The code the site sent you");
+    await user.type(box, "K7Q 2X9");
+    await user.click(one.getByRole("button", { name: "Give the code" }));
+    expect(box).toHaveValue("");
+    expect(await one.findByText(SAID.codeSaid)).toBeInTheDocument();
+    expect(fake.agent.sent).toEqual([
+      { route: "question", body: { code: "K7Q 2X9" } },
+    ]);
+  });
+
+  it("writes to the assistant from the card of a fill under way, and says whether it read it", async () => {
+    const user = userEvent.setup();
+    const working = queueItem(1, "filling", {
+      title: "Robot Arm Engineer",
+      mode: "direct",
+    });
+    const fake = fakeQueue([working]);
+    fake.details[working.id] = { chat: [] };
+    renderApp("/applications");
+    const one = await card(/Robot Arm Engineer/);
+    await user.type(
+      await one.findByLabelText("Write to the assistant"),
+      "Use the cover letter as it is.",
+    );
+    await user.click(one.getByRole("button", { name: "Send the message" }));
+    expect(
+      await one.findByText(
+        "You, to the assistant. The assistant has not read it yet.",
+      ),
+    ).toBeInTheDocument();
+    expect(fake.agent.sent).toEqual([
+      { route: "messages", body: { text: "Use the cover letter as it is." } },
+    ]);
+  });
+
+  it("says on the card that the run stopped because a page showed the code again", async () => {
+    fakeQueue([
+      queueItem(1, "submit_unknown", {
+        title: "Robot Arm Engineer",
+        mode: "direct",
+        error_code: "code_shown",
+      }),
+    ]);
+    renderApp("/applications");
+    const one = await card(/Robot Arm Engineer/);
+    expect(
+      await one.findByText(
+        "The code you gave showed again, so the assistant stopped, and the site may already have the application. Look for a confirmation mail or on the site.",
+      ),
+    ).toBeInTheDocument();
   });
 });

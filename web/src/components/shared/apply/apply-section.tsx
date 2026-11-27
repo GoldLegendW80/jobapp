@@ -9,6 +9,7 @@ import type { JobDetail } from "@/features/jobs/api/jobs-api";
 import { useApplication } from "@/features/apply/api/use-application";
 import { useApplicationActions } from "@/features/apply/api/use-application-actions";
 import {
+  assistantWorks,
   isAsk,
   SAID_NOTHING_SENT,
   saidNothingSent,
@@ -56,6 +57,8 @@ export function ApplySection({ job }: { job: JobDetail }) {
   const act = useApplicationActions(job.id, id);
   // A25: the apply agent waits for the person, or stopped waiting: its ask, the chat, the browser.
   const asking = application !== null && !manual && showsAsk(application);
+  // A25: while the apply agent works on it, a box to write to it, with the chat.
+  const works = assistantWorks(application, detail.data?.review_agent === true);
   const ask = isAsk(detail.data?.question) ? detail.data?.question : null;
   const notSentFirst = saidNothingSent(application, detail.data?.events);
 
@@ -89,7 +92,9 @@ export function ApplySection({ job }: { job: JobDetail }) {
                   reviewAgent={detail.data?.review_agent === true}
                 />
 
-                {asking ? <AgentWait application={application} /> : null}
+                {application && (asking || works) ? (
+                  <AgentWait application={application} works={works} />
+                ) : null}
                 {application?.ats === "email" && id ? (
                   <EmailApplication applicationId={id} />
                 ) : null}

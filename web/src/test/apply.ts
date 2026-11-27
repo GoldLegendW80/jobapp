@@ -2,6 +2,7 @@ import { http, HttpResponse } from "msw";
 
 import type { Answer, Application } from "@/features/apply/api/apply-api";
 
+import { agentWaitRoutes, agentWaitState } from "./agent-wait";
 import { defaultApplySettings, server } from "./server";
 
 export const APP_ID = "00000000-0000-4000-9000-0000000000a1";
@@ -102,6 +103,8 @@ export function fakeApply(initial: {
     ] as { at: string; kind: string; data: Record<string, unknown> }[],
     /** What the detail adds: a Full auto hold's end, the server's time, the assistant's ask (A25). */
     detail: {} as Record<string, unknown>,
+    /** A25: what the question and messages routes received, and their switches. */
+    agent: agentWaitState(),
     started: 0,
     startRefusal: null as { detail: string; code: string } | null,
     puts: [] as { field: string; body: unknown }[],
@@ -130,6 +133,13 @@ export function fakeApply(initial: {
     }),
   };
   server.use(
+    ...agentWaitRoutes(
+      (id) =>
+        state.application?.id === id
+          ? { application: state.application, detail: state.detail }
+          : null,
+      state.agent,
+    ),
     http.get("*/api/applications", () =>
       HttpResponse.json({
         items: state.application ? [state.application] : [],

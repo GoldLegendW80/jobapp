@@ -59,7 +59,8 @@ const questionSchema = z.object({
 });
 export type Question = z.infer<typeof questionSchema>;
 
-// A25: the asks of the application's runs and the person's answers, in order, with who said each.
+// A25: the asks of the application's runs, the person's answers and messages, in order, with who
+// said each. A code given is a fixed line of the api, never the code.
 const chatLineSchema = z.object({
   at: z.string().nullable(),
   who: z.string(),
@@ -67,6 +68,8 @@ const chatLineSchema = z.object({
   text: z.string(),
   // How an ask ended: answer, browser, person_late, run_ended, interrupted or cancelled.
   end: z.string().nullable().optional(),
+  // A person's message: whether the run has read it (with the answer of a tool call).
+  read: z.boolean().nullable().optional(),
 });
 export type ChatLine = z.infer<typeof chatLineSchema>;
 
@@ -372,6 +375,53 @@ export const answerQuestion = (
     body: { answer, remember },
     timeoutMs: TIMEOUT_MS,
     validate: (body) => applicationSchema.parse(body),
+  });
+
+/**
+ * A code handed over once (A25): `take` gives it, then nothing. A mutation keeps its variables
+ * after the send, so it keeps this holder, emptied, never the code.
+ */
+export class OnceCode {
+  #code: string | null;
+  constructor(code: string) {
+    this.#code = code;
+  }
+  take(): string {
+    const code = this.#code ?? "";
+    this.#code = null;
+    return code;
+  }
+}
+
+/**
+ * A25: the code an ask of kind code waits for, alone (`{code}`, no answer, no remember); the api
+ * hands it to the browser, which types it on the site, and never stores or repeats it. Its
+ * refusals are sentences for the person (422 its form, 409 the wait).
+ */
+export const giveCode = (
+  applicationId: string,
+  code: OnceCode,
+): Promise<Application> =>
+  request(`/applications/${id(applicationId)}/question`, {
+    method: "POST",
+    body: { code: code.take() },
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => applicationSchema.parse(body),
+  });
+
+/**
+ * A25: the person's message to the apply agent while it works on the application (201 with its
+ * line of the chat); 409 when no run works on it, 429 past the rate, 422 for its text.
+ */
+export const sendMessage = (
+  applicationId: string,
+  text: string,
+): Promise<ChatLine> =>
+  request(`/applications/${id(applicationId)}/messages`, {
+    method: "POST",
+    body: { text },
+    timeoutMs: TIMEOUT_MS,
+    validate: (body) => chatLineSchema.parse(body),
   });
 
 /** The image is fetched by the browser with the session cookie. */
