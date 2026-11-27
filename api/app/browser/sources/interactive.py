@@ -179,6 +179,10 @@ class GuardedTools:
         await self._before(name)
         return await self.tools.call(name, args)
 
+    async def permit(self) -> None:
+        """Jobs J31: the permission check alone, for a report of a stopped search (no call)."""
+        await _permit(self.policy, self.context)
+
     async def snapshot(self) -> dict[str, Any]:
         await self._before("browser_snapshot")
         shot = await self.tools.snapshot()

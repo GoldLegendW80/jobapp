@@ -43,7 +43,7 @@ import unicodedata
 import uuid
 from bisect import bisect_right
 from collections import Counter
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
@@ -217,9 +217,10 @@ STORES_AFTER_STOP = frozenset(
      "page_budget", "guard_failed", "browser_unavailable", "layout_changed"}
 )  # fmt: skip
 # The refusals of report_postings a card of a list the session read may stand in for (J31): the
-# app could not open the address, or opened a page that does not show the posting. Never
-# `app_opens_max`: that page opens at the next call.
-CARD_FALLBACK = frozenset({"not_seen", "detail_not_opened", "not_on_opened_page"})
+# app could not open the address, or opened a page that does not show the posting, or a page
+# that answered a walled status (`_card` refuses any other `page_error`). Never `app_opens_max`:
+# that page opens at the next call.
+CARD_FALLBACK = frozenset({"not_seen", "detail_not_opened", "not_on_opened_page", "page_error"})
 # The error statuses of a posting's own page that say it is walled, not gone (J31): a card may
 # stand in for it. Any other error status (404, 410, 500) refuses its card `page_error`.
 WALL_STATUSES = frozenset({401, 403, 429, 503})
@@ -801,7 +802,8 @@ class VerifiedFinding:
 @dataclass(frozen=True)
 class Card:
     """A link of a list the session read (J31): the list's address, how it was read (CARD_KINDS),
-    the card's text as shown and its words folded (`_words`, one space at each end)."""
+    the card's text as shown, one line per piece (`_card_text`), and its words folded (`_words`,
+    one space at each end)."""
 
     list_url: str
     kind: str
@@ -809,9 +811,60 @@ class Card:
     words: str
 
 
+def _card_text(pieces: Iterable[str]) -> str:
+    """A card's text, one line per piece (a heading, a label, a script's string), each piece's
+    spacing folded: whole pieces only, CARD_TEXT_MAX characters at most, a first piece longer
+    than that cut (no title then: `_held`)."""
+    lines: list[str] = []
+    size = -1
+    for piece in pieces:
+        line = " ".join(piece.split())
+        if not line:
+            continue
+        if size + 1 + len(line) > CARD_TEXT_MAX:
+            if not lines:
+                lines.append(line[:CARD_TEXT_MAX])
+            break
+        lines.append(line)
+        size += 1 + len(line)
+    return "\n".join(lines)
+
+
+def _held(card: Card, keys: Iterable[str]) -> str:
+    """The card's own words that hold a reported title (J31, as B21's `title_on` for a page): the
+    smallest run of its lines (a heading, a link's labels, a script item's strings) whose words
+    hold one of `keys` (folded) as a sequence of whole words, as the card shows it; "" when none
+    fits in TITLE_MAX characters. Never shorter than the card says, so the person's unwanted
+    titles and never apply rules read the card's words, never the model's choice of them."""
+    lines = card.text.split("\n")
+    starts: list[int] = []
+    parts: list[str] = []
+    at = 1
+    for line in lines:
+        starts.append(at)
+        folded = _words(line)
+        if folded:
+            parts.append(folded)
+            at += len(folded) + 1
+    words = f" {' '.join(parts)} "
+    best = ""
+    for key in keys:
+        at = words.find(f" {key} ")
+        for _ in range(SPANS_MAX):
+            if at < 0:
+                break
+            first = bisect_right(starts, at + 1) - 1
+            last = bisect_right(starts, at + len(key)) - 1
+            shown = " ".join(lines[first : last + 1])
+            if len(shown) <= TITLE_MAX and (not best or len(shown) < len(best)):
+                best = shown
+            at = words.find(f" {key} ", at + 1)
+    return best
+
+
 def _own_text(node: Any) -> str:
-    """A link's own text: its label and its visible descendants', the first CARD_NODES_MAX
-    nodes, CARD_TEXT_MAX characters at most."""
+    """A link's own text: its label and its visible descendants', one line each (`_card_text`),
+    the first CARD_NODES_MAX nodes, CARD_TEXT_MAX characters at most."""
     parts: list[str] = []
     size, stack, nodes = 0, [node], 0
     while stack and size <= CARD_TEXT_MAX and nodes < CARD_NODES_MAX:
@@ -824,7 +877,7 @@ def _own_text(node: Any) -> str:
             parts.append(label)
             size += len(label) + 1
         stack.extend(reversed(one.children))
-    return " ".join(" ".join(parts).split())[:CARD_TEXT_MAX]
+    return _card_text(parts)
 
 
 def _page_cards(url: str, root: Any) -> list[tuple[str, str]]:
@@ -841,8 +894,8 @@ def _page_cards(url: str, root: Any) -> list[tuple[str, str]]:
             heading = " ".join(node.label().split())[:CARD_TEXT_MAX]
         if node.url and (link := canonical(urljoin(url, node.url))):
             own = _own_text(node)
-            text = own if heading in ("", own) else f"{heading} {own}"
-            cards.append((link, text[:CARD_TEXT_MAX]))
+            text = own if heading in ("", own) else _card_text([heading, *own.split("\n")])
+            cards.append((link, text))
         stack.extend((child, heading) for child in reversed(node.children))
     return cards
 
@@ -920,11 +973,11 @@ def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str]]:
             found.append((list(links), [SCRIPT_LINK.sub(" ", line)]))
     cards: list[tuple[str, str]] = []
     for links, strings in found:
-        words = " ".join(" ".join(s for s in strings if s not in code).split())
+        words = _card_text(s for s in strings if s not in code)
         for given in links if words else ():
             link = canonical(urljoin(url, given))
             if link and not _written(given, link, code):
-                cards.append((link, words[:CARD_TEXT_MAX]))
+                cards.append((link, words))
     return cards
 
 
@@ -1812,6 +1865,39 @@ class FinderSession:
         while len(self.error_pages) > OPENED_MAX:
             del self.error_pages[next(iter(self.error_pages))]
 
+    def _statuses(self, addresses: set[str], status: object) -> None:
+        """The HTTP status of a page read (J31), under the address asked for and the one it
+        landed on (a redirect to a 404 page is that posting's error): an error status (4xx,
+        5xx) recorded, a success clearing an earlier one."""
+        for address in addresses - {""}:
+            self.error_pages.pop(address, None)
+            if isinstance(status, int) and status >= 400:
+                self._error_page(address, status)
+
+    def _stop_with(self, code: str) -> None:
+        """Note a stop: the first one, unless a later one keeps nothing more (a permission taken
+        back, the store failed) while the first still stored: the stronger wins (J31)."""
+        if not self.stopped or (
+            self.stopped in STORES_AFTER_STOP and code not in STORES_AFTER_STOP
+        ):
+            self.stopped = code
+
+    async def _permitted(self) -> None:
+        """J31: a stopped session makes no browser call, so the permission a report needs is
+        checked here (GuardedTools.permit) before the store: one taken back keeps nothing more.
+        A check that fails otherwise counts as taken back (fail closed)."""
+        from app.browser.sources import SourceError
+
+        permit = getattr(self.pages.tools, "permit", None)
+        if permit is None:
+            return
+        try:
+            await permit()
+        except SourceError as exc:
+            self._stop_with(exc.code)
+        except Exception:
+            self._stop_with("permission_unavailable")
+
     def _note_cards(self, source: str, kind: str, cards: list[tuple[str, str]]) -> None:
         """Keep the cards a page, a fetch or a script result showed (J31), each address's
         newest CARD_SOURCES_MAX, CARDS_MAX addresses (the oldest dropped); a link to the source
@@ -1947,10 +2033,7 @@ class FinderSession:
         self.current = opened
         self.interactions["browser_navigate"] += 1
         self._note_address(url)
-        status = result.get("status")
-        self.error_pages.pop(opened, None)
-        if isinstance(status, int) and status >= 400:
-            self._error_page(opened, status)  # `_read` keeps no record of it
+        self._statuses({url, opened}, result.get("status"))  # `_read` keeps no error page
         await self._read_off_loop(opened, self.pages.last_text)
         self._route(opened, typed_address=True)
         pages = self.pages
@@ -2142,6 +2225,7 @@ class FinderSession:
             return json.dumps({"error": code[:100], "message": FETCH_FAILED}), True
         self.interactions["web_fetch"] += 1
         status = result.get("status")
+        self._statuses({url, landed}, status)  # J31: a card never stands in for a gone page
         if not (isinstance(status, int) and status >= 400):
             await self._read_off_loop(landed, text, "fetch")  # opened, for report_postings
         title = result.get("title") if isinstance(result.get("title"), str) else ""
@@ -2735,6 +2819,8 @@ class FinderSession:
     async def _report_verified(self, items: Any, listing: bool = False) -> tuple[str, bool]:
         # J31: a stop after which the store still works keeps what the session read before it;
         # no browser act follows (the app opens nothing), and a card stands in for a page.
+        if self.stopped in STORES_AFTER_STOP:
+            await self._permitted()
         if self.stopped and self.stopped not in STORES_AFTER_STOP:
             return self._stop(self.stopped)
         if not isinstance(items, list) or len(items) > POSTINGS_MAX:
@@ -2864,36 +2950,35 @@ class FinderSession:
             result = await tools.call("browser_navigate", {"url": url, **scope})
             return result
 
-        opened = ""
+        opened = read = ""
         try:
             await self.pages.sleep(self.pages.rng.uniform(*APP_OPEN_PAUSE_S))
             await self.pages._act(go)
             landed = canonical(self.pages.last_url)
             status = result.get("status")
+            self._statuses({url, landed}, status)
             if landed and not (isinstance(status, int) and status >= 400):
                 await self._read_off_loop(landed, self.pages.last_text)
-                opened = landed
-            elif isinstance(status, int) and status >= 400:
-                for address in {url, landed} - {""}:
-                    self._error_page(address, status)
+                opened = read = landed
         except SourceError as exc:
             # As `navigate`: a page that did not load, or an address browserd refused, leaves
             # the posting to the agent; browserd's guard_failed and every other code stop.
             if exc.code == "page_failed" and result.get("error") == GUARD_FAILED:
                 self.stopped = self.stopped or GUARD_FAILED
             elif exc.code != "page_failed":
-                self.stopped = self.stopped or exc.code
+                self._stop_with(exc.code)
         finally:
             if not await self._restore_tab(made_tab):
                 opened = ""
-        if opened:
-            self.opened_by_app += 1  # a page the app opened and read, its tab given back
+        if read:
+            self.opened_by_app += 1  # a page the app opened and read, its tab given back or not
         return opened
 
     async def _restore_tab(self, made: int | None) -> bool:
         """Close the tab `_open_for_report` made (`made`, never the agent's) and select the
         agent's again. A failure stops the website with `guard_failed` (unless a stop came
-        first): the agent's next action would land elsewhere."""
+        first): the agent's next action would land elsewhere. A permission taken back on the
+        way (GuardedTools) stops it with its own code, so nothing more is kept (J31)."""
         from app.browser.sources import SourceError
 
         if self.interactive is None:
@@ -2912,7 +2997,10 @@ class FinderSession:
             for answer in (closed, back):  # B29: a tab opened again on the way, counted
                 self._closed(answer, agent=False)
             restored = closed.get("ok") is True and back.get("ok") is True
-        except (BrowserError, SourceError):
+        except BrowserError:
+            restored = False
+        except SourceError as exc:
+            self._stop_with(exc.code)
             restored = False
         if not restored:
             self.stopped = self.stopped or GUARD_FAILED
@@ -3005,7 +3093,8 @@ class FinderSession:
         """A posting kept from a card of a list (J31), its own page not read: its address is a
         link the session saw on a page it read or fetched, or an item of a script's result, and
         the reported title's words are in that card's text (case, accents, spacing and
-        punctuation aside, a gender marker at its end aside); its company, place and date when
+        punctuation aside, a gender marker at its end aside), stored as the card's own words that
+        hold them, never shorter (`_held`); its company, place and date when
         their words are in the card too. Refused `card_not_seen` otherwise: an address another
         run, another card or the model wrote is no evidence. The start page and a list are no
         posting; a page read that shows the title is reported with report_postings."""
@@ -3032,13 +3121,16 @@ class FinderSession:
         if page is not None and title_on(page, title) is not None:
             return None, "page_readable"
         keys = {_words(title), _words(_bare(title))} - {""}
-        card = next(
+        # The title stored is the card's own words that hold the reported ones (`_held`).
+        card, shown = next(
             (
-                c
+                (c, held)
                 for c in reversed(self.cards.get(url, ()))
                 if any(f" {key} " in c.words for key in keys)
+                and (held := _held(c, keys))
+                and not CONTROLS.search(held)
             ),
-            None,
+            (None, ""),
         )
         if card is None:
             return None, "card_not_seen"
@@ -3054,9 +3146,9 @@ class FinderSession:
                     held = False
             words = _words(value) if held else ""
             values[key] = value if words and f" {words} " in card.words else None
-        evidence = {"title": title, "rule": "card", "card": card.kind, "list": card.list_url}
+        evidence = {"title": shown, "rule": "card", "card": card.kind, "list": card.list_url}
         return VerifiedFinding(
-            title,
+            shown,
             values["location"] or "",
             url,
             card.text,

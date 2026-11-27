@@ -183,7 +183,7 @@ SCRIPT_URL = BASE + "search?q=robot"
         (
             [{"title": "Robot Welder", "company": "Invented Robotics", "link": "/jobs/7002"}],
             "() => [...document.querySelectorAll('a')].map(a => ({title: a.textContent}))",
-            [(JOB + "7002", "Robot Welder Invented Robotics")],
+            [(JOB + "7002", "Robot Welder\nInvented Robotics")],  # a line per string
         ),
         (  # an address the script's own code writes is the model's word, never a card
             [{"title": "Robot Welder", "link": "/jobs/9999"}],
@@ -437,3 +437,267 @@ def test_the_production_run_kept_its_cards_after_the_memory_stop() -> None:
     assert seen["after"] == []  # nothing opened, by the app or anyone, after the stop
     assert [f.list_url for f in seen["kept"]] == [lists[n // 22] for n in range(65)]
     assert all(f.evidence["rule"] == "card" for f in seen["kept"])
+
+
+TITLES_PAGE = "\n".join(
+    [
+        '- heading "Data jobs" [level=1]',
+        "- list:",
+        "  - listitem:",
+        '    - link "Senior Data Engineer (Stage)" [ref=e1]:',
+        f"      - /url: {JOB}301",
+        "  - listitem:",
+        '    - link "Senior Data Engineer (Stage) Example Robotics Paris" [ref=e2]:',
+        f"      - /url: {JOB}302",
+        '      - heading "Senior Data Engineer (Stage)" [level=3]',
+        "      - text: Example Robotics Paris",
+        "  - listitem:",
+        '    - heading "Stage: Data Engineer" [level=3]:',
+        '      - link "Voir l\'offre" [ref=e3]:',
+        f"        - /url: {JOB}303",
+        "  - listitem:",
+        f'    - link "Data Engineer {"and more words " * 22}" [ref=e4]:',
+        f"      - /url: {JOB}304",
+        "  - listitem:",
+        '    - link "Data Scientist H/F" [ref=e5]:',
+        f"      - /url: {JOB}305",
+    ]
+)
+
+
+@pytest.mark.parametrize(
+    ("url", "reported", "stored"),
+    [
+        (JOB + "301", "Data Engineer", "Senior Data Engineer (Stage)"),
+        (JOB + "301", "data engineer stage", "Senior Data Engineer (Stage)"),
+        (JOB + "301", "Senior Data Engineer", "Senior Data Engineer (Stage)"),
+        (JOB + "301", "Senior Data Engineer (Stage)", "Senior Data Engineer (Stage)"),
+        (JOB + "301", "Engineer", "Senior Data Engineer (Stage)"),
+        (JOB + "302", "Data Engineer", "Senior Data Engineer (Stage)"),  # its own heading
+        (JOB + "302", "Robotics Paris", "Example Robotics Paris"),  # a label of the card
+        (JOB + "303", "Data Engineer", "Stage: Data Engineer"),  # the heading that holds it
+        (JOB + "303", "Data Engineer Voir l'offre", "Stage: Data Engineer Voir l'offre"),
+        (JOB + "304", "Data Engineer", None),  # its one line is longer than a title
+        (JOB + "305", "Data Scientist", "Data Scientist H/F"),
+        (JOB + "305", "data scientist (h/f)", "Data Scientist H/F"),
+    ],
+)
+def test_a_card_is_stored_with_its_own_words_never_shorter(url, reported, stored) -> None:
+    """Review of J31a: the title stored is the card's own words that hold the reported ones, as
+    B21 stores a page's heading, so the model's shortening never dodges the person's rules."""
+    one, batches = listed((LIST, TITLES_PAGE))
+    answer = cards(one, {"title": reported, "url": url})
+    if stored is None:
+        assert answer["refused"][0]["reason"] == "card_not_seen"
+        return
+    [finding] = batches[0].findings
+    assert (finding.title, finding.evidence["title"]) == (stored, stored)
+
+
+@pytest.mark.parametrize(
+    ("item", "reported", "stored"),
+    [
+        (
+            {"title": "Senior Data Engineer (Stage)", "company": "Example Robotics"},
+            "Data Engineer",
+            "Senior Data Engineer (Stage)",
+        ),
+        (
+            {"level": "Senior", "title": "Data Engineer"},
+            "Senior Data Engineer",
+            "Senior Data Engineer",
+        ),
+        ({"title": "Data Engineer", "tag": "Stage"}, "Data Engineer Stage", "Data Engineer Stage"),
+        ({"title": "Stage Data Engineer"}, "data engineer", "Stage Data Engineer"),
+    ],
+)
+def test_a_script_card_is_stored_with_the_string_that_holds_the_title(item, reported, stored):
+    one, batches = listed()
+    raw = json.dumps([{**item, "link": "/jobs/7002"}])
+    asyncio.run(one._keep_script(SCRIPT_URL, raw, False, "() => readCards()"))
+    assert cards(one, {"title": reported, "url": JOB + "7002"})["kept"] == 1
+    assert batches[0].findings[0].title == stored
+
+
+def test_a_shortened_card_title_still_meets_the_persons_exclusions_and_rules() -> None:
+    """The card "Senior Data Engineer (Stage)" reported "Data Engineer", by report_listing and by
+    report_postings falling back on the card: the card's words are stored, so the unwanted title
+    "stage" leaves it out, and a never apply rule on "senior" skips it in the store."""
+    from app.browser.sources import interactive
+    from app.jobs import never_apply
+    from tests.browser.test_b21_vie import Commits, saved
+
+    one, batches = listed((LIST, TITLES_PAGE))
+    cards(one, {"title": "Data Engineer", "url": JOB + "301"})
+
+    async def failed(url: str) -> str:
+        return ""  # the app could not open it: its card stands in
+
+    fallback, stored = listed((LIST, TITLES_PAGE))
+    fallback._open_for_report = failed
+    item = {"title": "Data Engineer", "url": JOB + "302", "text": "x"}
+    assert json.loads(asyncio.run(fallback.report_verified([item]))[0])["kept"] == 1
+    rule = never_apply.NeverApplyRule.parse("No senior roles: senior")
+    for finding in (batches[0].findings[0], stored[0].findings[0]):
+        assert finding.title == "Senior Data Engineer (Stage)"
+        planned = interactive.searches_for(saved(BASE, title_exclude={"terms": ["stage"]}), BASE)
+        site = interactive._Site(planned, commits=Commits(), source_id="s", host="example")
+        asyncio.run(site.verified(finder.VerifiedBatch((finding,))))
+        assert (site.commits.stored, site.unwanted) == ([], {finding.url})
+        assert never_apply.matching_rule([rule], finding.company or "", finding.title) is rule
+
+
+def fetching(one: finder.FinderSession, answer: dict) -> None:
+    """browserd's web_fetch answers `answer`, whatever the address."""
+
+    async def call(name, args):
+        return answer
+
+    one.pages.tools.call = call
+
+
+@pytest.mark.parametrize("status", [404, 410, 500, 403, 503])
+@pytest.mark.parametrize("landed", [JOB + "101", BASE + "not-found"])
+def test_a_posting_that_answered_an_error_to_a_fetch_is_no_card(status, landed) -> None:
+    """Review of J31a: web_fetch records the error status under the address asked for and the one
+    it landed on, so a gone posting is refused `page_error`; a walled one stands on its card."""
+    one, _ = listed((LIST, LIST_PAGE))
+    fetching(one, {"ok": True, "url": landed, "snapshot": '- heading "Gone"', "status": status})
+    asyncio.run(one.web_fetch(JOB + "101"))
+    answer = cards(one, {"title": "Data Scientist", "url": JOB + "101"})
+    walled = status in finder.WALL_STATUSES
+    assert answer["kept"] == int(walled)
+    assert walled or answer["refused"][0]["reason"] == "page_error"
+    # A later success clears it.
+    fetching(one, {"ok": True, "url": JOB + "101", "snapshot": CHECK_PAGE, "status": 200})
+    asyncio.run(one.web_fetch(JOB + "101"))
+    assert finder.canonical(JOB + "101") not in one.error_pages
+
+
+@pytest.mark.parametrize("status", [404, 410, 500, 403, 503])
+def test_a_posting_redirected_to_an_error_page_is_no_card(status) -> None:
+    """The agent's own navigate to the posting landed on another address with an error status:
+    both addresses are that posting's error, by report_listing and by report_postings."""
+    from tests.browser.test_b20_agent import START, run, selected, text_of, tool
+    from tests.browser.test_b27_code_first import BOARD, CARDS, SEEN_1, board, opening, scripted
+
+    gone = START + "errors/not-found"
+    site = board(evaluated=scripted(CARDS))
+    site.pages[gone] = '- heading "Page not found" [level=1]'
+    seen: dict = {}
+
+    def answer(name, args):
+        if name == "browser_navigate" and args["url"] == SEEN_1:
+            site.current = gone
+            return {"ok": True, "url": gone, "status": status}
+        return None
+
+    async def script(session: finder.FinderSession):
+        stored: list = []
+
+        async def keep(batch):
+            stored.extend(batch.findings)
+
+        session.on_verified = keep
+        await tool(session, "browser_navigate", url=BOARD)
+        await tool(session, "browser_evaluate", function="() => 1")
+        opening(site, answer)
+        await tool(session, "browser_navigate", url=SEEN_1)
+        item = {"title": "Robot Arm Engineer", "url": SEEN_1}
+        seen["listing"] = json.loads(text_of(await tool(session, "report_listing", cards=[item])))
+        seen["stored"] = list(stored)
+        return finder.Ran()
+
+    run(selected(), site, script)
+    walled = status in finder.WALL_STATUSES
+    assert seen["listing"]["kept"] == int(walled)
+    assert walled or seen["listing"]["refused"][0]["reason"] == "page_error"
+    assert [f.list_url for f in seen["stored"]] == ([BOARD] if walled else [])
+
+
+@pytest.mark.parametrize("status", [404, 403])
+def test_report_postings_of_a_redirected_error_page_falls_back_on_a_walled_card_only(status):
+    one, _ = listed((LIST, LIST_PAGE))
+    one.error_pages[finder.canonical(JOB + "101")] = status
+
+    async def never(url: str) -> str:
+        raise AssertionError("an error page is never opened again")
+
+    one._open_for_report = never
+    item = {"title": "Data Scientist", "url": JOB + "101", "text": "x"}
+    answer = json.loads(asyncio.run(one.report_verified([item]))[0])
+    assert answer["kept"] == int(status == 403)
+    assert status == 403 or answer["refused"][0]["reason"] == "page_error"
+
+
+@pytest.mark.parametrize("action", ["close", "select"])
+@pytest.mark.parametrize("code", ["permission_revoked", "permission_unavailable"])
+def test_a_permission_taken_back_while_the_app_gives_its_tab_back_keeps_nothing(action, code):
+    """Review of J31a: the permission goes between the app's open and the give back of its tab:
+    the website stops with the permission's own code, never `guard_failed`, so neither the page
+    the app read nor any card is kept."""
+    from app.browser.sources import SourceError
+    from tests.browser.test_b27_code_first import CARDS, board, report_two, scripted
+
+    site = board(evaluated=scripted(CARDS))
+
+    def answer(name, args):
+        if name == "browser_tabs" and args["action"] == action:
+            return SourceError(code)
+        return None
+
+    entry, seen, urls = report_two(site, answer)
+    assert seen["stopped"] == code
+    assert seen["answer"] == f"Stopped: {code}. Nothing more is kept: stop now."
+    assert urls == []
+    assert seen["opened_by_app"] == 1  # the app read the first page before the permission went
+    assert entry["error"] == code
+
+
+class Permits:
+    """GuardedTools' permission check alone, answering `code` (None: still given)."""
+
+    def __init__(self, tools, code: str | None) -> None:
+        self.tools, self.code, self.checked = tools, code, 0
+
+    async def call(self, name, args):
+        raise AssertionError("a stopped session makes no browser call")
+
+    async def permit(self) -> None:
+        from app.browser.sources import SourceError
+
+        self.checked += 1
+        if self.code is not None:
+            raise SourceError(self.code)
+
+
+@pytest.mark.parametrize("code", [None, "permission_revoked", "permission_checkpoint"])
+def test_a_permission_taken_back_after_a_memory_stop_keeps_nothing(code) -> None:
+    """Review of J31a: a session stopped for memory makes no browser call, so its report checks
+    the permission first; taken back, nothing is kept and the answer says so."""
+    one, batches = listed((LIST, LIST_PAGE))
+    one.stopped = "browser_memory"
+    one.pages.tools = permits = Permits(one.pages.tools, code)
+    item = {"title": "Data Scientist", "url": JOB + "101"}
+    answer, error = asyncio.run(one.report_listing([item]))
+    assert error
+    assert permits.checked == 1
+    if code is None:
+        assert json.loads(answer)["kept"] == 1
+        return
+    assert answer == f"Stopped: {code}. Nothing more is kept: stop now."
+    assert (batches, one.stopped) == ([], code)
+
+
+def test_guarded_tools_check_the_permission_alone() -> None:
+    from app.browser.sources import SourceError, interactive
+
+    class Policy:
+        async def check(self, context):
+            return "permission_revoked"
+
+    context = interactive.SourceContext("e2e-person", "sweep", "s", "custom", BASE)
+    guarded = interactive.GuardedTools(object(), Policy(), context)
+    with pytest.raises(SourceError) as raised:
+        asyncio.run(guarded.permit())
+    assert raised.value.code == "permission_revoked"

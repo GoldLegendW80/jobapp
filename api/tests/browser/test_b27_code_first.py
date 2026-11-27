@@ -324,7 +324,7 @@ def test_a_tab_the_app_cannot_give_back_stops_the_website(failure, evaluated):
     assert seen["stopped"] == finder.GUARD_FAILED
     # The app read the first page before its tab could not be given back: that page stands.
     stopped_keeps(seen, urls, evaluated, finder.GUARD_FAILED, read=True)
-    assert seen["opened_by_app"] == 0
+    assert seen["opened_by_app"] == 1  # the page the app read is counted, its tab lost or not
     assert [t["action"] for t in tabs_of(site)].count("new") == 1
     assert entry["error"] == finder.GUARD_FAILED
 
