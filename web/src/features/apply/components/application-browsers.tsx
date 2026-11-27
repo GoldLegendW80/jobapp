@@ -4,6 +4,7 @@ import { LiveViewSlot } from "@/components/shared/apply/live-view-slot";
 import { LiveViews } from "@/components/shared/browser/live-views";
 
 import type { QueueItem } from "../api/queue-api";
+import { agentWaits } from "../helpers/agent-wait";
 import { liveStatus, liveWait, liveWatchOnly } from "../helpers/live-view";
 
 const IN_THE_BROWSER = new Set(["filling", "approved", "submitting"]);
@@ -47,6 +48,7 @@ export function ApplicationBrowsers({ items }: { items: QueueItem[] }) {
           status={(purpose) => liveStatus(purpose, item)}
           watchOnly={(purpose) => liveWatchOnly(purpose, item)}
           namedOnly={item.state !== "filling"}
+          assistantWaits={agentWaits(item)}
         />
       ))}
     </LiveViews>

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 
-import { describeError, isApiError } from "@/lib/api";
+import { describeError } from "@/lib/api";
 
 import {
   answerQuestion,
@@ -11,7 +11,7 @@ import {
   type Application,
 } from "./apply-api";
 import { queueKey } from "./queue-api";
-import { agentWaits, LATE_ANSWER, showsAsk } from "../helpers/agent-wait";
+import { agentWaits, showsAsk } from "../helpers/agent-wait";
 import { serverOffset } from "../helpers/full-auto-state";
 
 /** While the run waits, its ask is read again this often (the run looks for an answer every 2 s,
@@ -23,7 +23,8 @@ export const WAIT_POLL_MS = 3000;
  * section shares), read again while the run waits. Once the run moved on (an answer read, the
  * browser given back, the time up, the run's end) the posting's application and the queue are
  * read again, so the card follows it without a reload. `answer` sends the person's words to the
- * waiting run; `answerError` says why one was not taken (409 once the wait had ended).
+ * waiting run; `answerError` says why one was not taken, in the api's words: its 409 is the same
+ * for a wait that ended and for an answer already in.
  */
 export function useAgentWait(application: Application) {
   const client = useQueryClient();
@@ -55,12 +56,7 @@ export function useAgentWait(application: Application) {
   return {
     detail,
     answer,
-    answerError:
-      error === null
-        ? null
-        : isApiError(error) && error.status === 409
-          ? LATE_ANSWER
-          : describeError(error),
+    answerError: error === null ? null : describeError(error),
     offset: serverOffset(read?.now, detail.dataUpdatedAt),
   };
 }

@@ -12,7 +12,7 @@ import { fakeQueue, queueItem } from "@/test/apply-queue";
 import { fakeSession, member } from "@/test/auth";
 import { renderApp } from "@/test/render";
 
-import { CODE_IN_BROWSER } from "../helpers/agent-wait";
+import { ASK_NOT_SHOWN, CODE_IN_BROWSER } from "../helpers/agent-wait";
 import { DECISIONS } from "../helpers/decisions";
 
 beforeEach(() => {
@@ -67,6 +67,23 @@ describe("the apply agent's wait on the Applications page (A25)", () => {
       .closest("section") as HTMLElement;
     expect(
       within(waiting).getByRole("article", { name: /Drone Pilot/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("says so on the card when the run waits and the detail carries no ask, with Cancel", async () => {
+    const asking = queueItem(1, "needs_person", {
+      title: "Robot Arm Engineer",
+      mode: "direct",
+      needs: "agent_waits",
+    });
+    const fake = fakeQueue([asking]);
+    fake.now = WAIT_NOW;
+    fake.details[asking.id] = { question: null, chat: [] };
+    renderApp("/applications");
+    const one = await card(/Robot Arm Engineer/);
+    expect(await one.findByText(ASK_NOT_SHOWN)).toBeInTheDocument();
+    expect(
+      one.getByRole("button", { name: "Cancel application" }),
     ).toBeInTheDocument();
   });
 
