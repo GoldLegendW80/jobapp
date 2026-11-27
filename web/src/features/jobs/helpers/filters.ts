@@ -7,8 +7,8 @@
  * URL parameters mirror the api's: status (repeated), type (repeated), q, company, fit_min,
  * fit_max, found_from, found_to, place, work_mode, source and application (repeated),
  * published_within, published_from, published_undated, pay, pay_min with pay_period, sweep,
- * criteria (within or outside; all, the default, is omitted), and sort (omitted when it is the
- * default).
+ * search (main or a saved search's id), criteria (within or outside; all, the default, is
+ * omitted), and sort (omitted when it is the default).
  */
 import { CRITERIA_CHOICES, type CriteriaChoice } from "./criteria-words";
 import {
@@ -66,6 +66,8 @@ export interface JobFilters {
   applications: ApplicationChoice[];
   /** The postings one search added. */
   sweep: string | null;
+  /** Jobs J33b: the postings one of the person's searches added, `main` or a saved search's id. */
+  search: string | null;
   /** Jobs J30: the postings within the criteria of their search, or outside them (a badge). */
   criteria: CriteriaChoice | null;
   sort: JobSort;
@@ -97,6 +99,7 @@ export const EMPTY_FILTERS: JobFilters = {
   payPeriod: null,
   applications: [],
   sweep: null,
+  search: null,
   criteria: null,
   sort: DEFAULT_SORT,
 };
@@ -179,6 +182,7 @@ function parseMore(params: URLSearchParams) {
   }
   const from = params.get("published_from");
   const sweep = params.get("sweep")?.trim() ?? "";
+  const search = params.get("search")?.trim() ?? "";
   const criteria = params.get("criteria") ?? "";
   return {
     places: texts(params.getAll("place"), cleanPlace),
@@ -204,6 +208,12 @@ function parseMore(params: URLSearchParams) {
       isIn(APPLICATION_CHOICES),
     ),
     sweep: SWEEP_ID.test(sweep) ? sweep.toLowerCase() : null,
+    search:
+      search === "main"
+        ? search
+        : SWEEP_ID.test(search)
+          ? search.toLowerCase()
+          : null,
     criteria: isIn(CRITERIA_CHOICES)(criteria) ? criteria : null,
   } satisfies Partial<JobFilters>;
 }
@@ -274,6 +284,7 @@ export function toSearchParams(
   for (const choice of filters.applications)
     params.append("application", choice);
   if (filters.sweep) params.set("sweep", filters.sweep);
+  if (filters.search) params.set("search", filters.search);
   if (filters.criteria) params.set("criteria", filters.criteria);
   if (withSort && filters.sort !== DEFAULT_SORT)
     params.set("sort", filters.sort);
@@ -287,8 +298,8 @@ export function hasFilters(filters: JobFilters): boolean {
 
 /** How many filters narrow the list, counted as the filter bar's chips are: one per status,
  * type, place, work mode, website and application, one for the search, the company, the fit
- * range, the found dates, the published dates, the pay, the search that added them and the
- * criteria each. */
+ * range, the found dates, the published dates, the pay, the run and the search that added them
+ * and the criteria each. */
 export function activeFilterCount(filters: JobFilters): number {
   return (
     filters.statuses.length +
@@ -304,6 +315,7 @@ export function activeFilterCount(filters: JobFilters): number {
     (hasPublishedBound(filters) ? 1 : 0) +
     (filters.pay !== null || filters.payMin !== null ? 1 : 0) +
     (filters.sweep ? 1 : 0) +
+    (filters.search ? 1 : 0) +
     (filters.criteria ? 1 : 0)
   );
 }

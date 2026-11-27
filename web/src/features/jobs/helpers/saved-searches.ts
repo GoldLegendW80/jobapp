@@ -65,6 +65,17 @@ export function searchOf(sweep: Pick<Sweep, "search">): string | null {
     : sweep.search.id;
 }
 
+/** A search's name for the Jobs list's filter: null once the person no longer has it, undefined
+ * while her searches are not read. */
+export function searchNameOf(
+  searches: readonly SavedSearch[] | undefined,
+): (id: string) => string | null | undefined {
+  return (id) =>
+    searches
+      ? (searches.find((one) => one.id === id)?.name ?? null)
+      : undefined;
+}
+
 /** The newest sweep of a search among the last ones listed. */
 export function lastRunOf(
   id: string,

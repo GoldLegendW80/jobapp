@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 
 import type { Facet } from "@/features/jobs/api/jobs-api";
+import type { SavedSearch } from "@/features/jobs/api/searches-api";
 import {
   CRITERIA_CHOICE_LABELS,
   CRITERIA_CHOICES,
@@ -170,6 +171,45 @@ export function WebsiteMenu({
         onChange({ ...filters, sources });
       }}
     />
+  );
+}
+
+/** Jobs J33b: the postings one of the person's searches added (`search` of the list); a search
+ * deleted since stays named as such, so it can be changed or cleared. */
+export function SearchFilter({
+  filters,
+  onChange,
+  searches,
+}: FilterProps & { searches: readonly SavedSearch[] }) {
+  const known =
+    filters.search === null ||
+    filters.search === "main" ||
+    searches.some((one) => one.id === filters.search);
+  return (
+    <FieldSet className="gap-2">
+      <FieldLegend variant="label">Search</FieldLegend>
+      <NativeSelect
+        aria-label="Search"
+        value={filters.search ?? ""}
+        onChange={(event) => {
+          const value = event.target.value;
+          onChange({ ...filters, search: value === "" ? null : value });
+        }}
+      >
+        <option value="">Every search</option>
+        <option value="main">Main search</option>
+        {searches
+          .filter((one) => !one.main)
+          .map((one) => (
+            <option key={one.id} value={one.id}>
+              {one.name}
+            </option>
+          ))}
+        {known ? null : (
+          <option value={filters.search ?? ""}>A deleted search</option>
+        )}
+      </NativeSelect>
+    </FieldSet>
   );
 }
 
