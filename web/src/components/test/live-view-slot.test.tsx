@@ -80,9 +80,10 @@ function slot(
   {
     state = "filling",
     mode = "direct",
-  }: { state?: string; mode?: string } = {},
+    needs = null,
+  }: { state?: string; mode?: string; needs?: string | null } = {},
 ) {
-  const run = fakeApplication(state, { id: MINE, mode });
+  const run = fakeApplication(state, { id: MINE, mode, needs });
   return renderWithQuery(
     <LiveViewSlot
       idle={IDLE}
@@ -386,6 +387,25 @@ describe("the fill of the apply agent", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(
       "The assistant needs your help on jobs.example.org.",
     );
+  });
+
+  it("says the browser taken over during a wait is the person's, and for how long at most (A25)", async () => {
+    const opened = fakeScreens();
+    browser(
+      lease({
+        purpose: "apply_agent",
+        state: "waiting_person",
+        wait_reason: "takeover",
+        wait_minutes_left: 9,
+      }),
+    );
+    slot(OF_MINE, { state: "needs_person", needs: "agent_waits" });
+    await connected(opened);
+    expect(
+      await screen.findByText(
+        "The browser is yours until you choose Let the assistant continue, for 9 more minutes at most: then the assistant has it back.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("gives the keyboard and the mouse for a captcha of a fill, whatever its state", async () => {
