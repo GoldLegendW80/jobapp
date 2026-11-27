@@ -55,6 +55,7 @@ const FEEDS_WITH_A_KEY = {
       key_last4: "9f2c",
       key_saved_at: "2026-10-20T18:30:00Z",
     },
+    { name: "freehire", needs_key: false, key_stored: false, key_last4: null },
   ],
   keys_available: true,
 };

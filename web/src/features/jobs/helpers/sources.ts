@@ -4,7 +4,7 @@
  *
  * - a job website the app knows (LinkedIn, Welcome to the Jungle, Indeed, Free-Work): searched by
  *   the assistant, with that website's own permission and risk sentence (jobs J17);
- * - a job feed (Arbeitnow, Himalayas, Adzuna): read through its official API (app/jobs/feeds);
+ * - a job feed (Arbeitnow, Himalayas, Adzuna, freehire): read through its API (app/jobs/feeds);
  * - a company job board on Ashby, Greenhouse, Lever, SmartRecruiters, Workable or Recruitee:
  *   read through its public API (app/jobs/boards, POST /api/jobs/boards/detect names it);
  * - any other address: a website of the person's own, browsed by the assistant;
@@ -69,6 +69,7 @@ export const FEED_URLS: Record<JobFeed, string> = {
   arbeitnow: "https://www.arbeitnow.com/",
   himalayas: "https://himalayas.app/",
   adzuna: "https://www.adzuna.fr/",
+  freehire: "https://freehire.me/",
 };
 
 /** What each feed covers, said once in its row. */
@@ -76,6 +77,7 @@ export const FEED_SCOPES: Record<JobFeed, string> = {
   arbeitnow: "Jobs in Europe",
   himalayas: "Remote jobs open to France",
   adzuna: "Jobs in France",
+  freehire: "Jobs gathered from company application systems worldwide",
 };
 
 export interface Example {
@@ -97,6 +99,7 @@ export const EXAMPLES: readonly Example[] = [
   { label: "Free-Work", url: PLATFORM_URLS.freework, platform: "freework" },
   { label: "Arbeitnow", url: FEED_URLS.arbeitnow },
   { label: "Himalayas", url: FEED_URLS.himalayas },
+  { label: "freehire", url: FEED_URLS.freehire },
   { label: "Doctolib on Ashby", url: "https://jobs.ashbyhq.com/doctolib" },
   {
     label: "Datadog on Greenhouse",
@@ -134,6 +137,7 @@ export function feedOf(url: string): JobFeed | null {
   if (!host) return null;
   if (under(host, "arbeitnow.com")) return "arbeitnow";
   if (under(host, "himalayas.app")) return "himalayas";
+  if (under(host, "freehire.me")) return "freehire";
   // Adzuna has a site per country (adzuna.fr, adzuna.co.uk...): any of them is the feed.
   if (host.split(".").includes("adzuna")) return "adzuna";
   return null;
@@ -141,12 +145,16 @@ export function feedOf(url: string): JobFeed | null {
 
 /**
  * The recommended places, added together by one button (click analysis A1): the known job
- * websites and the two job feeds of EXAMPLES, never a company board example. Each known job
+ * websites and the two job feeds Arbeitnow and Himalayas of EXAMPLES, never a company board
+ * example. freehire (jobs J34) stays off until the person adds it on its own. Each known job
  * website keeps its risk sentence in its line, and its permission is still given at Save (J17).
  */
-export const RECOMMENDED: readonly Example[] = EXAMPLES.filter(
-  (example) => example.platform !== undefined || feedOf(example.url) !== null,
-);
+export const RECOMMENDED: readonly Example[] = EXAMPLES.filter((example) => {
+  const feed = feedOf(example.url);
+  return (
+    example.platform !== undefined || (feed !== null && feed !== "freehire")
+  );
+});
 
 /** The recommended places the draft does not list yet (a known website under any address). */
 export function missingRecommended(draft: SourcesDraft): Example[] {

@@ -465,7 +465,7 @@ export function sourceName(source: {
  * ("remoteok" is "Remote OK", opportunities O8). */
 export function sourceLabel(current: string): string {
   const names = current.split(
-    /, (?=[a-z_]+:|(?:remoteok|weworkremotely|arbeitnow|himalayas|adzuna|web)(?:, |$))/,
+    /, (?=[a-z_]+:|(?:remoteok|weworkremotely|arbeitnow|himalayas|adzuna|freehire|web)(?:, |$))/,
   );
   return names.length > 1
     ? names.map(oneSource).join("; ")

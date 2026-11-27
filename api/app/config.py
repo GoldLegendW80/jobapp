@@ -120,6 +120,9 @@ class Settings(BaseSettings):
     # are read from the fixture pages under this address instead of the real hosts. Refused in
     # production.
     browser_sources_base_url: str | None = None
+    # Tests only: the base address of the fake freehire interface (app/jobs/feeds/freehire.py)
+    # instead of https://freehire.me. Refused in production.
+    freehire_base_url: str | None = None
     # Documents (SPEC-documents.md, app/documents/). Every setting of the module, added at once
     # by task D2 so that no later task edits this file. A render: its wall time in seconds, the
     # renders one renderer process runs at once, the largest PDF kept.
@@ -233,6 +236,7 @@ class Settings(BaseSettings):
     @field_validator(
         "apply_stub_base_url",
         "browser_sources_base_url",
+        "freehire_base_url",
         "model_api_base_url",
         "google_auth_url",
         "google_token_base_url",
@@ -330,6 +334,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 "BROWSER_SOURCES_BASE_URL points the browser sources at test pages and must not "
                 "be set in production"
+            )
+        if self.app_env == "production" and self.freehire_base_url is not None:
+            raise ValueError(
+                "FREEHIRE_BASE_URL points the freehire feed at a test stub and must not be set "
+                "in production"
             )
         for name in ("google_auth_url", "google_token_base_url", "google_api_base_url"):
             if self.app_env == "production" and getattr(self, name) is not None:

@@ -28,10 +28,12 @@ const SOURCE_NAMES: Record<string, string> = {
   "hackernews:freelance": FEED_SHORT_NAMES.hackernews_freelance,
   "hackernews:hiring": FEED_SHORT_NAMES.hackernews_hiring,
   // The job feeds (features/jobs/job-feeds.ts): "via Arbeitnow" links back to the posting there,
-  // as Arbeitnow, Himalayas and Adzuna ask.
+  // as Arbeitnow, Himalayas and Adzuna ask; "via freehire" (jobs J34) links to the posting's own
+  // address, freehire's page when it has none.
   arbeitnow: "Arbeitnow",
   himalayas: "Himalayas",
   adzuna: "Adzuna",
+  freehire: "freehire",
 };
 
 /** The name of a feed's `source` ("remoteok" is "Remote OK"), or null for any other source. */

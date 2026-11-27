@@ -345,6 +345,9 @@ def test_the_feeds_setting_persists(
     factory: sessionmaker[Session], api: Api, owner: Signed
 ) -> None:
     set_profile(factory, owner.id, feeds_search())
+    every = ["arbeitnow", "himalayas", "adzuna", "freehire"]
+    assert save_search(api, owner, {"job_feeds": every}).status_code == 200
+    assert stored_search(factory, owner.id)["job_feeds"] == every
     saved = save_search(api, owner, {"job_feeds": ["arbeitnow", "adzuna"]})
     assert saved.status_code == 200, saved.text
     assert stored_search(factory, owner.id)["job_feeds"] == ["arbeitnow", "adzuna"]
@@ -352,7 +355,7 @@ def test_the_feeds_setting_persists(
     kept = save_search(api, owner, {"days": 14}, drop="job_feeds")
     assert kept.status_code == 200, kept.text
     assert stored_search(factory, owner.id)["job_feeds"] == ["arbeitnow", "adzuna"]
-    for bad in (["arbeitnow", "arbeitnow"], ["indeed"]):
+    for bad in (["arbeitnow", "arbeitnow"], ["indeed"], ["freehire", "freehire"]):
         refused = save_search(api, owner, {"job_feeds": bad})
         assert refused.status_code == 422, refused.text
     # Unticking all of them stores no key at all (the release before refuses it).
@@ -366,7 +369,12 @@ def test_the_feeds_setting_persists(
 def test_the_adzuna_key_routes(app: FastAPI, api: Api, owner: Signed) -> None:
     listed = api.get("/api/jobs/feeds", token=owner.token)
     assert listed.status_code == 200
-    assert [f["name"] for f in listed.json()["feeds"]] == ["arbeitnow", "himalayas", "adzuna"]
+    assert [f["name"] for f in listed.json()["feeds"]] == [
+        "arbeitnow",
+        "himalayas",
+        "adzuna",
+        "freehire",
+    ]
     assert listed.json()["keys_available"] is False
     body = {"app_id": APP_ID, "app_key": APP_KEY}
     unavailable = api.request("PUT", "/api/jobs/feeds/adzuna/key", token=owner.token, json=body)

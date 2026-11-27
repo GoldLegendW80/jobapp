@@ -1,0 +1,159 @@
+{
+ "data": [
+  {
+   "public_slug": "forward-deployed-engineer-example-robotics-a1b2",
+   "source": "greenhouse",
+   "external_id": "4001",
+   "url": "https://boards.example-ats.test/example-robotics/jobs/4001",
+   "title": "Forward Deployed Engineer",
+   "company": "Example Robotics",
+   "company_slug": "example-robotics",
+   "location": "Zürich, Switzerland",
+   "description": "<h2>About the role</h2><p>Build LLM agents with customers on site in Zürich. Python, Kubernetes, retrieval. ❤️</p><ul><li>Ship agents</li><li>Talk to users</li></ul><p>Apply on <a href=\"https://elsewhere.example.test/next\">our other page</a>.</p><script>steal()</script>",
+   "skills": [
+    "python"
+   ],
+   "work_mode": "hybrid",
+   "regions": [
+    "eu"
+   ],
+   "countries": [
+    "ch"
+   ],
+   "cities": [
+    "Zurich"
+   ],
+   "collections": [],
+   "posted_at": "2026-10-28T00:00:00Z",
+   "created_at": "2026-10-28T09:00:00Z",
+   "closed_at": null,
+   "enrichment": {
+    "seniority": "senior",
+    "category": "ml_ai",
+    "employment_type": "full_time"
+   }
+  },
+  {
+   "public_slug": "senior-ai-engineer-example-freight-c3d4",
+   "source": "lever",
+   "external_id": "c3d4",
+   "url": null,
+   "title": "Senior AI Engineer",
+   "company": "Example Freight",
+   "company_slug": "example-freight",
+   "location": "",
+   "description": "<p>Agents for freight planning, fully remote.</p>",
+   "skills": [],
+   "work_mode": "remote",
+   "regions": [],
+   "countries": [
+    "ch"
+   ],
+   "cities": [],
+   "collections": [],
+   "posted_at": "2026-10-29T00:00:00Z",
+   "created_at": "2026-10-29T09:00:00Z",
+   "enrichment": {}
+  },
+  {
+   "public_slug": "ai-engineer-closed-e5f6",
+   "source": "ashby",
+   "external_id": "e5f6",
+   "url": "https://jobs.example-ats.test/example-closed/e5f6",
+   "title": "AI Engineer",
+   "company": "Example Closed",
+   "location": "Geneva, Switzerland",
+   "description": "<p>Closed.</p>",
+   "work_mode": "onsite",
+   "countries": [
+    "ch"
+   ],
+   "cities": [
+    "Geneva"
+   ],
+   "posted_at": "2026-10-27T00:00:00Z",
+   "closed_at": "2026-10-29T10:00:00Z",
+   "enrichment": {}
+  },
+  {
+   "source": "workable",
+   "external_id": "g7",
+   "url": "javascript:alert(1)",
+   "title": "AI Engineer, Platform",
+   "company": "Example Script",
+   "location": "Basel",
+   "description": "<p>No address.</p>",
+   "countries": [
+    "ch"
+   ],
+   "cities": [
+    "Basel"
+   ],
+   "posted_at": "2026-10-27T00:00:00Z",
+   "enrichment": {}
+  },
+  {
+   "public_slug": "sales-engineer-ai-h8",
+   "source": "greenhouse",
+   "external_id": "h8",
+   "url": "https://boards.example-ats.test/example-sales/jobs/h8",
+   "title": "AI Engineer, Sales Team",
+   "company": "Example Sales",
+   "location": "Lausanne, Switzerland",
+   "description": "<p>Sell.</p>",
+   "work_mode": "onsite",
+   "countries": [
+    "ch"
+   ],
+   "cities": [
+    "Lausanne"
+   ],
+   "posted_at": "2026-10-26T00:00:00Z",
+   "enrichment": {}
+  },
+  {
+   "public_slug": "ai-engineer-intern-i9",
+   "source": "smartrecruiters",
+   "external_id": "i9",
+   "url": "http://careers.example-lab.test/jobs/i9",
+   "title": "AI Engineer Intern",
+   "company": "Example Lab",
+   "location": "Bern, Switzerland",
+   "description": "<p>Learn.</p>",
+   "work_mode": "onsite",
+   "countries": [
+    "ch"
+   ],
+   "cities": [
+    "Bern"
+   ],
+   "posted_at": null,
+   "enrichment": {
+    "employment_type": "internship"
+   }
+  },
+  {
+   "public_slug": "ai-engineer-old-j10",
+   "source": "lever",
+   "external_id": "j10",
+   "url": "https://jobs.example-ats.test/example-old/j10",
+   "title": "AI Engineer",
+   "company": "Example Old",
+   "location": "Zürich, Switzerland",
+   "description": "<p>Old.</p>",
+   "countries": [
+    "ch"
+   ],
+   "cities": [
+    "Zurich"
+   ],
+   "posted_at": "2026-08-01T00:00:00Z",
+   "enrichment": {}
+  }
+ ],
+ "meta": {
+  "total": 7,
+  "limit": 25,
+  "offset": 0
+ }
+}

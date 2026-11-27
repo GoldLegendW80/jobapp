@@ -78,6 +78,7 @@ export const noFeedKeys = {
     { name: "arbeitnow", needs_key: false, key_stored: false, key_last4: null },
     { name: "himalayas", needs_key: false, key_stored: false, key_last4: null },
     { name: "adzuna", needs_key: true, key_stored: false, key_last4: null },
+    { name: "freehire", needs_key: false, key_stored: false, key_last4: null },
   ],
   keys_available: true,
 };
