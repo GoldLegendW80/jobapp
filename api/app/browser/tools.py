@@ -113,6 +113,7 @@ class LeaseTools:
 
     async def erase_code(self) -> None:
         """A25: the run ends: a code the person gave and the agent did not type is dropped."""
+        await self._held()
         await self.client.erase_code(self.lease_id, self.user_id)
 
     async def _person_snapshot(self) -> dict[str, Any]:
