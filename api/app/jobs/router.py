@@ -162,9 +162,18 @@ def _invalid(field: str, message: str) -> RequestValidationError:
     )
 
 
-def _item(job: Job, file_count: int) -> JobListItem:
-    data = {name: getattr(job, name) for name in JobListItem.model_fields if name != "file_count"}
-    return JobListItem(**data, file_count=file_count)
+COMPUTED = ("file_count", "page_given_up")  # JobListItem's fields that are no Job column
+
+
+def _item(job: Job, file_count: int, given_up: set[uuid.UUID] | None = None) -> JobListItem:
+    data = {name: getattr(job, name) for name in JobListItem.model_fields if name not in COMPUTED}
+    return JobListItem(**data, file_count=file_count, page_given_up=job.id in (given_up or set()))
+
+
+def _given_up(db: Session, user: User, jobs: list[Job]) -> set[uuid.UUID]:
+    """Jobs J36: of these postings seen only in a list, those whose page the app no longer
+    tries to read."""
+    return service.pages_given_up(db, user.id, [job.id for job in jobs if job.list_url])
 
 
 def _filters(
@@ -257,8 +266,9 @@ def list_jobs(
     counts = service.status_counts(db, user.id, filters)
     buckets, unscored = service.fit_histogram(db, user.id, filters)
     selected = filters.statuses or tuple(JobStatus)
+    given_up = _given_up(db, user, [job for job, _ in page.rows])
     return JobListPage(
-        items=[_item(job, files) for job, files in page.rows],
+        items=[_item(job, files, given_up) for job, files in page.rows],
         next_cursor=page.next_cursor,
         total=sum(counts[s] for s in selected),
         counts_by_status=counts,
@@ -387,7 +397,7 @@ def _today(request: Request) -> date:
 def _detail(db: Session, user: User, job: Job, today: date) -> JobDetail:
     files = service.list_files(db, user.id, job.id)
     events, events_total = service.recent_events(db, user.id, job.id, EVENTS_IN_DETAIL)
-    item = _item(job, len(files))
+    item = _item(job, len(files), _given_up(db, user, [job]))
     return JobDetail(
         **item.model_dump(),
         posting_text=job.posting_text,

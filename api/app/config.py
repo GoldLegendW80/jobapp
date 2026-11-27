@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     # own deadline, BROWSER_SESSION_MAX_S, and suspends both timers.
     browser_idle_s: int = Field(default=300, ge=30, le=3600)
     browser_session_max_s: int = Field(default=1800, ge=60, le=7200)
+    # Jobs J36: after a website's agent, the time its reading of the pages of the postings seen
+    # only in a list may take, per website and search; 0 reads none.
+    browser_listed_pages_s: int = Field(default=600, ge=0, le=86_400)
     # Past this share of the browser container's memory limit, browserd closes the newest tab.
     browser_mem_guard_pct: int = Field(default=90, ge=50, le=99)
     # Two browsers at once (owner, 2026-11-06): BROWSER_SLOTS as browserd reads it, the fills

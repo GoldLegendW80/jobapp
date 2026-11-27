@@ -440,6 +440,26 @@ def record(
         db.rollback()
         logger.info("jobs.liveness.dropped", extra={"job_id": str(job_id)})
         return outcome
+    stored = store(db, job, finding, now)
+    status = job.status
+    db.commit()
+    logger.info(
+        "jobs.liveness",
+        extra={
+            "job_id": str(job_id),
+            "verdict": finding.verdict,
+            "reason": finding.reason,
+            "closed": stored["moved"],
+        },
+    )
+    return Outcome(status, stored)
+
+
+def store(db: Session, job: Job, finding: Finding, now: datetime) -> dict[str, Any]:
+    """The finding on the locked posting, which moves it to closed when it says so (module
+    docstring); the caller commits. Jobs J36 closes a posting kept from a card whose page the
+    app read gone with it. The finding as stored."""
+    user_id = job.user_id
     moved = (
         finding.verdict == CLOSED
         and job.status in AUTO_CLOSE_FROM
@@ -464,18 +484,7 @@ def record(
             .values(liveness=stored, updated_at=Job.updated_at)
             .execution_options(synchronize_session=False)
         )
-    status = job.status
-    db.commit()
-    logger.info(
-        "jobs.liveness",
-        extra={
-            "job_id": str(job_id),
-            "verdict": finding.verdict,
-            "reason": finding.reason,
-            "closed": moved,
-        },
-    )
-    return Outcome(status, stored)
+    return stored
 
 
 def _in_db[T](sessions: sessionmaker[Session], step: Callable[[Session], T]) -> T:

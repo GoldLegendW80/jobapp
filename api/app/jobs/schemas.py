@@ -409,6 +409,9 @@ class JobListItem(BaseModel):
     # Jobs J31: seen only in a list, its own page not read: the list's address; None once its
     # page was read or its text set by the person, and for any other posting.
     list_url: str | None = None
+    # Jobs J36: seen only in a list, and the app failed to read its page on 3 different days: it
+    # no longer tries (the person may paste its text).
+    page_given_up: bool = False
 
     @field_validator("outside_criteria", mode="before")
     @classmethod
@@ -797,6 +800,21 @@ class BoardFailureOut(BaseModel):
 SEARCHES_LISTED = 50  # the searches a website's summary names (all are counted, jobs J18)
 
 
+class ListedPagesOut(BaseModel):
+    """Jobs J36: what the app's reading of the pages of a website's postings seen only in a list
+    did after its agent: pages that showed the posting (`read`), postings closed as gone
+    (`closed`), failed readings (`unread`), of which the last try of a posting (`given_up`), the
+    postings still waiting for their page (`left`, None when it could not be counted) and why it
+    ended (`ended`, listed_pages.ENDS)."""
+
+    read: int = Field(default=0, ge=0)
+    closed: int = Field(default=0, ge=0)
+    unread: int = Field(default=0, ge=0)
+    given_up: int = Field(default=0, ge=0)
+    left: int | None = Field(default=None, ge=0)
+    ended: str
+
+
 class SearchRanOut(BaseModel):
     """One search the agent of a job website ran (jobs J18; since B20 from its own tool calls,
     finder.FinderSession.searches): what it typed and the options it chose with it, or a saved
@@ -857,6 +875,9 @@ class SourceOut(BaseModel):
     listed: int = Field(default=0, ge=0)
     listed_read: int = Field(default=0, ge=0)
     cards_refused: dict[str, int] = Field(default_factory=dict)
+    # Jobs J36: the pages of its postings seen only in a list the app read after its agent;
+    # None when it read none (another source, a sweep before J36, a search it did not follow).
+    listed_pages: ListedPagesOut | None = None
     # LinkedIn's public job search: the searches it built from the saved titles and places, of
     # which `searches` ran before its caps (0 from an older sweep or another source).
     planned: int = Field(default=0, ge=0)

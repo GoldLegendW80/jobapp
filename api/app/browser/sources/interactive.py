@@ -56,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import functools
 import json
 import logging
 import math
@@ -74,6 +75,7 @@ from app.browser.sources import (
     STOPS_SWEEP,
     Pages,
     SourceError,
+    listed_pages,
 )
 from app.jobs import sweep
 from app.jobs.schemas import SEARCHES_LISTED
@@ -354,6 +356,10 @@ class _Site:
     results_read: int | None = None
     # Jobs J31: the cards report_listing refused, by reason (the evidence rule).
     cards_refused: Counter[str] = field(default_factory=Counter)
+    # Jobs J36: the addresses of the postings this search kept from a card, in order, and what
+    # the app's reading of the pages of the postings seen only in a list did (listed_pages).
+    carded: dict[str, None] = field(default_factory=dict)
+    listed_pages: dict[str, Any] | None = None
 
     def _excluded(self, title: str, location: str) -> str:
         """The person's unwanted title or place a posting read meets, as a note ("Unwanted
@@ -423,6 +429,7 @@ class _Site:
         if kept or aside:
             # Marked before the commit: a commit whose caller is cancelled still lands.
             self.sent.update(finding.url for finding in kept)
+            self.carded.update((f.url, None) for f in kept if f.list_url is not None)
             found = finder.VerifiedBatch(tuple(kept)) if kept else None
             await self.commits.save(self.source_id, self.host, found, aside)
 
@@ -458,6 +465,8 @@ class _Site:
             if self.results_read is not None:
                 entry["results_read"] = self.results_read
             entry["cards_refused"] = dict(self.cards_refused)
+        if self.listed_pages is not None:
+            entry["listed_pages"] = self.listed_pages
         if self.unwanted:
             entry["unwanted"] = len(self.unwanted)
 
@@ -709,7 +718,11 @@ async def _website(
             pause=platform_policy.pause_for(paced),
             idle_s=got.lease.idle_s,
         )
-        return await _search(runner.finder, pages, scope, str(plan.user_id), site, runner.base_url)
+        # Jobs J36: after the agent, on this lease, the pages of the postings seen in a list.
+        listed = functools.partial(listed_pages.read, site=site, runner=runner, plan=plan)
+        return await _search(
+            runner.finder, pages, scope, str(plan.user_id), site, runner.base_url, listed
+        )
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
 
@@ -834,9 +847,11 @@ async def _search(
     user: str,
     site: _Site,
     base_url: str | None = None,
+    listed: Callable[[finder.FinderSession, str], Awaitable[None]] | None = None,
 ) -> str | None:
     """The complete run, the first navigation included, with no time cap (B20); a login the
-    search found ended is marked (`_signed_out`)."""
+    search found ended is marked (`_signed_out`). `listed` runs after the agent, its result
+    decided (jobs J36: the pages of the postings seen in a list)."""
     session = None
     cap = asyncio.timeout(None)  # B20: no time cap; the run's Cancel stops it
     try:
@@ -899,15 +914,10 @@ async def _search(
             site.output_tokens += ran.output_tokens
             site.tokens_seen = True
             signed_out = await _signed_out(pages, session, base_url)
-            if session.stopped:
-                return session.stopped
-            if ran.stopped in ("no_credential", "cancelled"):
-                # The person's Cancel of the website's run is never retried (sweep.NOT_RETRIED).
-                return "agent_cancelled" if ran.stopped == "cancelled" else "no_credential"
-            if ran.stopped:
-                return "agent_failed"
-            code = outcome(session)
-            return SIGNIN_WALL if signed_out and code is not None else code
+            code = _ended(session, ran, signed_out)
+            if listed is not None:
+                await listed(session, ran.stopped)
+            return code
     except TimeoutError:
         return "time_budget" if cap.expired() else "agent_failed"
     except SourceError as exc:
@@ -916,6 +926,19 @@ async def _search(
         site.pages = pages.count
         if session:
             site.keep(session)
+
+
+def _ended(session: finder.FinderSession, ran: finder.Ran, signed_out: bool) -> str | None:
+    """The website's code once its agent ended (`_search`)."""
+    if session.stopped:
+        return session.stopped
+    if ran.stopped in ("no_credential", "cancelled"):
+        # The person's Cancel of the website's run is never retried (sweep.NOT_RETRIED).
+        return "agent_cancelled" if ran.stopped == "cancelled" else "no_credential"
+    if ran.stopped:
+        return "agent_failed"
+    code = outcome(session)
+    return SIGNIN_WALL if signed_out and code is not None else code
 
 
 ASK_POLL_S = 2.0
