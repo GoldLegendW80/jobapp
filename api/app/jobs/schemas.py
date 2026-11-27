@@ -999,9 +999,21 @@ class SearchRequestOut(BaseModel):
     requested_at: datetime
 
 
+class SearchLastRunOut(BaseModel):
+    """A search's newest sweep (jobs J33b), however old: its id (the Jobs list's `sweep`), its
+    status, when it started and ended, and the new postings it kept."""
+
+    sweep_id: uuid.UUID
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    new: int
+
+
 class SavedSearchOut(BaseModel):
     """One of the person's searches. The main one (`id` "main", `main` true) is the profile's
-    search section: its revision is the profile's, and it changes in Settings."""
+    search section: its revision is the profile's, and it changes in Settings. `last_run` is
+    null for a search that never ran."""
 
     id: str
     name: str
@@ -1010,6 +1022,7 @@ class SavedSearchOut(BaseModel):
     criteria: dict[str, Any]
     schedule: SearchScheduleOut
     request: SearchRequestOut | None = None
+    last_run: SearchLastRunOut | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
