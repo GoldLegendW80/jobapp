@@ -17,6 +17,7 @@ import {
   CODE_IN_BROWSER,
   isAsk,
   kindWords,
+  NO_CODE_HERE,
   stoppedLine,
 } from "@/features/apply/helpers/agent-wait";
 import {
@@ -173,6 +174,7 @@ function AnswerBox({
           scroll margin is the phone's tab bar. */}
       <Textarea
         id={`${id}-answer`}
+        aria-describedby={`${id}-no-code`}
         className="min-h-20 scroll-mb-(--bottom-bar)"
         maxLength={ANSWER_MAX}
         value={text}
@@ -180,6 +182,9 @@ function AnswerBox({
           setText(event.target.value);
         }}
       />
+      <p id={`${id}-no-code`} className="text-sm text-muted-foreground">
+        {NO_CODE_HERE}
+      </p>
       <Button
         type="submit"
         className="w-full sm:w-fit"

@@ -15,6 +15,7 @@ import { WAIT_POLL_MS } from "@/features/apply/api/use-agent-wait";
 import {
   AFTER_SEND_WAIT,
   CODE_IN_BROWSER,
+  NO_CODE_HERE,
   NO_PASSWORD,
   SAID_NOTHING_SENT,
 } from "@/features/apply/helpers/agent-wait";
@@ -102,7 +103,8 @@ describe("the apply agent waits for the person (A25)", () => {
     expect(wait.getByText("It asks for a sign in.")).toBeInTheDocument();
     // 12 minutes from the server's time, never the page's clock.
     expect(wait.getByRole("timer").textContent).toMatch(/^1[12]:\d\d$/);
-    expect(wait.getByLabelText(BOX)).toBeInTheDocument();
+    // The answer goes to the assistant: the box says a code is typed in the browser.
+    expect(wait.getByLabelText(BOX)).toHaveAccessibleDescription(NO_CODE_HERE);
     expect(wait.getByText(NO_PASSWORD)).toBeInTheDocument();
     expect(
       within(section).getByRole("button", { name: "Cancel application" }),

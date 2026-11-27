@@ -55,6 +55,10 @@ export const kindWords = (kind: string) =>
  */
 export const TYPED_IN_BROWSER: ReadonlySet<string> = new Set(["code"]);
 
+/** Under the box: an answer goes to the model, so a code too until the api's next slice types it. */
+export const NO_CODE_HERE =
+  "Type codes and passwords in the browser yourself, never in this box.";
+
 export const CODE_IN_BROWSER =
   "Type the code in the browser yourself: open the browser below, choose Use the browser myself, type it, then choose Let the assistant continue.";
 
