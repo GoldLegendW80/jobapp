@@ -742,3 +742,14 @@ def test_the_report_tool_says_the_cap_the_cards_past_it_and_the_ids() -> None:
     assert "card of a list" in said
     assert "Indeed's jk, LinkedIn's job id" in said
     assert " - " not in said
+
+
+@pytest.mark.parametrize(
+    "url", ["", "mailto:e2e-person@example.org", "javascript:alert(1)", "ftp://x.example.org/j/1"]
+)
+def test_what_the_rule_cannot_read_has_no_key_and_is_never_noted(url: str) -> None:
+    assert finder.posting_key(url) == ""
+    one, _, _, _ = board_session(INDEED)
+    before = dict(one.postings)
+    one._note_seen([url])
+    assert one.postings == before
