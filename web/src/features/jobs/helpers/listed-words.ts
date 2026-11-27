@@ -81,7 +81,7 @@ export const LISTED_WALLED =
 
 /** Jobs J36: on a posting whose page no search opens by itself (`page_elsewhere`). */
 export const LISTED_ELSEWHERE =
-  "Its own page is on another website than the one that listed it, so the app does not open it by itself: open its own page to read it, or paste its text to use it.";
+  "The app does not open its own page by itself: open it to read it, or paste its text to use it.";
 
 /** Why the app's reading of the pages of postings seen in a list ended (api's listed_pages.ENDS),
  * said of the postings still waiting for their page. */
