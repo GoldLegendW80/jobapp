@@ -54,6 +54,9 @@ export const jobListItemSchema = z.object({
   // Jobs J30: what of the posting is outside the criteria of the search that found it (contract,
   // work_mode, older); [] within. Absent from an older api.
   outside_criteria: z.array(z.string()).default([]),
+  // Jobs J31: the address of the list it was seen in, its own page not read; null for any other
+  // posting and once its page was read. Absent from an older api.
+  list_url: z.string().nullable().default(null),
 });
 export type JobListItem = z.infer<typeof jobListItemSchema>;
 
@@ -425,13 +428,29 @@ export async function collectIds(
   query: string,
   cap: number,
   signal?: AbortSignal,
-): Promise<{ ids: string[]; total: number }> {
+): Promise<{ ids: string[]; total: number; listed: string[] }> {
   const ids: string[] = [];
+  const listed: string[] = [];
   let page = await listJobs(query, null, signal);
   for (;;) {
-    for (const item of page.items) if (ids.length < cap) ids.push(item.id);
+    for (const item of page.items)
+      if (ids.length < cap) {
+        ids.push(item.id);
+        if (item.list_url !== null) listed.push(item.id);
+      }
     if (!page.next_cursor || ids.length >= cap) break;
     page = await listJobs(query, page.next_cursor, signal);
   }
-  return { ids, total: page.total };
+  return { ids, total: page.total, listed };
+}
+
+/** PUT /api/jobs/{id}/text (jobs J31b): the text the person pasted for a posting seen only in a
+ * list replaces its card's; 409 `page_read` when its page was read meanwhile. */
+export function setPostingText(id: string, text: string): Promise<JobDetail> {
+  return request(`/jobs/${encodeURIComponent(id)}/text`, {
+    method: "PUT",
+    body: { text },
+    timeoutMs: 30_000,
+    validate: (data) => jobDetailSchema.parse(data),
+  });
 }

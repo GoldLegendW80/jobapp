@@ -77,7 +77,7 @@ SCHEMAS: dict[str, dict[str, Any]] = {
         ("kind", "sentence"),
     ),
     # A25: the code the person gave in the app, typed by browserd into the box named.
-    "apply_type_code": _object({"ref": REF}, ("ref",)),
+    "apply_type_code": _object({"ref": REF, "submit": REF}, ("ref",)),
 }
 DESCRIPTIONS = {
     "browser_file_upload": "Upload documents placed on this browser (cv.pdf, letter.pdf) to the "
@@ -97,8 +97,10 @@ DESCRIPTIONS = {
     "their words, or that they used "
     "the browser (read the page again before any act), or that nobody came (stop then).",
     "apply_type_code": "Once the person gave a code in the app (apply_ask_person's answer says "
-    "so), name the site's one time code box by its ref in your last snapshot: the app types the "
-    "code there once. You never see it, and only that box of the site that asked takes it.",
+    "so), name the site's one time code box by its ref in your last snapshot, and as submit the "
+    "button that sends it when the form has one: the app types the code there once, sends it "
+    "and answers only whether the site took it (taken) or kept its box (kept). You never see it, "
+    "and only that box of the site that asked takes it.",
 }
 
 
@@ -117,7 +119,7 @@ def _factory(name: str) -> app_tools.Factory:
             elif name == "apply_ask_person":
                 text, error = await session.ask_person(args.get("kind"), args.get("sentence"))
             elif name == "apply_type_code":
-                text, error = await session.type_code(args.get("ref"))
+                text, error = await session.type_code(args.get("ref"), args.get("submit"))
             else:
                 text, error = session.finish(
                     args.get("outcome"),

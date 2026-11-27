@@ -343,7 +343,8 @@ def test_browserd_cuts_a_discovery_snapshot_at_its_own_ceiling_only(monkeypatch)
         async def page():
             return SimpleNamespace(url=START)
 
-        return SimpleNamespace(page=page, state=SimpleNamespace(discovery=discovery, chooser=None))
+        state = SimpleNamespace(discovery=discovery, chooser=None, code_boxes=[])
+        return SimpleNamespace(page=page, state=state)
 
     import asyncio
 

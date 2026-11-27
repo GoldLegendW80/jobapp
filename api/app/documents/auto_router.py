@@ -57,6 +57,7 @@ from app.documents.models import (
 from app.identity import deps
 from app.identity.models import User
 from app.jobs import liveness_check
+from app.jobs import service as jobs_service
 
 logger = logging.getLogger("app.documents")
 
@@ -163,6 +164,8 @@ def _give_way(db: Session, document: Document, at: datetime, *, follows: bool = 
 def write_now(
     job_id: uuid.UUID, body: WriteIn, user: CurrentUser, request: Request, db: Db
 ) -> WriteOut:
+    if (listed := jobs_service.listed_refusal(db, user.id, job_id)) is not None:
+        raise _error(status.HTTP_409_CONFLICT, listed)
     if (closed := liveness_check.click_refusal(request, user.id, job_id)) is not None:
         raise _error(status.HTTP_409_CONFLICT, closed)
     at = deps.clock(request)

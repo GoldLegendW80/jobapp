@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 
 import type { Criteria, SavedSearch } from "@/features/jobs/api/searches-api";
-import type { Sweep } from "@/features/jobs/api/sweeps-api";
+import type { ScheduleState, Sweep } from "@/features/jobs/api/sweeps-api";
 
 import { emptySweeps } from "./handlers";
 import { server } from "./server";
@@ -21,6 +21,7 @@ export function makeSearch(
     criteria,
     schedule: { ...emptySweeps.schedule },
     request: null,
+    last_run: null,
     ...overrides,
   };
 }
@@ -33,11 +34,14 @@ export function makeSearch(
  */
 export function fakeSearches({
   main = () => ({}),
+  mainSchedule = () => ({}),
   saved = [],
   permitted = () => true,
   started,
 }: {
   main?: () => Criteria;
+  /** The main search's schedule, read live (the profile's `sweep_schedule`). */
+  mainSchedule?: () => Partial<ScheduleState> | undefined;
   saved?: SavedSearch[];
   permitted?: (criteria: Criteria) => boolean;
   /** The sweep a run starts, when none runs. */
@@ -51,7 +55,9 @@ export function fakeSearches({
     runs: [] as string[],
   };
   const listed = () => [
-    makeSearch("main", "Main search", main()),
+    makeSearch("main", "Main search", main(), {
+      schedule: { ...emptySweeps.schedule, ...mainSchedule() },
+    }),
     ...state.saved,
   ];
   const withLine = (search: SavedSearch): SavedSearch => {
@@ -155,6 +161,7 @@ export function fakeSearches({
       const body = (await request.json()) as {
         name: string;
         criteria: Criteria;
+        schedule: Pick<SavedSearch["schedule"], "enabled" | "days" | "times">;
         revision: number;
       };
       state.writes.push({ method: "PUT", id, body });
@@ -188,6 +195,11 @@ export function fakeSearches({
       Object.assign(found, {
         name: body.name,
         criteria: body.criteria,
+        schedule: {
+          ...found.schedule,
+          ...body.schedule,
+          next_run: body.schedule.enabled ? "2026-11-27T06:30:00Z" : null,
+        },
         revision: found.revision + 1,
       });
       return HttpResponse.json(found);

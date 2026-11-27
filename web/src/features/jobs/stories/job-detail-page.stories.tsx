@@ -192,6 +192,18 @@ export const SeeWhatIsOutsideMyCriteria: Story = {
   },
 };
 
+/** As a job seeker, I want a posting seen only in a list to say so, why its CV and Apply wait, and let me paste its text, so that I can act on it without waiting for a search. */
+export const PasteTheTextOfAPostingSeenInAList: Story = {
+  beforeEach: () => {
+    fakePostingDetails([
+      {
+        ...first,
+        list_url: "https://aggregator.example.org/jobs?q=genai",
+      },
+    ]);
+  },
+};
+
 /** As a job seeker, I want to see when a posting's own page may say it is closed, with its words, so that I close it in one click before writing anything. */
 export const SeeThatAPostingMayBeClosed: Story = {
   beforeEach: () => {

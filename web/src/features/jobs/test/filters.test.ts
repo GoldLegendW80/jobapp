@@ -50,14 +50,16 @@ describe("job filters in the URL", () => {
       payPeriod: "year",
       applications: ["none", "failed"],
       sweep: "0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa",
+      search: "main",
       criteria: "outside",
+      listing: "only",
       sort: "fit",
     };
     expect(roundTrip(filters)).toEqual(filters);
     expect(toSearchParams(filters).toString()).toBe(
       "q=forward+deployed&status=shortlisted&status=cv_ready&type=CDI&type=VIE&company=Mistral&fit_min=70&fit_max=100&found_from=2026-09-01&found_to=2026-10-09" +
         "&place=La+R%C3%A9union&place=Paris&work_mode=remote&work_mode=not_stated&source=linkedin&source=web&published_within=7&published_from=2026-11-01&published_undated=true" +
-        "&pay=stated&pay_min=50000&pay_period=year&application=none&application=failed&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa&criteria=outside&sort=fit",
+        "&pay=stated&pay_min=50000&pay_period=year&application=none&application=failed&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa&search=main&criteria=outside&listing=only&sort=fit",
     );
   });
 
@@ -92,6 +94,13 @@ describe("job filters in the URL", () => {
     ],
     ["criteria=within", { criteria: "within" }],
     ["criteria=outside", { criteria: "outside" }],
+    ["listing=only", { listing: "only" }],
+    ["listing=without", { listing: "without" }],
+    ["search=main", { search: "main" }],
+    [
+      "search=00000000-0000-4000-8000-000000000001",
+      { search: "00000000-0000-4000-8000-000000000001" },
+    ],
   ])("round trips %s alone", (query, expected) => {
     const filters = parse(query);
     expect(filters).toEqual({ ...EMPTY_FILTERS, ...expected });
@@ -130,6 +139,8 @@ describe("job filters in the URL", () => {
     ["blank search", "q=%20%20%20", {}],
     ["criteria all, the default", "criteria=all", {}],
     ["an unknown criteria", "criteria=Outside", {}],
+    ["listing all, the default", "listing=all", {}],
+    ["an unknown listing", "listing=Only", {}],
   ])("ignores %s safely", (_name, query, expected) => {
     expect(parse(query)).toEqual({ ...EMPTY_FILTERS, ...expected });
   });
@@ -265,6 +276,7 @@ describe("the filters of jobs J29 in the URL", () => {
       { applications: ["sent"] },
     ],
     ["a sweep that is no id", "sweep=abc", {}],
+    ["a search that is neither main nor an id", "search=Main", {}],
   ])("drops %s", (_, query, expected) => {
     expect(parse(query)).toEqual({ ...EMPTY_FILTERS, ...expected });
   });
@@ -276,15 +288,15 @@ describe("the filters of jobs J29 in the URL", () => {
 
   it("counts one per value and one per range, as the chips", () => {
     const filters = parse(
-      "place=Paris&place=Lyon&work_mode=remote&source=web&published_within=7&pay=stated&application=sent&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa&criteria=within",
+      "place=Paris&place=Lyon&work_mode=remote&source=web&published_within=7&pay=stated&application=sent&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa&search=main&criteria=within&listing=without",
     );
-    expect(activeFilterCount(filters)).toBe(9);
-    expect(activeFilterChips(filters)).toHaveLength(9);
+    expect(activeFilterCount(filters)).toBe(11);
+    expect(activeFilterChips(filters)).toHaveLength(11);
   });
 
   it("names each chip and removes only its own filter", () => {
     const filters = parse(
-      "q=ml&place=Saint-Denis&work_mode=not_stated&type=CDI&source=web&published_within=7&published_undated=true&pay_min=50000&pay_period=year&fit_min=60&application=waiting&status=found&found_from=2026-11-26&found_to=2026-11-26&company=Acme&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa&criteria=outside",
+      "q=ml&place=Saint-Denis&work_mode=not_stated&type=CDI&source=web&published_within=7&published_undated=true&pay_min=50000&pay_period=year&fit_min=60&application=waiting&status=found&found_from=2026-11-26&found_to=2026-11-26&company=Acme&sweep=0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa&criteria=outside&listing=only",
     );
     const chips = activeFilterChips(filters);
     expect(chips.map((chip) => chip.text)).toEqual([
@@ -293,6 +305,7 @@ describe("the filters of jobs J29 in the URL", () => {
       "Work mode: Not stated",
       "Contract: CDI",
       "Outside your criteria",
+      "Seen only in a list",
       "Website: Anywhere on the web",
       "Published in the last 7 days, or no date",
       "Pay: at least 50,000 a year",
@@ -315,6 +328,26 @@ describe("the filters of jobs J29 in the URL", () => {
     expect(place.without.sweep).toBe(filters.sweep);
     const criteria = chips.find((chip) => chip.key === "criteria")!;
     expect(criteria.without).toEqual({ ...filters, criteria: null });
+    const listing = chips.find((chip) => chip.key === "listing")!;
+    expect(listing.without).toEqual({ ...filters, listing: null });
+  });
+
+  it("names the search that added the postings, a deleted one and one not read yet", () => {
+    const id = "00000000-0000-4000-8000-000000000001";
+    const filters = parse(`search=${id}&place=Lyon`);
+    const named = (name: string | null | undefined) =>
+      activeFilterChips(filters, () => name).map((chip) => chip.text);
+    expect(named("Remote roles")).toEqual([
+      "Added by Remote roles",
+      "Place: Lyon",
+    ]);
+    expect(named(null)[0]).toBe("Added by a deleted search");
+    expect(named(undefined)[0]).toBe("Added by one of your searches");
+    expect(activeFilterChips(parse("search=main"))[0]!.text).toBe(
+      "Added by Main search",
+    );
+    const chip = activeFilterChips(filters)[0]!;
+    expect(chip.without).toEqual({ ...filters, search: null });
   });
 
   it("applies the presets over the other filters", () => {

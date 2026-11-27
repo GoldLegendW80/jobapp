@@ -123,6 +123,33 @@ export const SeePostingsOutsideMyCriteria: Story = {
   },
 };
 
+/** As a job seeker, I want a posting a search saw only in a list to say so, with the list and its own page, and a filter for them, so that I know its text is the card's before I act on it. */
+export const SeePostingsSeenOnlyInAList: Story = {
+  beforeEach: () => {
+    const [first, second, ...rest] = POSTINGS;
+    postings([
+      ...(first ? [first] : []),
+      ...(second
+        ? [
+            {
+              ...second,
+              list_url: "https://aggregator.example.org/jobs?q=genai",
+            },
+          ]
+        : []),
+      ...rest,
+    ]);
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const list = await page.findByRole("list", { name: "Postings" });
+    await expect(
+      (await within(list).findAllByTestId("listed-mention"))[0],
+    ).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: /^Filters/ }));
+  },
+};
+
 /** As a job seeker, I want to see the postings of one status with their count in one click, so that I can work through my pipeline a stage at a time. */
 export const PickAStatus: Story = {
   beforeEach: () => {
@@ -160,6 +187,33 @@ export const RunOneOfMySearches: Story = {
     const page = within(canvasElement);
     await page.findByRole("list", { name: "Postings" });
     await userEvent.click(page.getByRole("button", { name: "Find jobs" }));
+  },
+};
+
+/** As a job seeker, I want to run one of my searches by itself on the days and times I choose, so that each kind of role I look for comes in without my clicking. */
+export const ScheduleOneOfMySearches: Story = {
+  beforeEach: () => {
+    postings();
+    fakeSearches({ saved: [REMOTE_SEARCH, WAITING_SEARCH] });
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const body = within(canvasElement.ownerDocument.body);
+    await page.findByRole("list", { name: "Postings" });
+    await userEvent.click(page.getByRole("button", { name: "Find jobs" }));
+    await userEvent.click(
+      await body.findByRole("button", {
+        name: `More actions for ${WAITING_SEARCH.name}`,
+      }),
+    );
+    await userEvent.click(
+      await body.findByRole("menuitem", { name: "Schedule" }),
+    );
+    await expect(
+      await body.findByRole("dialog", {
+        name: `Automatic search of ${WAITING_SEARCH.name}`,
+      }),
+    ).toBeVisible();
   },
 };
 

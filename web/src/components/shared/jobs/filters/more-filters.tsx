@@ -1,7 +1,7 @@
 /**
  * The filters of the Filters panel beyond status, contract, fit, found and company (jobs J29):
- * place, work mode, website, published, pay, application, and the two presets; and the criteria
- * of the search that found a posting (jobs J30).
+ * place, work mode, website, published, pay, application, and the two presets; the criteria of
+ * the search that found a posting (jobs J30) and whether its own page was read (jobs J31).
  */
 import { useId, useState } from "react";
 
@@ -19,11 +19,17 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 
 import type { Facet } from "@/features/jobs/api/jobs-api";
+import type { SavedSearch } from "@/features/jobs/api/searches-api";
 import {
   CRITERIA_CHOICE_LABELS,
   CRITERIA_CHOICES,
   type CriteriaChoice,
 } from "@/features/jobs/helpers/criteria-words";
+import {
+  LISTING_CHOICE_LABELS,
+  LISTING_CHOICES,
+  type ListingChoice,
+} from "@/features/jobs/helpers/listed-words";
 import {
   cleanPlace,
   foundToday,
@@ -173,6 +179,45 @@ export function WebsiteMenu({
   );
 }
 
+/** Jobs J33b: the postings one of the person's searches added (`search` of the list); a search
+ * deleted since stays named as such, so it can be changed or cleared. */
+export function SearchFilter({
+  filters,
+  onChange,
+  searches,
+}: FilterProps & { searches: readonly SavedSearch[] }) {
+  const known =
+    filters.search === null ||
+    filters.search === "main" ||
+    searches.some((one) => one.id === filters.search);
+  return (
+    <FieldSet className="gap-2">
+      <FieldLegend variant="label">Search</FieldLegend>
+      <NativeSelect
+        aria-label="Search"
+        value={filters.search ?? ""}
+        onChange={(event) => {
+          const value = event.target.value;
+          onChange({ ...filters, search: value === "" ? null : value });
+        }}
+      >
+        <option value="">Every search</option>
+        <option value="main">Main search</option>
+        {searches
+          .filter((one) => !one.main)
+          .map((one) => (
+            <option key={one.id} value={one.id}>
+              {one.name}
+            </option>
+          ))}
+        {known ? null : (
+          <option value={filters.search ?? ""}>A deleted search</option>
+        )}
+      </NativeSelect>
+    </FieldSet>
+  );
+}
+
 /** Jobs J30: every posting (the default), those within the criteria of their search, or those
  * kept outside them with a badge. */
 export function CriteriaFilter({ filters, onChange }: FilterProps) {
@@ -191,6 +236,31 @@ export function CriteriaFilter({ filters, onChange }: FilterProps) {
         {CRITERIA_CHOICES.map((value) => (
           <option key={value} value={value}>
             {CRITERIA_CHOICE_LABELS[value]}
+          </option>
+        ))}
+      </NativeSelect>
+    </FieldSet>
+  );
+}
+
+/** Jobs J31: every posting (the default), those seen only in a list (their own page not read),
+ * or those whose page was read. */
+export function ListingFilter({ filters, onChange }: FilterProps) {
+  return (
+    <FieldSet className="gap-2">
+      <FieldLegend variant="label">Posting page</FieldLegend>
+      <NativeSelect
+        aria-label="Posting page"
+        value={filters.listing ?? ""}
+        onChange={(event) => {
+          const value = event.target.value as ListingChoice | "";
+          onChange({ ...filters, listing: value === "" ? null : value });
+        }}
+      >
+        <option value="">All postings</option>
+        {LISTING_CHOICES.map((value) => (
+          <option key={value} value={value}>
+            {LISTING_CHOICE_LABELS[value]}
           </option>
         ))}
       </NativeSelect>

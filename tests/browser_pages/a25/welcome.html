@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Welcome</title>
+  </head>
+  <body>
+    <h1>Welcome to Example Robotics careers</h1>
+    <p id="said"></p>
+    <script>
+      const said = new URLSearchParams(location.search).get("otp") || "";
+      document.getElementById("said").textContent = "You entered " + said;
+      document.title = "Welcome " + said;
+    </script>
+  </body>
+</html>

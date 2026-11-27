@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 
 import type { FitBucket } from "@/features/jobs/api/jobs-api";
 import { useJobFacets } from "@/features/jobs/api/use-job-facets";
+import { useSavedSearches } from "@/features/jobs/api/use-saved-searches";
 import {
   activeFilterCount,
   EMPTY_FILTERS,
@@ -30,10 +31,12 @@ import { FitRange } from "./fit-range";
 import {
   ApplicationMenu,
   CriteriaFilter,
+  ListingFilter,
   FilterPresets,
   PayFilter,
   PlaceFilter,
   PublishedFilter,
+  SearchFilter,
   WebsiteMenu,
   WorkModeMenu,
 } from "./more-filters";
@@ -65,10 +68,11 @@ export interface FiltersSummary {
  * The toolbar of both Jobs views, List and Map: the search box, a Filters button, the status
  * toggles with their counts, then one chip per active filter. The button counts the filters set
  * in its sheet (the search shows itself) and opens them, in the order a person narrows a list:
- * two presets, place, work mode, contract, criteria, website, published, pay, the fit range with its
- * histogram, application, status, the found dates, company, then the sort. Every change applies
- * at once, as the URL changes; the sheet's last button only closes it, naming how many postings
- * the view now holds.
+ * two presets, the search that added the postings (offered once the person has a saved search, or
+ * while it is set), place, work mode, contract, criteria, posting page, website, published, pay,
+ * the fit range with its histogram, application, status, the found dates, company, then the
+ * sort. Every change applies at once, as the URL changes; the sheet's last button only closes it,
+ * naming how many postings the view now holds.
  */
 export function FiltersToolbar({
   filters,
@@ -87,6 +91,11 @@ export function FiltersToolbar({
   const set = activeFilterCount({ ...filters, q: "" });
   const histogram = summary?.fit_histogram;
   const facets = useJobFacets(filters, open);
+  const searches = useSavedSearches({
+    enabled: open || filters.search !== null,
+  });
+  const listed = searches.data?.items ?? [];
+  const bySearch = listed.some((one) => !one.main) || filters.search !== null;
   return (
     <div
       role="search"
@@ -127,6 +136,13 @@ export function FiltersToolbar({
               </SheetHeader>
               <div className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4">
                 <FilterPresets filters={filters} onChange={onChange} />
+                {bySearch ? (
+                  <SearchFilter
+                    filters={filters}
+                    onChange={onChange}
+                    searches={listed}
+                  />
+                ) : null}
                 <PlaceFilter
                   filters={filters}
                   onChange={onChange}
@@ -136,6 +152,7 @@ export function FiltersToolbar({
                 <WorkModeMenu filters={filters} onChange={onChange} />
                 <TypeMenu filters={filters} onChange={onChange} />
                 <CriteriaFilter filters={filters} onChange={onChange} />
+                <ListingFilter filters={filters} onChange={onChange} />
                 <WebsiteMenu
                   filters={filters}
                   onChange={onChange}

@@ -814,6 +814,31 @@ describe("Past searches", () => {
     ).toBeInTheDocument();
   });
 
+  it("names the search a summary ran: a saved one by its name, an older sweep by none", async () => {
+    const search = {
+      id: "00000000-0000-4000-8000-000000000001",
+      name: "Remote roles",
+    };
+    fakeSweeps({
+      list: [makeSweep({ status: "done", new: 2, search })],
+      states: [finished({ search })],
+    });
+    await openJobs();
+    const user = userEvent.setup();
+    const dialog = await openPastSearches(user);
+    const [item] = within(
+      within(dialog).getByRole("list", { name: "Last searches" }),
+    ).getAllByRole("button");
+    expect(item).toHaveTextContent(/Remote roles, by hand, Done/);
+    await user.click(item!);
+    const summary = await screen.findByRole("dialog", {
+      name: "2 new postings found",
+    });
+    expect(
+      within(summary).getByText(/^Remote roles: /, { selector: "p" }),
+    ).toBeInTheDocument();
+  });
+
   it("says when there is no sweep yet and the automatic search is off", async () => {
     fakeSweeps({ list: [] });
     await openJobs();

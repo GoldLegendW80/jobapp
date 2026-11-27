@@ -11,8 +11,12 @@ from __future__ import annotations
 import json
 import logging
 import secrets
+import sys
+import unicodedata
 import uuid
 from collections.abc import Callable
+from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -33,6 +37,13 @@ from tests.apply.test_a25_waits import SENTENCE, AskSite, go_apply, kinds, svc, 
 from tests.identity.api_helpers import Api
 
 BOX = "e10"  # the site's one time code box on step 1
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "browser"))
+try:  # browserd's own tools on fake pages (pure Python), so the planted code tests prove it
+    from browserd.tools import actions, codes
+
+    from tests.browser import a25_pages as pages_fake
+except ImportError:  # the repository root is not mounted here
+    actions = codes = pages_fake = None  # type: ignore[assignment]
 
 
 class CodeSite(AskSite):
@@ -45,6 +56,7 @@ class CodeSite(AskSite):
         self.code: str | None = None
         self.typed: list[str] = []
         self.ask, self.takes_code = "", False
+        self.shown = codes.Codes() if codes is not None else None
 
     async def ask_begin(self, left_s: int, ask: str = "", code: bool = False) -> str:
         self.code = None
@@ -53,9 +65,11 @@ class CodeSite(AskSite):
     def give(self, lease_id: str, ask_id: str, code: str) -> bool:
         if lease_id != self.lease_id or ask_id != self.ask or not self.takes_code:
             return False
-        if self.where not in ("waiting", "held"):
+        if self.where not in ("waiting", "held") or self.code is not None:
             return False
         self.code = code
+        if self.shown is not None:
+            self.shown.add(code)
         return True
 
     def erase(self, _: str) -> None:
@@ -66,6 +80,12 @@ class CodeSite(AskSite):
         self.code = None
 
     def act(self, name: str, args: dict[str, Any], capability: Any) -> dict[str, Any]:
+        answer = self._act(name, args, capability)
+        if self.shown is not None and self.shown.found(answer):  # as browserd's run
+            return {"ok": False, "error": "code_shown", "message": "The code showed again."}
+        return answer
+
+    def _act(self, name: str, args: dict[str, Any], capability: Any) -> dict[str, Any]:
         if name == "browser_type_code":
             code, self.code = self.code, None
             if code is None:
@@ -73,7 +93,7 @@ class CodeSite(AskSite):
             if args.get("ref") != BOX:
                 return {"ok": False, "error": "not_code_box", "message": "Not a code box."}
             self.typed.append(code)
-            return {"ok": True, "url": self.page, "code_typed": True}
+            return {"ok": True, "code": "taken"}
         if name not in ("browser_snapshot", "browser_wait_for"):
             self.code = None
         if name == "browser_type" and args.get("ref") == BOX:
@@ -81,8 +101,12 @@ class CodeSite(AskSite):
         return super().act(name, args, capability)
 
     def text(self) -> str:
+        """The page's text, the code box's value hidden by the element once typed into, as
+        browserd's snapshot writes it (actions.boxes_hidden)."""
         shown = super().text()
-        return f'{shown}\n- textbox "Verification code" [ref={BOX}]' if "e8" in shown else shown
+        value = "[hidden: a box the app typed the person's code into]" if self.typed else ""
+        box = f'\n- textbox "Verification code" [ref={BOX}]: {value}'
+        return shown + box if "e8" in shown else shown
 
 
 class Client:
@@ -192,7 +216,7 @@ def test_the_code_typed_at_once_reaches_the_box_once_and_a_second_use_is_refused
     site, script = CodeSite({1: during}), coding()
     go_apply(svc(factory, site, script), app_id)
     assert site.typed == [planted]
-    assert json.loads(script.typed[0])["code_typed"] is True
+    assert json.loads(script.typed[0])["code"] == "taken"
     assert json.loads(script.again[0])["error"] == "no_code"
     assert json.loads(script.own[0])["error"] == "credential"  # its own typing, refused as ever
     assert site.erased == 1  # the run's end asks browserd to drop what is left
@@ -201,7 +225,8 @@ def test_the_code_typed_at_once_reaches_the_box_once_and_a_second_use_is_refused
 @pytest.mark.parametrize(
     ("typed", "given"),
     [("4815 1623", "48151623"), ("48-15-16", "481516"), (" K7Q2X9 ", "K7Q2X9"),
-     ("４８１５１６", "481516")],
+     ("４８１５１６", "481516"), ("K7Q-2X9", "K7Q2X9"), ("ABC-123", "ABC123"),
+     ("7KD.3QX", "7KD3QX")],
 )  # fmt: skip
 def test_a_code_as_people_type_it(
     db: Session, factory: sessionmaker[Session], person_a: Person, typed: str, given: str
@@ -224,13 +249,14 @@ def test_a_code_as_people_type_it(
         ("not_a_code_ask", 409, applier.NO_CODE_ASKED),
         ("nothing_waits", 409, "This application waits for no answer now."),
         ("answered_already", 409, "This application waits for no answer now."),
-        ("short", 422, applier.CODE_FORM),
-        ("long", 422, applier.CODE_FORM),
+        ("short", 422, applier.CODE_IN_BROWSER),
+        ("long", 422, applier.CODE_IN_BROWSER),
         ("words", 422, applier.CODE_FORM),
-        ("letters_spaced", 422, applier.CODE_FORM),
+        ("labelled", 422, applier.CODE_FORM),
         ("another_person", 404, "No such application."),
         ("browserd_says_no", 409, "This application waits for no answer now."),
         ("browserd_away", 409, applier.CODE_NOT_TAKEN),
+        ("client_breaks", 409, applier.CODE_NOT_TAKEN),
         ("ended_meanwhile", 409, "This application waits for no answer now."),
         ("no_lease_named", 409, applier.CODE_NOT_TAKEN),
     ],
@@ -244,7 +270,7 @@ def test_a_code_is_refused_off_the_ask_that_waits_for_it_and_nothing_of_it_is_ke
         "short": "123",
         "long": "1" * 17,
         "words": "the code is 4815",
-        "letters_spaced": "K7Q 2X9",
+        "labelled": "Code: 7KD-3QX",
     }.get(case, f"K{secrets.randbelow(10**9):09d}")
     if case != "nothing_waits":
         waits(db, factory, app_id, "other" if case == "not_a_code_ask" else "code")
@@ -261,8 +287,12 @@ def test_a_code_is_refused_off_the_ask_that_waits_for_it_and_nothing_of_it_is_ke
     erased: list[str] = []
 
     def give_(lease: str, ask: str, code: str) -> bool:
-        if case == "browserd_away":
+        if case == "browserd_away":  # a timeout after browserd took it, or before
+            site.give(lease, ask, code)
             raise BrowserError("unavailable")
+        if case == "client_breaks":  # any other failure after browserd took it: erased too
+            site.give(lease, ask, code)
+            raise RuntimeError("the event loop is closed")
         given = site.give(lease, ask, code)
         if case == "ended_meanwhile":  # the person gave the browser back as browserd took it
             with factory() as s:
@@ -274,7 +304,8 @@ def test_a_code_is_refused_off_the_ask_that_waits_for_it_and_nothing_of_it_is_ke
     with factory() as s, pytest.raises(applier.QuestionError) as refused:
         applier.answer_code(s, who, app_id, planted, AT, give_, erased.append)
     assert (refused.value.status, refused.value.detail) == (status, detail)
-    assert erased == ([site.lease_id] if case == "ended_meanwhile" else [])
+    erasing = ("ended_meanwhile", "browserd_away", "client_breaks")
+    assert erased == ([site.lease_id] if case in erasing else [])
     with factory() as s:
         texts = [json.dumps(r.value) for r in s.scalars(sa.select(ApplicationAnswer))]
     assert not any(planted in text for text in texts)
@@ -294,6 +325,8 @@ def test_a_planted_code_given_through_the_api_is_in_no_row_log_answer_or_model_m
     api_app: FastAPI,  # noqa: F811
     caplog: pytest.LogCaptureFixture,
 ) -> None:  # fmt: skip
+    if codes is None:
+        pytest.skip("browserd's finder is not mounted here")
     _password(factory, person_a, person_b)
     app_id = started(db, person_a, Mode.direct)
     planted = f"Q{secrets.randbelow(10**9):09d}"
@@ -339,3 +372,358 @@ def test_a_planted_code_given_through_the_api_is_in_no_row_log_answer_or_model_m
         assert planted not in json.dumps(record.__dict__, default=str)
     assert not any(planted in row for row in tables(db))
     assert "person_answered" in kinds(db, app_id)
+
+
+class PagesSite(AskSite):
+    """A25's site whose browser is browserd's own tools (`actions.run`) on a fake page of
+    api/tests/browser/a25_pages.py: the code kept, typed, sent and found as browserd does."""
+
+    def __init__(self, shape: str, length: int, monkeypatch: Any) -> None:
+        super().__init__()
+        self.fake = pages_fake.FakePage(shape, length)
+        self.tab = pages_fake.tab_on(self.fake, monkeypatch)
+        self.client = self  # agent_act's capability call: `client._tool`
+
+    async def ask_begin(self, left_s: int, ask: str = "", code: bool = False) -> str:
+        self.tab.state.drop_code()
+        return await super().ask_begin(left_s, ask, code)
+
+    def give(self, lease_id: str, ask_id: str, code: str) -> bool:
+        if (lease_id, ask_id, self.takes_code) != (self.lease_id, self.ask, True):
+            return False
+        if self.tab.state.code is not None:
+            return False
+        pages_fake.give(self.tab, code)
+        return True
+
+    def erase(self, _: str) -> None:
+        self.tab.state.drop_code()
+
+    async def erase_code(self) -> None:
+        await super().erase_code()
+        self.tab.state.drop_code()
+
+    async def call(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        return await self._tool(self.lease_id, "t", name, args or {}, None)
+
+    async def _tool(
+        self, lease_id: str, token: str, name: str, args: dict[str, Any], capability: Any
+    ) -> dict[str, Any]:
+        self.tab.gate = capability is not None
+        return await actions.run(self.tab, name, args)
+
+
+def on_pages(site: PagesSite) -> Any:
+    """Opens the code's page, asks for the code, types it with its button, reads three times."""
+
+    async def go(session: applier.ApplySession, message: str) -> applier.Ran:
+        go.seen = [message]  # type: ignore[attr-defined]
+
+        async def told(result: Any) -> None:
+            go.seen.append(json.dumps(result, ensure_ascii=False))  # type: ignore[attr-defined]
+
+        await told(await session.navigate(pages_fake.VERIFY))
+        await told(await session.ask_person("code", SENTENCE))
+        verify = site.fake.verify
+        await told(await session.type_code(site.fake.boxes[0].ref, verify and verify.ref))
+        for _ in range(3):
+            await told(await session.snapshot())
+        if not session.stopped:
+            session.finish("failed", "Stopped.", "", sent="unsure")
+        return applier.Ran(5, 1)
+
+    return go
+
+
+@pytest.mark.skipif(codes is None, reason="browserd is not mounted here")
+@pytest.mark.parametrize("shape", pages_fake.SHAPES if pages_fake else [])
+def test_a_whole_exchange_on_each_page_shape_keeps_the_code_out_of_answers_events_logs_and_rows(
+    db: Session, factory: sessionmaker[Session], person_a: Person, shape: str,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:  # fmt: skip
+    app_id = started(db, person_a, Mode.direct)
+    planted = "".join(secrets.choice("GHJKMNPQRSTVWXYZ") for _ in range(10))
+    site = PagesSite(shape, len(planted), monkeypatch)
+    site.hooks[1] = lambda s: give(factory, person_a, app_id, planted, s)  # type: ignore[arg-type]
+    caplog.set_level(logging.DEBUG)
+    script = on_pages(site)
+    go_apply(svc(factory, site, script), app_id)
+    assert site.fake.code_seen in (planted, "")  # the site got it, or kept its emptied box
+    assert site.tab.state.code_closed is (shape in ("get", "stuck", "later"))
+    for text in script.seen:
+        assert planted not in text
+        assert not site.tab.state.shown.found(text)
+    for record in caplog.records:
+        assert planted not in record.getMessage()
+        assert planted not in json.dumps(record.__dict__, default=str)
+    assert not any(planted in row for row in tables(db))
+    if site.tab.state.code_closed:
+        with factory() as s:
+            report = s.get(ApplicationAnswer, (app_id, applier.REPORT_KEY))
+            assert report is not None
+            assert report.value["summary"] == applier.CODE_SHOWN_SAID
+
+
+def test_two_code_answers_at_once_give_one_code_and_the_second_erases_nothing(
+    db: Session, factory: sessionmaker[Session], person_a: Person
+) -> None:
+    app_id = started(db, person_a, Mode.direct)
+    waits(db, factory, app_id, "code")
+    site = CodeSite()
+    site.ask, site.takes_code = "a" * 16, True
+    with factory() as s:
+        row = applier.open_ask(s, application(s, app_id))
+        row.value = {**row.value, "lease_id": site.lease_id, "ask_id": site.ask}
+        s.commit()
+    erased: list[str] = []
+    second: dict[str, Any] = {}
+
+    def give_(lease: str, ask: str, code: str) -> bool:
+        # Another tab answers while browserd takes the first code: refused before browserd,
+        # as are words to the same question; nothing of theirs is given or erased.
+        calls = {
+            "code": lambda s: applier.answer_code(
+                s, person_a.user_id, app_id, "Z9Z9Z9", AT, site.give, erased.append
+            ),
+            "words": lambda s: applier.answer_question(
+                s, person_a.user_id, app_id, "No mail came", False, AT
+            ),
+        }
+        for how, call in calls.items():
+            with factory() as s, pytest.raises(applier.QuestionError) as refused:
+                call(s)
+            second[how] = (refused.value.status, refused.value.detail)
+        return site.give(lease, ask, code)
+
+    with factory() as s:
+        applier.answer_code(s, person_a.user_id, app_id, "K7Q-2X9", AT, give_, erased.append)
+        s.commit()
+    assert second == {"code": (409, applier.CODE_ON_ITS_WAY),
+                      "words": (409, applier.CODE_ON_ITS_WAY)}  # fmt: skip
+    assert (site.code, erased) == ("K7Q2X9", [])
+    with factory() as s:
+        value = applier.open_ask(s, application(s, app_id)).value
+    assert (value["code"], "giving" in value) == (True, False)
+    # A marker left by an answer that died is stale after GIVING_S: the ask takes a code again.
+    with factory() as s:
+        row = applier.open_ask(s, application(s, app_id))
+        row.value = {k: v for k, v in row.value.items() if k != "code"}
+        row.value = {**row.value, "giving": "dead", "giving_at": AT.isoformat()}
+        s.commit()
+    site.code = None
+    later = AT + timedelta(seconds=applier.GIVING_S)
+    with factory() as s:
+        applier.answer_code(s, person_a.user_id, app_id, "481516", later, site.give, erased.append)
+        s.commit()
+    assert site.code == "481516"
+
+
+# Words to an ask of kind code (`looks_like_code`): refused when they may hold a code, so they
+# never reach the model; the code box takes the code-shaped ones (`code_of`).
+WORDS_REFUSED = [
+    "K7Q-2X9",
+    "K7Q 2X9",
+    "ABC-123",
+    "Code: 7KD-3QX",
+    "12/34/56",
+    "123,456",
+    "12:34:56",
+    "123\u2013456",
+    "123\u2011456",
+    "481516",
+    "4815",
+    "48 15 16",
+    "4 8 1 5 1 6",
+    "XKCDQW",
+    "the code is XKCD",
+    "mon code : 48-15",
+    "Der Code ist 4815",
+    "It is 2024",
+    "OK 404",
+    "aBcDeF",
+    "K 7 Q 2",
+    "code \uff14\uff18\uff11\uff15",
+    "K7Q2",
+    "it says K7Q2X9 thanks",
+    "A B C D",
+    # Small letters (review of PR 849, round 2): a token whose letters and digits, its marks
+    # aside, number 4 or more with a digit among them.
+    "abc-123",
+    "Abc-123",
+    "abc.123",
+    "abc_123",
+    "ab-12-cd",
+    "12-ab-34",
+    "the code is abc-123",
+    "abc!123",
+    "(abc-123)",
+    "abc/123",
+    "a1b2",
+    "x-4815",
+    "q-4-8-1",
+    "Il est 9h30",
+    "abc\u200b123",
+]
+WORDS_KEPT = [
+    "No mail came",
+    "Nothing arrived yet",
+    "I have no phone here",
+    "Try again in 5 minutes",
+    "It says error 404",
+    "The mail went to spam, give me a minute",
+    "I am on it",
+    "Je n'ai rien re\u00e7u",
+    "Ich habe keine Mail bekommen",
+    "Wait 10 min please",
+    "Use my other address",
+    "The site says the code expired",
+    "Rien pour l'instant",
+    "Give me 2 minutes",
+    "Ok",
+    "I",
+    "Done",
+    "Retry",
+    "Not yet, the SMS is late",
+    "No code came, send another one",
+    "",
+    "Il est 9h",
+    "Can you click Resend",
+    "My phone is off for 1 hour",
+    "My e-mail is fine",
+    "Maybe a 2nd mail",
+    "Step 3 of 5",
+    "abc-def",
+]
+
+
+@pytest.mark.parametrize("text", WORDS_REFUSED)
+def test_words_that_may_hold_a_code_are_refused(text: str) -> None:
+    assert applier.looks_like_code(text)
+
+
+@pytest.mark.parametrize("text", WORDS_KEPT)
+def test_words_that_hold_no_code_reach_the_assistant(text: str) -> None:
+    assert not applier.looks_like_code(text)
+
+
+CODE_BOX = [
+    ("481516", "481516"),
+    ("4815 1623", "48151623"),
+    ("48-15-16", "481516"),
+    ("K7Q-2X9", "K7Q2X9"),
+    ("K7Q 2X9", "K7Q2X9"),
+    ("ABC-123", "ABC123"),
+    ("7KD.3QX", "7KD3QX"),
+    ("123\u2013456", "123456"),
+    ("123\u2011456", "123456"),
+    ("12 34 56", "123456"),
+    ("\uff14\uff18\uff11\uff15\uff11\uff16", "481516"),
+    (" K7Q2X9 ", "K7Q2X9"),
+    ("XKCDQW", "XKCDQW"),
+    ("G-123456", "G123456"),
+    ("4815_1623", "48151623"),
+    ("ABCD-EFGH", "ABCDEFGH"),
+    ("1234567890123456", "1234567890123456"),
+    ("Q4815162342", "Q4815162342"),
+    # The words box's code like tokens, in small letters too (review of PR 849, round 2).
+    ("abc-123", "abc123"),
+    ("Abc-123", "Abc123"),
+    ("abc.123", "abc123"),
+    ("abc_123", "abc123"),
+    ("ab-12-cd", "ab12cd"),
+    ("12-ab-34", "12ab34"),
+    ("12/34/56", "123456"),
+    ("123,456", "123456"),
+    ("12:34:56", "123456"),
+    ("K7Q+2X9", "K7Q2X9"),
+    ("(481516)", "481516"),
+    ("481516.", "481516"),
+    ("abc\u200b123", "abc123"),
+]
+CODE_BOX_REFUSED = [
+    "123",
+    "1" * 17,
+    "the code is 4815",
+    "Code: 7KD-3QX",
+    "abc-def",
+    "4815!",
+    "",
+    "   ",
+    "-4815",
+    "481 516 ok",
+    "\u00c4BCD",
+    "\u03ba\u03c9\u03b4\u03b9\u03ba\u03cc\u03c2",
+    "48/15",
+    "My code 4815",
+    "12 34 56 78 90 12 34 56 7",
+    "co de",
+    "xkcdqw",
+    "4 8 1 5",
+    "4815",
+    "48151",
+    "abc 123",
+    "\u0661\u0662\u0663\u0664\u0665\u0666",
+]
+
+
+@pytest.mark.parametrize(("typed", "given"), CODE_BOX)
+def test_the_code_box_takes_the_shapes_sites_send(typed: str, given: str) -> None:
+    assert applier.code_of(typed) == given
+
+
+@pytest.mark.parametrize("typed", CODE_BOX_REFUSED)
+def test_the_code_box_refuses_what_is_no_code(typed: str) -> None:
+    assert applier.code_of(typed) == ""
+    assert applier.code_refused(typed) in (applier.CODE_FORM, applier.CODE_IN_BROWSER)
+
+
+@pytest.mark.parametrize(
+    ("typed", "said"),
+    [("4815", applier.CODE_IN_BROWSER), ("48151", applier.CODE_IN_BROWSER),
+     ("48 15", applier.CODE_IN_BROWSER), ("ab-12", applier.CODE_IN_BROWSER),
+     ("1" * 17, applier.CODE_IN_BROWSER),
+     ("\u0661\u0662\u0663\u0664\u0665\u0666", applier.CODE_IN_BROWSER),
+     ("the code is 4815", applier.CODE_FORM), ("xkcdqw", applier.CODE_FORM),
+     ("Code: 7KD-3QX", applier.CODE_FORM)],
+)  # fmt: skip
+def test_a_code_the_app_does_not_type_is_sent_to_the_browser(typed: str, said: str) -> None:
+    # 4 or 5 characters would end honest runs on a year or a phone number (browserd closes the
+    # tools when an answer holds the code): the person types such a code in the browser.
+    assert applier.code_refused(typed) == said
+    assert typed.strip() not in said or not typed.strip()
+
+
+# Generated inputs over a code's alphabet, its marks and other scripts: the two properties of
+# the words box and the code box (review of PR 849, round 2).
+ALPHABET = (
+    "abcxyzABCXYZ0123456789"
+    + "-._/:,+!?()'"
+    + "  "
+    + "\u00a0\u2013\u200b\u00ad"
+    + "\uff14\u00e9\u00c4\u03ba\u0661"
+)
+
+
+def generated(count: int, *, spaces: bool) -> list[str]:
+    import random
+
+    pick = random.Random(849)  # noqa: S311  a fixed draw of test inputs, no secret
+    letters = ALPHABET if spaces else ALPHABET.replace(" ", "").replace("\u00a0", "")
+    return ["".join(pick.choice(letters) for _ in range(pick.randint(1, 22))) for _ in range(count)]
+
+
+def test_nothing_the_code_box_takes_passes_as_words() -> None:
+    taken = [text for text in generated(20_000, spaces=True) if applier.code_of(text)]
+    assert len(taken) > 500  # the generator reaches codes
+    assert [text for text in taken if not applier.looks_like_code(text)] == []
+
+
+def test_a_token_refused_as_code_like_is_taken_or_sent_to_the_browser() -> None:
+    tokens = [t for t in generated(20_000, spaces=False) if len(t.split()) == 1]
+    refused = [t for t in tokens if applier._code_token(applier.WORD.findall(
+        unicodedata.normalize("NFKC", t)))]  # fmt: skip
+    assert len(refused) > 500
+    for token in refused:
+        assert applier.looks_like_code(token)
+        if not applier.code_of(token):
+            assert applier.code_refused(token) == applier.CODE_IN_BROWSER, token

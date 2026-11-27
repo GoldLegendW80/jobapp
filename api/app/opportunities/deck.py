@@ -214,6 +214,7 @@ def _candidates(user_id: uuid.UUID, min_fit: int, filters: Filters, mode: Mode) 
         Job.status.in_(DECK_STATUSES),
         sa.or_(Job.fit >= min_fit, sa.and_(Job.fit.is_(None), text == "")),
         sa.func.coalesce(sa.func.cardinality(Job.outside_criteria), 0) == 0,
+        Job.list_url.is_(None),  # jobs J31: seen only in a list, its text not read
         ~applied,
     )
     if filters.types:

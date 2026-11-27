@@ -18,6 +18,7 @@ import {
   sweepsKey,
   type ScheduleState,
 } from "./sweeps-api";
+import { searchesKey } from "./searches-api";
 import { useSweeps } from "./use-sweeps";
 
 /** The schedule as the list of sweeps reports it, and the line that sums it up. */
@@ -49,7 +50,8 @@ export function scheduleLine(state: ScheduleState | undefined): string {
     : line;
 }
 
-/** Saves the schedule in the profile, then reads the sweeps and the profile again. */
+/** Saves the schedule in the profile, then reads the sweeps, the profile and the searches again
+ * (the time zone is every search's). */
 export function useSaveSchedule(
   handlers: Pick<
     UseMutationOptions<void, Error, SweepSchedule>,
@@ -63,6 +65,7 @@ export function useSaveSchedule(
     onSuccess: (...args) => {
       void client.invalidateQueries({ queryKey: sweepsKey });
       void client.invalidateQueries({ queryKey: profileQueryKey });
+      void client.invalidateQueries({ queryKey: searchesKey });
       return handlers.onSuccess?.(...args);
     },
   });

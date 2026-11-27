@@ -86,6 +86,14 @@ export const sweepSourceSchema = z.object({
   opened_by_app: z.number().int().nonnegative().optional(),
   results_read: z.number().int().nonnegative().nullable().optional(),
   other_contract: z.number().int().nonnegative().optional(),
+  // Jobs J31: of the new ones, `listed` kept from a card of a list (their own page not read);
+  // `listed_read` postings kept so before whose page this source read; `cards_refused` the
+  // cards of a list the app's check refused, by reason. Absent from an older api.
+  listed: z.number().int().nonnegative().optional(),
+  listed_read: z.number().int().nonnegative().optional(),
+  cards_refused: z
+    .record(z.string(), z.number().int().nonnegative())
+    .optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;

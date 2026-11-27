@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.identity.models import User
 from app.jobs import criteria_badge
-from app.jobs.models import SavedSearch, SweepRequest, SweepTrigger
+from app.jobs.models import SavedSearch, Sweep, SweepRequest, SweepTrigger
 from app.profile.models import Profile
 from app.profile.schemas import (
     SCHEDULE_TIMES_MAX,
@@ -305,6 +305,33 @@ def delete(db: Session, user_id: uuid.UUID, search_id: uuid.UUID) -> bool:
     db.flush()
     criteria_badge.refresh(db, user_id, None, criteria_badge.criteria_for(db, user_id, None))
     return True
+
+
+def last_runs(db: Session, user_id: uuid.UUID) -> dict[uuid.UUID | None, sa.Row[Any]]:
+    """The newest sweep of each of the person's searches, in one query (jobs J33b): the main
+    search's under None (the sweeps that froze no saved search, as service.added_by_search reads
+    them), a saved search's under its id; a deleted search's sweeps are no search's. Each row has
+    `id`, `status`, `started_at`, `finished_at` and `new` (the stats' count, as stored)."""
+    frozen = sa.func.jsonb_typeof(Sweep.stats[("search_scope", "saved_search", "name")])
+    main = sa.and_(Sweep.saved_search_id.is_(None), sa.func.coalesce(frozen, "") != "string")
+    owner = sa.case((main, sa.literal(MAIN)), else_=sa.cast(Sweep.saved_search_id, sa.Text))
+    ranked = (
+        sa.select(
+            Sweep.saved_search_id,
+            Sweep.id,
+            Sweep.status,
+            Sweep.started_at,
+            Sweep.finished_at,
+            Sweep.stats["new"].label("new"),
+            sa.func.row_number()
+            .over(partition_by=owner, order_by=(Sweep.started_at.desc(), Sweep.id.desc()))
+            .label("rank"),
+        )
+        .where(Sweep.user_id == user_id, sa.or_(main, Sweep.saved_search_id.is_not(None)))
+        .subquery()
+    )
+    rows = db.execute(sa.select(ranked).where(ranked.c.rank == 1)).all()
+    return {row.saved_search_id: row for row in rows}
 
 
 # --- the line -----------------------------------------------------------------------------------

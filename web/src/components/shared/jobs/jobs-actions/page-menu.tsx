@@ -35,7 +35,8 @@ function scheduleState(state: ScheduleState | undefined): string {
 }
 
 /**
- * The page's "More actions" menu: the automatic search (its state on the item), the past
+ * The page's "More actions" menu: the main search's automatic search (its state on the item;
+ * each saved search's is on its row in Find jobs), the past
  * searches, and rescoring all postings or the selected ones. Each opens its own dialog; Your
  * search in numbers opens its page.
  */
@@ -68,7 +69,7 @@ export function PageMenu({
           >
             <CalendarClock aria-hidden="true" className="mt-0.5" />
             <span className="flex min-w-0 flex-col">
-              Automatic search
+              Automatic search of your main search
               <span className="text-xs text-muted-foreground">
                 {scheduleState(schedule)}
               </span>

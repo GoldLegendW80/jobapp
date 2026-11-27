@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -15,15 +16,15 @@ import {
   useTakeBack,
 } from "@/features/jobs/api/use-saved-searches";
 import type { SweepRunner } from "@/features/jobs/api/use-sweep-runner";
-import { useSweeps } from "@/features/jobs/api/use-sweeps";
 import {
-  lastRunOf,
+  runAllWords,
   runWords,
   searchOf,
 } from "@/features/jobs/helpers/saved-searches";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+import { ScheduleDialog } from "@/components/shared/jobs/schedule-dialog";
 import { COLUMN } from "@/components/shared/jobs/setup-grid";
 import { SearchRow } from "./search-row";
 import { BODY } from "./setup-surface";
@@ -33,23 +34,6 @@ const SAVED_MAX = 20;
 
 function failed(action: string, error: unknown) {
   toast.error(`${action}. ${errorDetail(error) ?? describeError(error)}`);
-}
-
-/** What Run all did, in one sentence: the searches started and those waiting in the line. */
-function runAllWords(runs: readonly SearchRun[], names: Map<string, string>) {
-  const name = (run: SearchRun) => names.get(run.search_id) ?? "A search";
-  const started = runs.filter((run) => run.outcome === "started").map(name);
-  const queued = runs.filter((run) => run.outcome === "queued").map(name);
-  const left = runs.filter(
-    (run) => run.outcome !== "started" && run.outcome !== "queued",
-  ).length;
-  return [
-    started.length ? `${started.join(", ")} started.` : "",
-    queued.length ? `${queued.join(", ")} wait in line.` : "",
-    left ? `${String(left)} had nothing to search.` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
 }
 
 /**
@@ -66,12 +50,11 @@ export function SearchesList({
   runner: SweepRunner;
   onEdit: (id: string) => void;
   onNew: () => void;
-  /** A search started: Find jobs closes so its progress shows on the page. */
+  /** A search started, or its new postings open in the list: Find jobs closes, so they show on
+   * the page. */
   onStarted: () => void;
 }) {
   const searches = useSavedSearches();
-  const history = useSweeps();
-  const sweeps = history.data?.items ?? [];
   const items = searches.data?.items ?? [];
   const names = items.filter((item) => !item.main).map((item) => item.name);
   const running = runner.running?.search ? searchOf(runner.running) : null;
@@ -130,6 +113,11 @@ export function SearchesList({
     },
   });
   const rename = useRenameSearch({});
+  // The search whose schedule is open: the list's newest copy of it, the last one seen once gone.
+  const [scheduling, setScheduling] = useState<SavedSearch | null>(null);
+  const scheduled = scheduling
+    ? (items.find((item) => item.id === scheduling.id) ?? scheduling)
+    : null;
   const busy =
     run.isPending ||
     runAll.isPending ||
@@ -199,8 +187,6 @@ export function SearchesList({
               <SearchRow
                 key={search.id}
                 search={search}
-                last={lastRunOf(search.id, sweeps)}
-                complete={history.isSuccess && sweeps.length < 20}
                 running={running === search.id}
                 names={names.filter((one) => one !== search.name)}
                 disabled={busy}
@@ -209,6 +195,9 @@ export function SearchesList({
                 }}
                 onEdit={() => {
                   onEdit(search.id);
+                }}
+                onSchedule={() => {
+                  setScheduling(search);
                 }}
                 onDuplicate={() => {
                   duplicate.mutate({ search, names });
@@ -220,11 +209,21 @@ export function SearchesList({
                 onTakeBack={() => {
                   takeBack.mutate(search.id);
                 }}
+                onOpenPostings={onStarted}
               />
             ))}
           </ul>
         )}
       </div>
+      {scheduled ? (
+        <ScheduleDialog
+          state={scheduled.schedule}
+          search={scheduled.main ? undefined : scheduled}
+          onClose={() => {
+            setScheduling(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

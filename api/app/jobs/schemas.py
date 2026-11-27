@@ -406,6 +406,9 @@ class JobListItem(BaseModel):
     # order: `contract` (its contract_type), `work_mode` (its work_mode), `older` (published more
     # than the search's days before found_on); [] within, or a row no pass reached yet.
     outside_criteria: list[str] = Field(default_factory=list)
+    # Jobs J31: seen only in a list, its own page not read: the list's address; None once its
+    # page was read or its text set by the person, and for any other posting.
+    list_url: str | None = None
 
     @field_validator("outside_criteria", mode="before")
     @classmethod
@@ -656,6 +659,18 @@ class UndoOut(BaseModel):
     skipped: list[uuid.UUID]
 
 
+# Jobs J31b: sweep.POSTING_TEXT_MAX, the longest text a posting keeps.
+PASTED_MAX = 200_000
+
+
+class JobTextIn(BaseModel):
+    """PUT /api/jobs/{id}/text (jobs J31b): the posting's text the person pasted."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: Annotated[str, StringConstraints(max_length=PASTED_MAX)]
+
+
 class JobCreateIn(BaseModel):
     """POST /api/jobs: a posting added by hand. The contract type, when not given, is read from
     the title, location and url as the engine did."""
@@ -836,6 +851,12 @@ class SourceOut(BaseModel):
     opened_by_app: int = Field(default=0, ge=0)
     results_read: int | None = Field(default=None, ge=0)
     other_contract: int = Field(default=0, ge=0)
+    # Jobs J31: of the new ones, `listed` were kept from a card of a list, their own page not
+    # read; `listed_read` postings kept so before whose page this source read, their card's text
+    # replaced; `cards_refused` the cards the evidence rule refused, by reason.
+    listed: int = Field(default=0, ge=0)
+    listed_read: int = Field(default=0, ge=0)
+    cards_refused: dict[str, int] = Field(default_factory=dict)
     # LinkedIn's public job search: the searches it built from the saved titles and places, of
     # which `searches` ran before its caps (0 from an older sweep or another source).
     planned: int = Field(default=0, ge=0)
@@ -999,9 +1020,21 @@ class SearchRequestOut(BaseModel):
     requested_at: datetime
 
 
+class SearchLastRunOut(BaseModel):
+    """A search's newest sweep (jobs J33b), however old: its id (the Jobs list's `sweep`), its
+    status, when it started and ended, and the new postings it kept."""
+
+    sweep_id: uuid.UUID
+    status: str
+    started_at: datetime
+    finished_at: datetime | None
+    new: int
+
+
 class SavedSearchOut(BaseModel):
     """One of the person's searches. The main one (`id` "main", `main` true) is the profile's
-    search section: its revision is the profile's, and it changes in Settings."""
+    search section: its revision is the profile's, and it changes in Settings. `last_run` is
+    null for a search that never ran."""
 
     id: str
     name: str
@@ -1010,6 +1043,7 @@ class SavedSearchOut(BaseModel):
     criteria: dict[str, Any]
     schedule: SearchScheduleOut
     request: SearchRequestOut | None = None
+    last_run: SearchLastRunOut | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

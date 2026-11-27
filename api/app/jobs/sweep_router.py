@@ -174,9 +174,18 @@ def sweep_out(row: Sweep) -> SweepOut:
         return {
             **{
                 name: max(0, count(item, name))
-                for name in ("duplicates", "outside", "unwanted", "opened_by_app", "other_contract")
+                for name in (
+                    "duplicates",
+                    "outside",
+                    "unwanted",
+                    "opened_by_app",
+                    "other_contract",
+                    "listed",
+                    "listed_read",
+                )
             },
             "refused": refusals(item.get("refused")),
+            "cards_refused": refusals(item.get("cards_refused")),
             "results_read": said
             if isinstance(said, int) and not isinstance(said, bool) and said >= 0
             else None,

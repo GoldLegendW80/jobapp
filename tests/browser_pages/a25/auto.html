@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Enter your code</title>
+  </head>
+  <body>
+    <h1>Enter the code we sent</h1>
+    <!-- No button: the page sends the code by itself at its last character. -->
+    <label for="otp">Verification code</label>
+    <input id="otp" autocomplete="one-time-code" maxlength="6" />
+    <script>
+      const box = document.getElementById("otp");
+      box.addEventListener("input", () => {
+        if (box.value.length === 6) location.href = "done.html";
+      });
+    </script>
+  </body>
+</html>

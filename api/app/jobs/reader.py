@@ -631,11 +631,22 @@ def save(
             service.add_event(db, job, JobEventKind.edit, {"changes": edits, "via": VIA}, now)
             service.touch(job, now)
         db.flush()
+        # Jobs J31: a text replaced since the run was bound (a posting seen in a list whose
+        # page a search read) stays to read, so its own words are read too.
+        digests = (binding or {}).get("texts")
+        replaced = (
+            isinstance(digests, list | tuple)
+            and facts.index < len(digests)
+            and digests[facts.index] != _digest(text)
+        )
+        done: dict[str, Any] = {"updated_at": Job.updated_at}
+        done.update(_badge(db, job, "contract_type" in values))
+        if not replaced:
+            done["read_at"] = now
         db.execute(
             sa.update(Job)
             .where(Job.id == job.id)
-            .values(read_at=now, **_badge(db, job, "contract_type" in values))
-            .values(updated_at=Job.updated_at)
+            .values(**done)
             .execution_options(synchronize_session=False)
         )
         db.commit()

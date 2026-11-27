@@ -2,6 +2,7 @@
  * last run, what a run did, what a save that stopped halfway left, and the websites the other
  * searches keep a permission for. */
 import { describeSchedule } from "@/features/profile/helpers/schedule";
+import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import type { Criteria, SavedSearch, SearchRun } from "../api/searches-api";
 import type { ScheduleState, Sweep } from "../api/sweeps-api";
@@ -64,12 +65,15 @@ export function searchOf(sweep: Pick<Sweep, "search">): string | null {
     : sweep.search.id;
 }
 
-/** The newest sweep of a search among the last ones listed. */
-export function lastRunOf(
-  id: string,
-  sweeps: readonly Sweep[],
-): Sweep | undefined {
-  return sweeps.find((sweep) => searchOf(sweep) === id);
+/** A search's name for the Jobs list's filter: null once the person no longer has it, undefined
+ * while her searches are not read. */
+export function searchNameOf(
+  searches: readonly SavedSearch[] | undefined,
+): (id: string) => string | null | undefined {
+  return (id) =>
+    searches
+      ? (searches.find((one) => one.id === id)?.name ?? null)
+      : undefined;
 }
 
 /** A free name for a copy: "Name copy", then "Name copy 2", within the 60 characters. */
@@ -120,6 +124,62 @@ export function runWords(
       : `${name} waits in line.`;
   if (run.outcome === "started") return `${name} started.`;
   return `${name} did not start. ${NOT_STARTED[run.outcome] ?? "Try again."}`;
+}
+
+export const SEARCH_GONE = "This search no longer exists.";
+
+/** What Run all did: the searches started, those waiting in the line, those with nothing to
+ * search, and each other one that did not start with its reason (a queue down included). */
+export function runAllWords(
+  runs: readonly SearchRun[],
+  names: ReadonlyMap<string, string>,
+): string {
+  const name = (run: SearchRun) => names.get(run.search_id) ?? "A search";
+  const named = (outcome: string) =>
+    runs.filter((run) => run.outcome === outcome).map(name);
+  const started = named("started");
+  const queued = named("queued");
+  const nothing = named("no_websites");
+  const others = runs.filter(
+    (run) => !["started", "queued", "no_websites"].includes(run.outcome),
+  );
+  return [
+    started.length ? `${started.join(", ")} started.` : "",
+    queued.length
+      ? `${queued.join(", ")} ${queued.length === 1 ? "waits" : "wait"} in line.`
+      : "",
+    nothing.length ? `${nothing.join(", ")} had nothing to search.` : "",
+    ...others.map((run) => runWords(name(run), run)),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** Why a saved search's schedule was not saved, in the words of its form and its row: `gone`
+ * when the search no longer exists, so there is nothing to save again; `moved` when it changed in
+ * another tab, so it must be read again before the next save. */
+export function scheduleFailure(failure: unknown): {
+  text: string;
+  gone: boolean;
+  moved: boolean;
+} {
+  if (isApiError(failure) && failure.status === 404)
+    return { text: SEARCH_GONE, gone: true, moved: false };
+  if (
+    isApiError(failure) &&
+    failure.status === 409 &&
+    (failure.body as { revision?: unknown } | null)?.revision !== undefined
+  )
+    return {
+      text: "This search changed in another tab. Try again.",
+      gone: false,
+      moved: true,
+    };
+  return {
+    text: `Not saved. ${errorDetail(failure) ?? describeError(failure)}`,
+    gone: false,
+    moved: false,
+  };
 }
 
 /** "the Indeed permission", "the Indeed and LinkedIn permissions". */

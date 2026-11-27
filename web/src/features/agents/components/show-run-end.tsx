@@ -1,7 +1,6 @@
 import { toast, type ExternalToast } from "sonner";
 
-import type { WorkflowRunDetail } from "../api/activity-api";
-import { runEndWords } from "../helpers/run-ends";
+import { runEndWords, type RunEnd } from "../helpers/run-ends";
 import { RunEndDetails } from "./run-end-details";
 
 // Long enough to read a failure's reason and reach a link.
@@ -9,7 +8,7 @@ export const RUN_END_TOAST_MS = 20_000;
 
 /** The toast of a run that ended: success, error or plain by its status, one per run id. */
 export function showRunEnd(
-  run: WorkflowRunDetail,
+  run: RunEnd,
   options: Pick<ExternalToast, "toasterId" | "duration"> = {},
 ) {
   const words = runEndWords(run);
