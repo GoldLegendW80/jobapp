@@ -37,6 +37,7 @@ describe("the apply agent's wait, in words (A25)", () => {
     expect(shownText("Sign in\n\nhere,‮please\u0007")).toBe(
       "Sign in here, please",
     );
+    expect(shownText("a؜b⁠c⁤d")).toBe("a b c d");
     const long = "x".repeat(SHOWN_MAX * 4);
     const shown = shownText(long);
     expect(Array.from(shown)).toHaveLength(SHOWN_MAX + 1);
