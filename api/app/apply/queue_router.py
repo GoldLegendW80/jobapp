@@ -219,6 +219,7 @@ def _deciding() -> sa.ColumnElement[bool]:
 def _waiting() -> sa.ColumnElement[bool]:
     return sa.or_(
         sa.and_(Application.state.in_(WAITING_ON_YOU), ~_deciding()),
+        sa.and_(Application.state == S.submitting, Application.needs == "agent_waits"),  # A25
         _rehearsal_waiting(),
         _manual_ended(),
     )

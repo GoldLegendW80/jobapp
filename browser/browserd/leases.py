@@ -58,6 +58,12 @@ log = logging.getLogger("browserd")
 Clock = Callable[[], float]
 APPLY_WAITS = frozenset({"captcha", "email_code", "forbidden"})
 APPLY_WAIT_S = 1800
+# A25: the apply agent's leases, whose `ask_person` waits for the person in the app
+# (tools/routes.agent_ask): a Take over turns it into a takeover, and only its Give back or the
+# api's resume makes it active; ASK_GRACE_S past its deadline it ends (a worker that died).
+ASK_PURPOSES = frozenset({"apply_agent", "apply_review"})
+ASK_MAX_S = 1800
+ASK_GRACE_S = 60
 
 LANGUAGE = re.compile(r"^[a-z]{2,3}(-[A-Z]{2})?$")
 TIMEZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
@@ -231,6 +237,13 @@ class Lease:
             if self.wait_reason in ("takeover", "ask_person"):
                 # Live.tick gives input back when the takeover allowance ends, and resumes an
                 # ask nobody took over at its deadline (B20, tools/ask_person.py).
+                if (
+                    self.wait_reason == "ask_person"
+                    and self.request.purpose in ASK_PURPOSES
+                    and self.wait_deadline is not None
+                    and now >= self.wait_deadline + ASK_GRACE_S
+                ):
+                    return "person_timeout"
                 return None
             if self.wait_deadline is None or now < self.wait_deadline:
                 return None

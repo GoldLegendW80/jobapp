@@ -21,10 +21,11 @@ One click Apply's agent lease: the apply session's code sends the capability wit
 call once it read the emergency stop off, and the model never holds it.
 """
 
+import contextlib
 from typing import Any
 
-from app.browser.client import BrowserdClient, BrowserError
-from app.browser.leases import Leases
+from app.browser.client import BrowserdClient, BrowserError, held_in
+from app.browser.leases import Leases, StoreUnavailableError
 
 SIGNIN_TOOL = "browser_request_signin"
 SIGNIN_REFUSED = "Ask for a sign in through request_signin (app.browser.handoff), not as a tool."
@@ -68,6 +69,44 @@ class LeaseTools:
         if await self.leases.apply_wait(self.user_id, self.lease_id, lease) is None:
             raise BrowserError("ended")
         return lease
+
+    async def ask_begin(self, left_s: int) -> str:
+        """A25: the apply agent's wait for the person (browserd's `agent_ask`), the api's copy of
+        the lease waiting with it. Answers the tab's host browserd noted."""
+        await self._held()
+        answer = await self.client.agent_ask(self.lease_id, self._token, "begin", left_s)
+        lease = answer.get("lease")
+        if not isinstance(lease, dict):
+            raise BrowserError("unavailable")
+        host = str(lease.get("wait_host") or "")[:253]
+        if lease.get("state") == "waiting_person":
+            reason = "takeover" if lease.get("wait_reason") == "takeover" else "ask_person"
+            with contextlib.suppress(StoreUnavailableError):
+                await self.leases.wait_person(self.user_id, self.lease_id, reason, host, left_s)
+        return host
+
+    async def ask_state(self) -> str:
+        """`waiting`, `held` (the person holds the input), `back` (active again: their Give
+        back, a take over's end) or `ended`. The api's copy is settled first, so it mirrors a
+        take over and never ends the lease at the ask's deadline under the person."""
+        await self._held()
+        with contextlib.suppress(StoreUnavailableError):
+            await self.leases.current(self.user_id)
+        lease = held_in(await self.client.current(), self.lease_id)
+        if lease is None:
+            return "ended"
+        if lease.get("state") == "active":
+            with contextlib.suppress(StoreUnavailableError):
+                await self.leases.resume(self.user_id, self.lease_id)
+            return "back"
+        return "held" if lease.get("wait_reason") == "takeover" else "waiting"
+
+    async def ask_resume(self) -> None:
+        """The person answered in the app: the lease is active again (a take over aside)."""
+        await self._held()
+        await self.client.agent_ask(self.lease_id, self._token, "resume")
+        with contextlib.suppress(StoreUnavailableError):
+            await self.leases.resume(self.user_id, self.lease_id)
 
     async def _person_snapshot(self) -> dict[str, Any]:
         await self._owned_apply()
