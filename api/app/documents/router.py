@@ -57,6 +57,7 @@ from app.documents import (
     corrections,
     freeze,
     panel,
+    pdf_text,
     render_client,
     render_job,
     store,
@@ -159,6 +160,9 @@ class VersionSummary(BaseModel):
     frozen_reason: FreezeReason | None
     corrections_count: int
     unprintable_count: int
+    # The findings of the check of its PDF's text layer, `{code, message}` each; null: never
+    # checked (rendered before the check, or not rendered yet).
+    pdf_text: list[dict[str, str]] | None = None
 
 
 class VersionOut(VersionSummary):
@@ -252,8 +256,13 @@ def _unprintable(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [record for record in records if record.get("code") == corrections.NOT_PRINTABLE]
 
 
+def _corrections(version: DocumentVersion) -> list[dict[str, Any]]:
+    """The version's corrections, without the records of its PDF's check (`pdf_text`)."""
+    return [record for record in version.corrections or [] if not pdf_text.is_record(record)]
+
+
 def _summary(version: DocumentVersion) -> dict[str, Any]:
-    records = list(version.corrections or [])
+    records = _corrections(version)
     return {
         "number": version.number,
         "origin": version.origin,
@@ -271,11 +280,12 @@ def _summary(version: DocumentVersion) -> dict[str, Any]:
         "frozen_reason": version.frozen_reason,
         "corrections_count": len(records),
         "unprintable_count": len(_unprintable(records)),
+        "pdf_text": pdf_text.summary(version.corrections or []),
     }
 
 
 def _version_out(version: DocumentVersion) -> VersionOut:
-    records = list(version.corrections or [])
+    records = _corrections(version)
     return VersionOut(
         **_summary(version),
         content=version.content,

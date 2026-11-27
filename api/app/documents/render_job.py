@@ -65,7 +65,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import queue as queues
 from app.documents import content as c
 from app.documents import fit as fitting
-from app.documents import freeze, profile_view, render_client, store, templates
+from app.documents import freeze, pdf_text, profile_view, render_client, store, templates
 from app.documents import photo as photos
 from app.documents.corrections import Correction
 from app.documents.models import (
@@ -412,6 +412,8 @@ class Claim:
     is_cv: bool
     steps: tuple[templates.Step, ...]
     build: Callable[[templates.Step], str]
+    # The e-mail and the phone the document prints, which its PDF's text must hold (`pdf_text`).
+    contact: tuple[str, str] = ("", "")
 
 
 def _owner(db: Session, document_id: uuid.UUID) -> uuid.UUID | None:
@@ -491,9 +493,29 @@ def _claim(
             is_cv=document.kind == Kind.cv,
             steps=context.template.steps(context.kind),
             build=_builder(context, document.language.value, at.date()),
+            contact=_printed_contact(context),
         )
         store.commit(db)
         return claim
+
+
+def _printed_contact(context: Context) -> tuple[str, str]:
+    """The e-mail and the phone as the template prints them (`templates.contact_lines`, after
+    what it cannot print was replaced): every template prints every contact line."""
+    identity = templates.printable_profile(context.template, context.view)[0].identity
+    return identity.email, identity.phone
+
+
+def _pdf_records(claim: Claim, fitted: fitting.Fitted) -> list[Correction] | None:
+    """The records of the check of the PDF's text layer; None when the layer was not read."""
+    if fitted.text is None:
+        return None
+    found = pdf_text.check(fitted.text, *claim.contact)
+    logger.info(
+        "documents.render.pdf_text",
+        extra={"document_id": str(claim.document_id), "found": list(found)},
+    )
+    return pdf_text.records(found)
 
 
 def _builder(context: Context, language: str, rendered_on: date) -> Callable[[Any], str]:
@@ -563,6 +585,7 @@ def _store_once(
             fit=FitResult.one_page if fitted.fit else FitResult.overflow,
             fit_step=fitted.step,
             pages=fitted.pages,
+            checked=_pdf_records(claim, fitted),
         )
     except store.PdfTooLargeError:
         if current:

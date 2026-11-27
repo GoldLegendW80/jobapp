@@ -49,7 +49,7 @@ POSTING_CHARS_MAX = 60_000
 
 _WORD = re.compile(r"[^\W_]+")  # one class under one quantifier: linear
 # Opening mark: its closing marks. A single quote is left out: it is an apostrophe as often.
-_QUOTES = {'"': '"', "“": "”", "„": "“”", "«": "»"}
+_QUOTES = {'"': '"', "\u201c": "\u201d", "\u201e": "\u201c\u201d", "\xab": "\xbb"}
 
 
 @dataclass(frozen=True, slots=True)

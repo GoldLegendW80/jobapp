@@ -69,6 +69,27 @@ NOT_PRINTABLE_REASON = "A character this template cannot print"
 PLACEHOLDER_REASON = "A fact your profile does not hold: asked in the hiring panel"
 COPIED = "Words copied from the posting"
 COPIED_KEPT = "Words copied from the posting, kept for you to put in your own words"
+# The check of a finished PDF's text layer (`pdf_text`): what was found, with what to do.
+PDF_CHECKED = "The text of the PDF was checked"
+PDF_NO_TEXT = (
+    "This PDF holds no text an application system can read. Render it again, and if it stays "
+    "so, choose another template."
+)
+PDF_EMAIL = (
+    "Your e-mail is not text in this PDF, so an application system cannot read it. Choose "
+    "another template, or check the e-mail of your profile."
+)
+PDF_PHONE = (
+    "Your phone number is not text in this PDF, so an application system cannot read it. "
+    "Choose another template, or check the phone number of your profile."
+)
+PDF_REPLACEMENT = (
+    "Some characters of this PDF read as a blank box. Check the spelling of the text, or "
+    "choose another template."
+)
+PDF_GLYPH_NAME = (
+    "Some letters of this PDF read as glyph codes, not letters. Choose another template."
+)
 REASONS: tuple[str, ...] = (
     NOT_IN_PROFILE,
     NUMBER_NOT_STATED,
@@ -80,6 +101,12 @@ REASONS: tuple[str, ...] = (
     PLACEHOLDER_REASON,
     COPIED,
     COPIED_KEPT,
+    PDF_CHECKED,
+    PDF_NO_TEXT,
+    PDF_EMAIL,
+    PDF_PHONE,
+    PDF_REPLACEMENT,
+    PDF_GLYPH_NAME,
 )
 
 FALLBACK = "fallback"
