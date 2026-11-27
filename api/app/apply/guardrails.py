@@ -111,8 +111,8 @@ SENTENCES = {
     "already_applied": "This posting is marked as applied.",
     "posting_closed": "This posting is closed.",
     "posting_listed": (
-        "This posting was seen only in a list: its text is needed first. Open its page and paste "
-        "its text, or wait for a search to read its page."
+        "This posting was seen only in a list: its text is needed first. It is ready once a "
+        "search reads its own page."
     ),
     "passed": "You passed this posting. Undo the Pass first if you want to apply.",
     "same_form": "This application form was already used for another of your postings.",

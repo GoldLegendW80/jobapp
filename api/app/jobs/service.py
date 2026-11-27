@@ -103,8 +103,8 @@ class ListingChoice(enum.StrEnum):
 
 # Jobs J31: what Write now and Apply answer for a posting seen only in a list.
 LISTED_WAITS = (
-    "This posting was seen only in a list: its text is needed first. Open its page and paste its "
-    "text, or wait for a search to read its page."
+    "This posting was seen only in a list: its text is needed first. It is ready once a search "
+    "reads its own page."
 )
 
 
