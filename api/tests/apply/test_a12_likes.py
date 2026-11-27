@@ -566,6 +566,21 @@ def test_a_posting_already_applied_or_closed_is_refused(
     assert generations(db, job) == []
 
 
+@pytest.mark.parametrize("mode", [LikeMode.review, LikeMode.full_auto])
+def test_a_like_on_a_posting_seen_only_in_a_list_is_refused(
+    db: Session, person_a: Person, stub: str, mode: LikeMode
+) -> None:
+    """Jobs J31 (owner, 2026-11-26): no CV is written until its page has been read, so a Like,
+    in Full auto too, is refused with what to do; no application, no document."""
+    db.add(ApplySettings(user_id=person_a.user_id, mode_after_like=mode, updated_at=AT))
+    job = posting(db, person_a.user_id, form(stub), kinds=())
+    listed = {"list_url": "https://aggregator.example.test/emplois?q=data"}
+    db.execute(sa.update(Job).where(Job.id == job).values(**listed))
+    db.commit()
+    assert refused(db, person_a, job).refusal.code == "posting_listed"
+    assert (generations(db, job), applications(db, person_a.user_id)) == ([], [])
+
+
 def test_a_stored_full_auto_still_makes_a_review_item(
     db: Session, person_a: Person, stub: str
 ) -> None:

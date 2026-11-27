@@ -258,6 +258,9 @@ class Job(Base):
     outside_criteria: Mapped[list[str] | None] = mapped_column(pg.ARRAY(sa.Text))
     contract_stated: Mapped[bool | None] = mapped_column(sa.Boolean)
     criteria_search_id: Mapped[uuid.UUID | None] = mapped_column(pg.UUID(as_uuid=True))
+    # Jobs J31 (migration 0052): seen only as a card of a list, its own page not read, the
+    # list's address; null once its page was read or the person set its text, and for any other.
+    list_url: Mapped[str | None] = mapped_column(sa.Text)
     search: Mapped[Any] = mapped_column(
         pg.TSVECTOR, sa.Computed(SEARCH_EXPRESSION, persisted=True), deferred=True
     )

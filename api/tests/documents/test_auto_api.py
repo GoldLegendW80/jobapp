@@ -32,6 +32,7 @@ from app.documents.models import (
     Origin,
 )
 from app.jobs import service as jobs_service
+from app.jobs.models import Job
 from tests.agents.conftest import API_KEY, new_key
 from tests.conftest import make_settings
 from tests.documents.conftest import load
@@ -139,6 +140,26 @@ def test_a_click_under_the_threshold_writes_the_cv_and_the_letter_follows(
     assert alex.generations(job) == [
         (Kind.cv, GenerationStatus.running, GenerationTrigger.click, alex.base)
     ]
+
+
+def test_a_posting_seen_only_in_a_list_answers_409_until_its_text_is_read(
+    alex: Who, api: Api, queue: RecordingQueue
+) -> None:
+    """Jobs J31 (owner, 2026-11-26): no CV is written until the posting's page has been read."""
+    job = alex.posting(40)
+    with alex.factory() as db:
+        listed = {"list_url": "https://aggregator.example.test/emplois?q=data"}
+        db.execute(sa.update(Job).where(Job.id == job).values(**listed))
+        db.commit()
+    response = api.request("POST", write(job), token=alex.token, json={"kinds": ["cv"]})
+    assert response.status_code == 409
+    assert response.json()["detail"] == jobs_service.LISTED_WAITS
+    assert (queue.jobs, alex.generations(job)) == ([], [])
+    with alex.factory() as db:
+        db.execute(sa.update(Job).where(Job.id == job).values(list_url=None))
+        db.commit()
+    response = api.request("POST", write(job), token=alex.token, json={"kinds": ["cv"]})
+    assert response.status_code == 202, response.text
 
 
 def test_a_click_for_both_kinds_marks_the_cv_so_the_letter_follows_it_and_one_kind_does_not(

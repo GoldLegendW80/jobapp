@@ -164,6 +164,20 @@ def test_a_posting_kept_with_a_badge_never_shows(
     assert set(deck_ids(api, person_a)) == {str(within), str(never_computed)}
 
 
+def test_a_posting_seen_only_in_a_list_never_shows(
+    api: Api, person_a: Person, factory: sessionmaker[Session]
+) -> None:
+    """Jobs J31 (owner, 2026-11-26: "Oui, avec une mention"): its fit is less reliable and no CV
+    is written until its page is read, so Discover leaves it out; once read, it shows."""
+    read = add_posting(factory, person_a)
+    listed = add_posting(factory, person_a, list_url="https://aggregator.example.test/emplois")
+    assert deck_ids(api, person_a) == [str(read)]
+    with factory() as db:
+        db.execute(sa.update(Job).where(Job.id == listed).values(list_url=None))
+        db.commit()
+    assert set(deck_ids(api, person_a)) == {str(read), str(listed)}
+
+
 def test_a_cancelled_application_beside_a_live_one_keeps_the_posting_out(
     api: Api, person_a: Person, factory: sessionmaker[Session]
 ) -> None:

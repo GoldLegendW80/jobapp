@@ -1018,3 +1018,25 @@ def test_the_backlog_waits_for_the_persons_sweep_and_needs_a_credential(
         )
         db.commit()
     assert len(backlog(factory)) == 1
+
+
+def test_a_text_replaced_after_the_run_was_bound_stays_to_read(
+    factory: sessionmaker[Session],
+) -> None:
+    """Jobs J31: a search read the page of a posting seen in a list while a reader run held its
+    card's text: the run's save keeps what it checked but leaves `read_at` unset, so the
+    backlog reads the page's own text too."""
+    user = new_user(factory, "e2e-reader-replaced@example.org")
+    job_id = add_posting(factory, user)
+    binding = bound(factory, user, job_id)
+    with factory() as db:
+        db.execute(
+            sa.update(Job)
+            .where(Job.id == job_id)
+            .values(posting_text=POSTING + "\nThe page read since.", read_at=None)
+        )
+        db.commit()
+    reader.save(factory, user, binding, facts(), NOW)
+    assert job_of(factory, job_id).read_at is None
+    reader.save(factory, user, bound(factory, user, job_id), facts(), NOW)
+    assert job_of(factory, job_id).read_at == NOW

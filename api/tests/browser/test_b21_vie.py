@@ -123,12 +123,16 @@ class Commits:
 
     def __init__(self) -> None:
         self.stored: list[finder.VerifiedFinding] = []
+        self.set_aside: list[tuple[finder.VerifiedFinding, str]] = []
 
     def admit(self, source_id: str) -> None:
         pass
 
-    async def save(self, source_id: str, host: str, batch: finder.VerifiedBatch) -> None:
-        self.stored.extend(batch.findings)
+    async def save(
+        self, source_id: str, host: str, batch: finder.VerifiedBatch | None, set_aside=()
+    ) -> None:
+        self.stored.extend(batch.findings if batch is not None else ())
+        self.set_aside.extend(set_aside)
 
     async def settle(self, source_id: str) -> bool:
         return True
