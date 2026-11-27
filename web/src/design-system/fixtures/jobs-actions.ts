@@ -142,6 +142,7 @@ export function fakeAdzunaKey({
       { name: "arbeitnow", needs_key: false },
       { name: "himalayas", needs_key: false },
       { name: "adzuna", needs_key: true, ...key },
+      { name: "freehire", needs_key: false },
     ],
     keys_available: feeds !== "no_keys",
   });
@@ -167,7 +168,7 @@ export function fakeAdzunaKey({
   );
 }
 
-/** Camille's search with the places Find jobs lists: two websites and two job feeds. */
+/** Camille's search with the places Find jobs lists: two websites and three job feeds. */
 export function findJobsSearch(): Search {
   const search = camilleProfile().search;
   return {
@@ -186,7 +187,7 @@ export function findJobsSearch(): Search {
         mode: "llm_browser",
       },
     ],
-    job_feeds: ["arbeitnow", "himalayas"],
+    job_feeds: ["arbeitnow", "himalayas", "freehire"],
   };
 }
 
