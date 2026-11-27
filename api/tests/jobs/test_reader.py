@@ -275,8 +275,8 @@ def test_a_save_stores_each_grounded_value_and_the_postings_own_text(
         "published_on",
         "company",
         "description",
-        "languages",
-    }
+    }  # no language found (jobs J35): stored, never told in History
+    assert job.languages == {"written_in": None, "asked": []}
     assert "work_mode" in done.text
     assert "quote is not in the posting text" in done.text
     assert "Barcelona" not in done.text
