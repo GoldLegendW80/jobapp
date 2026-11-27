@@ -116,6 +116,7 @@ describe("Schedule", () => {
   it("is off by default; turning it on saves the schedule into the search section", async () => {
     const fake = fakeProfile();
     const { user, dialog, state } = await openSchedule();
+    expect(state).toMatch(/^Automatic search of your main search/);
     expect(state).toContain("Off.");
     const toggle = within(dialog).getByRole("checkbox", {
       name: "Search automatically",

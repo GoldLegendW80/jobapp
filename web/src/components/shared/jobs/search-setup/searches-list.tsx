@@ -1,4 +1,5 @@
 import { Plus } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 
@@ -24,6 +25,7 @@ import {
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+import { ScheduleDialog } from "@/components/shared/jobs/schedule-dialog";
 import { COLUMN } from "@/components/shared/jobs/setup-grid";
 import { SearchRow } from "./search-row";
 import { BODY } from "./setup-surface";
@@ -130,6 +132,11 @@ export function SearchesList({
     },
   });
   const rename = useRenameSearch({});
+  // The search whose schedule is open: the list's newest copy of it, the last one seen once gone.
+  const [scheduling, setScheduling] = useState<SavedSearch | null>(null);
+  const scheduled = scheduling
+    ? (items.find((item) => item.id === scheduling.id) ?? scheduling)
+    : null;
   const busy =
     run.isPending ||
     runAll.isPending ||
@@ -210,6 +217,9 @@ export function SearchesList({
                 onEdit={() => {
                   onEdit(search.id);
                 }}
+                onSchedule={() => {
+                  setScheduling(search);
+                }}
                 onDuplicate={() => {
                   duplicate.mutate({ search, names });
                 }}
@@ -225,6 +235,15 @@ export function SearchesList({
           </ul>
         )}
       </div>
+      {scheduled ? (
+        <ScheduleDialog
+          state={scheduled.schedule}
+          search={scheduled.main ? undefined : scheduled}
+          onClose={() => {
+            setScheduling(null);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

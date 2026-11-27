@@ -15,7 +15,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "One search of Your searches in Find jobs: its name, what it searches in one line, its schedule and where it stands, with Run now and Edit, and Duplicate, Rename and Delete in its menu. The main search is neither renamed nor deleted.",
+          "One search of Your searches in Find jobs: its name, what it searches in one line, its schedule and where it stands, with Run now and Edit, and Schedule, Duplicate, Rename and Delete in its menu. The main search is neither renamed nor deleted.",
       },
     },
   },
@@ -35,6 +35,7 @@ const meta = {
     disabled: false,
     onRun: () => undefined,
     onEdit: () => undefined,
+    onSchedule: () => undefined,
     onDuplicate: () => undefined,
     onRename: () => Promise.resolve(null),
     onDelete: () => undefined,

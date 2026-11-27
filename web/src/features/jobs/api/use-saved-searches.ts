@@ -17,6 +17,7 @@ import {
   runSearch,
   searchesKey,
   takeBackRun,
+  type SavedSchedule,
   type SavedSearch,
   type SearchRun,
 } from "./searches-api";
@@ -104,6 +105,21 @@ export function useRenameSearch(
   return useRefreshing(
     ({ search, name }: { search: SavedSearch; name: string }) =>
       changeSearch(search.id, search.revision, { ...bodyOf(search), name }),
+    handlers,
+  );
+}
+
+/** A saved search's schedule, on the revision its row showed, the rest of it as the list served
+ * it; the list is read again, so its row says the new schedule. */
+export function useScheduleSearch(
+  handlers: Handlers<
+    SavedSearch,
+    { search: SavedSearch; schedule: SavedSchedule }
+  >,
+) {
+  return useRefreshing(
+    ({ search, schedule }: { search: SavedSearch; schedule: SavedSchedule }) =>
+      changeSearch(search.id, search.revision, { ...bodyOf(search), schedule }),
     handlers,
   );
 }

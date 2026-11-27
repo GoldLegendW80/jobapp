@@ -2,6 +2,7 @@
  * last run, what a run did, what a save that stopped halfway left, and the websites the other
  * searches keep a permission for. */
 import { describeSchedule } from "@/features/profile/helpers/schedule";
+import { describeError, errorDetail, isApiError } from "@/lib/api";
 
 import type { Criteria, SavedSearch, SearchRun } from "../api/searches-api";
 import type { ScheduleState, Sweep } from "../api/sweeps-api";
@@ -120,6 +121,35 @@ export function runWords(
       : `${name} waits in line.`;
   if (run.outcome === "started") return `${name} started.`;
   return `${name} did not start. ${NOT_STARTED[run.outcome] ?? "Try again."}`;
+}
+
+export const SEARCH_GONE = "This search no longer exists.";
+
+/** Why a saved search's schedule was not saved, in the words of its form and its row: `gone`
+ * when the search no longer exists, so there is nothing to save again; `moved` when it changed in
+ * another tab, so it must be read again before the next save. */
+export function scheduleFailure(failure: unknown): {
+  text: string;
+  gone: boolean;
+  moved: boolean;
+} {
+  if (isApiError(failure) && failure.status === 404)
+    return { text: SEARCH_GONE, gone: true, moved: false };
+  if (
+    isApiError(failure) &&
+    failure.status === 409 &&
+    (failure.body as { revision?: unknown } | null)?.revision !== undefined
+  )
+    return {
+      text: "This search changed in another tab. Try again.",
+      gone: false,
+      moved: true,
+    };
+  return {
+    text: `Not saved. ${errorDetail(failure) ?? describeError(failure)}`,
+    gone: false,
+    moved: false,
+  };
 }
 
 /** "the Indeed permission", "the Indeed and LinkedIn permissions". */

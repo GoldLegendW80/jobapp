@@ -49,8 +49,9 @@ function stateLine(
 
 /**
  * One search of Your searches: its name, one line of what it searches, its schedule and where it
- * stands, with Run now and Edit, and Duplicate, Rename and Delete in its menu (the main search is
- * neither renamed nor deleted). A run waiting in the line says its place and can be taken back.
+ * stands, with Run now and Edit, and Schedule, Duplicate, Rename and Delete in its menu (the main
+ * search is neither renamed nor deleted). A run waiting in the line says its place and can be
+ * taken back.
  */
 export function SearchRow({
   search,
@@ -61,6 +62,7 @@ export function SearchRow({
   disabled,
   onRun,
   onEdit,
+  onSchedule,
   onDuplicate,
   onRename,
   onDelete,
@@ -76,6 +78,7 @@ export function SearchRow({
   disabled: boolean;
   onRun: () => void;
   onEdit: () => void;
+  onSchedule: () => void;
   onDuplicate: () => void;
   /** Resolves with what went wrong, or null once renamed. */
   onRename: (name: string) => Promise<string | null>;
@@ -198,6 +201,7 @@ export function SearchRow({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem onSelect={onSchedule}>Schedule</DropdownMenuItem>
             <DropdownMenuItem onSelect={onDuplicate}>
               Duplicate
             </DropdownMenuItem>
