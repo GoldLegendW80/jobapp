@@ -20,8 +20,9 @@ The rule (`compare`), pure and linear in the number of languages:
   holds one; anything else is unsure.
 - Levels: each side read on one scale (LEVELS: CEFR letters A1 to C2, then native), from the
   words of the level as written in English, French or German. The person's level is the lowest
-  reading of her words, the posting's the highest; a negation next to a word ("non native", "pas
-  courant") or words the scale does not know make the level unknown.
+  reading of her words (with no level written, those of the name she wrote: "Anglais courant"),
+  the posting's the highest; a negation next to a word ("non native", "pas courant") or words the
+  scale does not know make the level unknown.
 - A required language the person does not declare: the badge (`missing`). An unsure one she does
   not declare: a notice. A declared language (or one of its alternatives) asked with a level:
   passes when hers is native, or both are read and hers is at least the posting's; else a notice
@@ -147,7 +148,8 @@ _LEVELS: dict[int, tuple[str, ...]] = {
         "c1", "fluent", "fluently", "fluency", "courant*", "couramment", "fliessend*", "fluide",
         "advanced", "avance*", "business", "business level", "business fluent", "professional",
         "professionnel*", "niveau professionnel", "full professional proficiency", "excellent*",
-        "excellen*", "tres bon*", "tres bonne*", "sehr gut*", "strong", "maitrise", "proficient",
+        "excellen*", "tres bon*", "tres bonne*", "tres bon niveau",
+        "tres bonnes connaissances", "sehr gut*", "strong", "maitrise", "proficient",
         "ausgezeichnet*",
     ),
     6: (
@@ -380,7 +382,7 @@ def _level_gap(item: Asked, mine: list[Spoken]) -> Gap | None:
     asked = level_of(item.level, "high")
     if asked is None:
         return None
-    readings = [(level_of(one.level, "low"), one) for one in mine]
+    readings = [(level_of(one.level or one.name, "low"), one) for one in mine]
     if any(point == NATIVE for point, _ in readings):
         return None
     known = [(point, one) for point, one in readings if isinstance(point, int)]
