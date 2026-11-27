@@ -123,6 +123,33 @@ export const SeePostingsOutsideMyCriteria: Story = {
   },
 };
 
+/** As a job seeker, I want a posting a search saw only in a list to say so, with the list and its own page, and a filter for them, so that I know its text is the card's before I act on it. */
+export const SeePostingsSeenOnlyInAList: Story = {
+  beforeEach: () => {
+    const [first, second, ...rest] = POSTINGS;
+    postings([
+      ...(first ? [first] : []),
+      ...(second
+        ? [
+            {
+              ...second,
+              list_url: "https://aggregator.example.org/jobs?q=genai",
+            },
+          ]
+        : []),
+      ...rest,
+    ]);
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const list = await page.findByRole("list", { name: "Postings" });
+    await expect(
+      (await within(list).findAllByTestId("listed-mention"))[0],
+    ).toBeVisible();
+    await userEvent.click(page.getByRole("button", { name: /^Filters/ }));
+  },
+};
+
 /** As a job seeker, I want to see the postings of one status with their count in one click, so that I can work through my pipeline a stage at a time. */
 export const PickAStatus: Story = {
   beforeEach: () => {

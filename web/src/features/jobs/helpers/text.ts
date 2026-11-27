@@ -63,11 +63,16 @@ const FIELD_LABELS: Record<string, string> = {
   description: "description",
 };
 
-/** A search's event; jobs J23: how the posting it found is dated, when it is not exactly. */
+/** A search's event; jobs J23: how the posting it found is dated, when it is not exactly; jobs
+ * J31: a posting kept from a card of a list, and its own page read later. */
 function sweepLine(data: Record<string, unknown>): string {
+  if (data.page_read && typeof data.page_read === "object")
+    return "A search read its own page: its text replaced the card's of the list";
   const found = data.discovery;
   if (found && typeof found === "object") {
-    const { date, evidence } = found as Record<string, unknown>;
+    const { date, evidence, listed } = found as Record<string, unknown>;
+    if (listed && typeof listed === "object")
+      return "Found by a search in a list, its own page not read";
     const shown =
       evidence && typeof evidence === "object"
         ? (evidence as Record<string, unknown>).date_shown
@@ -126,6 +131,8 @@ export function describeEvent(
               ),
             ]
           : [];
+      if (data.text_pasted && typeof data.text_pasted === "object")
+        return "You pasted its text: it replaced the card's of the list";
       if (data.via === "reader")
         return names.length
           ? `Read the posting and set the ${names.join(", ")}`
