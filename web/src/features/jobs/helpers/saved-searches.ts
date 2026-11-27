@@ -128,6 +128,33 @@ export function runWords(
 
 export const SEARCH_GONE = "This search no longer exists.";
 
+/** What Run all did: the searches started, those waiting in the line, those with nothing to
+ * search, and each other one that did not start with its reason (a queue down included). */
+export function runAllWords(
+  runs: readonly SearchRun[],
+  names: ReadonlyMap<string, string>,
+): string {
+  const name = (run: SearchRun) => names.get(run.search_id) ?? "A search";
+  const named = (outcome: string) =>
+    runs.filter((run) => run.outcome === outcome).map(name);
+  const started = named("started");
+  const queued = named("queued");
+  const nothing = named("no_websites");
+  const others = runs.filter(
+    (run) => !["started", "queued", "no_websites"].includes(run.outcome),
+  );
+  return [
+    started.length ? `${started.join(", ")} started.` : "",
+    queued.length
+      ? `${queued.join(", ")} ${queued.length === 1 ? "waits" : "wait"} in line.`
+      : "",
+    nothing.length ? `${nothing.join(", ")} had nothing to search.` : "",
+    ...others.map((run) => runWords(name(run), run)),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 /** Why a saved search's schedule was not saved, in the words of its form and its row: `gone`
  * when the search no longer exists, so there is nothing to save again; `moved` when it changed in
  * another tab, so it must be read again before the next save. */

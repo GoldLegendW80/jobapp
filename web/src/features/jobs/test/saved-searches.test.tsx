@@ -11,6 +11,7 @@ import {
   halfSavedWords,
   searchOf,
   nameProblem,
+  runAllWords,
   runWords,
 } from "@/features/jobs/helpers/saved-searches";
 import { admin, fakeSession } from "@/test/auth";
@@ -530,6 +531,37 @@ describe("The words of a saved search", () => {
     expect(searchOf(sweep("new", { id: REMOTE, name: "Remote roles" }))).toBe(
       REMOTE,
     );
+  });
+
+  it("says what Run all did with each search, a queue that is down included", () => {
+    const names = new Map([
+      ["main", "Main search"],
+      [REMOTE, "Remote roles"],
+      [LYON, "Lyon"],
+      ["other", "Grenoble"],
+    ]);
+    const run = (search_id: string, outcome: string) => ({
+      search_id,
+      outcome,
+      sweep: null,
+      request: null,
+    });
+    expect(
+      runAllWords(
+        [
+          run("main", "started"),
+          run(REMOTE, "queued"),
+          run(LYON, "no_websites"),
+          run("other", "queue_down"),
+        ],
+        names,
+      ),
+    ).toBe(
+      "Main search started. Remote roles waits in line. Lyon had nothing to search. Grenoble did not start. The search could not be queued. Try again in a minute.",
+    );
+    expect(
+      runAllWords([run(REMOTE, "queued"), run(LYON, "queued")], names),
+    ).toBe("Remote roles, Lyon wait in line.");
   });
 
   it("says a run waits in line only when the api kept it in the line", () => {

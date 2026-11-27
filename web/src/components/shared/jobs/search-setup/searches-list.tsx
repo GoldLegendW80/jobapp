@@ -16,7 +16,11 @@ import {
   useTakeBack,
 } from "@/features/jobs/api/use-saved-searches";
 import type { SweepRunner } from "@/features/jobs/api/use-sweep-runner";
-import { runWords, searchOf } from "@/features/jobs/helpers/saved-searches";
+import {
+  runAllWords,
+  runWords,
+  searchOf,
+} from "@/features/jobs/helpers/saved-searches";
 import { describeError, errorDetail, isApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -30,23 +34,6 @@ const SAVED_MAX = 20;
 
 function failed(action: string, error: unknown) {
   toast.error(`${action}. ${errorDetail(error) ?? describeError(error)}`);
-}
-
-/** What Run all did, in one sentence: the searches started and those waiting in the line. */
-function runAllWords(runs: readonly SearchRun[], names: Map<string, string>) {
-  const name = (run: SearchRun) => names.get(run.search_id) ?? "A search";
-  const started = runs.filter((run) => run.outcome === "started").map(name);
-  const queued = runs.filter((run) => run.outcome === "queued").map(name);
-  const left = runs.filter(
-    (run) => run.outcome !== "started" && run.outcome !== "queued",
-  ).length;
-  return [
-    started.length ? `${started.join(", ")} started.` : "",
-    queued.length ? `${queued.join(", ")} wait in line.` : "",
-    left ? `${String(left)} had nothing to search.` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
 }
 
 /**
