@@ -64,4 +64,12 @@ export const LANGUAGE_NOTICES: Notice[] = [
     level: "warning",
     job_id: null,
   },
+  {
+    kind: "signal",
+    code: "language_unread",
+    text: "This posting requires Dutch; your profile lists “Plattdüütsch”, which the app cannot read as a language.",
+    quote: "Fluent Dutch required",
+    level: "warning",
+    job_id: null,
+  },
 ];

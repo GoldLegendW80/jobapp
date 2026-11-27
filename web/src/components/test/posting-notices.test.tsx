@@ -31,7 +31,7 @@ describe("PostingNotices", () => {
     const items = within(
       screen.getByRole("list", { name: "Before you apply" }),
     ).getAllByRole("listitem");
-    expect(items).toHaveLength(2);
+    expect(items).toHaveLength(3);
     expect(items[0]).toHaveTextContent(
       "This posting requires German, which your profile does not list.",
     );

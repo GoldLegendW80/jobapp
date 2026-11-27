@@ -140,10 +140,19 @@ describe("the badge of a posting that requires a language the profile does not l
     expect(words).not.toContain("another criterion");
   });
 
-  it("still reads as a sentence when the api names no language", () => {
+  it("says nothing of a code her current languages no longer name", () => {
     expect(
       outsideCriteriaWords(posting({ outside_criteria: ["language"] }), 30),
-    ).toBe("Requires a language your profile does not list");
+    ).toBeNull();
+    expect(
+      outsideCriteriaWords(
+        posting({
+          outside_criteria: ["contract", "language"],
+          contract_type: "Freelance",
+        }),
+        30,
+      ),
+    ).toBe("Outside your criteria: freelance mission");
   });
 
   it("says nothing of the languages without the code", () => {

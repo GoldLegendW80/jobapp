@@ -65,14 +65,15 @@ function joinAnd(names: readonly string[]): string {
 
 /**
  * Jobs J35: "Requires German, which your profile does not list", or null when the badge has no
- * `language` code. A badge the api has not followed yet with a name still reads as a sentence.
+ * `language` code. The names are read against her current languages: a code they no longer
+ * name (a posting no longer open keeps the badge of the languages she listed then) says nothing.
  */
 export function languageWords(job: CriteriaFacts): string | null {
   if (!(job.outside_criteria ?? []).includes("language")) return null;
   const missing = [...new Set(job.languages_missing ?? [])];
   return missing.length
     ? `Requires ${joinAnd(missing)}, which your profile does not list`
-    : "Requires a language your profile does not list";
+    : null;
 }
 
 /**
