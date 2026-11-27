@@ -10,7 +10,7 @@ its shape: Indeed's list links `/rc/clk?jk=<key>&...` while the agent reported
 call opens (63 refused `app_opens_max`).
 
 Real board hosts appear only in the pure tables (never contacted); the sessions run on the
-boards' `.test` stand ins (`finder.FAMILIES`) and invented hosts. Invented postings only."""
+boards' `.test` stand ins (`same_posting.FAMILIES`) and invented hosts. Invented postings only."""
 
 import asyncio
 import json
@@ -21,12 +21,20 @@ from typing import Any
 
 import pytest
 
-from app.browser import finder, sources
+from app.browser import finder, same_posting, sources
+from app.jobs import slug
 
 JK = "5f1c2d3e4a5b6c7d"  # an Indeed key's shape: 16 lowercase hex digits
 JK2 = "0a1b2c3d4e5f6a7b"
 LI = "4012345678"
 CAREERS = "https://careers.example.org/jobs/robot-engineer-42"
+# The shapes of real application systems, invented companies and ids (never contacted).
+GH_PAGE = "https://www.example-robotics.test/careers?gh_jid=4012345"
+GH_BOARD = "https://boards.greenhouse.io/examplerobotics/jobs/4012345"
+LEVER = "https://jobs.lever.co/examplerobotics/0f1e2d3c-4b5a-4968-8778-000000000042"
+WORKDAY = ("https://examplerobotics.wd3.myworkdayjobs.com/en-US/External/job/Bern/"
+           "Data-Engineer_R12345")  # fmt: skip
+WTTJ = "https://www.welcometothejungle.com/fr/companies/example-robotics/jobs/data-engineer_bern"
 
 
 def key(url: str) -> str:
@@ -58,7 +66,7 @@ GENERIC_SAME = [
     (CAREERS, CAREERS + "/"),  # one trailing slash aside
     (CAREERS, CAREERS + "?utm_source=board&utm_medium=mail&utm_campaign=x"),
     (CAREERS, CAREERS + "/?utm_content=y"),
-    *[(CAREERS, f"{CAREERS}?{name}=abc") for name in sorted(finder.TRACKING)],
+    *[(CAREERS, f"{CAREERS}?{name}=abc") for name in sorted(same_posting.TRACKING)],
     (CAREERS, CAREERS + "#apply"),
     (CAREERS, "https://careers.example.org:443/jobs/robot-engineer-42"),
     (CAREERS, "HTTPS://Careers.Example.ORG/jobs/robot-engineer-42"),
@@ -72,6 +80,13 @@ GENERIC_SAME = [
     ("https://www.linkedin.com/company/example-robotics/jobs",
      "https://www.linkedin.com/company/example-robotics/jobs/?trk=x&refId=y&trackingId=z&eBP=w"
      "&trkInfo=v&lipi=u"),
+    # Application systems the rule has no ids for: their id identifies under the default, and
+    # only a parameter that tracks may differ.
+    (GH_PAGE, GH_PAGE + "&utm_source=board&gclid=x"),
+    (GH_BOARD, GH_BOARD + "/?utm_medium=mail"),
+    (LEVER, LEVER + "/?utm_campaign=x"),
+    (WORKDAY, WORKDAY + "?utm_source=board"),
+    (WTTJ, WTTJ + "?utm_source=x&utm_medium=y"),
 ]  # fmt: skip
 SAME = (
     [(f"https://ch.indeed.com/viewjob?jk={JK}", h + p) for h in INDEED_HOSTS for p in INDEED_PATHS]
@@ -141,6 +156,14 @@ NOT_SAME = [
     (CAREERS + "?id=", CAREERS),
     (CAREERS + "?q=a%20b", CAREERS + "?q=a+b"),  # a + kept as written
     ("https://ch.indeed.com/cmp/Example-Robotics?ref=a", "https://ch.indeed.com/cmp/Example-Robotics"),
+    # Application systems: another id, and a parameter the rule does not list (it identifies).
+    (GH_PAGE, GH_PAGE.replace("4012345", "4012346")),
+    (GH_PAGE, GH_PAGE + "&gh_src=x"),
+    (GH_BOARD, GH_BOARD.replace("4012345", "4012346")),
+    (LEVER, LEVER.replace("000000000042", "000000000043")),
+    (LEVER, LEVER + "?lever-source=board"),
+    (WORKDAY, WORKDAY.replace("_R12345", "_R12346")),
+    (WTTJ, WTTJ.replace("data-engineer_bern", "data-engineer_zurich")),
 ]  # fmt: skip
 
 
@@ -153,7 +176,7 @@ def test_an_id_made_up_or_borrowed_and_the_near_misses_name_another_posting(seen
 def test_the_tables_are_big_enough_and_cover_the_tracking_lists() -> None:
     assert len(SAME) >= 40
     assert len(NOT_SAME) >= 40
-    for board in finder.BOARDS.values():  # each tracker of a board is in an accept row
+    for board in same_posting.BOARDS.values():  # each tracker of a board is in an accept row
         assert all(any(f"{name}=" in reported for _, reported in SAME) for name in board.tracking)
 
 
@@ -165,6 +188,11 @@ CORPUS = (
     + [f"https://careers.example.org/jobs?id={n}" for n in range(30)]
     + [f"https://ats.example-hire.test/example-robotics/jobs/{n}?ref=board" for n in range(30)]
     + [f"https://jobs.example.test/offres/{246000 + n}/" for n in range(30)]
+    + [GH_PAGE.replace("4012345", str(4012300 + n)) for n in range(20)]
+    + [GH_BOARD.replace("4012345", str(4012400 + n)) for n in range(20)]
+    + [LEVER.replace("000000000042", f"{n:012x}") for n in range(20)]
+    + [WORKDAY.replace("_R12345", f"_R{12300 + n}") for n in range(20)]
+    + [WTTJ.replace("data-engineer_bern", f"data-engineer-{n}_bern") for n in range(20)]
 )
 
 
@@ -172,6 +200,17 @@ def test_distinct_postings_keep_distinct_keys() -> None:
     keys = [key(url) for url in CORPUS]
     assert all(keys)
     assert len(set(keys)) == len(CORPUS)
+
+
+def test_the_store_and_the_session_read_one_rule() -> None:
+    """The store's duplicate key (`slug.PostingKey`) is `url_key` of the session's key: two
+    addresses the session names one posting are one in the store, as written and as the session
+    keeps them (canonical), and the distinct postings stay distinct there."""
+    for seen, reported in SAME:
+        for a, b in ((seen, reported), (finder.canonical(seen), finder.canonical(reported))):
+            assert slug.posting_url_key(a) == slug.posting_url_key(b), (seen, reported)
+    stored = {slug.posting_url_key(url) for url in CORPUS}
+    assert len(stored) == len(CORPUS)
 
 
 @pytest.mark.parametrize(
@@ -228,6 +267,15 @@ TITLE = {"title": "Data Engineer", "company": "Example Robotics"}
          f"http://www.linkedin.test:8080/jobs/view/{LI}/"),
         (LINKEDIN_PAGE, {"job-posting-id": LI, **TITLE}, READ,
          f"http://www.linkedin.test:8080/jobs/view/{LI}/"),
+        # One id given twice, in two fields, is one card; two different ids are none.
+        (INDEED_PAGE, {"jk": JK, "jobKey": JK, **TITLE}, READ,
+         f"http://ch.indeed.test:8080/viewjob?jk={JK}"),
+        (LINKEDIN_PAGE, {"jobId": LI, "entityUrn": f"urn:li:jobPosting:{LI}", **TITLE}, READ,
+         f"http://www.linkedin.test:8080/jobs/view/{LI}/"),
+        (INDEED_PAGE, {"jk": JK, "jobKey": JK2, **TITLE}, READ, None),
+        (LINKEDIN_PAGE, {"jobId": LI, "entityUrn": "urn:li:jobPosting:4012345679", **TITLE}, READ,
+         None),
+        (LINKEDIN_PAGE, {"jobId": LI, "currentJobId": 4012345679, **TITLE}, READ, None),
         # Refused: a field the board does not name, an id of another shape or another board's
         # field, an id the script's code writes, a page of no board, an item with no words.
         (INDEED_PAGE, {"id": JK, **TITLE}, READ, None),
@@ -505,6 +553,117 @@ def test_past_the_opens_a_posting_with_no_card_is_refused_with_what_to_do() -> N
     assert one.refused == {"app_opens_max": 1}
 
 
+def served_list(count: int) -> tuple[finder.FinderSession, list, list[str]]:
+    """A session that read a list of `count` cards, every posting's page served."""
+    one, batches, opened, served = board_session(INDEED, indeed_list(keys(count)))
+    for k in keys(count):
+        served[f"{INDEED}viewjob?jk={k}"] = posting(f"Data Role {k[-4:]}")
+    return one, batches, opened
+
+
+def test_a_posting_an_earlier_report_kept_takes_no_open_from_the_cards_before_it() -> None:
+    """Review of #854, round 1: 25 postings reported, 20 opened and 5 kept from their card; then
+    20 new ones with a card and those 5 again. The 5 are refused `duplicate` and take no open, so
+    the 20 new ones are all opened, none kept from its card."""
+    one, _, opened = served_list(45)
+    first = reported(one, *(item(k) for k in keys(25)))
+    assert (first["kept"], first["kept_from_card"]) == (25, 5)
+    second = reported(one, *(item(k) for k in keys(20, 25)), *(item(k) for k in keys(5, 20)))
+    assert second["kept"] == finder.APP_OPENS_MAX
+    assert "from_card" not in second
+    assert [r["reason"] for r in second["refused"]] == ["duplicate"] * 5
+    assert len(opened) == 2 * finder.APP_OPENS_MAX
+
+
+def test_an_item_refused_before_any_open_takes_no_open_from_the_cards_before_it() -> None:
+    """Review of #854, round 1: 20 postings with a card, then 5 items with an empty title."""
+    one, _, opened = served_list(25)
+    answer = reported(one, *(item(k) for k in keys(20)), *(item(k, title=" ") for k in keys(5, 20)))
+    assert answer["kept"] == finder.APP_OPENS_MAX
+    assert "from_card" not in answer
+    assert [r["reason"] for r in answer["refused"]] == ["missing_field"] * 5
+    assert len(opened) == finder.APP_OPENS_MAX
+
+
+def test_a_posting_named_twice_in_one_report_takes_one_open() -> None:
+    """15 postings with a card, 5 with none, then the same 5 under another spelling: the 5 take
+    5 opens, not 10, so the 15 with a card are opened too."""
+    bare = keys(5, 100)
+    rows = "\n".join(f"- link [ref=e{n}]:\n  - /url: /rc/clk?jk={k}" for n, k in enumerate(bare))
+    one, _, opened, served = board_session(
+        INDEED, indeed_list(keys(15)), (INDEED + "jobs?q=data&start=90", rows)
+    )
+    for k in keys(15) + bare:
+        served[f"{INDEED}viewjob?jk={k}"] = posting(f"Data Role {k[-4:]}")
+    again = [item(k, f"http://fr.indeed.test:8080/m/viewjob?jk={k}") for k in bare]
+    answer = reported(one, *(item(k) for k in keys(15) + bare), *again)
+    assert answer["kept"] == finder.APP_OPENS_MAX
+    assert "from_card" not in answer
+    assert [r["reason"] for r in answer["refused"]] == ["duplicate"] * 5
+    assert opened == [f"{INDEED}viewjob?jk={k}" for k in keys(15) + bare]
+
+
+def test_a_page_that_did_not_load_is_opened_once_a_report() -> None:
+    """A posting reported twice whose page did not load: one open, then its card stands in."""
+    k = keys(1)[0]
+    one, batches, opened, _ = board_session(INDEED, indeed_list([k]))
+    answer = reported(one, item(k), item(k, f"{INDEED}rc/clk?jk={k}"))
+    assert opened == [f"{INDEED}viewjob?jk={k}"]
+    assert answer["kept"] == 1
+    assert [r["reason"] for r in answer["refused"]] == ["duplicate"]
+    assert batches[0].findings[0].list_url == INDEED + "jobs?q=data&l=bern&start=0"
+
+
+def drawn_reports(seed: int) -> list[tuple[int, bool]]:
+    """Four reports drawn at random (seeded) in one session, of postings with a card, postings
+    with none, pages read, ids never seen, empty titles and repeats (of a posting an earlier
+    report kept, or named earlier in the same one) under two spellings; one page in seven does
+    not load. For each: the opens it used and whether a posting wanted one (kept from its card
+    or refused `app_opens_max`). No posting is opened twice in one report."""
+    rng = random.Random(seed)  # noqa: S311  a seeded draw, the same on every run
+    carded, bare, read, unseen = keys(40), keys(30, 1000), keys(6, 2000), keys(6, 3000)
+    rows = "\n".join(f"- link [ref=e{n}]:\n  - /url: /rc/clk?jk={k}" for n, k in enumerate(bare))
+    one, _, opened, served = board_session(
+        INDEED,
+        indeed_list(carded),
+        (INDEED + "jobs?q=data&start=90", rows),
+        *((f"{INDEED}viewjob?jk={k}&from=serp", posting(f"Data Role {k[-4:]}")) for k in read),
+    )
+    for k in carded + bare:
+        if int(k, 16) % 7:
+            served[f"{INDEED}viewjob?jk={k}"] = posting(f"Data Role {k[-4:]}")
+    pools = {"carded": carded, "bare": bare, "read": read, "unseen": unseen}
+    named: list[str] = []
+    results: list[tuple[int, bool]] = []
+    for _ in range(4):
+        items: list[dict[str, str]] = []
+        for _ in range(rng.randint(10, 60)):
+            kind = rng.choice([*pools, "carded", "bare", "again", "empty"])
+            k = rng.choice(pools.get(kind) or named or carded)
+            spelling = rng.choice([f"{INDEED}viewjob?jk={k}", f"{INDEED}rc/clk?jk={k}&tk=x"])
+            items.append(item(k, spelling, " " if kind == "empty" else None))
+            named.append(k)
+        before, refused = len(opened), one.refused["app_opens_max"]
+        answer = reported(one, *items)
+        used = opened[before:]
+        assert len({key(u) for u in used}) == len(used), seed
+        wanting = one.refused["app_opens_max"] > refused or any(
+            c["why"] == finder.CARD_WHY["app_opens_max"] for c in answer.get("from_card", [])
+        )
+        results.append((len(used), wanting))
+    return results
+
+
+def test_no_posting_is_kept_from_its_card_for_want_of_an_open_while_one_is_left() -> None:
+    """The property of the plan (review of #854, round 1): whenever a posting is kept from its
+    card or refused for want of an open, its report used all its APP_OPENS_MAX opens."""
+    drawn = [one for seed in range(12) for one in drawn_reports(seed)]
+    assert all(used <= finder.APP_OPENS_MAX for used, _ in drawn)
+    assert all(used == finder.APP_OPENS_MAX for used, wanting in drawn if wanting)
+    # Both cases were drawn, so the property was put to the test.
+    assert {wanting for _, wanting in drawn} == {True, False}
+
+
 def test_a_page_already_read_wins_over_its_card_and_over_an_open() -> None:
     k = keys(1)[0]
     page = f"{INDEED}viewjob?jk={k}&from=serp&vjs=3"
@@ -593,6 +752,78 @@ def test_linkedin_a_public_job_link_with_its_position_is_a_card() -> None:
         f"{LINKEDIN}jobs/view/{4012345600 + n}/" for n in range(3)
     ] + links[3:]
     assert finder.route_of(links[3], {LINKEDIN}, [], typed_address=True) == "search_address"
+
+
+def search_with_two_cards(url: str, links: tuple[str, str]) -> tuple[str, str]:
+    """A search page (fewer than LIST_CARDS_MIN cards, so no list) whose address holds a
+    posting's id, its heading sharing a word with the posting's title."""
+    return url, "\n".join(
+        [
+            '- heading "Data jobs" [level=1]',
+            '- link "Data Engineer" [ref=e1]:',
+            f"  - /url: {links[0]}",
+            '- link "Robot Welder" [ref=e2]:',
+            f"  - /url: {links[1]}",
+            "- paragraph: Data Engineer, Example Robotics, Bern.",
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("start", "search", "links", "own"),
+    [
+        (LINKEDIN, f"{LINKEDIN}jobs/search/?currentJobId={LI}&keywords=data",
+         (f"/jobs/view/{LI}/", "/jobs/view/4012345679/"), f"{LINKEDIN}jobs/view/{LI}/"),
+        (LINKEDIN, f"{LINKEDIN}jobs/collections/recommended/?currentJobId={LI}",
+         (f"/jobs/view/{LI}/", "/jobs/view/4012345679/"), f"{LINKEDIN}jobs/view/{LI}/"),
+        (INDEED, f"{INDEED}cmp/Example-Robotics/jobs?jk={JK}",
+         (f"/rc/clk?jk={JK}", f"/rc/clk?jk={JK2}"), f"{INDEED}viewjob?jk={JK}"),
+    ],
+)  # fmt: skip
+@pytest.mark.parametrize("title", ["Data Engineer", "Data Scientist"])
+def test_a_search_page_holding_a_postings_id_is_never_its_page(start, search, links, own, title):
+    """Review of #854, round 1: a search or company page read whose address holds the posting's
+    id is not the posting's page. A report of the posting opens the board's own page and keeps
+    it there with that page's title, never the search address with the list's heading."""
+    one, batches, opened, served = board_session(start, search_with_two_cards(search, links))
+    assert search not in one.lists
+    served[own] = posting("Data Engineer")
+    for url in (own, search):  # the posting's own address, and the search address as it is
+        answer = reported(one, {"title": title, "url": url, "text": "A posting."})
+        if url == own:
+            assert answer["kept"] == 1
+    assert opened == [own]
+    [finding] = [f for batch in batches for f in batch.findings]
+    assert (finding.url, finding.title, finding.list_url) == (own, "Data Engineer", None)
+
+
+def test_a_search_address_holding_a_postings_id_is_kept_from_its_card_at_the_boards_own():
+    """Review of #854, round 1: a list links its postings as search addresses that carry their
+    id (`/jobs/search/?currentJobId=<id>&...`). Reported as they are, they are kept from their
+    card at the board's own address of the posting, as J31 stores no search address; and the app
+    opens that address, never the search."""
+    rows = ['- heading "Data jobs" [level=1]', "- list:"]
+    for n in range(6):
+        rows += [
+            "  - listitem:",
+            f'    - link "Data Role {n}" [ref=e{n}]:',
+            f"      - /url: /jobs/search/?currentJobId={4012345600 + n}&keywords=data&refId=r{n}",
+        ]
+    one, batches, opened, served = board_session(
+        LINKEDIN, (LINKEDIN + "jobs/search/?keywords=data", "\n".join(rows))
+    )
+    searches = [
+        f"{LINKEDIN}jobs/search/?currentJobId={4012345600 + n}&keywords=data&refId=r{n}"
+        for n in range(6)
+    ]
+    answer = listed(one, *({"title": f"Data Role {n}", "url": searches[n]} for n in range(5)))
+    assert (answer["kept"], answer["refused"]) == (5, [])
+    served[f"{LINKEDIN}jobs/view/4012345605/"] = posting("Data Role 5")
+    assert reported(one, {"title": "Data Role 5", "url": searches[5], "text": "A card."})["kept"]
+    assert opened == [f"{LINKEDIN}jobs/view/4012345605/"]
+    assert [f.url for b in batches for f in b.findings] == [
+        f"{LINKEDIN}jobs/view/{4012345600 + n}/" for n in range(6)
+    ]
 
 
 def test_a_link_seen_past_the_seen_set_still_counts() -> None:

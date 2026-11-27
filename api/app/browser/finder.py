@@ -47,7 +47,7 @@ from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import InitVar, dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote, unquote, urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 import regex
 from pydantic import BaseModel, ConfigDict, Field
@@ -58,6 +58,16 @@ from app.agents.failures import TURN_LIMIT
 from app.agents.models import CredentialKind, RunStatus
 from app.browser import screenshot, web_plan
 from app.browser.client import BrowserError
+from app.browser.same_posting import (
+    Board,
+    board_address,
+    board_of,
+    family_of,
+    posting_address,
+    posting_id,
+    posting_key,
+    posting_page,
+)
 from app.browser.words import words as _words
 
 if TYPE_CHECKING:
@@ -230,10 +240,13 @@ WALL_STATUSES = frozenset({401, 403, 429, 503})
 # unread (CARD_FALLBACK), so the agent reports them no more.
 CARD_KEPT = (
     "so they were kept from the card you saw in a list, marked for the person as seen only in "
-    "a list (a later search reads their page): do not report them again."
+    "a list (a later search may read their page): do not report them again."
 )
 CARD_WHY = {
-    "app_opens_max": f"The app opens at most {APP_OPENS_MAX} pages a report, {CARD_KEPT}",
+    "app_opens_max": (
+        f"The app opens at most {APP_OPENS_MAX} pages a report and opened other postings' "
+        f"pages, {CARD_KEPT}"
+    ),
     "detail_not_opened": (
         "The app could not open their page (no free tab, a page that did not load, or the "
         f"search stopped), {CARD_KEPT}"
@@ -383,7 +396,7 @@ REPORT_ADVICE = {
     "app_opens_max": (
         f"The app opens at most {APP_OPENS_MAX} pages a report, and no card of a list you read "
         "shows this posting: open its page yourself and report it, or report it again in your "
-        "next report, where the app opens it."
+        "next report, where the app may open it."
     ),
     "card_not_seen": (
         "Report only a card you saw in this search, on a page, a fetched page or in a script's "
@@ -750,53 +763,6 @@ def canonical(url: str) -> str:
     return urlunsplit((scheme, host, path, quote(parts.query, safe=_QUERY_SAFE), ""))
 
 
-# Owner, 2026-10-29 (B19, "Let it use the search boxes"): each website's own hosts are allowed.
-# A platform's hosts are a family, as browserd's discovery.FAMILIES: its domain, the domain's
-# `www.` host and, with `countries`, every host of two lowercase ASCII letters under it
-# (`fr.indeed.com`), on https and its default port; each has a `.test` stand in on http and port
-# 8080 for the tests (`.test` is reserved, RFC 2606), as platform_policy.test_start maps a
-# platform there. The lease opens the family (`lease_hosts`); since B20 a page may be on any
-# public host.
-COUNTRY_LABEL = re.compile(r"[a-z]{2}")
-PLATFORM_FAMILIES = (
-    ("indeed.com", True),
-    ("linkedin.com", True),
-    ("welcometothejungle.com", False),
-)
-FAMILIES = tuple(
-    family
-    for domain, countries in PLATFORM_FAMILIES
-    for family in (
-        (domain, countries, "https", 443),
-        (domain.rsplit(".", 1)[0] + ".test", countries, "http", 8080),
-    )
-)
-
-
-def family_of(url: str) -> tuple[str, bool, str, int] | None:
-    """The family a canonical address is on: its scheme and port, its host the domain, the
-    domain's `www.` host or, with countries, two lowercase letters under the domain."""
-    try:
-        parts = urlsplit(url)
-        port = parts.port
-    except ValueError:
-        return None
-    if parts.username or parts.password:
-        return None
-    host = parts.hostname or ""
-    port = {"http": 80, "https": 443}.get(parts.scheme) if port is None else port
-    for family in FAMILIES:
-        domain, countries, scheme, family_port = family
-        if (parts.scheme, port) != (scheme, family_port):
-            continue
-        label, dot, rest = host.partition(".")
-        if host in (domain, "www." + domain) or (
-            countries and dot and rest == domain and COUNTRY_LABEL.fullmatch(label)
-        ):
-            return family
-    return None
-
-
 def lease_hosts(start: str) -> list[str]:
     """The hosts a job website's lease opens: its family's (the domain, and every name under it
     or its `www.` host; browserd narrows them to the family, discovery.on_site), else the
@@ -808,141 +774,11 @@ def lease_hosts(start: str) -> list[str]:
     return [domain, f"*.{domain}" if countries else f"www.{domain}"]
 
 
-@dataclass(frozen=True)
-class Board:
-    """A job board whose postings carry an id of their own (B31): the query parameters that hold
-    it on any path, a path that holds it (group 1), its shape, a value naming it (group 1), the
-    names a script's item gives it (case, `_` and `-` aside), the board's own address of a
-    posting, and the parameters that only track on the board's hosts."""
-
-    params: frozenset[str]
-    path: re.Pattern[str] | None
-    shape: re.Pattern[str]
-    urn: re.Pattern[str] | None
-    fields: frozenset[str]
-    address: str
-    tracking: frozenset[str]
-
-
-# B31 (owner, 2026-11-26: "Je veux vraiment qu'on remonte un max de job"): two addresses name the
-# same posting when they give one posting id of a board that has ids (BOARDS, on any host of the
-# board's family and any path), else when they are one address once the parameters that only
-# track are left out (TRACKING and the prefix, and the board's own on its family), one trailing
-# slash and the order of the parameters aside. A parameter not listed identifies. Accept and
-# refuse table: test_b31_same_posting.py.
-BOARDS = {
-    "indeed": Board(
-        params=frozenset({"jk"}),
-        path=None,
-        shape=re.compile(r"[0-9a-f]{16}"),
-        urn=None,
-        fields=frozenset({"jk", "jobkey"}),
-        address="/viewjob?jk={id}",
-        tracking=frozenset({"tk", "from", "vjs", "bb", "xkcb", "advn", "adid", "sjdu"}),
-    ),
-    "linkedin": Board(
-        params=frozenset({"currentJobId"}),
-        path=re.compile(r"/jobs/view/(?:[^/]*-)?([0-9]+)/?"),
-        shape=re.compile(r"[0-9]{1,19}"),
-        urn=re.compile(r"urn:li:(?:fs_|fsd_)?jobPosting:([0-9]{1,19})"),
-        fields=frozenset({"jobid", "jobpostingid", "currentjobid", "entityurn"}),
-        address="/jobs/view/{id}/",
-        tracking=frozenset({"trk", "trkInfo", "refId", "trackingId", "eBP", "lipi"}),
-    ),
-}
-TRACKING = frozenset(
-    {"gclid", "gbraid", "wbraid", "dclid", "fbclid", "msclkid", "mc_cid", "mc_eid", "_hsenc",
-     "_hsmi", "igshid"}
-)  # fmt: skip
-TRACKING_PREFIX = "utm_"
-
-
-def _query(query: str) -> list[tuple[str, str]]:
-    """A query's parameters as a server reads them: split on `&`, each name and value percent
-    decoded (a `+` kept as written), empty pieces aside."""
-    pairs: list[tuple[str, str]] = []
-    for piece in query.split("&"):
-        if piece:
-            name, _, value = piece.partition("=")
-            pairs.append((unquote(name), unquote(value)))
-    return pairs
-
-
-def board_of(url: str) -> tuple[str, Board] | None:
-    """The board (BOARDS) a canonical address is on, with its family's domain (`family_of`)."""
-    family = family_of(url)
-    board = BOARDS.get(family[0].rsplit(".", 1)[0]) if family else None
-    return (family[0], board) if family and board else None
-
-
-def posting_id(url: str) -> tuple[str, str] | None:
-    """The board's domain and the posting id a canonical address gives (B31): its id parameters
-    and its id path, when they hold one id of the board's shape. None for an address of no
-    board, with no id, with two different ids, or with an id of another shape."""
-    found = board_of(url)
-    if found is None:
-        return None
-    domain, board = found
-    parts = urlsplit(url)
-    ids = {value for name, value in _query(parts.query) if name in board.params}
-    if board.path is not None and (match := board.path.fullmatch(parts.path)):
-        ids.add(match.group(1))
-    if len(ids) != 1:
-        return None
-    one = ids.pop()
-    return (domain, one) if board.shape.fullmatch(one) else None
-
-
-def posting_key(url: str) -> str:
-    """What names the posting a canonical address shows (B31): its board and id (`posting_id`),
-    else the address once the parameters that only track are left out, one trailing slash and
-    the order of the parameters aside. "" for an address it cannot read. Two addresses of one
-    key name the same posting. Pure."""
-    found = posting_id(url)
-    if found is not None:
-        return f"{found[0]} {found[1]}"  # a space is in no canonical address
-    try:
-        parts = urlsplit(url)
-    except ValueError:
-        return ""
-    if parts.scheme not in ("http", "https") or not parts.netloc:
-        return ""
-    board = board_of(url)
-    tracking = TRACKING | board[1].tracking if board else TRACKING
-    kept = sorted(
-        (
-            (name, value)
-            for name, value in _query(parts.query)
-            if name not in tracking and not name.startswith(TRACKING_PREFIX)
-        ),
-        key=lambda pair: pair[0],
-    )
-    path = parts.path[:-1] if parts.path.endswith("/") else parts.path
-    query = "&".join(f"{quote(name, safe='')}={quote(value, safe='')}" for name, value in kept)
-    return f"{parts.scheme}://{parts.netloc}{path}?{query}"
-
-
-def board_address(url: str, posting: str) -> str:
-    """The board's own address of a posting id (B31), on the scheme and host of `url`, a board's
-    canonical address; "" for an address of no board or an id of another shape."""
-    found = board_of(url)
-    if found is None or not found[1].shape.fullmatch(posting):
-        return ""
-    parts = urlsplit(url)
-    return canonical(f"{parts.scheme}://{parts.netloc}{found[1].address.format(id=posting)}")
-
-
-def posting_address(url: str) -> str:
-    """The board's own address of the posting a board's address names (`posting_id`), on its
-    host; the address itself for any other."""
-    found = posting_id(url)
-    return board_address(url, found[1]) if found else url
-
-
 def _item_ids(one: dict[str, Any], board: Board) -> dict[str, str]:
-    """The posting ids an object of a script's result gives in its own fields (B31): a field the
+    """The posting id an object of a script's result gives in its own fields (B31): a field the
     board names (`Board.fields`) holding an id of the board's shape, a number, or a value naming
-    one (`Board.urn`); by the value as given."""
+    one (`Board.urn`); by the value as given. Two different ids give none, as an address with two
+    ids has none (`posting_id`)."""
     ids: dict[str, str] = {}
     for name, value in one.items():
         if re.sub(r"[_-]", "", name.casefold()) not in board.fields:
@@ -953,7 +789,7 @@ def _item_ids(one: dict[str, Any], board: Board) -> dict[str, str]:
         posting = match.group(1) if board.urn and (match := board.urn.fullmatch(given)) else given
         if board.shape.fullmatch(posting):
             ids[given] = posting
-    return ids
+    return ids if len(set(ids.values())) == 1 else {}
 
 
 @dataclass
@@ -1224,11 +1060,9 @@ def _script_cards(url: str, raw: object, code: str) -> list[tuple[str, str, Unit
             if isinstance(one, dict):
                 ids = _item_ids(one, board[1]) if board else {}
                 words = [s for s in _strings(one) if not SCRIPT_ADDRESS.fullmatch(s)]
-                built = [
-                    board_address(canonical(url), posting)
-                    for given, posting in ids.items()
-                    if given not in code and posting not in code
-                ]
+                posting = next(iter(ids.values()), "")
+                written = posting in code or any(given in code for given in ids)
+                built = [board_address(canonical(url), posting)] if ids and not written else []
                 found.append((_own_links(one), [s for s in words if s not in ids], built))
                 stack.extend(v for v in one.values() if isinstance(v, list | dict))
             else:
@@ -2256,14 +2090,18 @@ class FinderSession:
     def _as_seen(self, url: str) -> tuple[str, bool]:
         """B31: the address of the posting a reported canonical address names, as the session saw
         it, and whether it saw it: the address itself when its page was read; else a page of the
-        same posting it read (a list aside); else the address itself when it saw it; else, of
-        the same posting it saw, the board's own address for its id (`posting_address`), or its
-        newest address. The address itself, unseen, when it saw no address of that posting: a
-        made up address or id stays refused."""
+        same posting it read that is the posting's own (`_own_page`); else the address itself
+        when it saw it; else, of the same posting it saw, the board's own address for its id
+        (`posting_address`), or its newest address. The address itself, unseen, when it saw no
+        address of that posting: a made up address or id stays refused. A board's address of a
+        posting that is not the board's page of it (a search or a company page holding its id,
+        `posting_page`) is read as the board's own address of that posting first."""
+        if posting_id(url) is not None and not posting_page(url):
+            url = posting_address(url)
         same = self._same(url)
         if url in self.pages_read:
             return url, True
-        read = next((a for a in same if a in self.pages_read and a not in self.lists), None)
+        read = next((a for a in same if a in self.pages_read and self._own_page(a)), None)
         if read is not None:
             return read, True
         if url in same or url in self.seen or url in self.script_links or url in self.cards:
@@ -2271,6 +2109,16 @@ class FinderSession:
         if url in self.error_pages:
             return url, False
         return (posting_address(same[0]), True) if same else (url, False)
+
+    def _own_page(self, url: str) -> bool:
+        """B31: whether a page read is a posting's own page: on a board, the board's page of the
+        posting its id names (`posting_page`); elsewhere neither a list nor an address `route_of`
+        reads as a search or listing page."""
+        if url in self.lists:
+            return False
+        if posting_id(url) is not None:
+            return posting_page(url)
+        return route_of(url, {self.start, self.landed}, [], typed_address=True) is None
 
     def _reported(self, url: str, pending: set[str]) -> bool:
         """Whether a report of this session already kept the posting `url` names (B31: by its
@@ -3210,12 +3058,11 @@ class FinderSession:
             return True
 
         # B31: the opens of one call go first to the postings no card stands in for, so that
-        # past APP_OPENS_MAX a card keeps a posting rather than a refusal (`bare_after`: how many
-        # of those come after each index).
-        unopened = [] if listing or self.stopped else [self._unopened(item) for item in items]
-        bare_after = [0] * (len(unopened) + 1)
-        for index in range(len(unopened) - 1, -1, -1):
-            bare_after[index] = bare_after[index + 1] + (unopened[index] == "bare")
+        # past APP_OPENS_MAX a card keeps a posting rather than a refusal (`plan`, planned again
+        # after each open, which may change what the next postings need; `tried`: one open a
+        # posting).
+        plan = [] if listing or self.stopped else self._unopened(items, set())
+        tried: set[str] = set()
         opens = 0
         from_card: dict[str, list[int]] = {}
         for index, item in enumerate(items):
@@ -3226,13 +3073,18 @@ class FinderSession:
                 finding, reason = self._verified(item, urls)
             if not listing and reason == "detail_not_opened" and not self.stopped:
                 # B27: an address the agent saw and did not open, the app opens itself.
-                carded = index < len(unopened) and unopened[index] == "card"
+                address, _seen = self._as_seen(canonical(urljoin(self.current, item["url"])))
+                key = posting_key(address) or address
+                carded = index < len(plan) and plan[index][0] == "card"
                 left = APP_OPENS_MAX - opens
-                if left <= 0 or (carded and left <= bare_after[index + 1]):
+                bare = sum(kind == "bare" for kind, _ in plan[index + 1 :])
+                if key in tried:
+                    pass  # this report opened it and its page did not load: it stays unread
+                elif left <= 0 or (carded and left <= bare):
                     reason = "app_opens_max"
                 else:
                     opens += 1
-                    address, _seen = self._as_seen(canonical(urljoin(self.current, item["url"])))
+                    tried.add(key)
                     opened = await self._open_for_report(address)
                     if self.stopped and self.stopped not in STORES_AFTER_STOP:
                         pending.clear()  # a permission taken back: nothing more is kept
@@ -3243,6 +3095,8 @@ class FinderSession:
                             reason = "not_on_opened_page"
                     elif self.stopped and (again := self._verified(item, urls))[0] is not None:
                         finding, reason = again  # read, then its tab not given back (J31)
+                    claimed = tried | {k for _, k in plan[: index + 1] if k}
+                    plan[index + 1 :] = self._unopened(items[index + 1 :], claimed)
             if not listing and reason in CARD_FALLBACK:
                 # J31: a page the app could not open or read; a card of a list read stands in.
                 card, _why = self._card(item, urls)
@@ -3402,17 +3256,35 @@ class FinderSession:
             refusal["do"] = REPORT_ADVICE[reason]
         return refusal
 
-    def _unopened(self, item: Any) -> str:
-        """B31: whether the app has to open a reported posting's page: "" when it does not (its
-        page read, an error page, an address never seen, an item it cannot read), "card" when a
-        card of a list the session read stands in for it (`_card`), "bare" when none does."""
-        url = item.get("url") if isinstance(item, dict) else None
-        if not isinstance(url, str) or len(url) > 2000:
-            return ""
-        address, seen = self._as_seen(canonical(urljoin(self.current, url)))
-        if not seen or address in self.pages_read or address in self.error_pages:
-            return ""
-        return "card" if self._card(item, set())[0] is not None else "bare"
+    def _unopened(self, items: list[Any], claimed: set[str]) -> list[tuple[str, str]]:
+        """B31: for each reported posting, whether the app opens its page, with the posting it
+        claims (`posting_key`): "card" when `_verified` answers `detail_not_opened` and a card of
+        a list the session read stands in for it (`_card`), "bare" when none does; "" for any
+        other answer (its page read, an error page, an address never seen, a duplicate, an item
+        refused before), and for a posting an earlier item claimed (`claimed`, which it fills: a
+        posting to open, or kept from a page or a card), which takes no open."""
+        planned: list[tuple[str, str]] = []
+        for item in items:
+            finding, reason = self._verified(item, set())
+            if reason == "detail_not_opened":
+                address, _seen = self._as_seen(canonical(urljoin(self.current, item["url"])))
+                key = posting_key(address) or address
+                if key in claimed:
+                    planned.append(("", ""))
+                    continue
+                claimed.add(key)
+                carded = self._card(item, set())[0] is not None
+                planned.append(("card" if carded else "bare", key))
+                continue
+            if finding is None and reason in CARD_FALLBACK:
+                finding = self._card(item, set())[0]
+            key = (posting_key(finding.url) or finding.url) if finding is not None else ""
+            if key in claimed:
+                key = ""
+            elif key:
+                claimed.add(key)
+            planned.append(("", key))
+        return planned
 
     def _verified(self, item: Any, pending: set[str]) -> tuple[VerifiedFinding | None, str]:
         if not isinstance(item, dict):
@@ -3512,7 +3384,7 @@ class FinderSession:
         # B31: the card of another spelling of the posting's address stands for it too.
         url, _seen = self._as_seen(url)
         same = list(dict.fromkeys([url, *self._same(url)]))
-        # A board's posting id names a posting whatever else its address holds (B31).
+        # B31: a board's address of a posting id is now the board's page of it, whatever its query.
         searched = posting_id(url) is None and route_of(url, home, [], typed_address=True)
         if url in home or url in self.lists or searched:
             return None, "not_a_posting_page"  # a search address or a listing page's shape too
