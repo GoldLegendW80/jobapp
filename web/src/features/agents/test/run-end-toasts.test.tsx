@@ -211,6 +211,27 @@ describe("the toast of a run's end", () => {
     ).toBeInTheDocument();
   });
 
+  it("keeps the words of before when the search's sweep cannot be read", async () => {
+    fakeActivity(
+      [
+        { under_way: 1, ended: [OLD] },
+        { under_way: 0, ended: [ENDED_SEARCH, OLD] },
+      ],
+      [SEARCH],
+    );
+    server.use(
+      http.get("*/api/jobs/sweeps/:id", () =>
+        HttpResponse.json({ detail: "Server error" }, { status: 500 }),
+      ),
+    );
+    const app = await openAt("/jobs");
+    await firstCountRead(app);
+    await readCount(app);
+    expect(
+      await screen.findByText("Robotics engineer in Lyon."),
+    ).toBeInTheDocument();
+  });
+
   it("says why a run failed, with no postings link", async () => {
     const ended = { id: FAILED.id, finished_at: "2026-11-10T09:30:00Z" };
     fakeActivity(
