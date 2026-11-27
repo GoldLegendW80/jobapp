@@ -99,12 +99,17 @@ class Field(Element):
             return {**self.f, "host": actions.host_of(self.page.url)}
         if js == actions.FOCUSED_JS:
             return True
-        if js == actions.VALUE_JS:
-            return ""
+        if js == actions.SAME_JS:
+            return arg is self
+        if js == actions.VALUE_JS:  # the keys typed into it
+            return "".join(c[1] for c in self.page.calls if c[0] == "key")
+        if js == actions.SHOWN_JS:  # the site took it: the box left the page
+            return False
         return await super().evaluate(js, arg)
 
     async def focus(self, **kw: Any) -> None:
         self.page.calls.append(("focus",))
+        self.page.focused = self
 
     async def element_handle(self) -> "Field":
         return self
@@ -219,7 +224,7 @@ def run(
     )
     tab.discovery = request is Sweep
     if name == "browser_type_code":  # A25: the code the person gave in the app, on the lease
-        tab.state.code, tab.state.code_host = "4815", actions.host_of(page.url)
+        tab.state.code, tab.state.code_host = "481516", actions.host_of(page.url)
     result = asyncio.run(actions.run(tab, name, args))
     assert result["ok"] is True, result
     return page.calls

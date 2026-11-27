@@ -1251,14 +1251,6 @@ SAME_JS = "(e, other) => e === other"
 # The box is still on its page: in its document and drawn (a transparent box over slots is).
 SHOWN_JS = """e => e.isConnected && e.getClientRects().length > 0
   && getComputedStyle(e).visibility !== 'hidden'"""
-# The element keys go to, in the top document only (a frame's focus is no box of the code).
-TOP_FOCUS_JS = """() => {
-  let e = document.activeElement;
-  for (let i = 0; e && e.shadowRoot && e.shadowRoot.activeElement && i < 50; i++) {
-    e = e.shadowRoot.activeElement;
-  }
-  return e;
-}"""
 ENTRY_HEAD = re.compile(r'(?P<head>\s*- \S+(?: "(?:[^"\\]|\\.)*")?(?: \[[^\]\n]*\])*)(?::.*)?')
 
 
@@ -1379,7 +1371,7 @@ async def _key_target(page: Any, host: str, landed: list[Any], *, first: bool) -
     """The next key goes to one of the code's boxes: the named box (`landed[0]`) for the first
     key; then a box of `landed`, or one `detect.key_box` holds on the ask's host (added)."""
     try:
-        focused = await page.evaluate_handle(TOP_FOCUS_JS)
+        focused = await page.evaluate_handle(DEEP_FOCUS_JS)  # the top document's own focus
         for seen in landed[:1] if first else landed:
             if await seen.evaluate(SAME_JS, focused) is True:
                 return True
