@@ -1971,8 +1971,8 @@ def listed_postings(
 ) -> list[Listed]:
     """Jobs J36: the postings a website's reading of pages tries (`_listed`), in order: those of
     `first` (the jobs this search stored or found again from a card, Known.carded), the oldest
-    first, then the others by `listed_key` of `day`, so the postings a reading holds at its end
-    (stored never) are not first again on every day; at most LISTED_MAX of them."""
+    first, then the others by `listed_key` of `day`, so the postings a reading holds at its end,
+    which are not stored, do not stand first again each day; at most LISTED_MAX of them."""
     order: list[Any] = []
     if first:
         mine = Job.id.in_(sorted(first))
