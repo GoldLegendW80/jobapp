@@ -4,10 +4,12 @@ import { screen, userEvent } from "storybook/test";
 
 import { ScheduleDialog } from "@/components/shared/jobs/schedule-dialog";
 import { camilleProfile } from "@/design-system/fixtures/camille-profile";
+import { REMOTE_SEARCH } from "@/design-system/fixtures/saved-searches";
 import { WEEKDAYS_SCHEDULE } from "@/design-system/fixtures/jobs-actions";
 import { phoneScreen } from "@/design-system/fixtures/phone-screen";
 import { withApp } from "@/design-system/with-app";
 import { fakeProfile } from "@/test/profile";
+import { fakeSearches } from "@/test/searches";
 import { emptySweeps, server } from "@/test/server";
 
 const meta = {
@@ -19,7 +21,7 @@ const meta = {
     docs: {
       description: {
         component:
-          "The automatic search: on or off, its days, one to four times and its time zone, with when it runs next. Opened by Automatic search in More actions on Jobs.",
+          "The automatic search of one search: on or off, its days, one to four times, with when it runs next. The main search's (Automatic search in More actions on Jobs, or its row in Find jobs) holds the time zone every search shares; a saved search's (its row in Find jobs) names that time zone and where it is changed.",
       },
       story: { inline: false, height: "720px" },
     },
@@ -92,4 +94,33 @@ export const OnAPhone: Story = {
   name: "On a phone",
   args: { state: WEEKDAYS_SCHEDULE },
   beforeEach: phoneScreen,
+};
+
+/** A saved search's schedule: the time zone is named, never offered, as every search shares it. */
+export const SavedSearch: Story = {
+  name: "The schedule of a saved search",
+  args: { search: REMOTE_SEARCH },
+  beforeEach: () => {
+    fakeSearches({ saved: [REMOTE_SEARCH] });
+  },
+};
+
+/** A saved search changed in another tab meanwhile: the dialog says so and keeps the choice. */
+export const SavedSearchMoved: Story = {
+  name: "A saved search changed in another tab",
+  args: { search: { ...REMOTE_SEARCH, revision: 0 } },
+  beforeEach: SavedSearch.beforeEach,
+  play: async () => {
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+  },
+};
+
+/** A saved search's schedule on a phone: the same width as the main search's. */
+export const SavedSearchOnAPhone: Story = {
+  name: "The schedule of a saved search on a phone",
+  args: { search: REMOTE_SEARCH },
+  beforeEach: () => {
+    fakeSearches({ saved: [REMOTE_SEARCH] });
+    return phoneScreen();
+  },
 };

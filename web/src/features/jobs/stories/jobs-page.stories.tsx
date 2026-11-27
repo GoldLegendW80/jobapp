@@ -163,6 +163,33 @@ export const RunOneOfMySearches: Story = {
   },
 };
 
+/** As a job seeker, I want to run one of my searches by itself on the days and times I choose, so that each kind of role I look for comes in without my clicking. */
+export const ScheduleOneOfMySearches: Story = {
+  beforeEach: () => {
+    postings();
+    fakeSearches({ saved: [REMOTE_SEARCH, WAITING_SEARCH] });
+  },
+  play: async ({ canvasElement }) => {
+    const page = within(canvasElement);
+    const body = within(canvasElement.ownerDocument.body);
+    await page.findByRole("list", { name: "Postings" });
+    await userEvent.click(page.getByRole("button", { name: "Find jobs" }));
+    await userEvent.click(
+      await body.findByRole("button", {
+        name: `More actions for ${WAITING_SEARCH.name}`,
+      }),
+    );
+    await userEvent.click(
+      await body.findByRole("menuitem", { name: "Schedule" }),
+    );
+    await expect(
+      await body.findByRole("dialog", {
+        name: `Automatic search of ${WAITING_SEARCH.name}`,
+      }),
+    ).toBeVisible();
+  },
+};
+
 /** As a job seeker, I want to tick several postings and act on them at once, so that a morning of sorting takes a few clicks. */
 export const ActOnASelection: Story = {
   beforeEach: () => {

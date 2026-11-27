@@ -179,6 +179,10 @@ class GuardedTools:
         await self._before(name)
         return await self.tools.call(name, args)
 
+    async def permit(self) -> None:
+        """Jobs J31: the permission check alone, for a report of a stopped search (no call)."""
+        await _permit(self.policy, self.context)
+
     async def snapshot(self) -> dict[str, Any]:
         await self._before("browser_snapshot")
         shot = await self.tools.snapshot()
@@ -348,14 +352,23 @@ class _Site:
     media_blocked: bool = False
     # Jobs J30: how many results the agent said it read, its own count (the largest it gave).
     results_read: int | None = None
+    # Jobs J31: the cards report_listing refused, by reason (the evidence rule).
+    cards_refused: Counter[str] = field(default_factory=Counter)
+
+    def _excluded(self, title: str, location: str) -> str:
+        """The person's unwanted title or place a posting read meets, as a note ("Unwanted
+        title: Stage"), else ""."""
+        titles, places = self.planned.unwanted_titles, self.planned.unwanted_places
+        if titles and (met := titles.search(title)):
+            return f"Unwanted title: {met.group(0)}"
+        if places and (met := places.search(location)):
+            return f"Unwanted place: {met.group(0)}"
+        return ""
 
     def _sort(self, title: str, location: str, url: str) -> set[str]:
         """Where a posting read goes: unwanted (the person's unwanted titles and places), or kept,
         whatever its contract (jobs J30: the store gives it its badge)."""
-        titles, places = self.planned.unwanted_titles, self.planned.unwanted_places
-        if (titles and titles.search(title)) or (places and places.search(location)):
-            return self.unwanted
-        return self.found
+        return self.unwanted if self._excluded(title, location) else self.found
 
     def place(self, url: str, into: set[str]) -> bool:
         """Put an address in one set only: unwanted wins over found (fail closed). False when
@@ -387,24 +400,31 @@ class _Site:
         self.media_blocked = self.media_blocked or session.media_blocked
         if session.results_read is not None:
             self.results_read = max(self.results_read or 0, session.results_read)
+        self.cards_refused.update(session.cards_refused)
 
     async def verified(self, batch: finder.VerifiedBatch) -> None:
-        """A verified batch on its way to the store (module docstring)."""
+        """A verified batch on its way to the store (module docstring). A page read the person's
+        exclusions set aside still goes to the store with its exclusion (jobs J31): the posting
+        kept from its card, if any, is skipped with it as its note (`sweep._page_read`)."""
         kept: list[finder.VerifiedFinding] = []
+        aside: list[tuple[finder.VerifiedFinding, str]] = []
         for finding in batch.findings:
             url = finding.url  # canonical (finder.FinderSession._verified)
             if url in self.sent:
                 continue  # stored already: counted once, by the commits
-            place = self._sort(finding.title, finding.location, url)
-            if place is self.found:
+            excluded = self._excluded(finding.title, finding.location)
+            if not excluded:
                 if url not in self.unwanted:
                     kept.append(finding)
             else:
-                self.place(url, place)
-        if kept:
+                self.place(url, self.unwanted)
+                if finding.list_url is None:
+                    aside.append((finding, excluded))
+        if kept or aside:
             # Marked before the commit: a commit whose caller is cancelled still lands.
             self.sent.update(finding.url for finding in kept)
-            await self.commits.save(self.source_id, self.host, finder.VerifiedBatch(tuple(kept)))
+            found = finder.VerifiedBatch(tuple(kept)) if kept else None
+            await self.commits.save(self.source_id, self.host, found, aside)
 
     def write(self, entry: dict[str, Any]) -> None:
         entry["result_pages"] = self.pages
@@ -437,6 +457,7 @@ class _Site:
                 entry["media_blocked"] = self.media_blocked
             if self.results_read is not None:
                 entry["results_read"] = self.results_read
+            entry["cards_refused"] = dict(self.cards_refused)
         if self.unwanted:
             entry["unwanted"] = len(self.unwanted)
 

@@ -39,6 +39,16 @@ export const searchRequestSchema = z.object({
 });
 export type SearchRequest = z.infer<typeof searchRequestSchema>;
 
+/** A search's newest sweep, however old (jobs J33b); null for a search that never ran. */
+export const lastRunSchema = z.object({
+  sweep_id: z.string().min(1),
+  status: z.string(),
+  started_at: z.string(),
+  finished_at: z.string().nullable(),
+  new: z.number().int().nonnegative(),
+});
+export type LastRun = z.infer<typeof lastRunSchema>;
+
 export const savedSearchSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
@@ -49,6 +59,7 @@ export const savedSearchSchema = z.object({
     .transform((value) => value as Criteria),
   schedule: scheduleSchema,
   request: searchRequestSchema.nullable().default(null),
+  last_run: lastRunSchema.nullable().default(null),
 });
 export type SavedSearch = z.infer<typeof savedSearchSchema>;
 

@@ -4,6 +4,7 @@ import { userEvent, within } from "storybook/test";
 import {
   ApplicationMenu,
   CriteriaFilter,
+  SearchFilter,
   FilterPresets,
   PayFilter,
   PlaceFilter,
@@ -13,6 +14,11 @@ import {
 } from "@/components/shared/jobs/filters/more-filters";
 import { FACETS } from "@/design-system/fixtures/job-filters";
 import { WithFilters } from "@/design-system/fixtures/job-harnesses";
+import {
+  MAIN_SEARCH,
+  REMOTE_SEARCH,
+  WAITING_SEARCH,
+} from "@/design-system/fixtures/saved-searches";
 import { EMPTY_FILTERS } from "@/features/jobs/helpers/filters";
 
 const meta = {
@@ -98,6 +104,38 @@ export const Published: Story = {
       initial={{ ...EMPTY_FILTERS, publishedWithin: 7, publishedUndated: true }}
     >
       {(props) => <PublishedFilter {...props} />}
+    </WithFilters>
+  ),
+};
+
+/** The postings one of the person's searches added, offered once she has a saved search
+ * (jobs J33b). */
+export const Search: Story = {
+  render: () => (
+    <WithFilters initial={{ ...EMPTY_FILTERS, search: REMOTE_SEARCH.id }}>
+      {(props) => (
+        <SearchFilter
+          {...props}
+          searches={[MAIN_SEARCH, REMOTE_SEARCH, WAITING_SEARCH]}
+        />
+      )}
+    </WithFilters>
+  ),
+};
+
+/** A search deleted since the address was made: named so, and changed or cleared here. */
+export const DeletedSearch: Story = {
+  name: "Search deleted since",
+  render: () => (
+    <WithFilters
+      initial={{
+        ...EMPTY_FILTERS,
+        search: "00000000-0000-4000-8000-000000000009",
+      }}
+    >
+      {(props) => (
+        <SearchFilter {...props} searches={[MAIN_SEARCH, REMOTE_SEARCH]} />
+      )}
     </WithFilters>
   ),
 };

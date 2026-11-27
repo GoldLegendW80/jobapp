@@ -2,8 +2,9 @@
 app/jobs/searches.py), and their runs.
 
 - GET /api/jobs/searches: the main search first (`id` "main", the profile's search section), then
-  the saved ones in the order they were made, each with its schedule, its next run and its run
-  waiting in the line, and the running sweep's id.
+  the saved ones in the order they were made, each with its schedule, its next run, its run
+  waiting in the line and its newest sweep (jobs J33b, read for every search in one query), and
+  the running sweep's id.
 - POST /api/jobs/searches: 201 with a new saved search. 422 for a name or criteria the checks
   refuse, a ticked website the person gave no permission for, or past 20; 409 for a name taken.
 - GET, PUT, DELETE /api/jobs/searches/{id}: read; change with the revision read (409 with the
@@ -25,6 +26,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any
 
+import sqlalchemy as sa
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
@@ -42,6 +44,7 @@ from app.jobs.schemas import (
     SavedSearchList,
     SavedSearchOut,
     SearchConflictOut,
+    SearchLastRunOut,
     SearchRequestOut,
     SearchRunAllOut,
     SearchRunOut,
@@ -101,6 +104,19 @@ def _request_out(
     return None
 
 
+def _last_run_out(row: sa.Row[Any] | None) -> SearchLastRunOut | None:
+    if row is None:
+        return None
+    new = row.new
+    return SearchLastRunOut(
+        sweep_id=row.id,
+        status=row.status.value,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        new=new if isinstance(new, int) and not isinstance(new, bool) and new > 0 else 0,
+    )
+
+
 def _schedule_out(plan: Any, search: SearchSection | None, now: datetime) -> SearchScheduleOut:
     active = plan.enabled and sweep.has_sources(search)
     return SearchScheduleOut(
@@ -115,7 +131,7 @@ def _schedule_out(plan: Any, search: SearchSection | None, now: datetime) -> Sea
 
 class _Person:
     """What every view of one person's searches reads once: the profile, the main search, the
-    line."""
+    line, the newest sweep of each search."""
 
     def __init__(self, db: Session, user_id: uuid.UUID) -> None:
         profile = db.get(Profile, user_id)
@@ -125,6 +141,7 @@ class _Person:
         self.main = sweep.user_search(db, user_id)
         self.timezone = sweep.schedule_of(self.main).timezone
         self.line = searches.waiting(db, user_id)
+        self.last = searches.last_runs(db, user_id)
 
     def main_out(self, now: datetime) -> SavedSearchOut:
         return SavedSearchOut(
@@ -135,6 +152,7 @@ class _Person:
             criteria=searches.criteria_from(self.main),
             schedule=_schedule_out(sweep.schedule_of(self.main), self.main, now),
             request=_request_out(self.line, None),
+            last_run=_last_run_out(self.last.get(None)),
         )
 
     def saved_out(self, row: SavedSearch, now: datetime) -> SavedSearchOut:
@@ -150,6 +168,7 @@ class _Person:
             criteria=dict(row.criteria),
             schedule=_schedule_out(searches.schedule_of(row).of(self.timezone), merged, now),
             request=_request_out(self.line, row.id),
+            last_run=_last_run_out(self.last.get(row.id)),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

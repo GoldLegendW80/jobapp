@@ -110,6 +110,10 @@ SENTENCES = {
     "in_progress": "An application to this posting is already under way.",
     "already_applied": "This posting is marked as applied.",
     "posting_closed": "This posting is closed.",
+    "posting_listed": (
+        "This posting was seen only in a list: its text is needed first. It is ready once a "
+        "search reads its own page."
+    ),
     "passed": "You passed this posting. Undo the Pass first if you want to apply.",
     "same_form": "This application form was already used for another of your postings.",
     "same_address": "Another of your postings with this address is marked as applied.",
@@ -416,6 +420,8 @@ def duplicates(
         return Refusal("already_applied")
     if status is JobStatus.closed:
         return Refusal("posting_closed")
+    if getattr(posting, "list_url", None) is not None:  # jobs J31: its text is needed first
+        return Refusal("posting_listed")
 
     key = current_key(key)
     stored = db.execute(

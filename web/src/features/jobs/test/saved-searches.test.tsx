@@ -9,8 +9,9 @@ import {
   copyName,
   criteriaLine,
   halfSavedWords,
-  lastRunOf,
+  searchOf,
   nameProblem,
+  runAllWords,
   runWords,
 } from "@/features/jobs/helpers/saved-searches";
 import { admin, fakeSession } from "@/test/auth";
@@ -18,9 +19,11 @@ import { fakeJobsApi, makeJob } from "@/test/jobs";
 import { fakeProfile } from "@/test/profile";
 import { renderApp } from "@/test/render";
 import { fakeSearches, makeSearch } from "@/test/searches";
-import { emptySweeps, server } from "@/test/server";
+import { server } from "@/test/server";
 
 const REMOTE = "00000000-0000-4000-8000-000000000001";
+const LYON = "00000000-0000-4000-8000-000000000002";
+const OLD_RUN = "0b6c3a52-6d1e-4c4f-9f43-2a41c1a1e0aa";
 const TERMS = (terms: string[]) => ({ advanced_regex: false, terms });
 
 function sweep(
@@ -63,12 +66,12 @@ beforeEach(() => {
 });
 
 async function openFindJobs() {
-  renderApp("/jobs");
+  const app = renderApp("/jobs");
   await screen.findByRole("list", { name: "Postings" });
   const user = userEvent.setup();
   await user.click(screen.getByRole("button", { name: "Find jobs" }));
   const list = await screen.findByRole("list", { name: "Your searches" });
-  return { user, list };
+  return { user, list, app };
 }
 
 function rowOf(list: HTMLElement, name: string) {
@@ -80,30 +83,35 @@ describe("Your searches (jobs J33)", () => {
     fakeSearches({
       main: () => ({ title_include: TERMS(["Data engineer"]) }),
       saved: [
-        makeSearch(REMOTE, "Remote roles", {
-          title_include: TERMS(["ML engineer"]),
-          location: TERMS(["Lyon"]),
-          web_search: false,
-          interactive_sites: [
-            {
-              platform: "indeed",
-              url: "https://www.indeed.com/",
-              enabled: true,
-              mode: "llm_browser",
+        makeSearch(
+          REMOTE,
+          "Remote roles",
+          {
+            title_include: TERMS(["ML engineer"]),
+            location: TERMS(["Lyon"]),
+            web_search: false,
+            interactive_sites: [
+              {
+                platform: "indeed",
+                url: "https://www.indeed.com/",
+                enabled: true,
+                mode: "llm_browser",
+              },
+            ],
+          },
+          {
+            last_run: {
+              sweep_id: OLD_RUN,
+              status: "done",
+              started_at: "2026-09-02T08:00:00Z",
+              finished_at: "2026-09-02T08:10:00Z",
+              new: 3,
             },
-          ],
-        }),
+          },
+        ),
       ],
     });
-    server.use(
-      http.get("*/api/jobs/sweeps", () =>
-        HttpResponse.json({
-          ...emptySweeps,
-          items: [sweep("s1", { id: REMOTE, name: "Remote roles" })],
-        }),
-      ),
-    );
-    const { list } = await openFindJobs();
+    const { list, user, app } = await openFindJobs();
     const rows = within(list).getAllByRole("listitem");
     expect(
       rows.map((row) => within(row).getByRole("heading").textContent),
@@ -111,11 +119,20 @@ describe("Your searches (jobs J33)", () => {
     const remote = rowOf(list, "Remote roles");
     expect(remote).toHaveTextContent("ML engineer; Lyon; on Indeed");
     expect(remote).toHaveTextContent("Runs when you start it.");
+    // Its last run is the api's, older than the last 20 sweeps (none listed here).
     expect(remote).toHaveTextContent(/Last run .*, 3 new postings\./);
     expect(rowOf(list, "Main search")).toHaveTextContent("Not run yet.");
     expect(
       screen.getByRole("link", { name: "Settings, Search" }),
     ).toHaveAttribute("href", "/settings/search");
+    // "3 new postings" opens the list on that run's postings, and Find jobs closes.
+    await user.click(
+      within(remote).getByRole("link", { name: "3 new postings" }),
+    );
+    expect(app.location()).toBe(`/jobs?sweep=${OLD_RUN}`);
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", { name: "Find jobs" })).toBeNull();
+    });
   });
 
   it("starts the main search in two clicks, Find jobs then Run now, and follows it", async () => {
@@ -301,6 +318,199 @@ describe("Your searches (jobs J33)", () => {
   });
 });
 
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday"];
+
+async function openSchedule(
+  user: ReturnType<typeof userEvent.setup>,
+  list: HTMLElement,
+  name: string,
+) {
+  await user.click(
+    within(list).getByRole("button", { name: `More actions for ${name}` }),
+  );
+  await user.click(screen.getByRole("menuitem", { name: "Schedule" }));
+}
+
+/** Turns the schedule on, on weekdays only, and saves. */
+async function weekdaysOnly(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+) {
+  await user.click(
+    within(dialog).getByRole("checkbox", { name: "Search automatically" }),
+  );
+  await user.click(within(dialog).getByRole("button", { name: "Saturday" }));
+  await user.click(within(dialog).getByRole("button", { name: "Sunday" }));
+  await user.click(within(dialog).getByRole("button", { name: "Save" }));
+}
+
+describe("The schedule of each search (jobs J33b)", () => {
+  it("schedules a saved search from its row, on the revision it showed, and the row follows without a reload", async () => {
+    const criteria = { title_include: TERMS(["ML engineer"]) };
+    const searches = fakeSearches({
+      saved: [makeSearch(REMOTE, "Remote roles", criteria, { revision: 3 })],
+    });
+    const { user, list } = await openFindJobs();
+    expect(rowOf(list, "Remote roles")).toHaveTextContent(
+      "Runs when you start it.",
+    );
+    await openSchedule(user, list, "Remote roles");
+    const dialog = await screen.findByRole("dialog", {
+      name: "Automatic search of Remote roles",
+    });
+    // The time zone is the person's, for every search: named, with where it changes.
+    expect(dialog).toHaveTextContent(
+      "The times are in your time zone, Europe/Paris, which all your searches share: change it in the schedule of Main search.",
+    );
+    expect(dialog).toHaveTextContent(
+      "When two of your searches are due at the same time, the second waits in line and starts when the first ends.",
+    );
+    expect(within(dialog).queryByLabelText("Time zone")).toBeNull();
+    await weekdaysOnly(user, dialog);
+
+    expect(
+      await screen.findByText(
+        "Automatic search of Remote roles: on, weekdays at 06:17 (Europe/Paris).",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: /^Automatic search/ }),
+    ).toBeNull();
+    expect(searches.writes).toEqual([
+      {
+        method: "PUT",
+        id: REMOTE,
+        body: {
+          name: "Remote roles",
+          criteria,
+          schedule: { enabled: true, days: WEEKDAYS, times: ["06:17"] },
+          revision: 3,
+        },
+      },
+    ]);
+    await waitFor(() => {
+      expect(rowOf(list, "Remote roles")).toHaveTextContent(
+        "Automatic: weekdays at 06:17 (Europe/Paris)",
+      );
+    });
+  });
+
+  it("says when the search changed in another tab, then saves on its new revision", async () => {
+    const searches = fakeSearches({
+      saved: [makeSearch(REMOTE, "Remote roles", {}, { revision: 3 })],
+    });
+    const { user, list } = await openFindJobs();
+    await openSchedule(user, list, "Remote roles");
+    const dialog = await screen.findByRole("dialog", {
+      name: "Automatic search of Remote roles",
+    });
+    searches.saved[0]!.revision = 4;
+    await weekdaysOnly(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "This search changed in another tab. Try again.",
+    );
+    // The choice is kept; the search was read again, so Save goes on its stored revision.
+    expect(
+      within(dialog).getByRole("button", { name: "Saturday" }),
+    ).toHaveAttribute("aria-pressed", "false");
+    const save = within(dialog).getByRole("button", { name: "Save" });
+    await waitFor(() => {
+      expect(save).toBeEnabled();
+    });
+    await user.click(save);
+    await waitFor(() => {
+      expect(
+        searches.writes.map(
+          (one) => (one.body as { revision: number }).revision,
+        ),
+      ).toEqual([3, 4]);
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: /^Automatic search/ }),
+      ).toBeNull();
+    });
+  });
+
+  it("says a search deleted meanwhile no longer exists, and a refused save in the api's words", async () => {
+    const searches = fakeSearches({
+      saved: [makeSearch(REMOTE, "Remote roles"), makeSearch(LYON, "Lyon")],
+    });
+    const { user, list } = await openFindJobs();
+    await openSchedule(user, list, "Remote roles");
+    let dialog = await screen.findByRole("dialog", {
+      name: "Automatic search of Remote roles",
+    });
+    searches.saved = searches.saved.filter((one) => one.id !== REMOTE);
+    await weekdaysOnly(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "This search no longer exists.",
+    );
+    // The row leaves the list; the dialog stays with what holds, and nothing is saved again.
+    await waitFor(() => {
+      expect(
+        within(list).queryByRole("listitem", { name: "Remote roles" }),
+      ).toBeNull();
+    });
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    server.use(
+      http.put("*/api/jobs/searches/:id", () =>
+        HttpResponse.json(
+          {
+            detail:
+              "Give your permission to search www.indeed.com in Find jobs first.",
+          },
+          { status: 422 },
+        ),
+      ),
+    );
+    await openSchedule(user, list, "Lyon");
+    dialog = await screen.findByRole("dialog", {
+      name: "Automatic search of Lyon",
+    });
+    await weekdaysOnly(user, dialog);
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Not saved. Give your permission to search www.indeed.com in Find jobs first.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeEnabled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(rowOf(list, "Lyon")).toHaveTextContent("Runs when you start it.");
+  });
+
+  it("schedules the main search from its row through the profile, with the time zone of every search", async () => {
+    const profile = fakeProfile({ search: structuredClone(EMPTY.search) }, 6);
+    fakeSearches({
+      saved: [makeSearch(REMOTE, "Remote roles")],
+      mainSchedule: () =>
+        (profile.sections.search as { sweep_schedule?: object } | undefined)
+          ?.sweep_schedule,
+    });
+    const { user, list } = await openFindJobs();
+    await openSchedule(user, list, "Main search");
+    const dialog = await screen.findByRole("dialog", {
+      name: "Automatic search",
+    });
+    expect(within(dialog).getByLabelText("Time zone")).toBeInTheDocument();
+    expect(dialog).toHaveTextContent("The app runs your main search by itself");
+    await weekdaysOnly(user, dialog);
+    expect(
+      await screen.findByText(
+        "Automatic search: on, weekdays at 06:17 (Europe/Paris).",
+      ),
+    ).toBeInTheDocument();
+    expect(profile.sections.search).toMatchObject({
+      sweep_schedule: { enabled: true, days: WEEKDAYS, times: ["06:17"] },
+    });
+    await waitFor(() => {
+      expect(rowOf(list, "Main search")).toHaveTextContent(
+        "Automatic: weekdays at 06:17 (Europe/Paris)",
+      );
+    });
+  });
+});
+
 describe("The words of a saved search", () => {
   it("names a copy that is free, within 60 characters", () => {
     expect(copyName("Remote", ["Remote", "Remote copy"])).toBe("Remote copy 2");
@@ -317,8 +527,41 @@ describe("The words of a saved search", () => {
 
   it("says what a search looks for, and reads an old sweep as the main search's", () => {
     expect(criteriaLine({})).toBe("Any title; Anywhere; on the web");
-    expect(lastRunOf("main", [sweep("old", undefined)])?.id).toBe("old");
-    expect(lastRunOf(REMOTE, [sweep("old", undefined)])).toBeUndefined();
+    expect(searchOf(sweep("old", undefined))).toBe("main");
+    expect(searchOf(sweep("new", { id: REMOTE, name: "Remote roles" }))).toBe(
+      REMOTE,
+    );
+  });
+
+  it("says what Run all did with each search, a queue that is down included", () => {
+    const names = new Map([
+      ["main", "Main search"],
+      [REMOTE, "Remote roles"],
+      [LYON, "Lyon"],
+      ["other", "Grenoble"],
+    ]);
+    const run = (search_id: string, outcome: string) => ({
+      search_id,
+      outcome,
+      sweep: null,
+      request: null,
+    });
+    expect(
+      runAllWords(
+        [
+          run("main", "started"),
+          run(REMOTE, "queued"),
+          run(LYON, "no_websites"),
+          run("other", "queue_down"),
+        ],
+        names,
+      ),
+    ).toBe(
+      "Main search started. Remote roles waits in line. Lyon had nothing to search. Grenoble did not start. The search could not be queued. Try again in a minute.",
+    );
+    expect(
+      runAllWords([run(REMOTE, "queued"), run(LYON, "queued")], names),
+    ).toBe("Remote roles, Lyon wait in line.");
   });
 
   it("says a run waits in line only when the api kept it in the line", () => {
