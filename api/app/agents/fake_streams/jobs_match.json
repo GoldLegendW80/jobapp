@@ -1,0 +1,193 @@
+{
+ "description": "The career and culture reading (jobs J38): reads its batch and submits three rows in one call: posting 0 valid (a dash used as a separator in a strength), posting 1 with a career score out of range, and an index the run was never given; the default stream.",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000881",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__read_rating_batch",
+     "mcp__app__submit_ratings"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000882",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_match_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_match_01",
+       "name": "mcp__app__read_rating_batch",
+       "input": {}
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 200,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000883",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_match_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_match_02",
+       "name": "mcp__app__submit_ratings",
+       "input": {
+        "ratings": [
+         {
+          "index": 0,
+          "career": 82,
+          "culture": 64,
+          "strengths": [
+           "Moves you to a lead role - in robotics",
+           "Hybrid, as you want"
+          ],
+          "gaps": [
+           "Pays under your salary range"
+          ]
+         },
+         {
+          "index": 1,
+          "career": 140,
+          "culture": 60,
+          "strengths": [
+           "Data work close to your recent roles"
+          ],
+          "gaps": [
+           "Says little about the team"
+          ]
+         },
+         {
+          "index": 7,
+          "career": 50,
+          "culture": 50,
+          "strengths": [
+           "A posting this run was never given"
+          ],
+          "gaps": [
+           "None"
+          ]
+         }
+        ]
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 200,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "sleep": 0.1
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000884",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_match_3",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Postings rated."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 4000,
+      "output_tokens": 200,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 2400,
+    "duration_api_ms": 2100,
+    "num_turns": 3,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000008ff",
+    "result": "Postings rated.",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0389,
+    "usage": {
+     "input_tokens": 17300,
+     "output_tokens": 428,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "modelUsage": {
+     "{model}": {
+      "inputTokens": 17300,
+      "outputTokens": 428,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.0389,
+      "contextWindow": 200000
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed"
+   }
+  }
+ ]
+}

@@ -99,6 +99,9 @@ api/app/jobs/notices.py) follows the rule of its Language Gate
 (.claude/skills/job-application-assistant/04-job-evaluation.md): the role's own requirements count,
 not the language the ad is written in; a required language not declared fails; a declared one
 asked at a level that may be higher is flagged, never passed in silence; anything else passes.
+The career and culture reading of a posting (api/app/jobs/match.py, api/app/jobs/prompts/match.md)
+adapts two dimensions of its evaluation rubric (04-job-evaluation.md: career alignment and
+behavioral or culture fit) and their four bands; the prompt is written anew in this app's words.
 
 MIT License
 

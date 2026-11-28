@@ -387,6 +387,19 @@ class LanguagesOut(BaseModel):
     asked: list[AskedLanguageOut] = Field(default_factory=list)
 
 
+class MatchOut(BaseModel):
+    """Jobs J38: how the posting matches the career and the culture the person's profile states,
+    as a model read it (app/jobs/match.py)."""
+
+    career: int
+    culture: int
+    strengths: list[str]
+    gaps: list[str]
+    rated_at: datetime
+    # The text read is the posting's text now; else the reading waits to be made again.
+    current: bool
+
+
 class JobListItem(BaseModel):
     """One row of the list: everything but the posting text, the legacy columns and the files."""
 
@@ -440,6 +453,11 @@ class JobListItem(BaseModel):
     # names them ("German", "German or Dutch"), read against her current languages.
     languages: LanguagesOut | None = None
     languages_missing: list[str] = Field(default_factory=list)
+    # Jobs J38: the career and culture scores of the posting's reading (null: none yet), and
+    # `blend` (scoring.blend) of them with the fit. Served only: nothing orders or filters on it.
+    match_career: int | None = None
+    match_culture: int | None = None
+    blend: int | None = None
 
     @field_validator("languages", mode="before")
     @classmethod
@@ -529,6 +547,7 @@ class JobDetail(JobListItem):
     events: list[EventOut]  # newest first, at most EVENTS_IN_DETAIL
     events_total: int
     notices: list[NoticeOut] = []
+    match: MatchOut | None = None
 
 
 # --- editing, bulk, add, rescore (J4) -----------------------------------------------------------
