@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Write the .env of the CI e2e stack from .env.example: every placeholder secret replaced by a
 # fresh random value, caddy on 127.0.0.1:${1:-8080}, and no pace of the agents queue (agents
-# A13: the journeys' fake backend is never rate limited, and a journey must not wait for a turn).
+# A13: the journeys' fake backend has no rate limit to stay under, and a journey must not wait
+# for a turn).
 # The file lives only on the CI runner.
 #
 #   .github/scripts/ci_env.sh [port] > .env
