@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { PostingMatch } from "@/components/shared/jobs/posting/posting-match";
 import {
   MATCH,
+  MATCH_BANDS,
   MATCH_LONGEST,
   MATCH_OLDER_TEXT,
 } from "@/design-system/fixtures/posting-match";
@@ -33,6 +34,8 @@ describe("PostingMatch", () => {
         screen.getByRole("list", { name: "Gaps in the match" }),
       ).getAllByRole("listitem"),
     ).toHaveLength(1);
+    for (const point of screen.getAllByRole("listitem"))
+      expect(point).toHaveAttribute("dir", "auto");
     expect(screen.getByText(/keyword fit/)).toBeInTheDocument();
     expect(
       screen.getByText(/Read by the assistant on 27 Nov 2026/),
@@ -43,7 +46,7 @@ describe("PostingMatch", () => {
   it("keeps a reading on an older text with one line that says so", () => {
     render(<PostingMatch match={MATCH_OLDER_TEXT} />);
     expect(screen.getByText(/text changed since/)).toHaveTextContent(
-      "since this reading",
+      /^Read by the assistant on 27 Nov 2026\. The posting's text changed since this reading\.$/,
     );
     expect(screen.getByText("Career")).toBeInTheDocument();
   });
@@ -84,6 +87,11 @@ describe("the detail's reading", () => {
   it("parses a reading", () => {
     const parsed = jobDetailSchema.parse(makeDetail({ match: MATCH }));
     expect(parsed.match?.career).toBe(72);
+  });
+
+  it("keeps a reading at every band's edge, 0 and 100 included", () => {
+    for (const match of MATCH_BANDS)
+      expect(jobDetailSchema.parse(makeDetail({ match })).match).toEqual(match);
   });
 
   it("parses an older api's detail with no reading, which renders nothing", () => {
