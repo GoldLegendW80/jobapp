@@ -1555,7 +1555,7 @@
     {
       "name": "posting_reader",
       "category": "finding",
-      "description": "Reads each posting found and fills its location, pay, work mode, contract, published date, company and description from its text.",
+      "description": "Reads each posting found and fills its location, pay, work mode, contract, published date, company, the languages it asks for and description from its text.",
       "module": "app.jobs.reader",
       "model": "claude-sonnet-5-5",
       "internal": true,
