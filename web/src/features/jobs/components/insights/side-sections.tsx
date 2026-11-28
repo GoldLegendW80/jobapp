@@ -73,3 +73,40 @@ export function PassReasonsSection({
     </Section>
   );
 }
+
+/** Jobs J37: the postings the app closed by itself, its check of their page or their date. */
+export function ClosedByChecksSection({
+  closed,
+}: {
+  closed: Insights["closed_by_checks"];
+}) {
+  const total = closed.page + closed.closing_date;
+  return (
+    <Section
+      title="Closed by the app"
+      description="Open postings whose page the app found gone or saying they are closed, or whose stated closing date passed. Each one's History says why; a posting you reopen stays open."
+    >
+      <Card>
+        <CardContent>
+          {total === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              None closed by the app yet.
+            </p>
+          ) : (
+            <Facts>
+              <Fact label="Page gone or closed">
+                {formatCount(closed.page)}
+              </Fact>
+              <Fact label="Closing date passed">
+                {formatCount(closed.closing_date)}
+              </Fact>
+              <Fact label={`In the last ${String(closed.days)} days`}>
+                {formatCount(closed.recent)}
+              </Fact>
+            </Facts>
+          )}
+        </CardContent>
+      </Card>
+    </Section>
+  );
+}

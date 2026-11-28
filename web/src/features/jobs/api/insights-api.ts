@@ -58,6 +58,13 @@ const insightsSchema = z.object({
   passes_without_reason: z.number().int(),
   silent: z.array(silentSchema),
   silent_undated: z.number().int(),
+  /** Jobs J37: the postings the app's checks closed that stay closed. */
+  closed_by_checks: z.object({
+    page: z.number().int(),
+    closing_date: z.number().int(),
+    recent: z.number().int(),
+    days: z.number().int(),
+  }),
 });
 export type Insights = z.infer<typeof insightsSchema>;
 

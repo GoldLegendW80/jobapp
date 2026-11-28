@@ -8,7 +8,7 @@ import type { Liveness } from "../api/liveness-api";
 
 export const MAY_BE_CLOSED = "May be closed";
 export const NOT_CHECKED =
-  "Not checked yet. The app reads its page before it writes documents or applies.";
+  "Not checked yet. The app reads its page before it writes documents or applies, and from time to time while it is found or shortlisted (never a LinkedIn posting).";
 
 /** The statuses a closed page matters to: not applied yet, not passed. */
 const OPEN = new Set(["found", "shortlisted", "cv_ready", "staged"]);
@@ -54,9 +54,12 @@ export function checkWords(liveness: Liveness, status: string): string {
   const gone = liveness.reason === "http_404" || liveness.reason === "http_410";
   switch (liveness.verdict) {
     case "closed": {
-      const said = gone
-        ? "its page no longer exists"
-        : "its page says it is closed";
+      const said =
+        liveness.reason === "closing_date"
+          ? "its closing date passed"
+          : gone
+            ? "its page no longer exists"
+            : "its page says it is closed";
       return status === "closed" && liveness.moved
         ? `${when}: ${said}, so it moved to Closed.`
         : `${when}: ${said}.`;

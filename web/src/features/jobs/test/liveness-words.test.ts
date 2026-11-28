@@ -60,6 +60,18 @@ describe("checkWords", () => {
       "Checked on 7 Nov 2026: its page says it is closed.",
     ],
     [
+      "closed",
+      "closing_date",
+      "closed",
+      "Checked on 7 Nov 2026: its closing date passed, so it moved to Closed.",
+    ],
+    [
+      "closed",
+      "closing_date",
+      "found",
+      "Checked on 7 Nov 2026: its closing date passed.",
+    ],
+    [
       "may_be_closed",
       "page_hints",
       "found",
