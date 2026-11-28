@@ -38,12 +38,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.jobs import liveness_check
 from app.jobs import service as jobs_service
-from app.jobs.liveness import CLOSED, Finding
+from app.jobs.liveness import CLOSED, UNCONFIRMED, Finding
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus
 
 logger = logging.getLogger("app.jobs.liveness")
 
+# The postings whose attempt the worker could not store, by id: their person and when.
+type Unstored = dict[uuid.UUID, tuple[uuid.UUID, datetime]]
+
 OPEN = frozenset({JobStatus.found, JobStatus.shortlisted})
+# Stored when a check's own finding cannot be: the page was asked all the same.
+NOT_STORED = Finding(UNCONFIRMED, "check_failed")
 # The answers that say the host turned the app away: it is asked again only after a rest.
 REST_REASONS = frozenset({"rate_limited", "bot_check", "refused", "sign_in"})
 # The findings stored without a request: they leave the day's room as it was.
@@ -191,9 +196,12 @@ def due(db: Session, user_id: uuid.UUID, now: datetime, bounds: Bounds) -> list[
     )
 
 
-def plan(db: Session, now: datetime, bounds: Bounds) -> list[Pick]:
+def plan(
+    db: Session, now: datetime, bounds: Bounds, unstored: Unstored | None = None
+) -> list[Pick]:
     """The checks of one tick: each person's next due postings within her day's room, the
-    persons in turn, at most `per_tick` in all and one posting of a host."""
+    persons in turn, at most `per_tick` in all and one posting of a host. A posting whose
+    attempt this worker could not store (`unstored`) waits `again_days` and counts for the day."""
     if bounds.per_day <= 0 or bounds.per_tick <= 0:
         return []
     people = list(
@@ -203,17 +211,21 @@ def plan(db: Session, now: datetime, bounds: Bounds) -> list[Pick]:
     )
     if not people:
         return []
+    unstored = _remembered(unstored or {}, now, bounds)
     taken = searched_hosts(db)
     lists: list[list[Pick]] = []
     for person in people:
-        room = min(bounds.per_day - checks_today(db, person, now), bounds.per_tick)
+        kept = sum(
+            user == person and at > now - timedelta(hours=24) for user, at in unstored.values()
+        )
+        room = min(bounds.per_day - checks_today(db, person, now) - kept, bounds.per_tick)
         if room <= 0:
             continue
         resting = resting_hosts(db, person, now, bounds)
         picks: list[Pick] = []
         for row in due(db, person, now, bounds):
             host = host_key(row.url)
-            if not host or host in taken or host in resting:
+            if not host or host in taken or host in resting or row.id in unstored:
                 continue
             taken.add(host)
             picks.append(Pick(person, row.id, row.url, host))
@@ -221,6 +233,14 @@ def plan(db: Session, now: datetime, bounds: Bounds) -> list[Pick]:
                 break
         lists.append(picks)
     return _in_turn(lists)[: bounds.per_tick]
+
+
+def _remembered(unstored: Unstored, now: datetime, bounds: Bounds) -> Unstored:
+    """The attempts not stored that still space their posting; the older ones forgotten."""
+    for job_id, (_, at) in list(unstored.items()):
+        if at <= now - timedelta(days=bounds.again_days):
+            del unstored[job_id]
+    return unstored
 
 
 def _in_turn(lists: Iterable[list[Pick]]) -> list[Pick]:
@@ -321,14 +341,41 @@ def _now_of(db: Session, pick: Pick) -> Any:
     ).one_or_none()
 
 
+async def _record(
+    sessions: sessionmaker[Session], pick: Pick, finding: Finding, now: datetime
+) -> bool:
+    try:
+        await asyncio.to_thread(
+            _in_db,
+            sessions,
+            lambda db: liveness_check.record(
+                db, pick.user_id, pick.job_id, finding, now, pick.url, close_from=OPEN
+            ),
+        )
+    except Exception as error:
+        logger.warning(
+            "jobs.liveness.not_stored",
+            extra={
+                "job_id": str(pick.job_id),
+                "reason": finding.reason,
+                "error": type(error).__name__,
+            },
+        )
+        return False
+    return True
+
+
 async def _check(
     checker: liveness_check.Checker,
     sessions: sessionmaker[Session],
     pick: Pick,
     clock: Callable[[], datetime],
+    unstored: Unstored,
 ) -> bool:
     """One planned check, unless the posting left the open ones or was checked meanwhile.
-    Whether it asked the page."""
+    Whether it asked the page. Whatever stops the store of its finding, the attempt is stored
+    as NOT_STORED in a transaction of its own, else kept in `unstored`: it counts for the day
+    and spaces the next check of the posting as any check does."""
     now = clock()
     found = await asyncio.to_thread(_in_db, sessions, lambda db: _now_of(db, pick))
     if (
@@ -339,13 +386,10 @@ async def _check(
     ):
         return False
     finding = await checker.check(pick.url)
-    await asyncio.to_thread(
-        _in_db,
-        sessions,
-        lambda db: liveness_check.record(
-            db, pick.user_id, pick.job_id, finding, now, pick.url, close_from=OPEN
-        ),
-    )
+    if not await _record(sessions, pick, finding, now) and not await _record(
+        sessions, pick, NOT_STORED, now
+    ):
+        unstored[pick.job_id] = (pick.user_id, now)
     return True
 
 
@@ -355,17 +399,20 @@ async def tick(ctx: dict[str, Any]) -> int:
     sessions: sessionmaker[Session] = ctx["sessions"]
     clock: Callable[[], datetime] = ctx["clock"]
     bounds = Bounds.of(ctx["settings"])
+    unstored: Unstored = ctx.setdefault("liveness_unstored", {})
     lock = sessions()
     try:
         if not await asyncio.to_thread(_locked, lock):
             return 0
         closed = await asyncio.to_thread(close_passed, sessions, clock())
-        picks = await asyncio.to_thread(_in_db, sessions, lambda db: plan(db, clock(), bounds))
+        picks = await asyncio.to_thread(
+            _in_db, sessions, lambda db: plan(db, clock(), bounds, unstored)
+        )
         checker = liveness_check.for_worker(ctx)
         asked = 0
         for pick in picks:
             try:
-                asked += await _check(checker, sessions, pick, clock)
+                asked += await _check(checker, sessions, pick, clock, unstored)
             except Exception as error:
                 logger.warning(
                     "jobs.liveness.not_checked",

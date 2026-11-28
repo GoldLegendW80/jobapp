@@ -42,6 +42,7 @@ import codecs
 import contextlib
 import ipaddress
 import logging
+import re
 import socket
 import uuid
 import zlib
@@ -89,6 +90,8 @@ AUTO_CLOSE_FROM = frozenset(
     {JobStatus.found, JobStatus.shortlisted, JobStatus.cv_ready, JobStatus.staged}
 )
 CLOSED_SENTENCE = "This posting is closed."
+# What jsonb refuses in a string: U+0000, and a lone surrogate, which UTF-8 cannot carry.
+_REFUSED = re.compile("[\x00\ud800-\udfff]")
 
 
 # --- the addresses a check may reach: browserd's egress rule, kept in step by a shared test -----
@@ -459,6 +462,11 @@ def record(
     return Outcome(status, stored)
 
 
+def storable(text: str | None) -> str | None:
+    """A page's words as jsonb takes them (_REFUSED dropped), None when nothing is left."""
+    return (_REFUSED.sub("", text) or None) if text else None
+
+
 def store(
     db: Session,
     job: Job,
@@ -480,7 +488,7 @@ def store(
     stored = {
         "verdict": finding.verdict,
         "reason": finding.reason,
-        "sentence": finding.sentence,
+        "sentence": storable(finding.sentence),
         "checked_at": now.isoformat(),
         "moved": moved,
     }

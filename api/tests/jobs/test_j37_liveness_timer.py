@@ -207,7 +207,7 @@ def test_a_posting_that_left_the_open_ones_after_the_plan_is_not_asked_nor_close
     web = Web()
     pick = liveness_timer.Pick(ann, posting, f"https://{host(1)}/careers/1", host(1))
     checker = ctx(factory, web, NOW)["liveness"]
-    assert asyncio.run(liveness_timer._check(checker, factory, pick, lambda: NOW)) is False
+    assert asyncio.run(liveness_timer._check(checker, factory, pick, lambda: NOW, {})) is False
     assert web.seen == []
     # A finding that lands once the person acted is stored, the posting left as she set it.
     with factory() as db:
@@ -288,6 +288,90 @@ def test_a_posting_the_person_reopened_is_only_proposed(
     assert job.status is JobStatus.found
     assert job.liveness is not None
     assert (job.liveness["verdict"], job.liveness["moved"]) == (CLOSED, False)
+
+
+# --- a finding that cannot be stored -------------------------------------------------------------
+
+
+def test_a_page_s_words_the_database_refuses_are_dropped_before_the_store(
+    factory: sessionmaker[Session], ann: uuid.UUID
+) -> None:
+    (posting,) = add(factory, ann, [{"n": 1}])
+    page = f"<html><body><p>{COPY}</p><h2>This job is no longer\x00 available.</h2></body></html>"
+    web = Web({path(host(1), 1): html(page)})
+    for minute in range(5):
+        tick(factory, web, NOW + timedelta(minutes=minute), per_day=2)
+    assert web.seen == [path(host(1), 1)]
+    (job,) = jobs(factory, [posting])
+    assert job.status is JobStatus.closed
+    assert job.liveness is not None
+    assert (job.liveness["reason"], job.liveness["moved"]) == ("page_says", True)
+    assert job.liveness["sentence"] == "This job is no longer available."
+
+
+@pytest.mark.parametrize(
+    ("words", "stored"),
+    [
+        ("No longer\x00 open.", "No longer open."),
+        ("Closed\ud800 now\udfff.", "Closed now."),
+        ("\x00", None),
+        ("", None),
+        (None, None),
+        ("Fermée — \U0001f6ab", "Fermée — \U0001f6ab"),
+    ],
+)
+def test_what_jsonb_refuses_is_dropped(words: str | None, stored: str | None) -> None:
+    assert liveness_check.storable(words) == stored
+
+
+@pytest.mark.parametrize("refused", [{"http_410"}, {"http_410", "check_failed"}])
+def test_a_check_whose_finding_cannot_be_stored_counts_and_waits_as_any_check(
+    factory: sessionmaker[Session],
+    ann: uuid.UUID,
+    monkeypatch: pytest.MonkeyPatch,
+    refused: set[str],
+) -> None:
+    (posting,) = add(factory, ann, [{"n": 1, "published_on": date(2026, 1, 1)}])
+    real = liveness_check.record
+
+    def record(
+        db: Session, user: uuid.UUID, job_id: uuid.UUID, finding: Finding, *rest: Any, **named: Any
+    ) -> Any:
+        if finding.reason in refused:
+            raise RuntimeError("the database refused it")
+        return real(db, user, job_id, finding, *rest, **named)
+
+    monkeypatch.setattr(liveness_check, "record", record)
+    web = Web({path(host(1), 1): Page(410, b"gone")})
+    clock = [NOW]
+    # One worker over the minutes: its memory keeps what no store took.
+    worker = ctx(factory, web, NOW, per_day=2)
+    worker["clock"] = lambda: clock[0]
+
+    async def ticks(start: datetime) -> list[int]:
+        asked = []
+        for minute in range(5):
+            clock[0] = start + timedelta(minutes=minute)
+            asked.append(await liveness_timer.tick(worker))
+        return asked
+
+    assert asyncio.run(ticks(NOW)) == [1, 0, 0, 0, 0]
+    assert web.seen == [path(host(1), 1)]
+    (job,) = jobs(factory, [posting])
+    assert job.status is JobStatus.found
+    if "check_failed" in refused:
+        assert job.liveness is None
+    else:
+        assert job.liveness is not None
+        assert (job.liveness["verdict"], job.liveness["reason"]) == ("unconfirmed", "check_failed")
+    # It took one of the day's two: one more posting is asked, then none.
+    add(factory, ann, [{"n": 2}, {"n": 3}])
+    assert asyncio.run(ticks(NOW + timedelta(minutes=10))) == [1, 0, 0, 0, 0]
+    assert len(web.seen) == 2
+    # After `again_days`, the page is asked again.
+    worker["settings"].jobs_liveness_checks_per_day = 150
+    assert asyncio.run(ticks(NOW + timedelta(days=7, minutes=1)))[0] >= 1
+    assert web.seen.count(path(host(1), 1)) == 2
 
 
 # --- the bounds ----------------------------------------------------------------------------------
