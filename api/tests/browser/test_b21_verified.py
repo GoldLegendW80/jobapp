@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.browser import finder, sources
+from tests.browser.posting_pages import dressed
 from tests.browser.test_b13_runtime import BASE, InteractiveTools, session
 
 JOB = BASE + "offres/246286"
@@ -22,7 +23,12 @@ def page(*lines: str) -> str:
     return "\n".join(lines)
 
 
-OFFER = page(  # the VIE site's offer page: two h1, the title in an h2, an offer number
+def posting_page(*lines: str) -> str:
+    """A posting's page as a website serves it: a header, similar postings, a footer."""
+    return dressed(page(*lines))
+
+
+OFFER = posting_page(  # the VIE site's offer page: two h1, the title in an h2, an offer number
     "- banner:",
     '  - heading "Mon Volontariat International" [level=1]',
     "- main:",
@@ -62,7 +68,7 @@ def reported(one: finder.FinderSession, **item) -> dict:
 def test_a_posting_opened_three_pages_earlier_is_accepted():
     one, batches = opened(
         (JOB, OFFER),
-        (BASE + "offres/246285", page('- heading "Data Engineer" [level=1]')),
+        (BASE + "offres/246285", posting_page('- heading "Data Engineer" [level=1]')),
         (BASE + "offres/recherche?q=genai", page("- paragraph: 9 offres")),
         (BASE + "offres/recherche?q=genai&page=2", page("- paragraph: 3 offres")),
     )
@@ -76,7 +82,7 @@ def test_a_posting_opened_three_pages_earlier_is_accepted():
 
 def test_a_page_with_two_h1_accepts_the_title_found_in_its_text():
     one, batches = opened(
-        (JOB, page(
+        (JOB, posting_page(
             '- heading "Offres VIE" [level=1]',
             '- heading "Offre n° 246286" [level=1]',
             "- generic: AI Engineer Consultant (H/F)",
@@ -114,7 +120,7 @@ def test_a_title_with_other_case_accents_marker_or_spaces_is_accepted(title):
 
 def test_accents_are_aside_too():
     one, batches = opened(
-        (JOB, page('- heading "Ingénieur Données" [level=1]', "- paragraph: Paris")),
+        (JOB, posting_page('- heading "Ingénieur Données" [level=1]', "- paragraph: Paris")),
     )
     assert reported(one, title="ingenieur donnees")["kept"] == 1
     assert batches[0].findings[0].title == "Ingénieur Données"  # the heading as shown
@@ -122,7 +128,7 @@ def test_accents_are_aside_too():
 
 def test_a_title_not_on_the_page_stores_the_page_s_one_heading():
     one, batches = opened(
-        (JOB, page('- heading "Data Engineer" [level=1]', "- paragraph: Build pipelines.")),
+        (JOB, posting_page('- heading "Data Engineer" [level=1]', "- paragraph: Build pipelines.")),
     )
     assert reported(one, title="GenAI Forward Deployed Engineer")["kept"] == 1
     [finding] = batches[0].findings
@@ -131,7 +137,12 @@ def test_a_title_not_on_the_page_stores_the_page_s_one_heading():
 
 def test_a_title_not_on_a_page_with_no_clear_heading_is_refused_with_what_to_do():
     one, batches = opened(
-        (JOB, page('- heading "One" [level=1]', '- heading "Two" [level=1]', "- paragraph: x")),
+        (
+            JOB,
+            posting_page(
+                '- heading "One" [level=1]', '- heading "Two" [level=1]', "- paragraph: x"
+            ),
+        ),
     )
     answer = reported(one, title="GenAI Engineer")
     assert answer["kept"] == 0
@@ -198,7 +209,7 @@ def test_a_company_claim_not_on_the_page_is_dropped_not_refusing():
 
 def test_a_labelled_field_wins_over_the_claim():
     one, batches = opened(
-        (JOB, page(
+        (JOB, posting_page(
             '- heading "Robot Engineer" [level=1]',
             "- paragraph: Entreprise: Example Robotics",
             "- paragraph: Lieu: Lyon",
@@ -233,7 +244,7 @@ def test_a_labelled_field_wins_over_the_claim():
     ],
 )
 def test_empty_titles_texts_and_field_limits_stay_refused(item, reason):
-    one, batches = opened((JOB, page('- heading "Robot Engineer" [level=1]')))
+    one, batches = opened((JOB, posting_page('- heading "Robot Engineer" [level=1]')))
     answer, _ = asyncio.run(one.report_verified([{"url": JOB, **item}]))
     assert json.loads(answer)["refused"][0]["reason"] == reason
     assert not batches
@@ -249,7 +260,7 @@ def test_a_duplicate_stays_refused():
 def test_the_record_of_opened_pages_is_bounded_oldest_first():
     one, batches = opened((JOB, OFFER))
     for index in range(finder.OPENED_MAX):
-        one._read(BASE + f"offres/{index}", page(f'- heading "Role {index}" [level=1]'))
+        one._read(BASE + f"offres/{index}", posting_page(f'- heading "Role {index}" [level=1]'))
     assert len(one.pages_read) == finder.OPENED_MAX
     assert JOB not in one.pages_read  # the oldest went first
     assert reported(one, title="AI Engineer Consultant")["refused"][0]["reason"] in {
@@ -545,7 +556,7 @@ def test_a_shortened_title_reaches_the_persons_never_apply_rule_with_the_page_s_
 
     rule = NeverApplyRule.parse("No cybersecurity roles: cyber, security, pentest, threat")
     one, batches = opened(
-        (JOB, page('- heading "Cybersecurity: AI Engineer" [level=1]', "- paragraph: x")),
+        (JOB, posting_page('- heading "Cybersecurity: AI Engineer" [level=1]', "- paragraph: x")),
     )
     assert reported(one, title="AI Engineer")["kept"] == 1
     [finding] = batches[0].findings
@@ -679,7 +690,7 @@ ERROR_PAGE = page(
     "- paragraph: Error code: 404",
     "- paragraph: Message: File not found.",
 )
-ROBOT_PAGE = page('- heading "Robot Engineer" [level=1]', "- paragraph: Build robots.")
+ROBOT_PAGE = posting_page('- heading "Robot Engineer" [level=1]', "- paragraph: Build robots.")
 
 
 class StatusTools(InteractiveTools):

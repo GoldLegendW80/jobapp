@@ -20,6 +20,8 @@ from app.browser.client import BrowserError
 from app.browser.leases import StoreUnavailableError
 from app.browser.sources import interactive, listed_pages
 from app.jobs import sweep
+from tests.browser import posting_pages
+from tests.browser.posting_pages import FOOTER, HEADER
 from tests.browser.test_b20_agent import HOME, START
 from tests.browser.test_b27_code_first import TabSite
 
@@ -40,49 +42,8 @@ BODY = (
 )
 
 
-# A posting's page as a website serves it (review of PR 864, round 2): a header with a logo link,
-# a navigation of several links, a sign in link and button, the posting, a block of similar
-# postings with their own links, and a footer of links. Invented.
-HEADER = "\n".join(
-    [
-        "- banner:",
-        '  - link "Example Robotics careers" [ref=h0]:',
-        "    - /url: /",
-        "  - navigation:",
-    ]
-    + [
-        f'    - link "{word}" [ref=h{i}]:\n      - /url: /{word.lower()}'
-        for i, word in enumerate(("Jobs", "Companies", "Salaries", "Blog"), 1)
-    ]
-    + ['  - link "Sign in" [ref=h5]:', "    - /url: /login", '  - button "Sign in" [ref=h6]']
-)
-SIMILAR_TITLES = (
-    "Robot Painter",
-    "Robot Arm Engineer",
-    "Robot Tester",
-    "Robot Pilot",
-    "Robot Fitter",
-)
-SIMILAR = "\n".join(
-    ['  - region "Similar jobs":', '    - heading "Similar jobs" [level=2]', "    - list:"]
-    + [
-        f'      - listitem:\n        - link "{t}" [ref=s{i}]:\n          - /url: /jobs/{60 + i}\n'
-        "        - paragraph: Example Robotics, Lyon"
-        for i, t in enumerate(SIMILAR_TITLES)
-    ]
-)
-FOOTER = "\n".join(
-    ["- contentinfo:"]
-    + [
-        f'  - link "{word}" [ref=f{i}]:\n    - /url: /{word.lower()}'
-        for i, word in enumerate(("About", "Privacy", "Terms", "Cookies", "Contact"))
-    ]
-)
-
-
 def posting(title: str, body: str = BODY) -> str:
-    inside = "\n".join(f"  {line}" for line in body.split("\n"))
-    return f'{HEADER}\n- main:\n  - heading "{title}" [level=1]\n{inside}\n{SIMILAR}\n{FOOTER}'
+    return posting_pages.posting(title, body)
 
 
 def bare(title: str) -> str:

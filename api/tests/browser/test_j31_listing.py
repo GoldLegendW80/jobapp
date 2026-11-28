@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.browser import finder
+from tests.browser.posting_pages import dressed
 from tests.browser.test_b13_runtime import BASE, InteractiveTools, session
 
 LIST = BASE + "emplois?q=data&l=saint-denis"
@@ -130,7 +131,7 @@ def test_a_card_of_a_page_read_in_another_run_is_refused() -> None:
 
 
 def test_a_page_read_that_shows_the_title_goes_to_report_postings() -> None:
-    page = '- heading "Data Scientist" [level=1]\n- paragraph: Build invented models.'
+    page = dressed('- heading "Data Scientist" [level=1]\n- paragraph: Build invented models.')
     one, _ = listed((LIST, LIST_PAGE), (JOB + "101", page))
     assert cards(one, {"title": "Data Scientist", "url": JOB + "101"})["refused"][0] == {
         "index": 0,
@@ -310,7 +311,7 @@ def test_a_stopped_session_still_keeps_what_it_read_and_opens_nothing(stop: str)
     """The production run of 2026-11-26: three result pages read, the tab closed three times for
     memory, then a report of 65 postings refused. Now a stop after which the store works keeps
     the pages read and the cards seen, and the app opens nothing."""
-    page = '- heading "Data Analyst" [level=1]\n- paragraph: Read before the stop.'
+    page = dressed('- heading "Data Analyst" [level=1]\n- paragraph: Read before the stop.')
     one, batches = listed((LIST, LIST_PAGE), (JOB + "104", page))
     one.stopped = stop
     opened: list[str] = []
