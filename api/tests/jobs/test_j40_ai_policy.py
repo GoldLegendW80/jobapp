@@ -101,8 +101,6 @@ POINTS = [
     "Hinweise zum Einsatz von KI im Bewerbungsprozess.",
     "Unsere KI-Richtlinie für Bewerber finden Sie hier.",
 ]
-FOUND = [*FORBIDS, *ALLOWS, *DISCLOSES, *POINTS]
-
 # The employer, its people or its tools use AI on the applications (list 3).
 EMPLOYER = [
     "We may use AI assisted tools during our recruiting process.",
@@ -135,6 +133,115 @@ EMPLOYER = [
     "Our clients use AI to review their applications.",
     "Nos clients utilisent l'IA pour trier leurs candidatures.",
 ]
+# What the employer's side uses AI for, whoever the subject is (list 3): a named employer, "the
+# company", a noun phrase, a privacy or accommodations line.
+EMPLOYER_SIDE = [
+    "Please note that Northwind Labs uses artificial intelligence (AI) tools to help our "
+    "recruiters assess and evaluate candidates' resumes and qualifications throughout the "
+    "recruiting process.",
+    "Northwind Labs is committed to providing reasonable accommodations during our application "
+    "process, as well as regarding the use of AI tools for employment decision making.",
+    "AI tools are used to assess and evaluate candidates in the hiring process.",
+    "Lumen Works uses AI tools to select CVs in the application process.",
+    "Lumen Works uses AI tools to assess qualifications in the application process.",
+    "Lumen Works uses AI tools to review profiles in the application process.",
+    "Lumen Works uses AI tools to review resumes in the application process.",
+    "Lumen Works uses AI tools to review applications in the application process.",
+    "Automated decision making with AI tools applies to your application.",
+    "Automated employment decision tools are used in our application process.",
+    "Atelier Cobalt utilise des outils d'IA pour évaluer les candidats lors de l'entretien.",
+    "Atelier Cobalt utilise des outils d'IA afin de trier les candidatures lors de l'entretien.",
+    "Atelier Cobalt utilise des outils d'IA afin de présélectionner des profils lors de "
+    "l'entretien.",
+    "Atelier Cobalt utilise des outils d'IA afin d'évaluer nos dossiers lors de l'entretien.",
+    "Atelier Cobalt utilise des outils d'IA afin de trier les cv lors de l'entretien.",
+    "Des outils d'IA peuvent aider les recruteurs pendant le processus de recrutement.",
+    "Les outils d'IA servent à la décision d'embauche dans le processus de recrutement.",
+    "L'IA est utilisée pour les décisions de recrutement pendant le processus de recrutement.",
+    "L'IA est utilisée pour les décisions automatisées pendant le processus de recrutement.",
+    "Im Vorstellungsgespräch setzt Firma Nordlicht KI-Tools ein, um Bewerber zu bewerten.",
+    "Im Vorstellungsgespräch setzt Firma Nordlicht KI-Tools ein, um Kandidaten zu beurteilen.",
+    "Im Vorstellungsgespräch setzt Firma Nordlicht KI-Tools ein, um Bewerber zu prüfen.",
+    "Im Bewerbungsprozess setzt Firma Nordlicht KI-Tools ein, um Bewerbungen vorauszuwählen.",
+    "Im Bewerbungsprozess können KI-Tools Bewerbungen vorauswählen.",
+    "KI-Tools fließen in die Einstellungsentscheidung im Bewerbungsprozess ein.",
+    "KI-Tools werden bei Personalentscheidungen im Bewerbungsprozess eingesetzt.",
+    "Im Bewerbungsprozess kommen KI-Tools für automatisierte Entscheidungen zum Einsatz.",
+    *[
+        f"The company uses AI tools to {verb} candidates during the hiring process."
+        for verb in [
+            "assess",
+            "evaluate",
+            "screen",
+            "review",
+            "rank",
+            "score",
+            "shortlist",
+            "select",
+        ]
+    ],
+    *[
+        f"The company uses AI tools to review {word} applicants during the hiring process."
+        for word in [
+            "the",
+            "all",
+            "our",
+            "incoming",
+            "each",
+            "every",
+            "any",
+            "qualified",
+            "potential",
+        ]
+    ],
+    *[
+        f"AI tools {verb} our recruiters during the interview process."
+        for verb in ["help", "helps", "assist", "assists", "support", "supports"]
+    ],
+    *[
+        f"AI tools support {who} during the interview process."
+        for who in [
+            "the recruiting team",
+            "the recruitment team",
+            "the hiring team",
+            "hiring managers",
+            "the talent team",
+            "the talent acquisition team",
+            "its HR team",
+        ]
+    ],
+    "AI tools helping our recruiters during the interview process.",
+    *[
+        f"Privacy notice: AI tools for {kind} decisions in the application process."
+        for kind in ["employment", "hiring", "recruiting", "recruitment", "selection", "staffing"]
+    ],
+    *[
+        f"Atelier Cobalt utilise l'IA pour {verb} {who} lors de l'entretien."
+        for verb, who in [("aider", "nos recruteurs"), ("aide", "les recruteurs")]
+    ],
+    "Atelier Cobalt utilise l'IA qui aident les recruteurs lors de l'entretien.",
+    "Atelier Cobalt utilise l'IA pour assister l'équipe de recrutement lors de l'entretien.",
+    "Atelier Cobalt utilise l'IA pour soutenir nos recruteurs lors de l'entretien.",
+    *[
+        f"KI-Tools {verb} {who} im Bewerbungsprozess."
+        for verb in ["helfen", "hilft", "unterstützen", "unterstützt"]
+        for who in ["unseren Recruitern", "unserer Personalabteilung", "den Personalern"]
+    ],
+]
+# A policy for candidates that holds a word near the employer's list stays found.
+NEAR_THE_LIST = [
+    "We evaluate every application ourselves, so please do not use AI to write your application.",
+    "Candidates may use AI to review their resume before they submit it.",
+    "Do not use AI to evaluate your own answers during the interview.",
+    "Candidates must not use AI to assess their own qualifications in the application.",
+    "Recruiters read every application: please do not use AI to write your cover letter.",
+    "Please do not use AI to make decisions for you during the coding test.",
+    "Les candidats ne doivent pas utiliser l'IA pour évaluer leur propre candidature.",
+    "Bewerber werden im Vorstellungsgespräch persönlich bewertet, daher ist der Einsatz von KI "
+    "nicht gestattet.",
+]
+FOUND = [*FORBIDS, *ALLOWS, *DISCLOSES, *POINTS, *NEAR_THE_LIST]
+
 # An employer's product for candidates is not the candidates' own use (list 3).
 PRODUCT = [
     "Our product helps applicants use AI to write better cover letters.",
@@ -255,6 +362,7 @@ OTHER_LANGUAGES = [
 ]
 SILENT = [
     *EMPLOYER,
+    *EMPLOYER_SIDE,
     *PRODUCT,
     *MESSAGES,
     *SKILLS,
@@ -285,6 +393,14 @@ def test_what_is_not_a_policy_on_candidates_gives_no_signal(text: str) -> None:
 def test_the_tables_are_wide_enough_to_measure() -> None:
     assert len(FOUND) >= 40
     assert len(SILENT) >= 60
+    assert len(EMPLOYER_SIDE) >= 12
+    assert len(NEAR_THE_LIST) >= 6
+
+
+def test_a_sentence_with_the_employer_side_and_the_candidates_step_is_a_declared_miss() -> None:
+    text = "AI tools help our recruiters to assess candidates, so please do not use AI in yours."
+    assert "ai_policy" not in codes(text)
+    assert "ai_policy" in codes("Please do not use AI tools in your application.")
 
 
 @pytest.mark.parametrize(

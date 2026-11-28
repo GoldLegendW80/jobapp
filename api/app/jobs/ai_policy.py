@@ -14,9 +14,11 @@ and German (the lists are read out in tasks/jobs/todo.md, J40):
    candidates' use as a noun ("candidates' use of AI") or a document made by AI ("AI generated
    cover letters");
 3. nobody else's use: not the employer, its people or its tools using AI ("we use", "our
-   platform screens", "the review of your application"), not its product for candidates ("the AI
-   interviewer", "helps applicants use AI"), not its calls and messages, not a skill ("experience
-   using AI") and not a process the role works on ("improve the hiring process").
+   platform screens", "the review of your application"), not what its side uses AI for, whoever
+   the subject ("to evaluate candidates", "help our recruiters", "hiring decisions"), not its
+   product for candidates ("the AI interviewer", "helps applicants use AI"), not its calls and
+   messages, not a skill ("experience using AI") and not a process the role works on ("improve the
+   hiring process").
 
 A sentence that negates is silent unless it states the rule ("do not use", "interdit", "nicht
 erlaubt"). Whatever the lists do not name is silent: precision first, a miss is a sentence the
@@ -289,7 +291,41 @@ _TASK = _compile(
     rf"|revolutionier)\w*{_GAP}{{0,3}}? (?:bewerbungsprozess\w*|auswahlverfahren\w*"
     r"|bewerbungsverfahren\w*|recruiting\w*)\b",
 )
-_NOT_THEIRS = (_EMPLOYER, _ACTS_ON, _PRODUCT, _HELPS, _MESSAGES, _SKILL, _TOPIC, _TASK)
+# What the employer's side uses AI for, whoever the subject: judging the candidates, helping the
+# recruiters, deciding to hire. Never "your" or "their" own step: those stay the candidate's.
+_VERB_EN = r"(?:assess|evaluate|screen|review|rank|score|shortlist|select)"
+_OBJECT_EN = r"(?:candidates?|applicants?|applications?|resumes?|cvs?|qualifications|profiles?)"
+_EMPLOYER_USES = _compile(
+    rf"\bto {_VERB_EN}(?: and {_VERB_EN})? (?:(?:the|all|our|incoming|each|every|any|qualified"
+    rf"|potential) )*{_OBJECT_EN}\b",
+    r"\b(?:help|helps|helping|assist|assists|support|supports) (?:(?:our|the|its) )?(?:recruiters?"
+    r"|recruiting team|recruitment team|hiring team|hiring managers?|talent team"
+    r"|talent acquisition team|hr team)\b",
+    r"\b(?:employment|hiring|recruiting|recruitment|selection|staffing) decisions?\b",
+    r"\bautomated decision",
+    r"\b(?:evaluer|preselectionner|trier) (?:(?:les|des|nos) )?(?:candidatures?|candidats?|cv"
+    r"|dossiers?|profils?)\b",
+    r"\b(?:aider|aide|aident|assister|soutenir) (?:(?:nos|les|l) )?(?:recruteurs?"
+    r"|equipes? de recrutement)\b",
+    r"\bdecisions? (?:d embauche|de recrutement|automatisees?)\b",
+    r"\b(?:bewerbungen|bewerber\w*|kandidaten)(?: [a-z]+)? (?:zu )?(?:bewerten|vorauswahlen"
+    r"|vorauszuwahlen|beurteilen|prufen)\b",
+    r"\b(?:helfen|hilft|unterstutzen|unterstutzt)(?: [a-z]+)? (?:recruiter\w*"
+    r"|personalabteilung\w*|personaler\w*)\b",
+    r"\b(?:einstellungsentscheidung\w*|personalentscheidung\w*|automatisierte\w*"
+    r" entscheidung\w*)\b",
+)
+_NOT_THEIRS = (
+    _EMPLOYER,
+    _ACTS_ON,
+    _PRODUCT,
+    _HELPS,
+    _MESSAGES,
+    _SKILL,
+    _TOPIC,
+    _TASK,
+    _EMPLOYER_USES,
+)
 
 # A negated sentence states a rule only through these: "do not use", "interdit", "nicht erlaubt".
 _NEGATED = re.compile(
