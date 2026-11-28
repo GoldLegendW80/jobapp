@@ -23,7 +23,7 @@ from app.jobs.liveness import CLOSED, Finding
 from app.jobs.liveness_timer import Bounds
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus, SweepTrigger
 from tests.jobs.conftest import new_user
-from tests.jobs.test_liveness_check import COPY, Page, html, instant, resolver
+from tests.jobs.test_liveness_check import COPY, HINT_PAGE, Page, html, instant, resolver
 
 NOW = datetime(2026, 11, 28, 9, 30, tzinfo=UTC)
 OPEN_PAGE = f"<html><body><h1>Robotics engineer</h1><p>{COPY}</p></body></html>"
@@ -138,7 +138,7 @@ def host(n: int) -> str:
 # --- the order and what is not the timer's -------------------------------------------------------
 
 
-def test_never_checked_first_then_published_longest_ago_then_the_oldest_check(
+def test_never_checked_first_published_longest_ago_then_the_oldest_check(
     factory: sessionmaker[Session], ann: uuid.UUID
 ) -> None:
     add(
@@ -150,7 +150,7 @@ def test_never_checked_first_then_published_longest_ago_then_the_oldest_check(
             {"n": 3, "published_on": date(2026, 8, 1)},
             {
                 "n": 4,
-                "published_on": date(2026, 7, 1),
+                "published_on": date(2026, 5, 1),
                 "liveness": checked(NOW - timedelta(days=9)),
             },
             {
@@ -241,15 +241,15 @@ def test_a_closing_date_leaves_a_posting_the_person_acted_on_after_it_was_read(
     factory: sessionmaker[Session], ann: uuid.UUID, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     (posting,) = add(factory, ann, [{"n": 1, "closes_on": date(2026, 11, 20)}])
-    real = liveness_timer._reopened
+    real = liveness_timer._propose_one
 
-    def click_then_reopened(db: Session, job_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    def click_then_propose(*args: Any) -> int:
         # Between the pass's read of the open postings and its row lock.
         acted(factory, ann, posting)
-        return real(db, job_ids)
+        return real(*args)
 
-    monkeypatch.setattr(liveness_timer, "_reopened", click_then_reopened)
-    assert liveness_timer.close_passed(factory, NOW) == 0
+    monkeypatch.setattr(liveness_timer, "_propose_one", click_then_propose)
+    assert liveness_timer.propose_passed(factory, NOW) == 0
     (job,) = jobs(factory, [posting])
     assert job.status is JobStatus.cv_ready
     assert job.liveness is None
@@ -428,19 +428,22 @@ def test_a_click_s_check_takes_from_the_day_s_room(
 ) -> None:
     add(factory, ann, [{"n": n, "liveness": checked(NOW - timedelta(hours=2))} for n in (1, 2)])
     add(factory, ann, [{"n": n} for n in (3, 4, 5)])
-    # Findings stored without a request leave the room as it was.
-    asked_nothing = [checked(NOW - timedelta(hours=1), r, "unconfirmed") for r in ("linkedin",)]
-    asked_nothing.append(checked(NOW - timedelta(hours=1), "closing_date", "closed"))
+    # Findings stored without a request leave the room as it was; a closing date's proposal
+    # whose page the timer asked takes from it.
+    an_hour_ago = NOW - timedelta(hours=1)
+    stored = [checked(an_hour_ago, r, "unconfirmed") for r in ("linkedin", "no_address")]
+    stored.append(checked(an_hour_ago, "closing_date", "may_be_closed"))
+    stored.append({**checked(an_hour_ago, "closing_date", "may_be_closed"), "page": "none"})
     add(
         factory,
         ann,
         [
-            {"n": 20 + i, "status": JobStatus.closed, "liveness": stored}
-            for i, stored in enumerate(asked_nothing)
+            {"n": 20 + i, "status": JobStatus.closed, "liveness": finding}
+            for i, finding in enumerate(stored)
         ],
     )
     web = Web()
-    assert tick(factory, web, per_day=3) == 1
+    assert tick(factory, web, per_day=4) == 1
 
 
 def test_one_tick_at_a_time_across_two_workers(
@@ -590,103 +593,142 @@ def test_the_worker_runs_the_tick_every_minute() -> None:
 # --- a closing date that passed ------------------------------------------------------------------
 
 
-def test_a_closing_date_closes_the_posting_once_it_passed_everywhere(
+def closing(
+    day: date, quote: str | None = "Applications close on 20 November 2026."
+) -> dict[str, Any]:
+    """A posting's stated closing date, with the signal its sentence was read from."""
+    signals = [{"code": "closing", "quote": quote, "value": day.isoformat()}] if quote else None
+    return {"closes_on": day, "signals": signals}
+
+
+def proposal(at: datetime, sentence: str | None, **page: str) -> dict[str, Any]:
+    return {
+        "verdict": "may_be_closed",
+        "reason": "closing_date",
+        "sentence": sentence,
+        "checked_at": at.isoformat(),
+        "moved": False,
+        **page,
+    }
+
+
+def test_a_closing_date_that_passed_everywhere_only_proposes_the_posting(
     factory: sessionmaker[Session], ann: uuid.UUID
 ) -> None:
     found, shortlisted, ready, coming = add(
         factory,
         ann,
         [
-            {"n": 1, "closes_on": date(2026, 11, 20)},
-            {"n": 2, "closes_on": date(2026, 11, 20), "status": JobStatus.shortlisted},
-            {"n": 3, "closes_on": date(2026, 11, 20), "status": JobStatus.cv_ready},
-            {"n": 4, "closes_on": date(2026, 11, 21)},
+            {"n": 1, **closing(date(2026, 11, 20))},
+            {"n": 2, **closing(date(2026, 11, 20), None), "status": JobStatus.shortlisted},
+            {"n": 3, **closing(date(2026, 11, 20)), "status": JobStatus.cv_ready},
+            {"n": 4, **closing(date(2026, 11, 21))},
         ],
     )
     web = Web()
     # 21 November at 11:59 UTC is still 20 November at UTC-12.
     before = datetime(2026, 11, 21, 11, 59, tzinfo=UTC)
-    asyncio.run(liveness_timer.tick(ctx(factory, web, before, per_day=0)))
-    assert [job.status for job in jobs(factory, [found, shortlisted])] == [
+    tick(factory, web, before, per_day=0)
+    assert [job.liveness for job in jobs(factory, [found, shortlisted])] == [None, None]
+    at = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
+    tick(factory, web, at, per_day=0)
+    first, second, third, fourth = jobs(factory, [found, shortlisted, ready, coming])
+    assert [job.status for job in (first, second, third, fourth)] == [
         JobStatus.found,
         JobStatus.shortlisted,
+        JobStatus.cv_ready,
+        JobStatus.found,
     ]
-    at = datetime(2026, 11, 21, 12, 0, tzinfo=UTC)
-    asyncio.run(liveness_timer.tick(ctx(factory, web, at, per_day=0)))
-    first, second, third, fourth = jobs(factory, [found, shortlisted, ready, coming])
-    assert (first.status, second.status) == (JobStatus.closed, JobStatus.closed)
-    assert (third.status, fourth.status) == (JobStatus.cv_ready, JobStatus.found)
-    assert first.liveness is not None
-    assert (first.liveness["reason"], first.liveness["moved"]) == ("closing_date", True)
-    assert status_events(factory, found) == [
-        {"from": "found", "to": "closed", "via": "liveness", "check": "closing_date"}
-    ]
-    assert liveness_check.closed_sentence(first.liveness) == (
-        "This posting is closed: its closing date passed."
+    assert first.liveness == proposal(at, "Applications close on 20 November 2026.")
+    assert second.liveness == proposal(at, None)
+    assert (third.liveness, fourth.liveness) == (None, None)
+    assert [status_events(factory, job) for job in (found, shortlisted)] == [[], []]
+    assert web.seen == []
+    # Proposed once: the next tick stores nothing new.
+    tick(factory, web, at + timedelta(minutes=1), per_day=0)
+    assert jobs(factory, [found])[0].liveness == proposal(
+        at, "Applications close on 20 November 2026."
     )
-    assert web.seen == []
 
 
-def test_a_closing_date_spends_no_check_of_the_day(
+def test_a_closing_date_s_proposal_spends_nothing_and_its_page_is_asked_first(
     factory: sessionmaker[Session], ann: uuid.UUID
 ) -> None:
-    add(factory, ann, [{"n": n, "closes_on": date(2026, 11, 1)} for n in (1, 2, 3)])
-    add(factory, ann, [{"n": 4}])
-    web = Web()
-    assert tick(factory, web, per_day=1) == 1
-    assert web.seen == [path(host(4), 4)]
-
-
-def test_a_reopened_posting_whose_date_passed_is_not_closed_again(
-    factory: sessionmaker[Session], ann: uuid.UUID
-) -> None:
-    (posting,) = add(factory, ann, [{"n": 1, "closes_on": date(2026, 11, 20)}])
-    tick(factory, Web(), per_day=0)
-    with factory() as db:
-        job = jobs_service.lock_job(db, ann, posting)
-        assert job is not None
-        jobs_service.set_status(db, job, JobStatus.found, NOW)
-        db.commit()
-    # The person's Check now after the date: its finding stays, no proposal comes back.
-    with factory() as db:
-        liveness_check.record(db, ann, posting, Finding("no_closure", "none"), NOW, job.url)
-    later = NOW + timedelta(days=1)
-    web = Web()
-    tick(factory, web, later)
-    (job,) = jobs(factory, [posting])
-    assert job.status is JobStatus.found
-    assert job.liveness is not None
-    assert job.liveness["reason"] == "none"
-    assert web.seen == []
-    events = status_events(factory, posting)
-    assert [e["to"] for e in events] == ["closed", "found"]
-
-
-def test_a_reopened_posting_never_checked_since_its_date_is_proposed(
-    factory: sessionmaker[Session], ann: uuid.UUID
-) -> None:
-    (posting,) = add(
+    dated = add(factory, ann, [{"n": n, **closing(date(2026, 11, 1))} for n in (1, 2, 3)])
+    # Checked before its date passed, two days ago: asked again first all the same.
+    dated += add(
         factory,
         ann,
-        [
-            {
-                "n": 1,
-                "closes_on": date(2026, 11, 20),
-                "liveness": checked(datetime(2026, 11, 2, tzinfo=UTC)),
-            }
-        ],
+        [{"n": 5, **closing(date(2026, 11, 26)), "liveness": checked(NOW - timedelta(days=2))}],
     )
+    add(factory, ann, [{"n": 4, "published_on": date(2026, 1, 1)}])
+    web = Web()
+    assert tick(factory, web, per_day=4, per_tick=4) == 4
+    assert sorted(web.seen) == sorted(path(host(n), n) for n in (1, 2, 3, 5))
+    assert all(job.liveness and job.liveness["page"] == "none" for job in jobs(factory, dated))
+
+
+def test_its_own_page_says_whether_a_posting_whose_date_passed_is_closed(
+    factory: sessionmaker[Session], ann: uuid.UUID, ben: uuid.UUID
+) -> None:
+    gone, still, walled, hinted = add(
+        factory, ann, [{"n": n, **closing(date(2026, 11, 20))} for n in (1, 2, 3, 4)]
+    )
+    web = Web(
+        {
+            path(host(1), 1): Page(410, b"gone"),
+            path(host(3), 3): Page(429, b"slow down"),
+            path(host(4), 4): html(HINT_PAGE),
+        }
+    )
+    assert tick(factory, web) == 4
+    first, second, third, fourth = jobs(factory, [gone, still, walled, hinted])
+    assert first.status is JobStatus.closed
+    assert first.liveness is not None
+    assert (first.liveness["reason"], first.liveness["moved"]) == ("http_410", True)
+    assert status_events(factory, gone) == [
+        {"from": "found", "to": "closed", "via": "liveness", "check": "http_410"}
+    ]
+    sentence = "Applications close on 20 November 2026."
+    assert (second.status, third.status, fourth.status) == (JobStatus.found,) * 3
+    assert second.liveness == proposal(NOW, sentence, page="none")
+    assert third.liveness == proposal(NOW, sentence, page="rate_limited")
+    # A page that proposes gives its own words.
+    assert fourth.liveness is not None
+    assert (fourth.liveness["reason"], fourth.liveness["sentence"]) == ("page_hints", "Job expired")
+    # The wall behind a proposal kept rests its host for everyone.
+    add(factory, ben, [{"n": 3, "host": host(3)}])
+    assert tick(factory, web, NOW + timedelta(minutes=1)) == 0
+
+
+def test_a_closing_date_s_proposal_stands_until_a_page_or_the_person_says_otherwise(
+    factory: sessionmaker[Session], ann: uuid.UUID
+) -> None:
+    (posting,) = add(factory, ann, [{"n": 1, **closing(date(2026, 11, 20))}])
+    sentence = "Applications close on 20 November 2026."
+    web = Web()
+    assert tick(factory, web) == 1
+    # Asked again after `again_days`, the page still shows no sign of closing: still proposed.
+    assert tick(factory, web, NOW + timedelta(days=6, hours=23)) == 0
+    later = NOW + timedelta(days=7, minutes=1)
+    assert tick(factory, web, later) == 1
+    assert jobs(factory, [posting])[0].liveness == proposal(later, sentence, page="none")
+    # The person's Check now gives the page's own answer, and the date proposes no more.
     with factory() as db:
-        job = jobs_service.lock_job(db, ann, posting)
-        assert job is not None
-        jobs_service.set_status(db, job, JobStatus.closed, NOW, via="liveness")
-        jobs_service.set_status(db, job, JobStatus.found, NOW)
-        db.commit()
-    tick(factory, Web(), per_day=0)
+        liveness_check.record(
+            db, ann, posting, Finding("no_closure", "none"), later, f"https://{host(1)}/careers/1"
+        )
+    tick(factory, web, later + timedelta(minutes=1), per_day=0)
     (job,) = jobs(factory, [posting])
     assert job.status is JobStatus.found
     assert job.liveness is not None
-    assert (job.liveness["reason"], job.liveness["moved"]) == ("closing_date", False)
-    stored = job.liveness["checked_at"]
-    tick(factory, Web(), NOW + timedelta(minutes=1), per_day=0)
-    assert jobs(factory, [posting])[0].liveness["checked_at"] == stored  # type: ignore[index]
+    assert (job.liveness["verdict"], job.liveness["reason"]) == ("no_closure", "none")
+    assert len(web.seen) == 2
+
+
+def test_a_closing_date_s_proposal_is_not_a_fresh_check_for_a_click(
+    factory: sessionmaker[Session], ann: uuid.UUID
+) -> None:
+    assert not liveness_check.fresh(proposal(NOW, None), NOW)
+    assert liveness_check.fresh(proposal(NOW, None, page="none"), NOW)
+    assert not liveness_check.fresh(proposal(NOW - timedelta(hours=2), None, page="none"), NOW)

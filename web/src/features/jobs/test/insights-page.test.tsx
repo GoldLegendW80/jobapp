@@ -71,8 +71,11 @@ describe("Your search in numbers", () => {
       name: "Closed by the app",
     });
     expect(closedByApp).toHaveTextContent("Page gone or closed23");
-    expect(closedByApp).toHaveTextContent("Closing date passed9");
-    expect(closedByApp).toHaveTextContent("In the last 7 days6");
+    expect(closedByApp).toHaveTextContent("Closed in the last 7 days6");
+    expect(closedByApp).toHaveTextContent("May be closed: their page4");
+    expect(closedByApp).toHaveTextContent(
+      "May be closed: closing date passed9",
+    );
   });
 
   it("says too few to say, with no benchmark, under 20 applications", async () => {

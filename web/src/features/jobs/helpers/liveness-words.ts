@@ -44,6 +44,13 @@ const UNREAD: Record<string, string> = {
   unexpected_answer: "the site gave an unexpected answer",
 };
 
+/** What the page answered the timer's check of a posting its closing date proposes, if asked. */
+function pageWords(page: string | null | undefined): string {
+  if (!page) return "";
+  if (page === "none") return "; its page shows no sign of closing";
+  return `; its page could not be read, ${UNREAD[page] ?? "for a reason this page does not know"}`;
+}
+
 /** One sentence on what the last check found, for the posting's status. */
 export function checkWords(liveness: Liveness, status: string): string {
   if (liveness.reason === "linkedin")
@@ -54,17 +61,16 @@ export function checkWords(liveness: Liveness, status: string): string {
   const gone = liveness.reason === "http_404" || liveness.reason === "http_410";
   switch (liveness.verdict) {
     case "closed": {
-      const said =
-        liveness.reason === "closing_date"
-          ? "its closing date passed"
-          : gone
-            ? "its page no longer exists"
-            : "its page says it is closed";
+      const said = gone
+        ? "its page no longer exists"
+        : "its page says it is closed";
       return status === "closed" && liveness.moved
         ? `${when}: ${said}, so it moved to Closed.`
         : `${when}: ${said}.`;
     }
     case "may_be_closed":
+      if (liveness.reason === "closing_date")
+        return `${when}: its closing date passed, so it may be closed${pageWords(liveness.page)}.`;
       return liveness.reason === "redirected"
         ? `${when}: its address now leads to another page.`
         : `${when}: its page may say it is closed.`;

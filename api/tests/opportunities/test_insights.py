@@ -314,7 +314,8 @@ def test_the_silent_applications(
 def test_the_postings_the_app_s_checks_closed(
     api: Api, person_a: Person, person_b: Person, factory: sessionmaker[Session], clock: Clock
 ) -> None:
-    """Jobs J37: closed now by the liveness check, by what closed them, and the recent ones."""
+    """Jobs J37: closed now by the liveness check and the recent ones; apart, the open postings
+    it proposes, by their page or by their closing date."""
     today = clock().date()
 
     def closed(on: date, check: str, status: JobStatus = JobStatus.closed) -> uuid.UUID:
@@ -323,10 +324,22 @@ def test_the_postings_the_app_s_checks_closed(
         event(factory, person_a, posting, on, moved)
         return posting
 
+    def checked(owner: Person, status: JobStatus, verdict: str, reason: str, **more: Any) -> None:
+        stored = {"verdict": verdict, "reason": reason, "checked_at": "2026-11-01T10:00:00+00:00"}
+        add_posting(factory, owner, status=status, liveness={**stored, "moved": False, **more})
+
     closed(today, "http_404")
     closed(today - timedelta(days=6), "page_says")
-    closed(today - timedelta(days=7), "closing_date")
-    closed(today - timedelta(days=30), "closing_date")
+    closed(today - timedelta(days=7), "http_410")
+    closed(today - timedelta(days=30), "page_says")
+    checked(person_a, JobStatus.found, "may_be_closed", "page_hints")
+    checked(person_a, JobStatus.cv_ready, "closed", "http_410")
+    checked(person_a, JobStatus.shortlisted, "may_be_closed", "closing_date")
+    checked(person_a, JobStatus.staged, "may_be_closed", "closing_date", page="none")
+    # Not proposals: applied already, a page with no sign of closing, another person's.
+    checked(person_a, JobStatus.applied, "may_be_closed", "closing_date")
+    checked(person_a, JobStatus.found, "no_closure", "none")
+    checked(person_b, JobStatus.found, "may_be_closed", "closing_date")
     reopened = closed(today - timedelta(days=2), "http_410", JobStatus.found)
     event(factory, person_a, reopened, today - timedelta(days=1), {"from": "closed", "to": "found"})
     # Closed by the person, or by the app and then by the person again: not the checks'.
@@ -339,9 +352,10 @@ def test_the_postings_the_app_s_checks_closed(
     moved = {"from": "found", "to": "closed", "via": "liveness", "check": "http_404"}
     event(factory, person_b, posting_b, today, moved)
     assert read(api, person_a)["closed_by_checks"] == {
-        "page": 2,
-        "closing_date": 2,
+        "page": 4,
         "recent": 2,
+        "proposed_page": 2,
+        "proposed_date": 2,
         "days": 7,
     }
 

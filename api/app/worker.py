@@ -28,7 +28,7 @@ Sweeps queue (app.queue.SWEEPS):
   (app/jobs/rescore.py). No model call: the fit is code.
 - cron:liveness_timer: every minute, the pages of the open postings checked by the worker, a few
   at a time and one tick at a time (jobs J37, app/jobs/liveness_timer.py `tick`), and the open
-  postings whose stated closing date passed closed.
+  postings whose stated closing date passed proposed as maybe closed.
 
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in

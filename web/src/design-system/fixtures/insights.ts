@@ -61,7 +61,13 @@ export const INSIGHTS: Insights = {
     },
   ],
   silent_undated: 1,
-  closed_by_checks: { page: 23, closing_date: 9, recent: 6, days: 7 },
+  closed_by_checks: {
+    page: 23,
+    recent: 6,
+    proposed_page: 4,
+    proposed_date: 9,
+    days: 7,
+  },
 };
 
 /** Invented numbers of a search just started: under every floor, nothing silent. */
@@ -97,7 +103,13 @@ export const FEW_INSIGHTS: Insights = {
   passes_without_reason: 12,
   silent: [],
   silent_undated: 0,
-  closed_by_checks: { page: 0, closing_date: 0, recent: 0, days: 7 },
+  closed_by_checks: {
+    page: 0,
+    recent: 0,
+    proposed_page: 0,
+    proposed_date: 0,
+    days: 7,
+  },
 };
 
 /** No posting at all. */

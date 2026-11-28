@@ -4,10 +4,11 @@ a click. No second checker and no rule of its own: each check is app/jobs/livene
 stored as a click's is.
 
 - Which: the person's postings `found` or `shortlisted` (OPEN) with an address, never LinkedIn's
-  (`host_key`), never checked first, then by the day published (or found when it gives none)
-  oldest first, then by the oldest check; a posting checked less than `again_days` ago, or whose
-  stated closing date passed, is not due. A posting the person acted on (cv_ready, staged,
-  applied and later) is the clicks' and the apply run's, as before.
+  (`host_key`): first those a closing date proposes whose page was not asked since, then those
+  never checked (the day published, or found when it gives none, oldest first), then the oldest
+  check first; a posting checked less than `again_days` ago is not due, unless its closing date
+  proposes it. A posting the person acted on (cv_ready, staged, applied and later) is the
+  clicks' and the apply run's, as before.
 - Bounds (Settings, JOBS_LIVENESS_*): at most `per_tick` checks a tick in all, the persons in
   turn; at most `per_day` checks of a person's postings in the last 24 hours, counted from the
   checks stored on them (`jobs.liveness.checked_at`, a click's included); one posting of a host
@@ -20,9 +21,11 @@ stored as a click's is.
   (LOCK) for its whole run on a session of its own, and a tick that finds it held does nothing.
   A dead worker's connection ends, and its lock with it.
 - A closing date the posting states (`closes_on`, app/jobs/signals.py) that passed everywhere
-  (LAST_ZONE) closes it as a closed page does (`liveness_check.store`, reason `closing_date`), no
-  request made; a posting the app closed once and the person reopened is only proposed, while
-  no check was stored after its closing date.
+  (LAST_ZONE) only proposes it (`may_be_closed`, reason `closing_date`, the sentence the date was
+  read from), no request made, while no check was stored after the date; the person closes it
+  in one click or keeps it. Its page is then asked first: a closed page closes it as any check
+  does; a page that neither closes nor proposes leaves the proposal standing, with the page's
+  answer (`liveness_check.store`, `keep_date`).
 """
 
 import asyncio
@@ -37,10 +40,10 @@ from urllib.parse import urlsplit
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.jobs import liveness_check
+from app.jobs import liveness, liveness_check
 from app.jobs import service as jobs_service
-from app.jobs.liveness import CLOSED, UNCONFIRMED, Finding
-from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus, Sweep, SweepStatus
+from app.jobs.liveness import MAY_BE_CLOSED, UNCONFIRMED, Finding
+from app.jobs.models import Job, JobStatus, Sweep, SweepStatus
 
 logger = logging.getLogger("app.jobs.liveness")
 
@@ -53,12 +56,11 @@ NOT_STORED = Finding(UNCONFIRMED, "check_failed")
 # The answers that say the host turned the app away: it is asked again only after a rest.
 REST_REASONS = frozenset({"rate_limited", "bot_check", "refused", "sign_in"})
 # The findings stored without a request: they leave the day's room as it was.
-NO_REQUEST = ("closing_date", "linkedin", "no_address")
+NO_REQUEST = (liveness_check.CLOSING_DATE, "linkedin", "no_address")
 LOCK = 0x6A6F_624C_6976_65
 TICK_SECOND = 50
 # A closing date has passed everywhere once its next day began at UTC-12.
 LAST_ZONE = timedelta(hours=12)
-DATE_FINDING = Finding(CLOSED, "closing_date")
 _ISO = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:\d{2}|Z)$"
 
 
@@ -145,6 +147,12 @@ def searched_hosts(db: Session) -> set[str]:
     return hosts
 
 
+def answered() -> sa.ColumnElement[str]:
+    """What the posting's last check found of its page: the page's reason a closing date's
+    proposal keeps (`page`), else the finding's reason (`closing_date` when no page was asked)."""
+    return sa.func.coalesce(Job.liveness["page"].astext, Job.liveness["reason"].astext)
+
+
 def checks_today(db: Session, user_id: uuid.UUID, now: datetime) -> int:
     """The person's postings checked in the 24 hours before `now`, by the timer or a click."""
     return (
@@ -154,7 +162,7 @@ def checks_today(db: Session, user_id: uuid.UUID, now: datetime) -> int:
             .where(
                 Job.user_id == user_id,
                 checked_at() > now - timedelta(hours=24),
-                Job.liveness["reason"].astext.not_in(NO_REQUEST),
+                answered().not_in(NO_REQUEST),
             )
         )
         or 0
@@ -168,7 +176,7 @@ def resting_hosts(db: Session, now: datetime, bounds: Bounds) -> set[str]:
     urls = db.scalars(
         sa.select(Job.url).where(
             Job.url.is_not(None),
-            Job.liveness["reason"].astext.in_(REST_REASONS),
+            answered().in_(REST_REASONS),
             checked_at() > now - timedelta(hours=bounds.rest_hours),
         )
     )
@@ -179,18 +187,19 @@ def due(db: Session, user_id: uuid.UUID, now: datetime, bounds: Bounds) -> list[
     """The person's open postings a check may ask, in the order they are asked (module
     docstring): their id and address."""
     when = checked_at()
+    proposed = answered() == liveness_check.CLOSING_DATE
     return list(
         db.execute(
             sa.select(Job.id, Job.url)
             .where(
                 _open(user_id),
-                sa.or_(when.is_(None), when <= now - timedelta(days=bounds.again_days)),
-                sa.or_(Job.closes_on.is_(None), Job.closes_on > last_passed(now)),
+                sa.or_(proposed, when.is_(None), when <= now - timedelta(days=bounds.again_days)),
             )
             .order_by(
+                sa.case((proposed, 0), else_=1),
                 when.is_not(None),
-                sa.func.coalesce(Job.published_on, Job.found_on).asc(),
                 sa.nulls_first(when.asc()),
+                sa.func.coalesce(Job.published_on, Job.found_on).asc(),
                 Job.id,
             )
         )
@@ -255,70 +264,59 @@ def _in_turn(lists: Iterable[list[Pick]]) -> list[Pick]:
 # --- a closing date that passed ------------------------------------------------------------------
 
 
-def _reopened(db: Session, job_ids: list[uuid.UUID]) -> set[uuid.UUID]:
-    return set(
-        db.scalars(
-            sa.select(JobEvent.job_id).where(
-                JobEvent.job_id.in_(job_ids),
-                JobEvent.kind == JobEventKind.status,
-                JobEvent.data["via"].astext == "liveness",
-            )
-        )
-    )
-
-
-def _date_due(job: Any, reopened: bool, now: datetime) -> bool:
-    """An open posting whose closing date passed: closed; reopened by the person after the app
-    closed it, proposed once (while no check was stored after its closing date)."""
+def _date_due(job: Any, now: datetime) -> bool:
+    """An open posting whose closing date passed and no check was stored after it: proposed
+    once, a check after the date (the timer's, a click's) has the last word."""
     if job.status not in OPEN or job.closes_on is None or job.closes_on > last_passed(now):
         return False
     stored = _stored_at(job.liveness)
-    return not reopened or stored is None or stored.date() <= job.closes_on
+    return stored is None or stored.date() <= job.closes_on
 
 
-def close_passed(sessions: sessionmaker[Session], now: datetime) -> int:
-    """Every open posting whose stated closing date passed, each under its row lock in its own
-    transaction (one that fails fails alone). How many it closed."""
+def date_sentence(signals: list[Any] | None) -> str | None:
+    """The sentence the posting's closing date was read from (its `closing` signal)."""
+    for signal in signals or []:
+        if isinstance(signal, dict) and signal.get("code") == "closing":
+            quote = signal.get("quote")
+            return liveness.quote(quote) if isinstance(quote, str) and quote.strip() else None
+    return None
+
+
+def propose_passed(sessions: sessionmaker[Session], now: datetime) -> int:
+    """Every open posting whose stated closing date passed, proposed, each under its row lock
+    in its own transaction (one that fails fails alone). How many it proposed."""
     with sessions() as db:
         found = db.execute(
             sa.select(Job.user_id, Job.id, Job.status, Job.closes_on, Job.liveness).where(
                 Job.status.in_(OPEN), Job.closes_on <= last_passed(now)
             )
         ).all()
-        reopened = _reopened(db, [row.id for row in found]) if found else set()
-    # Read again under the lock; a reopened posting proposed already is not locked each tick.
-    rows = [row for row in found if _date_due(row, row.id in reopened, now)]
-    closed = 0
-    for row in rows:
+    proposed = 0
+    # Read again under the lock; a posting proposed already is not locked each tick.
+    for row in [row for row in found if _date_due(row, now)]:
         try:
-            closed += _close_one(sessions, row.user_id, row.id, row.id in reopened, now)
+            proposed += _propose_one(sessions, row.user_id, row.id, now)
         except Exception as error:
             logger.warning(
                 "jobs.liveness.date_failed",
                 extra={"job_id": str(row.id), "error": type(error).__name__},
             )
-    return closed
+    return proposed
 
 
-def _close_one(
-    sessions: sessionmaker[Session],
-    user_id: uuid.UUID,
-    job_id: uuid.UUID,
-    reopened: bool,
-    now: datetime,
+def _propose_one(
+    sessions: sessionmaker[Session], user_id: uuid.UUID, job_id: uuid.UUID, now: datetime
 ) -> int:
     with sessions() as db:
         job = jobs_service.lock_job(db, user_id, job_id)
-        if job is None or not _date_due(job, reopened, now):
+        if job is None or not _date_due(job, now):
             db.rollback()
             return 0
-        stored = liveness_check.store(db, job, DATE_FINDING, now, close_from=OPEN)
+        finding = Finding(MAY_BE_CLOSED, liveness_check.CLOSING_DATE, date_sentence(job.signals))
+        liveness_check.store(db, job, finding, now, close_from=OPEN)
         db.commit()
-    logger.info(
-        "jobs.liveness",
-        extra={"job_id": str(job_id), "reason": DATE_FINDING.reason, "closed": stored["moved"]},
-    )
-    return int(stored["moved"])
+    logger.info("jobs.liveness", extra={"job_id": str(job_id), "reason": finding.reason})
+    return 1
 
 
 # --- the tick ------------------------------------------------------------------------------------
@@ -349,7 +347,14 @@ async def _record(
             _in_db,
             sessions,
             lambda db: liveness_check.record(
-                db, pick.user_id, pick.job_id, finding, now, pick.url, close_from=OPEN
+                db,
+                pick.user_id,
+                pick.job_id,
+                finding,
+                now,
+                pick.url,
+                close_from=OPEN,
+                keep_date=True,
             ),
         )
     except Exception as error:
@@ -394,8 +399,8 @@ async def _check(
 
 
 async def tick(ctx: dict[str, Any]) -> int:
-    """The worker's cron (sweeps queue): the closing dates that passed, then one tick's checks.
-    How many pages it asked."""
+    """The worker's cron (sweeps queue): the closing dates that passed proposed, then one tick's
+    checks. How many pages it asked."""
     sessions: sessionmaker[Session] = ctx["sessions"]
     clock: Callable[[], datetime] = ctx["clock"]
     bounds = Bounds.of(ctx["settings"])
@@ -404,7 +409,7 @@ async def tick(ctx: dict[str, Any]) -> int:
     try:
         if not await asyncio.to_thread(_locked, lock):
             return 0
-        closed = await asyncio.to_thread(close_passed, sessions, clock())
+        proposed = await asyncio.to_thread(propose_passed, sessions, clock())
         picks = await asyncio.to_thread(
             _in_db, sessions, lambda db: plan(db, clock(), bounds, unstored)
         )
@@ -418,10 +423,10 @@ async def tick(ctx: dict[str, Any]) -> int:
                     "jobs.liveness.not_checked",
                     extra={"job_id": str(pick.job_id), "error": type(error).__name__},
                 )
-        if closed or picks:
+        if proposed or picks:
             logger.info(
                 "jobs.liveness.timer",
-                extra={"closed_by_date": closed, "planned": len(picks), "asked": asked},
+                extra={"proposed_by_date": proposed, "planned": len(picks), "asked": asked},
             )
         return asked
     finally:

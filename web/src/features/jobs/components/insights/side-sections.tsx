@@ -74,34 +74,40 @@ export function PassReasonsSection({
   );
 }
 
-/** Jobs J37: the postings the app closed by itself, its check of their page or their date. */
+/**
+ * Jobs J37: the postings the app closed by itself after a check of their page, and apart those it
+ * only proposes as maybe closed (their page, or their stated closing date that passed).
+ */
 export function ClosedByChecksSection({
   closed,
 }: {
   closed: Insights["closed_by_checks"];
 }) {
-  const total = closed.page + closed.closing_date;
+  const total = closed.page + closed.proposed_page + closed.proposed_date;
   return (
     <Section
       title="Closed by the app"
-      description="Open postings whose page the app found gone or saying they are closed, or whose stated closing date passed. Each one's History says why; a posting you reopen stays open."
+      description="Open postings whose page the app found gone or saying they are closed. Each one's History says why; a posting you reopen stays open. Apart, the open postings marked May be closed, whose page may say so or whose stated closing date passed: you close each one in one click, or keep it."
     >
       <Card>
         <CardContent>
           {total === 0 ? (
             <p className="text-sm text-muted-foreground">
-              None closed by the app yet.
+              None closed or proposed by the app yet.
             </p>
           ) : (
             <Facts>
               <Fact label="Page gone or closed">
                 {formatCount(closed.page)}
               </Fact>
-              <Fact label="Closing date passed">
-                {formatCount(closed.closing_date)}
-              </Fact>
-              <Fact label={`In the last ${String(closed.days)} days`}>
+              <Fact label={`Closed in the last ${String(closed.days)} days`}>
                 {formatCount(closed.recent)}
+              </Fact>
+              <Fact label="May be closed: their page">
+                {formatCount(closed.proposed_page)}
+              </Fact>
+              <Fact label="May be closed: closing date passed">
+                {formatCount(closed.proposed_date)}
               </Fact>
             </Facts>
           )}

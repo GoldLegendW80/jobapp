@@ -91,7 +91,6 @@ const CHECKS: Record<string, string> = {
   http_404: "its page no longer exists",
   http_410: "its page no longer exists",
   page_says: "its page says it is closed",
-  closing_date: "its closing date passed",
 };
 
 /** One line for an event of the timeline. */

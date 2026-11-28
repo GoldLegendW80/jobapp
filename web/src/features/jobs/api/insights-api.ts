@@ -58,11 +58,16 @@ const insightsSchema = z.object({
   passes_without_reason: z.number().int(),
   silent: z.array(silentSchema),
   silent_undated: z.number().int(),
-  /** Jobs J37: the postings the app's checks closed that stay closed. */
+  /**
+   * Jobs J37: the postings the app's checks closed that stay closed (`page`, `recent` of them in
+   * the last `days`), and apart the open ones they propose as maybe closed, by their page or by
+   * their stated closing date that passed.
+   */
   closed_by_checks: z.object({
     page: z.number().int(),
-    closing_date: z.number().int(),
     recent: z.number().int(),
+    proposed_page: z.number().int(),
+    proposed_date: z.number().int(),
     days: z.number().int(),
   }),
 });

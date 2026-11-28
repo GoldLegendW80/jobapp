@@ -117,11 +117,6 @@ describe("describeEvent", () => {
     ],
     [
       "status",
-      { from: "found", to: "closed", via: "liveness", check: "closing_date" },
-      "Status changed from Found to Closed (checked by the app: its closing date passed)",
-    ],
-    [
-      "status",
       { from: "shortlisted", to: "closed", via: "liveness", check: "http_410" },
       "Status changed from Shortlisted to Closed (checked by the app: its page no longer exists)",
     ],

@@ -13,8 +13,10 @@ and to, less a status an undo took back (via `undo` or `*_undo`). From that:
 - passed: skipped now by a swipe Pass (its last status event), with that Pass's reason if any.
 
 Closed by the app (jobs J37): the postings closed now whose last status event is the liveness
-check's (`via` liveness), by what closed them (their page gone or saying so, or their stated
-closing date passed) and those of the last CLOSED_DAYS days.
+check's (`via` liveness, their page gone or saying so), and those of the last CLOSED_DAYS days.
+Apart from them, the open postings it only proposes as maybe closed (the "May be closed" badge:
+not applied yet, the last check `may_be_closed` or `closed`), by their page or by their stated
+closing date that passed.
 
 Silent: still `applied`, never answered, and nothing for SILENT_DAYS days or more since the
 latest of `applied_on`, a status change, a note and a click of one of its applications. One
@@ -36,8 +38,10 @@ from sqlalchemy.orm import Session
 
 from app.apply import guardrails
 from app.apply.models import Application, State
+from app.jobs import liveness_check
 from app.jobs import service as jobs_service
 from app.jobs import undo as undo_tokens
+from app.jobs.liveness import CLOSED, MAY_BE_CLOSED
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
 from app.opportunities import passes
 
@@ -136,8 +140,9 @@ class Silent:
 @dataclass(frozen=True)
 class ClosedByChecks:
     page: int
-    closing_date: int
     recent: int
+    proposed_page: int
+    proposed_date: int
     days: int = CLOSED_DAYS
 
 
@@ -325,7 +330,8 @@ def _first_answer(applied: Sequence[Row]) -> FirstAnswer:
 
 
 def closed_by_checks(db: Session, user_id: uuid.UUID, today: date) -> ClosedByChecks:
-    """The person's postings the liveness check closed and that stay closed (module docstring)."""
+    """The person's postings the liveness check closed and that stay closed, and those it
+    proposes (module docstring)."""
     rank = sa.func.row_number().over(
         partition_by=JobEvent.job_id, order_by=(JobEvent.at.desc(), JobEvent.id.desc())
     )
@@ -345,11 +351,21 @@ def closed_by_checks(db: Session, user_id: uuid.UUID, today: date) -> ClosedByCh
         )
     ).all()
     since = datetime.combine(today - timedelta(days=CLOSED_DAYS - 1), time(), UTC)
-    by_date = sum(check == "closing_date" for check, _ in rows)
+    proposed = Counter(
+        reason == liveness_check.CLOSING_DATE
+        for reason in db.scalars(
+            sa.select(Job.liveness["reason"].astext).where(
+                Job.user_id == user_id,
+                Job.status.in_(liveness_check.AUTO_CLOSE_FROM),
+                Job.liveness["verdict"].astext.in_((MAY_BE_CLOSED, CLOSED)),
+            )
+        )
+    )
     return ClosedByChecks(
-        page=len(rows) - by_date,
-        closing_date=by_date,
+        page=len(rows),
         recent=sum(at >= since for _, at in rows),
+        proposed_page=proposed[False],
+        proposed_date=proposed[True],
     )
 
 
