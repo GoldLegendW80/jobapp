@@ -395,6 +395,13 @@ def test_a_plain_text_naming_escaped_tags_is_stored_with_every_word(hidden: str)
     assert "<li>" in text
 
 
+def test_a_plain_text_naming_an_escaped_tag_of_the_list_loses_the_tag_and_its_attributes() -> None:
+    description = (
+        "Use &lt;li&gt; items. Avoid &lt;p class=&quot;Kubernetes Terraform&quot;&gt; please."
+    )
+    assert arbeitnow.text_of(description) == "Use\nitems. Avoid\nplease."
+
+
 # An answer escaped twice holding a tag outside the closed list: converted the plain way, as
 # before J39, its tags staying words; the pass leaves it as stored.
 OUTSIDE_THE_LIST = [
@@ -485,9 +492,22 @@ def test_a_long_answer_escaped_twice_is_stored_as_escaped_once(
     assert "Paragraph 492:" in text if size < 4 * TEXT_MAX else "Paragraph 126:" in text
 
 
+def exactly_kept(after: str) -> str:
+    """An answer whose text is TEXT_MAX characters exactly, uncut, then `after`."""
+    head = long_answer(480)
+    word = "x" * (TEXT_MAX - len(plain_text(head)) - 1)
+    once = f"{head}<p>{word}</p>{after}<p>The benefits: 30 days off.</p>"
+    assert len(plain_text(head + f"<p>{word}</p>")) == TEXT_MAX
+    return once
+
+
 SCRIPT = "<script>track('apply');</script>"
 # Something hides words in what the conversion reads and keeps: the old way, as before J39.
 HIDDEN_IN_LONG = [
+    pytest.param(
+        exactly_kept("<!-- the old benefits "),
+        id="a comment never closed after a text of the length kept, uncut",
+    ),
     pytest.param(long_answer(600, before={10: SCRIPT}), id="a script, past what it keeps"),
     pytest.param(
         long_answer(160, spans=True, before={10: SCRIPT}), id="a script, past what it reads"
