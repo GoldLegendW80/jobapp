@@ -4,10 +4,10 @@ a click. No second checker and no rule of its own: each check is app/jobs/livene
 stored as a click's is.
 
 - Which: the person's postings `found` or `shortlisted` (OPEN) with an address, never LinkedIn's
-  (`host_key`), never checked first, then by the day published (or found when it
-  gives none) oldest first, then by the oldest check; a posting checked less than `again_days`
-  ago is not due. A posting the person acted on (cv_ready, staged, applied and later) is the
-  clicks' and the apply run's, as before.
+  (`host_key`), never checked first, then by the day published (or found when it gives none)
+  oldest first, then by the oldest check; a posting checked less than `again_days` ago, or whose
+  stated closing date passed, is not due. A posting the person acted on (cv_ready, staged,
+  applied and later) is the clicks' and the apply run's, as before.
 - Bounds (Settings, JOBS_LIVENESS_*): at most `per_tick` checks a tick in all, the persons in
   turn; at most `per_day` checks of a person's postings in the last 24 hours, counted from the
   checks stored on them (`jobs.liveness.checked_at`, a click's included); one posting of a host
@@ -20,7 +20,8 @@ stored as a click's is.
   A dead worker's connection ends, and its lock with it.
 - A closing date the posting states (`closes_on`, app/jobs/signals.py) that passed everywhere
   (LAST_ZONE) closes it as a closed page does (`liveness_check.store`, reason `closing_date`), no
-  request made; a posting the app closed once and the person reopened is only proposed, once.
+  request made; a posting the app closed once and the person reopened is only proposed, while
+  no check was stored after its closing date.
 """
 
 import asyncio
@@ -72,7 +73,7 @@ class Bounds:
         )
 
 
-# The worst tick: every check at its whole budget, plus the database.
+# The worst tick: the most checks a tick the setting accepts, each at its whole budget.
 TICK_TIMEOUT_S = 20 * liveness_check.BUDGET_S + 30
 
 
@@ -246,7 +247,7 @@ def _reopened(db: Session, job_ids: list[uuid.UUID]) -> set[uuid.UUID]:
     )
 
 
-def _date_due(job: Job, reopened: bool, now: datetime) -> bool:
+def _date_due(job: Any, reopened: bool, now: datetime) -> bool:
     """An open posting whose closing date passed: closed; reopened by the person after the app
     closed it, proposed once (while no check was stored after its closing date)."""
     if job.status not in OPEN or job.closes_on is None or job.closes_on > last_passed(now):
@@ -259,12 +260,14 @@ def close_passed(sessions: sessionmaker[Session], now: datetime) -> int:
     """Every open posting whose stated closing date passed, each under its row lock in its own
     transaction (one that fails fails alone). How many it closed."""
     with sessions() as db:
-        rows = db.execute(
-            sa.select(Job.user_id, Job.id).where(
+        found = db.execute(
+            sa.select(Job.user_id, Job.id, Job.status, Job.closes_on, Job.liveness).where(
                 Job.status.in_(OPEN), Job.closes_on <= last_passed(now)
             )
         ).all()
-        reopened = _reopened(db, [row.id for row in rows]) if rows else set()
+        reopened = _reopened(db, [row.id for row in found]) if found else set()
+    # Read again under the lock; a reopened posting proposed already is not locked each tick.
+    rows = [row for row in found if _date_due(row, row.id in reopened, now)]
     closed = 0
     for row in rows:
         try:
