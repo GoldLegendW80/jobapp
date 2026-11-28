@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Write the .env of the CI e2e stack from .env.example: every placeholder secret replaced by a
-# fresh random value, caddy on 127.0.0.1:${1:-8080}. The file lives only on the CI runner.
+# fresh random value, caddy on 127.0.0.1:${1:-8080}, and no pace of the agents queue (agents
+# A13: the journeys' fake backend is never rate limited, and a journey must not wait for a turn).
+# The file lives only on the CI runner.
 #
 #   .github/scripts/ci_env.sh [port] > .env
 set -euo pipefail
@@ -23,4 +25,6 @@ sed -e "s/^SECRET_KEY=.*/SECRET_KEY=$secret/" \
   -e "s/^BROWSER_CONTROL_SECRET=.*/BROWSER_CONTROL_SECRET=$browser_secret/" \
   -e "s/^HTTP_BIND=.*/HTTP_BIND=127.0.0.1/" \
   -e "s/^HTTP_PORT=.*/HTTP_PORT=$port/" \
+  -e "/^AGENTS_STARTS_PER_MINUTE=/d" \
   "$ROOT/.env.example"
+echo "AGENTS_STARTS_PER_MINUTE=0"

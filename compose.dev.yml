@@ -49,6 +49,9 @@ services:
     image: jobapp-worker:dev
     environment:
       OPENSSL_armcap: "0"
+      # No pace of the agents queue unless .env sets one (agents A13): a journey on this stack
+      # never waits for a turn.
+      AGENTS_STARTS_PER_MINUTE: ${AGENTS_STARTS_PER_MINUTE:-0}
     volumes:
       - ./api/app:/app/app
 

@@ -60,7 +60,8 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   kept: a lost one is seen as lost by the api once its time on its way has passed.
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
-  so long that their message must be lost).
+  so long that their message must be lost, and waiting runs whose job is gone from the queue,
+  agents A13, `reap_lost_waits`).
 
 Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
 - parse_document(document_id): reads one uploaded document. One at a time (max_jobs 1): the
