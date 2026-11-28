@@ -581,6 +581,39 @@ def test_two_down_answers_in_a_row_rest_the_host(
     assert tick(factory, Web()) == asked
 
 
+@pytest.mark.parametrize(
+    ("kind", "site"),
+    [
+        ("indeed", "fr.indeed.example"),
+        ("welcome_to_the_jungle", "www.welcometothejungle.example"),
+        ("freework", "www.free-work.example"),
+    ],
+)
+def test_a_platform_her_search_met_a_checkpoint_on_rests_for_her_during_its_pause(
+    factory: sessionmaker[Session], ann: uuid.UUID, ben: uuid.UUID, kind: str, site: str
+) -> None:
+    add(factory, ann, [{"n": 1, "host": site}])
+    add(factory, ben, [{"n": 2, "host": site}])
+    met = NOW - timedelta(days=6, hours=23)
+    with factory() as db, db.begin():
+        db.add(
+            Sweep(
+                user_id=ann,
+                trigger=SweepTrigger.manual,
+                status=SweepStatus.done,
+                finished_at=met,
+                stats={"sources": [{"kind": kind, "checkpoint_at": met.isoformat()}]},
+            )
+        )
+    web = Web()
+    # Her pause is hers, as the search keeps it: Ben's posting of the platform is asked.
+    assert tick(factory, web) == 1
+    assert web.seen == [path(site, 2)]
+    assert tick(factory, web, NOW + timedelta(minutes=59, seconds=59)) == 0
+    assert tick(factory, web, NOW + timedelta(hours=1)) == 1
+    assert web.seen == [path(site, 2), path(site, 1)]
+
+
 def test_a_host_a_running_search_reads_is_left_alone(
     factory: sessionmaker[Session], ann: uuid.UUID, ben: uuid.UUID
 ) -> None:

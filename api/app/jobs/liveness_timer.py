@@ -15,7 +15,9 @@ stored as a click's is.
   a tick; a host whose answer to a check of anyone's posting in the last `rest_hours` was a wall
   (REST_REASONS) is left alone for every person (the checks all leave from the machine's one
   address), and so is for DOWN_REST a host whose two latest checks found it down (DOWN_REASONS);
-  a host a running search reads (its sources' hosts) is left alone while it runs.
+  a host a running search reads (its sources' hosts) is left alone while it runs; a platform
+  (Indeed, Welcome to the Jungle, Free-Work) her browser search met a checkpoint on is left
+  alone for her during its pause (`paused_platforms`).
   Each request is paced by the shared pacer, as a click's. A person with no open posting costs
   no query of her own and no request.
 - One tick at a time, whatever the number of workers: the tick holds a transaction advisory lock
@@ -59,6 +61,8 @@ REST_REASONS = frozenset({"rate_limited", "bot_check", "refused", "sign_in"})
 # The answers of a host that is down (5xx, the time, the network): twice in a row, a rest.
 DOWN_REASONS = frozenset({"server_error", "timeout", "network"})
 DOWN_REST = timedelta(hours=1)
+# The pace key of a protected platform's every address (platform_policy.pace_key).
+PLATFORM_KEY = "platform:"
 # The findings stored without a request: they leave the day's room as it was.
 NO_REQUEST = (liveness_check.CLOSING_DATE, "linkedin", "no_address")
 LOCK = 0x6A6F_624C_6976_65
@@ -214,6 +218,21 @@ def down_hosts(db: Session, now: datetime) -> set[str]:
     }
 
 
+def paused_platforms(db: Session, user_id: uuid.UUID, now: datetime) -> set[str]:
+    """The pace keys of the platforms the person's browser search met a checkpoint on within
+    its pause, as the search stores it: per person and platform, in her sweeps' history
+    (opportunities/platforms/guard.py, `checkpoint_at` and PAUSE)."""
+    from app.browser import platform_policy
+    from app.opportunities.platforms import guard
+
+    paused = set()
+    for kind in sorted(guard.KINDS):
+        met = guard.checkpoint_at(db, user_id, kind)
+        if met is not None and met + guard.PAUSE > now:
+            paused.add(platform_policy.pace_key(kind, ""))
+    return paused
+
+
 def due(db: Session, user_id: uuid.UUID, now: datetime, bounds: Bounds) -> list[Any]:
     """The person's open postings a check may ask, in the order they are asked (module
     docstring): their id and address."""
@@ -263,10 +282,15 @@ def plan(
         if room <= 0:
             continue
         picks: list[Pick] = []
+        paused: set[str] | None = None
         for row in due(db, person, now, bounds):
             host = host_key(row.url)
             if not host or host in taken or row.id in unstored:
                 continue
+            if host.startswith(PLATFORM_KEY):
+                paused = paused_platforms(db, person, now) if paused is None else paused
+                if host in paused:
+                    continue
             taken.add(host)
             picks.append(Pick(person, row.id, row.url, host))
             if len(picks) >= room:
