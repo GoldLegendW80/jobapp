@@ -152,8 +152,20 @@ def start_at(
     holds the person's run lock (runs.lock_user)."""
     own = last_wait(db, run.id)
     others = _last_steps(db, run.user_id, run.id)
-    retry = own is not None and own[1].get("reason") == BUSY
-    cooling = retry or (paced and any(data.get("reason") == BUSY for _, data in others))
+    # Refused runs only: a run once held behind one is not a refused one itself.
+    refused = db.scalar(
+        sa.select(sa.func.count())
+        .select_from(AgentEvent)
+        .join(AgentRun, AgentRun.id == AgentEvent.run_id)
+        .where(
+            AgentRun.user_id == run.user_id,
+            AgentRun.status == RunStatus.queued,
+            AgentEvent.kind == WAITING,
+            AgentEvent.data["retry"].astext == "refused",
+            sa.or_(AgentRun.id == run.id, sa.literal(paced)),
+        )
+    )
+    cooling = bool(refused)
     if cooling:
         running = db.scalar(
             sa.select(sa.func.count())
