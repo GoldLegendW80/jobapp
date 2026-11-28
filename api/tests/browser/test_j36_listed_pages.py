@@ -389,6 +389,108 @@ def test_what_a_page_answers(status, landed, snapshot, title, platform, expected
     assert (closed is not None) == (expected == "gone")
 
 
+ID = job(12345)
+HTTP = ID.replace("https://", "http://")
+SLUG = ID + "-robot-welder"
+WWW = ID.replace("//", "//www.")
+OTHER_POSTING = posting("Robot Painter")
+LONG_LIST = '- heading "Robot jobs in Paris" [level=1]\n' + cards(6, snippet=BODY[13:200])
+# A page the app landed on after a redirect: (asked, landed, snapshot, title, verdict). It is
+# read only on the posting's id kept as a whole piece of the landed path, and on the page's one
+# level 1 heading holding the whole title (review of PR 864, round 4, follow up 1).
+REDIRECTS = [
+    (HTTP, ID, posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, WWW, posting("Robot Welder"), "Robot Welder", "read"),
+    (WWW, ID, posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, ID + "/", posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, ID + "-robot-welder", posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, START + "jobs/robot-welder-12345", posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, START + "fr/jobs/12345", posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, ID + "?utm_source=x&gclid=1", posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, SLUG + "/?utm_medium=y", posting("Robot Welder"), "Robot Welder", "read"),
+    (ID, SLUG, posting("ROBOT  WELDER H/F"), "Robot Welder", "read"),  # folded as title_on
+    (ID, SLUG, posting("Senior Robot Welder (Stage)"), "Robot Welder", "read"),
+    (
+        START + "job?id=123456",
+        START + "job?id=123456&view=2",
+        posting("Robot Welder"),
+        "Robot Welder",
+        "read",
+    ),  # the id kept by its own parameter, on the same path
+    (
+        START + "job?id=123456",
+        START.replace("https://", "http://") + "job?id=123456",
+        posting("Robot Welder"),
+        "Robot Welder",
+        "read",
+    ),  # the id in the same parameter
+    # The two measured cases of the review: another posting by a short id, and a list at an
+    # address that keeps the id in its query.
+    (START + "job?id=42", START + "job?id=43", OTHER_POSTING, "Robot Welder", "unread"),
+    (ID, START + "jobs?expired=12345", LONG_LIST, "Robot Welder", "unread"),
+    (ID, START + "jobs?expired=12345", posting("Robot Welder"), "Robot Welder", "unread"),
+    (ID, START + "jobs/123456", OTHER_POSTING, "Robot Welder", "unread"),  # a longer number
+    (ID, START + "jobs/123456", posting("Robot Welder"), "Robot Welder", "unread"),
+    (ID, START + "jobs/12345678-robot-welder", posting("Robot Welder"), "Robot Welder", "unread"),
+    (ID, START, HOME_PAGE + "\n" + BODY, "Robot Welder", "unread"),
+    (ID, START + "search?q=robot+welder", HEADED_LIST, "Robot Welder", "unread"),
+    (ID, START + "jobs/54321", posting("Robot Welder"), "Robot Welder", "unread"),  # no id
+    # The id is kept but the page's one level 1 heading does not hold the whole title.
+    (ID, SLUG, posting("Robot Arm Engineer"), "Robot Welder", "unread"),  # one shared word
+    (ID, SLUG, posting("Robot"), "Robot Welder", "unread"),
+    (ID, SLUG, posting("Welder"), "Robot Welder", "unread"),
+    (ID, SLUG, posting("Robot Painter"), "Robot Welder", "unread"),
+    (
+        ID,
+        SLUG,
+        posting("Robot Welder").replace("[level=1]", "[level=2]"),
+        "Robot Welder",
+        "unread",
+    ),  # a title in a level 2 heading
+    (ID, SLUG, posting("Example Painter"), "Robot Welder", "unread"),
+]
+
+
+@pytest.mark.parametrize(("asked", "landed", "snapshot", "title", "expected"), REDIRECTS)
+def test_a_redirect_is_read_only_on_the_id_and_the_whole_title(
+    asked, landed, snapshot, title, expected
+) -> None:
+    page = page_of(landed, snapshot)
+    opened = finder.AppOpen(landed, 200, True, True, True)
+    found, _ = listed_pages.verdict(opened, asked, page, snapshot, title, "custom")
+    assert found == expected
+
+
+def test_a_page_at_the_address_asked_for_keeps_the_rule_of_the_address() -> None:
+    """No redirect: a primary heading sharing one meaningful word with the title is still read
+    (declared)."""
+    snapshot = posting("Robot Arm Engineer")
+    opened = finder.AppOpen(ID, 200, True, True, True)
+    found, _ = listed_pages.verdict(opened, ID, page_of(ID, snapshot), snapshot, "Robot Welder",
+                                    "custom")  # fmt: skip
+    assert found == "read"
+
+
+def test_a_redirect_that_writes_another_pages_text_stores_nothing(monkeypatch) -> None:
+    """Round 4, follow up 1, measured: a posting by a short query id redirected to another
+    posting's page, and one redirected to a list at an address keeping its id in its query,
+    were read; now each is a failed reading, never a text nor a new address."""
+    by_id, expired = job(12345), START + "jobs?expired=12345"
+    short, other = START + "job?id=42", START + "job?id=43"
+    board = Board(
+        {expired: LONG_LIST, other: OTHER_POSTING},
+        redirects={by_id: expired, short: other},
+    )
+    held = [
+        sweep.Listed(uuid.UUID(int=n), url, "Robot Welder", "Example Robotics", "Paris")
+        for n, url in ((1, by_id), (2, short))
+    ]
+    done, commits, _ = phase(monkeypatch, board, held)
+    assert [(p.job_id.int, p.outcome) for p in commits.saved] == [(1, "unread"), (2, "unread")]
+    assert all(p.finding is None for p in commits.saved)
+    assert (done["read"], done["unread"], done["ended"]) == (0, 2, "done")
+
+
 def test_a_list_the_session_read_is_never_read_as_the_posting() -> None:
     """Round 2, item 1: another address the session read before as a list is never the
     posting's page; its own address, which the session counts a list for its header and footer

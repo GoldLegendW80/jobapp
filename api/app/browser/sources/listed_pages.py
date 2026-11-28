@@ -30,6 +30,12 @@ another posting or a search) that shows its title as B21 judges a page it opens 
 search's own store (sweep._page_read, service.page_text), the person's exclusions and never apply
 rules met as there. Nothing reads the page's shape: a list of results served at the posting's own
 address whose heading holds its title is read as the posting, as B27 reads it for a report.
+A page the app landed on at another address than the one asked for (beyond what
+`same_posting` reads as one address: a tracking parameter, a trailing slash) is read only when,
+besides, the asked address's posting id (five digits or more, or a UUID) stands in the landed
+path as a whole piece of it and the page's one level 1 heading holds the whole title
+(`finder.primary_holds`): a redirect to another posting, a list or a search that shares a word
+or the id in its query is a failed reading.
 Anything else is a failed reading, written once a day, and after service.PAGE_TRIES_DAYS such
 days the posting is no longer tried. When no tab of its own could be made, nothing is stored and
 the reading ends (`no_tab`).
@@ -52,8 +58,10 @@ import asyncio
 import dataclasses
 import functools
 import logging
+import re
 from collections.abc import Callable, Collection
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 from app.browser import finder, platform_policy, same_posting
 from app.browser.leases import StoreUnavailableError
@@ -63,6 +71,8 @@ from app.jobs import liveness, service, sweep
 logger = logging.getLogger("app.browser.sources.listed_pages")
 
 READ, GONE, WALLED, UNREAD = "read", "gone", "walled", "unread"
+# A posting's id in an address, as liveness.own_page reads it: a UUID or five digits or more.
+_ID_TOKEN = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{5,}")
 NO_PAGE = "no_page"  # a page that did not load: held
 HELD_MAX = 3  # pages in a row that did not load: the website's pages do not load
 WALLS_MAX = 2  # walls with no other answer between them: the website itself is walled
@@ -95,6 +105,28 @@ def own_page(requested: str, landed: str, lists: Collection[str] = ()) -> bool:
     )
 
 
+def _id_kept(requested: str, landed: str) -> bool:
+    """Whether the posting id of the asked address (`liveness`'s id, if it carries one) stands
+    in the landed address as a whole piece of its path: between slashes, or at an end of a
+    slug after or before a dash, never inside a longer number or only in its query. An id that
+    sits in a query parameter of the asked address is kept by the same parameter with the
+    same value on the same path. Fails closed."""
+    try:
+        asked, now = urlsplit(requested), urlsplit(landed)
+    except ValueError:
+        return False
+    ids = _ID_TOKEN.findall(f"{asked.path}?{asked.query}".casefold())
+    if not ids:
+        return True
+    one = ids[-1]
+    if re.search(rf"(?<![0-9a-z]){re.escape(one)}(?![0-9a-z])", now.path.casefold()):
+        return True
+    return asked.path.rstrip("/").casefold() == now.path.rstrip("/").casefold() and bool(
+        {name for name, value in parse_qsl(asked.query) if value.casefold() == one}
+        & {name for name, value in parse_qsl(now.query) if value.casefold() == one}
+    )
+
+
 def verdict(
     opened: finder.AppOpen,
     requested: str,
@@ -110,7 +142,8 @@ def verdict(
     liveness finding that closes it), WALLED or UNREAD. READ only on the posting's own page
     (`own_page`, `lists` the session's before the open), no wall whatever its headings hold, and
     with its title on it as B21 judges a page it opens for a report (`finder.title_on`, the rule
-    of FinderSession.page_finding); only the liveness rule's `closed` closes it. Fails closed."""
+    of FinderSession.page_finding; after a redirect, `_id_kept` and `finder.primary_holds`
+    too); only the liveness rule's `closed` closes it. Fails closed."""
     if not opened.landed or opened.odd_status or (opened.status or 0) >= 500:
         return NO_PAGE, None
     if opened.status in WALLED_STATUSES or platform_policy.wall(
@@ -130,6 +163,10 @@ def verdict(
         return UNREAD, None
     if len(" ".join(page.text.split())) < service.TEXT_MIN_CHARS:
         return NO_PAGE, None
+    if same_posting.posting_key(opened.landed) != same_posting.posting_key(requested) and not (
+        _id_kept(requested, opened.landed) and finder.primary_holds(page, title)
+    ):
+        return UNREAD, None  # a redirect: the page's one level 1 heading holds the whole title
     return (READ if finder.title_on(page, title) is not None else UNREAD), None
 
 

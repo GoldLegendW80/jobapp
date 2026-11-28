@@ -1286,6 +1286,17 @@ def _on_page(text: str, page: PageRead) -> bool:
     return bool(words) and f" {words} " in page.words
 
 
+def primary_holds(page: PageRead, title: str) -> bool:
+    """Whether the page's one level 1 heading (`PageRead.primary`) holds the whole title as a
+    sequence of whole words, the folding of `title_on` (a gender marker at its end aside)."""
+    words = _words(title)
+    bare = _words(_bare(title))
+    if not words or not bare:
+        return False
+    held = page.heading((words,) if bare == words else (words, bare), equal=False)
+    return held is not None and held < page.primary_heads
+
+
 def title_on(page: PageRead, title: str) -> tuple[str, str] | None:
     """The title a reported posting is stored with, and the rule that accepted it (B21), always
     as the page shows it and never shorter than what the page says, so the unwanted titles and
