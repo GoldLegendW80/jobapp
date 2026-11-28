@@ -264,6 +264,9 @@ class Job(Base):
     # Jobs J35 (migration 0053, app/jobs/languages.py): the languages the posting asks for, as the
     # posting reader read them, `{"written_in", "asked"}`; null until the reader read it since.
     languages: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
+    # Jobs J38 (migration 0055, app/jobs/match.py): how the posting matches the person's career
+    # and culture, as a model read it, and that rating's attempts; null until a rating took it.
+    match: Mapped[dict[str, Any] | None] = mapped_column(pg.JSONB)
     search: Mapped[Any] = mapped_column(
         pg.TSVECTOR, sa.Computed(SEARCH_EXPRESSION, persisted=True), deferred=True
     )

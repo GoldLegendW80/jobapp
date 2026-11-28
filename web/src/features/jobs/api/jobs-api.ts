@@ -83,6 +83,11 @@ export const jobListItemSchema = z.object({
     .nullable()
     .default(null),
   languages_missing: z.array(z.string()).default([]),
+  // Jobs J38: the career and culture scores of the posting's reading (null: none yet), and their
+  // blend with the fit. Served only: no screen shows them yet. Absent from an older api.
+  match_career: z.number().int().nullable().default(null),
+  match_culture: z.number().int().nullable().default(null),
+  blend: z.number().int().nullable().default(null),
 });
 export type JobListItem = z.infer<typeof jobListItemSchema>;
 
@@ -131,6 +136,18 @@ export const jobDetailSchema = jobListItemSchema.extend({
   events: z.array(jobEventSchema),
   events_total: z.number().int().nonnegative(),
   notices: noticesSchema.optional(),
+  // Jobs J38: the whole reading; `current` is false once the posting's text changed since.
+  match: z
+    .object({
+      career: z.number().int(),
+      culture: z.number().int(),
+      strengths: z.array(z.string()),
+      gaps: z.array(z.string()),
+      rated_at: z.string(),
+      current: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
 export type JobDetail = z.infer<typeof jobDetailSchema>;
 

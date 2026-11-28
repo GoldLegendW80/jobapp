@@ -145,6 +145,10 @@ class Settings(BaseSettings):
     jobs_liveness_checks_per_tick: int = Field(default=10, ge=0, le=20)
     jobs_liveness_host_rest_hours: int = Field(default=24, ge=1, le=168)
     jobs_liveness_again_days: int = Field(default=7, ge=1, le=90)
+    # Jobs J38 (app/jobs/match.py): the least fit a posting needs for its career and culture
+    # reading, and the postings given to that reading in 24 hours per person (0: none).
+    jobs_match_daily_max: int = Field(default=200, ge=0, le=10_000)
+    jobs_match_fit_floor: int = Field(default=50, ge=0, le=100)
     # Documents (SPEC-documents.md, app/documents/). Every setting of the module, added at once
     # by task D2 so that no later task edits this file. A render: its wall time in seconds, the
     # renders one renderer process runs at once, the largest PDF kept.

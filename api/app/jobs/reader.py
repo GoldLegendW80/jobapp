@@ -1248,12 +1248,17 @@ def start_backlog(db: Session, now: datetime) -> list[uuid.UUID]:
     """The runs of the backlog to queue now (module docstring), once every ended run is
     settled (`settle_ended`): none while BACKLOG_RUNS of the reader are queued or running; else
     one batch of the person whose last reading run is the oldest, among those with a posting to
-    read, a credential, no reading run, no sweep running and no pause (`paused`). The caller
-    commits, then queues them."""
+    read, a credential, no reading run, no sweep running and no pause (`paused`); with none,
+    the read again (`_reread`), then a batch of the career and culture reading (jobs J38,
+    match.py `start`), whose runs count in BACKLOG_RUNS too. The caller commits, then queues
+    them."""
+    from app.jobs import match
+
     # One tick at a time decides, whatever the number of workers.
     db.execute(sa.select(sa.func.pg_advisory_xact_lock(0x6A6F_6252_6561_64)))
     settle_ended(db)
-    if (db.scalar(_active()) or 0) >= BACKLOG_RUNS:
+    match.settle_ended(db)
+    if (db.scalar(_active()) or 0) + match.active(db) >= BACKLOG_RUNS:
         return []
     last = (
         sa.select(sa.func.max(AgentRun.created_at))
@@ -1283,7 +1288,7 @@ def start_backlog(db: Session, now: datetime) -> list[uuid.UUID]:
         )
         if not isinstance(made, str):
             return [made[0]]
-    return _reread(db, now)
+    return _reread(db, now) or match.start(db, now)
 
 
 def _rereads_allowed(db: Session, user_id: uuid.UUID, now: datetime) -> bool:
@@ -1355,8 +1360,11 @@ def _reread(db: Session, now: datetime) -> list[uuid.UUID]:
 
 
 def _queue_down(db: Session, run_id: uuid.UUID, now: datetime) -> None:
+    from app.jobs import match
+
     if runs.fail_queued(db, run_id, runs.QUEUE_DOWN, now):
         settle(db, run_id)
+        match.settle(db, run_id)
 
 
 async def tick(ctx: dict[str, Any]) -> int:

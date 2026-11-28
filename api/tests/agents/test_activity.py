@@ -216,6 +216,7 @@ RECORDING = {
     "app/documents/offer_notes.py": {("offer_letter", "notes_chat"), ("offer_letter", "offer")},
     "app/ingestion/engine.py": {("fill_profile", "read"), ("fill_profile", "onboarding_read")},
     "app/jobs/assess_router.py": {("assess", "assess")},
+    "app/jobs/match.py": {("posting_rating", "backlog")},
     "app/jobs/reader.py": {("posting_reading", "backlog")},
     "app/jobs/sweep.py": {
         ("job_search", "onboarding"),
