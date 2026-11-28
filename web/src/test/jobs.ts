@@ -54,6 +54,9 @@ export function makeJob(
     page_elsewhere: false,
     languages: null,
     languages_missing: [],
+    match_career: null,
+    match_culture: null,
+    blend: null,
     ...overrides,
   };
 }

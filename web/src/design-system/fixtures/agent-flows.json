@@ -85,6 +85,15 @@
           "group": ""
         },
         {
+          "id": "jobs_match",
+          "kind": "agent",
+          "label": "Career and culture reader",
+          "column": 2,
+          "row": 3,
+          "note": "",
+          "group": ""
+        },
+        {
           "id": "help",
           "kind": "person",
           "label": "Let the assistant continue",
@@ -168,6 +177,16 @@
           "from": "posting_reader",
           "to": "postings",
           "label": "fills facts and text"
+        },
+        {
+          "from": "backlog",
+          "to": "jobs_match",
+          "label": "then rates the read ones"
+        },
+        {
+          "from": "jobs_match",
+          "to": "postings",
+          "label": "stores career and culture"
         }
       ]
     },
@@ -1550,6 +1569,16 @@
       "model": "claude-opus-5-5",
       "internal": true,
       "private_io": false,
+      "test_only": false
+    },
+    {
+      "name": "jobs_match",
+      "category": "finding",
+      "description": "Reads how each posting matches the career and the culture your profile states, ten at a time, and stores two scores with its strengths and gaps.",
+      "module": "app.jobs.match",
+      "model": "claude-sonnet-5-5",
+      "internal": true,
+      "private_io": true,
       "test_only": false
     },
     {
