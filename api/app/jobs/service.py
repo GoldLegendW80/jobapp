@@ -31,6 +31,7 @@ from app.jobs import criteria_badge, scoring, searches, signals
 from app.jobs import slug as slugs
 from app.jobs import undo as undo_tokens
 from app.jobs.models import (
+    VISIBLE_COLUMNS,
     ContractType,
     FileOrigin,
     Job,
@@ -48,6 +49,7 @@ from app.jobs.models import (
 from app.jobs.never_apply import NeverApplyRule
 from app.jobs.schemas import ImportFile, ImportJob
 from app.jobs.scoring import ScoreResult
+from app.jobs.visible_text import visible
 from app.profile import matching
 from app.profile.models import Profile
 from app.profile.schemas import SearchSection, SkillsSection
@@ -240,6 +242,7 @@ def page_text(
     is scored again (a fit the person set stays), the fit event `via` the text's source. Writes
     `event` first, then the others; the caller sets `updated_at` and flushes. Returns whether
     `rule` skipped it."""
+    text = visible(text)
     events = [event]
     note, why = (rule.text, "never_apply") if rule is not None else (excluded, "unwanted")
     skipped = False
@@ -334,7 +337,7 @@ def set_listed_text(
     `text_too_short`) or a posting no longer seen in a list (409, `page_read`: a search read
     its page meanwhile), SearchUnreadableError when its search no longer reads; nothing is
     written then."""
-    text = text.strip()
+    text = visible(text).strip()
     if len(" ".join(text.split())) < TEXT_MIN_CHARS:
         raise TextRefusedError("text_too_short", TEXT_SHORT, 422)
     job = lock_job(db, user_id, job_id)
@@ -734,6 +737,14 @@ class NewJob:
     published_on: date | None = None
     notes: str = ""
     legacy: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # Jobs J39: what create_job and its callers derive (the slug, the duplicate, the signals,
+        # the fit) reads the texts as they are stored.
+        for name in VISIBLE_COLUMNS:
+            value = getattr(self, name)
+            if isinstance(value, str):
+                setattr(self, name, visible(value))
 
 
 def create_job(db: Session, user_id: uuid.UUID, new: NewJob, now: datetime) -> Job:
@@ -1348,6 +1359,17 @@ def _update_imported(
     summary.files_replaced += len(replaced)
 
 
+def _visible_item(item: ImportJob) -> ImportJob:
+    """Jobs J39: the row's texts as they are stored, so its match, its fit and its changes read
+    them; a row with nothing to drop is the same object."""
+    changed = {
+        name: visible(value)
+        for name in VISIBLE_COLUMNS
+        if isinstance(value := getattr(item, name), str) and visible(value) != value
+    }
+    return item.model_copy(update=changed) if changed else item
+
+
 def import_jobs(
     db: Session, user_id: uuid.UUID, items: Sequence[ImportJob], now: datetime
 ) -> ImportSummary:
@@ -1372,7 +1394,7 @@ def import_jobs(
     index = _Index(db, user_id)
     skills = user_skills(db, user_id)
     summary.fits_checked = skills is not None
-    for item in items:
+    for item in map(_visible_item, items):
         job = index.match(item)
         owner = index.by_url.get(item.url) if item.url else None
         if owner is not None and owner is not job:

@@ -59,6 +59,7 @@ from app.jobs.models import (
     PayPeriod,
     WorkMode,
 )
+from app.jobs.visible_text import visible
 from app.profile.schemas import CURRENCIES, SCHEDULE_TIMES_MAX, Text
 
 IMPORT_FORMAT = "jobapp-jobs"
@@ -559,7 +560,8 @@ PATCH_NULLABLE = frozenset({"updated_at", "fit", "url", "pay", "work_mode"})
 
 
 def _clean_line(value: str) -> str:
-    return " ".join(value.split())
+    # Jobs J39: as the line is stored, so a line of invisible characters alone is an empty one.
+    return " ".join(visible(value).split())
 
 
 def _http_url(value: str | None) -> str | None:
@@ -765,7 +767,7 @@ class JobCreateIn(BaseModel):
     def _text(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        value = value.replace("\r\n", "\n").strip()
+        value = visible(value).replace("\r\n", "\n").strip()
         return value or None
 
 

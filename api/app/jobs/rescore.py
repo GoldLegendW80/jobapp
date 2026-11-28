@@ -25,6 +25,9 @@ asked, one person after the other, and never two rescores of one person at once:
    saved during the run asked for a later revision: the next tick claims it, so it runs once more
    after it, and the changes saved meanwhile make that one run.
 
+After the rescores asked for, each tick gives the pass over the postings stored before jobs J39
+its slice (app/jobs/visible_pass.py): their texts as a reader sees them, with nobody's click.
+
 A profile whose skills section is missing or no longer validates scores nothing (outcome
 `no_skills`); a run that raises is logged and done with `failed`, so it is not tried every tick
 ("Rescore all postings" in Jobs stays). No document is written because of a rescore: documents
@@ -44,7 +47,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.jobs import service
+from app.jobs import service, visible_pass
 from app.jobs.models import JobRescore
 from app.profile import service as profile_service
 from app.profile.schemas import DocumentsGeneration
@@ -224,6 +227,10 @@ def tick(
                 **{k: v for k, v in outcome.items() if isinstance(v, int)},
             },
         )
+    try:
+        visible_pass.step(sessions)
+    except Exception:
+        logger.exception("jobs.visible_pass.failed")
     return done
 
 

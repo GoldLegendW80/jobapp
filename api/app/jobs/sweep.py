@@ -130,6 +130,7 @@ from app.jobs.models import (
     SweepTrigger,
 )
 from app.jobs.never_apply import NeverApplyRule
+from app.jobs.visible_text import visible
 from app.opportunities import pay as pays
 from app.profile import matching
 from app.profile.models import Profile
@@ -1708,9 +1709,31 @@ def discovery_date(finding: Any) -> str:
     return "approximate" if finding.evidence.get("date_shown") else "unknown"
 
 
+class _Seen:
+    """Jobs J39: a source's finding with its title, company, place and text as a reader sees
+    them (app/jobs/visible_text.py), so its keys, rules, score and signals read what is stored;
+    every other attribute is the finding's own."""
+
+    def __init__(self, finding: Any) -> None:
+        self._finding = finding
+        self.title = visible(finding.title)
+        self.company = visible(finding.company) if finding.company else finding.company
+        self.location = visible(finding.location)
+        self.text = visible(finding.text)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._finding, name)
+
+
+def seen(finding: Any) -> Any:
+    """The finding as every source's store reads it (`_Seen`)."""
+    return finding if isinstance(finding, _Seen) else _Seen(finding)
+
+
 def _read_of(finding: Any) -> tuple[Posting, str, Any, ContractType | None, bool]:
     """A verified finding as the store reads it: the posting, its company, the cleaned title
     (`posting_titles.clean`), its contract and whether a word states it."""
+    finding = seen(finding)
     # Jobs J25: the title without gender markers, board boilerplate and (J26) contract markers,
     # the company it names when none is stated; the title as shown stays in the posting's text.
     cleaned = posting_titles.clean(finding.title, finding.company, finding.location)
@@ -1745,6 +1768,7 @@ def _store_finding(
 ) -> None:  # fmt: skip
     """Store one verified finding; with `set_aside` (the exclusion of the person's that set its
     page aside before the store), only the page read of a posting kept from a card (J31)."""
+    finding = seen(finding)
     posting, company, cleaned, contract, stated = _read_of(finding)
     key = slugs.PostingKey.of(company, posting.title, posting.location, posting.url)
     cross = posting_titles.cross_key(company, posting.title, posting.location)

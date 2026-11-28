@@ -13,6 +13,13 @@ the last page read are not read in this sweep, the entry says so (outcome `parti
 cursor does not move, so the next sweep pages back to the same point again rather than skipping
 what this one could not reach. Postings of that gap that are still newer than `search.days`
 are read once a sweep reaches them within its pages.
+
+Jobs J39 (issue #877): some answers hold their description's HTML escaped twice ("&lt;p&gt;",
+"&amp;nbsp;"). The conversion (`plain_text`) reads the entities once, so the tags came out as
+words and were stored as such. `text_of` converts such a text once more: a text the conversion
+gave that still holds a tag the conversion turns into a line break (`_Text.BLOCKS`: `<p>`,
+`</li>`, `<br/>`). The pass over old postings (app/jobs/visible_pass.py) repairs this feed's
+stored texts by the same rule (`again`), and only theirs (`is_its`).
 """
 
 import re
@@ -27,12 +34,15 @@ from app.jobs.feeds import (
     FeedError,
     Fetched,
     Finding,
+    _Text,
     epoch,
     line,
     plain_text,
 )
 from app.jobs.models import ContractType
+from app.jobs.sweep import noted_sources
 
+NAME = "arbeitnow"
 API = "https://www.arbeitnow.com/api/job-board-api"
 PAGES = 10  # about five days of postings on 2026-10-30
 # Its postings live on its country sites (www.arbeitnow.com, .co.uk, .ch, .nl, .fr seen on
@@ -42,6 +52,9 @@ HOST = re.compile(r"(?:www\.)?arbeitnow\.(?:com|co\.uk|[a-z]{2})")
 # The cursor's overlap: a posting stamped a little before the previous run's newest one still
 # reads (the addresses dedupe what was stored).
 OVERLAP = timedelta(hours=1)
+
+# A start or end tag the conversion turns into a line break, left in a text it gave.
+UNCONVERTED = re.compile(rf"</?(?:{'|'.join(sorted(_Text.BLOCKS))})\b[^<>]*>", re.IGNORECASE)
 
 # Its `job_types` words (English and German), mapped where the contract is clear.
 CONTRACTS: tuple[tuple[tuple[str, ...], ContractType], ...] = (
@@ -62,6 +75,23 @@ def contract_of(types: object) -> ContractType | None:
         if any(needle in words for needle in needles):
             return contract
     return None
+
+
+def again(text: str) -> str:
+    """A text the conversion gave, converted once more when it still holds UNCONVERTED tags
+    (the answer's HTML was escaped twice), else as it is."""
+    return plain_text(text) if UNCONVERTED.search(text) else text
+
+
+def text_of(description: object) -> str:
+    """A posting's text: its description's HTML converted as every feed's is, then `again`."""
+    return again(plain_text(description))
+
+
+def is_its(source: str | None) -> bool:
+    """Whether a stored posting came from this feed: the first source that stored it."""
+    names = noted_sources(source)
+    return bool(names) and names[0] == NAME
 
 
 def address_of(value: object) -> str | None:
@@ -88,13 +118,13 @@ def finding_of(item: Any, now: datetime) -> Finding | None:
     if remote:
         location = f"{location}, Remote" if location else "Remote"
     return Finding(
-        source="arbeitnow",
+        source=NAME,
         external_id=slug,
         title=title,
         company=line(item.get("company_name")) or None,
         location=location,
         url=url,
-        text=plain_text(item.get("description")),
+        text=text_of(item.get("description")),
         posted_at=epoch(item.get("created_at")),
         remote=remote or None,
         contract=contract_of(item.get("job_types")),
@@ -103,7 +133,7 @@ def finding_of(item: Any, now: datetime) -> Finding | None:
 
 
 class Arbeitnow:
-    name = "arbeitnow"
+    name = NAME
     host = "www.arbeitnow.com"
     budget = PAGES
     needs_key = False
