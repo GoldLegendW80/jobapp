@@ -643,3 +643,38 @@ Owner, 2026-11-26, issue #853; branch `browser/B31-report-keeps-what-it-saw`. De
 6. The check on an id the script's code writes is literal: a computed id (`jobId: 4012345677 + 1`, `jk: (0x63).toString(16).padStart(16, '0')`) becomes a card, as a computed link already does (J31's `_written`). For Indeed a made up id's page answers 404 and its card is refused; past the 20 opens, and in `report_listing`, the card alone keeps it, as for J31.
 7. `?id=a+b` and `?id=a%2Bb` give one key although a server reads them apart: harmless, the app opens or stores the spelling it saw. The store reads the query as the rule does, so `?q=a+b` and `?q=a%20b`, one address for its `url_key` before, are two there now.
 8. The plan of a report's opens cannot foresee an open that lands on the page of a posting reported later (a redirect), nor a stop: a posting with a card before that open or that stop may already have been kept from its card while the later one then needs no open or gets none; the plan is made again after each open, so the postings after it are planned right (`test_the_opens_are_planned_again_after_each_open`).
+
+### B32: a posting's page with a header and a footer is not a list
+
+Found by the reviews of #864, issue #865 (plan #856, row 1), in production since B31 (#854); branch `browser/B32-posting-page-is-no-list`. Decisions: "The search reports what fits the profile" (B21), "The agent writes code on the page" (B27) and "A posting seen only in a list" (J31) in [decisions](../../docs/decisions.md) (Interactive job search); spec: [SPEC-browser, Interactive discovery](../../SPEC-browser.md#interactive-discovery-626), "A posting's page is no list".
+
+**The defect.** `FinderSession._note_cards` makes a list of any page that showed `LIST_CARDS_MIN` (5) links with words (J31), and a real posting page holds that many in its header, navigation and footer alone. `_own_page` and `_card` read such a page as a list: a posting reported under the spelling the list showed (tracking parameters) after its page was read under another was opened again (one of the 20 opens of a report), and kept from its card when that open failed (the mention, the card's text, the tracking address) although its page was read. It never picked a wrong posting. The fakes of the tests held no links. From the review of #854: the store's key read a board's posting spelled with http and with https as two (`slug.posting_url_key`).
+
+**Acceptance (#865):**
+1. A page read at the posting's own address is the posting's page whatever links it holds: `_own_page` and `_card` no longer take it for a list; a search address and a page of results stay lists.
+2. The fake posting pages of the B21, B27, B31 and J31 tests look like real ones (J36's `posting()`).
+3. A test through a report: read under one spelling, reported under the list's: no second open, a full posting stored, no mention.
+4. In the store's key, http on its default port reads as https, with a row in the store test.
+5. The whole `api/tests/browser` folder and the jobs tests of J31 and of keys.
+6. Docs: this section and one line in SPEC-browser.
+
+**The rule (table: `api/tests/browser/test_b32_posting_page_is_no_list.py`, `TABLE`).** `_own_page(url)` (a page read of the reported posting, `_same`: the same posting id of a board, else the same address once the trackers are left out) no longer reads `lists`: on a board, the board's page of the posting id (`posting_page`); elsewhere an address `route_of` reads as no search or listing page. An open of the reported spelling would read that same page, and `_verified` judges it by B21's title rule either way, so nothing more is kept, one open less. `_card` (report_listing, and the card that stands in for a page not read) still refuses a page of `lists` as `not_a_posting_page` unless `_posting_page_read`: on a board, the board's page of the posting id, whatever it shows; elsewhere a page read at an address `_own_page` takes whose one level 1 heading holds the whole reported title (`primary_holds`, never one shared word); such a page that shows the title answers `page_readable`. `route_of` still refuses a search address or a listing page's shape first.
+
+| Page read, 5 or more cards | report_listing at its address | read as the posting's page under another spelling |
+|---|---|---|
+| a search page (`/search?q=robot&l=paris`) | list, `not_a_posting_page` (`route_of`) | no (`route_of`) |
+| a page of results with 20 cards at another shape (`/s/robot-paris`) | list, `not_a_posting_page` | yes, judged by its title as an open would |
+| a company's page of 6 postings (`/c/example-robotics`) | list, `not_a_posting_page` | yes, judged by its title as an open would |
+| a page of results whose heading holds the title ("Robot Welder jobs in Paris") | `page_readable` (B21 reads such a page, as J36 declared) | yes |
+| a posting page with 8 similar postings | `page_readable` | yes, no second open |
+| a posting page whose address the list never showed | `page_readable` | yes |
+| a wall at the posting's address with a header and a footer, off a board | list, `not_a_posting_page` | yes (`title_not_on_page`) |
+| a board's page of the posting (`/jobs/view/<id>/`, `/viewjob?jk=`), a wall | its card stands in | yes |
+| a board's search or company page holding the id | the board's own address read instead | no (`posting_page`) |
+
+**As built:** `api/app/browser/finder.py`: `_own_page` without `lists`, `_posting_page_read`, `_card` reads `lists` through it. `api/app/jobs/slug.py`: `as_https`, read by `posting_url_key` (the session's rule is unchanged: http is another family there, `NOT_SAME`). Tests: `api/tests/browser/posting_pages.py` (J36's `HEADER`, `SIMILAR`, `FOOTER` and `posting`, moved, and `dressed`), the posting pages of `test_b21_verified.py`, `test_b27_code_first.py`, `test_b31_same_posting.py` and `test_j31_listing.py` dressed; `test_b32_posting_page_is_no_list.py` (through a report on Indeed, LinkedIn and a careers page; J36's `LAYOUTS`; the table; a list under a tracking spelling; a board's own page and a board's page holding the id; a made up address beside a page read); `api/tests/jobs/test_slug.py` (`test_the_stores_key_reads_http_on_its_default_port_as_https`). Red on main once the fakes were real: `test_b31_same_posting.py::test_a_page_already_read_wins_over_its_card_and_over_an_open` and `::test_the_opens_are_planned_again_after_each_open`, `test_j31_listing.py::test_a_page_read_that_shows_the_title_goes_to_report_postings` (this defect); `test_b21_verified.py::test_a_page_with_two_h1_accepts_the_title_found_in_its_text` (B21's declared open point 5: with no single detail, the text stored holds the page's other visible lines, the similar postings' too; its assertion now says so).
+
+**Declared open points:**
+1. Off a board, a wall answering 200 at the posting's own address with five links or more (a header and a footer) is still a list for `report_listing`: its card does not stand in. A wall answering 401, 403, 429 or 503 is no list (an error page's cards are not noted) and its card stands in as before.
+2. A list reported under a tracking spelling of a list read is now refused `not_a_posting_page` where B31 kept it from a card (`test_a_list_kept_from_a_card_under_another_spelling_stays_a_list`).
+3. A posting page off a board whose title is not in its one level 1 heading (no heading, two h1, the title in a div) and that shows five links or more answers `not_a_posting_page` to `report_listing` instead of `page_readable`; `report_postings` reads it as before.
