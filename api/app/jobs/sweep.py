@@ -1970,13 +1970,11 @@ def listed_postings(
     day: date,
 ) -> list[Listed]:
     """Jobs J36: the postings a website's reading of pages tries (`_listed`), in order: those of
-    `first` (the jobs this search stored or found again from a card, Known.carded), the oldest
-    first, then the others by `listed_key` of `day`, so the postings a reading holds at its end,
-    which are not stored, do not stand first again each day; at most LISTED_MAX of them."""
-    order: list[Any] = []
-    if first:
-        mine = Job.id.in_(sorted(first))
-        order += [sa.case((mine, 0), else_=1), sa.case((mine, Job.created_at))]
+    `first` (the jobs this search stored or found again from a card, Known.carded), then the
+    others, each group by `listed_key` of `day`, so the postings a reading holds at its end, which
+    are not stored, do not stand first again each day, those of this search (the likeliest to be
+    walled) included; at most LISTED_MAX of them."""
+    order: list[Any] = [sa.case((Job.id.in_(sorted(first)), 0), else_=1)] if first else []
     statement = _listed_rows(user_id, host).order_by(*order, listed_key(day), Job.id)
     picked: list[Listed] = []
     with sessions() as db:

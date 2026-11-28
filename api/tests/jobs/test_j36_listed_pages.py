@@ -379,7 +379,8 @@ def test_the_older_postings_are_tried_in_an_order_of_the_day(
     """Round 3, item 5: the pages a reading holds at its end are not stored, so the postings
     after this search's own are tried in an order the same all day long and another each day
     (the md5 of the day and the posting's id): no fixed set stands first for good. This
-    search's own stay first."""
+    search's own stay first, in that order too (round 4, follow up 2: they are the likeliest
+    to be walled, so a fixed order would end every reading at the same two)."""
     set_profile(factory, alice, search())
     titles = [f"GenAI engineer, team {name}" for name in "ABCDEFGH"]
     run(factory, new_sweep(factory, alice), *(card(t) for t in titles))
@@ -398,9 +399,13 @@ def test_the_older_postings_are_tried_in_an_order_of_the_day(
         assert order(day, set()) == order(day, set())
     assert len({order(day, set())[0] for day in days}) > 1
     mine = {ids[2], ids[5]}
-    picked = order(days[0], mine)
-    assert set(picked[:2]) == mine
-    assert picked[2:] == [i for i in order(days[0], set()) if i not in mine]
+    for day in days:  # this search's own first, in the order of the day too
+        picked = order(day, mine)
+        assert picked[:2] == sorted(mine, key=lambda i: day_key(day, i))
+        assert picked[2:] == [i for i in order(day, set()) if i not in mine]
+        assert order(day, mine) == picked
+    heads = {tuple(order(day, mine)[:2]) for day in days}
+    assert len(heads) > 1  # round 4, follow up 2: two walled ones never stand first for good
 
 
 def failed_before(factory: sessionmaker[Session], user: uuid.UUID, jobs: list[Job]) -> None:
