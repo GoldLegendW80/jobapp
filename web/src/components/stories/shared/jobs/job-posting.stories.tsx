@@ -10,7 +10,9 @@ import {
   fakePostingDetails,
   LONG_TITLE_POSTING,
   NO_PAY_NO_FIT_POSTING,
+  postingDetail,
 } from "@/design-system/fixtures/posting-details";
+import { MATCH } from "@/design-system/fixtures/posting-match";
 import {
   fakeJobFiles,
   WORKED_ON_POSTING,
@@ -83,6 +85,14 @@ export const WorkedOn: Story = {
   beforeEach: () => {
     fakeJobDetail(WORKED_ON_POSTING);
     fakeJobFiles();
+  },
+};
+
+/** The assistant's reading of the posting, under its text. */
+export const WithReading: Story = {
+  name: "With a career and culture reading",
+  beforeEach: () => {
+    fakeJobDetail({ ...postingDetail(POSTING_DETAIL), match: MATCH });
   },
 };
 

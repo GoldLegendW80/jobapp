@@ -30,6 +30,7 @@ import { PostingFacts } from "./posting-facts";
 import { PostingHeader } from "./posting-header";
 import { PostingHistory } from "./posting-history";
 import { PostingLiveness } from "./posting-liveness";
+import { PostingMatch } from "./posting-match";
 import { PostingNotices } from "./posting-notices";
 import { ListedNotice } from "./listed-notice";
 
@@ -123,6 +124,7 @@ function JobDetailView({
         }
       >
         <PostingContent job={job} link={link} />
+        <PostingMatch match={job.match} />
         <AssessmentDetails job={job} />
         <OfferNotesSection job={job} />
         <NotesEditor key={job.id} job={job} save={save} />
