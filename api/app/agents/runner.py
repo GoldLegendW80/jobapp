@@ -139,13 +139,14 @@ import uuid
 from collections import deque
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import sqlalchemy as sa
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
@@ -166,7 +167,7 @@ from claude_agent_sdk import (
 )
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.agents import chat, credentials, definitions, live, overrides, runs, sdk_options
+from app.agents import busy, chat, credentials, definitions, live, overrides, runs, sdk_options
 from app.agents import tools as app_tools
 from app.agents.backend import Backend, BackendFactory, BackendRequest
 from app.agents.crypto import DecryptError, Keyring
@@ -197,7 +198,7 @@ from app.agents.failures import (
 )
 from app.agents.failures import is_box_failure as is_box_failure
 from app.agents.failures import is_provider_failure as is_provider_failure
-from app.agents.models import CredentialKind, RunStatus
+from app.agents.models import AgentRun, CredentialKind, RunStatus
 from app.agents.sdk_options import ENV_KEEP as ENV_KEEP
 from app.agents.sdk_options import FORBIDDEN_TOOLS as FORBIDDEN_TOOLS
 from app.agents.sdk_options import TURN_BUDGETED as TURN_BUDGETED
@@ -1013,6 +1014,8 @@ class _State:
     web_search_passed: set[str] = field(default_factory=set)
     # Jobs J27: the follow up messages that continued the session (`_follow_up`).
     follow_ups: int = 0
+    # Agents A13: when Anthropic's rate limit event, refusing the run, said its limit resets.
+    resets_at: datetime | None = None
     # Jobs J27: every result of the run, one per query. Measured in Claude Code 2.1.286: a
     # result's `usage` and `num_turns` are its own query's, while `total_cost_usd` is the
     # session's total so far; the run's tokens and turns are the sums, its cost the last one.
@@ -1115,7 +1118,11 @@ async def _handle(message: Any, state: _State, recorder: Recorder) -> None:
                 {"model": data.get("model"), "tools": list(data.get("tools") or [])},
             )
     elif isinstance(message, RateLimitEvent):
-        await recorder.emit("rate_limit", {"status": message.rate_limit_info.status})
+        info = message.rate_limit_info
+        if info.status == "rejected" and isinstance(info.resets_at, int | float):
+            with contextlib.suppress(OverflowError, OSError, ValueError):
+                state.resets_at = datetime.fromtimestamp(info.resets_at, UTC)
+        await recorder.emit("rate_limit", {"status": info.status})
 
 
 def _int(value: Any) -> int:
@@ -1406,16 +1413,82 @@ async def _run_stream(
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
-def _claim(context: RunContext, run_id: uuid.UUID) -> tuple[Any, int] | None:
+@dataclass(frozen=True)
+class _Claimed:
+    run: Any
+    seq: int
+    refused: tuple[datetime, ...] = ()  # when Anthropic refused it as busy before (A13)
+
+
+@dataclass(frozen=True)
+class _Waits:
+    """How a run Anthropic refuses may wait (agents A13, `execute`)."""
+
+    may_wait: bool = False
+    paced: bool = False
+    until: datetime | None = None
+
+
+def _claim(context: RunContext, run_id: uuid.UUID, paced: bool) -> _Claimed | str | None:
+    """The run, now running; "waits" when `paced` and its turn among the person's starts on the
+    agents queue has not come (agents A13, `busy.start_at`: its `waiting` step is written); None
+    when it is not queued."""
     with context.sessions() as db:
-        run = runs.claim(db, run_id, context.clock())
+        now = context.clock()
+        refused = tuple(busy.refusals(db, run_id))
+        if paced:
+            user_id = db.scalar(
+                sa.select(AgentRun.user_id).where(
+                    AgentRun.id == run_id, AgentRun.status == RunStatus.queued
+                )
+            )
+            if user_id is None:
+                return None
+            runs.lock_user(db, user_id)
+            queued = db.get(AgentRun, run_id, populate_existing=True)
+            if queued is None or queued.status is not RunStatus.queued:
+                db.rollback()
+                return None
+            limits = busy.bounds(context.settings)
+            turn = busy.start_at(db, queued, now, limits)
+            if turn is not None:
+                step = busy.wait_step(busy.PACE, turn, "held", len(refused) + 1, limits, paced)
+                held = runs.hold_queued(db, run_id, step, now)
+                db.commit()
+                return "waits" if held else None
+        run = runs.claim(db, run_id, now)
         if run is None:
             db.rollback()
             return None
         seq = runs.next_seq(db, run_id)
-        runs.append_event(db, run_id, seq, "status", {"status": "running"}, context.clock())
+        runs.append_event(db, run_id, seq, "status", busy.running(paced), now)
         db.commit()
-        return run, seq + 1
+        return _Claimed(run, seq + 1, refused)
+
+
+def _wait_again(
+    context: RunContext,
+    run_id: uuid.UUID,
+    seq: int,
+    claimed: _Claimed,
+    state: _State,
+    how: _Waits,
+) -> datetime | None:
+    """A run Anthropic refused before it did anything goes back to `queued` with its `waiting`
+    step (agents A13); None when its tries or its time are used up, and it fails as before."""
+    now = context.clock()
+    limits = busy.bounds(context.settings)
+    provider = (state.resets_at - now).total_seconds() if state.resets_at is not None else None
+    at = busy.plan(claimed.refused, now, provider, limits, how.until)
+    if at is None:
+        return None
+    step = busy.wait_step(busy.BUSY, at, "refused", len(claimed.refused) + 2, limits, how.paced)
+    with context.sessions() as db:
+        if not runs.requeue(db, run_id, seq, step, now):
+            db.rollback()
+            return None
+        db.commit()
+    return at
 
 
 @dataclass(frozen=True)
@@ -1616,28 +1689,98 @@ def _mark_verified(context: RunContext, user_id: uuid.UUID, secret: _Secret) -> 
 
 
 async def execute(
-    context: RunContext, run_id: uuid.UUID, *, wall_time_max_s: float | None = None
+    context: RunContext,
+    run_id: uuid.UUID,
+    *,
+    wall_time_max_s: float | None = None,
+    may_wait: bool = False,
+    paced: bool = False,
+    wait_until: datetime | None = None,
 ) -> RunStatus | None:
     """Run one queued run to its end (module docstring). None when it was not queued.
+
+    `may_wait` (agents A13): the caller starts the run again when this answers `queued`, at the
+    time of its last `waiting` step: a run Anthropic refused as busy before it did anything then
+    waits instead of failing, for a try that starts by `wait_until` when it is given. `paced`:
+    the agents queue's own start, counted among the person's starts of the minute and waiting
+    its turn there.
 
     From the moment the credential is decrypted to the end of this call, it is replaced in
     every log record of the process, whoever logs (app/logging_config.py): the SDK, the HTTP
     client and the queue log on their own, outside the scrub of what the run stores."""
+    how = _Waits(may_wait, paced and may_wait, wait_until)
     with contextlib.ExitStack() as held:
-        return await _execute(context, run_id, held, wall_time_max_s)
+        return await _execute(context, run_id, held, wall_time_max_s, how)
+
+
+async def execute_waiting(
+    context: RunContext, run_id: uuid.UUID, until: datetime | None = None
+) -> RunStatus | None:
+    """`execute` for a caller that runs the agent in its own process and holds no browser lease
+    nor lock (the hiring panel): a run Anthropic refused before it did anything waits here,
+    `queued`, and starts again at its time, for a try that starts by `until` (the caller's own
+    bound), else it fails as before. None when it was not queued, or was cancelled while it
+    waited. Cancelled itself (the job ends) while the run waits: the run fails as stopped."""
+    try:
+        while True:
+            status = await execute(context, run_id, may_wait=True, wait_until=until)
+            if status is not RunStatus.queued:
+                return status
+            if not await _wait_turn(context, run_id):
+                return None
+    except asyncio.CancelledError:
+        # Whether it landed in the wait or in the end of a try that queued the run again.
+        with contextlib.suppress(Exception):
+            await asyncio.shield(asyncio.to_thread(_stop_waiting, context, run_id))
+        raise
+
+
+def _wait_until(context: RunContext, run_id: uuid.UUID) -> datetime | None:
+    """The time of a queued run's last `waiting` step; None when it no longer waits."""
+    with context.sessions() as db:
+        status = db.scalar(sa.select(AgentRun.status).where(AgentRun.id == run_id))
+        found = busy.last_wait(db, run_id) if status is RunStatus.queued else None
+    if found is None:
+        return None
+    try:
+        return datetime.fromisoformat(str(found[1].get("at")))
+    except ValueError:
+        return None
+
+
+async def _wait_turn(context: RunContext, run_id: uuid.UUID) -> bool:
+    """Wait for the run's time by the context's clock, looking every `cancel_poll_s` whether it
+    is still queued (a Cancel ends the wait at once). True once its time came."""
+    while True:
+        at = await asyncio.to_thread(_wait_until, context, run_id)
+        if at is None:
+            return False
+        if context.clock() >= at:
+            return True
+        await asyncio.sleep(context.cancel_poll_s)
+
+
+def _stop_waiting(context: RunContext, run_id: uuid.UUID) -> None:
+    with context.sessions() as db:
+        if runs.fail_queued(db, run_id, runs.STOPPED, context.clock()):
+            db.commit()
 
 
 async def _execute(
     context: RunContext,
     run_id: uuid.UUID,
     held: contextlib.ExitStack,
-    wall_time_max_s: float | None = None,
+    wall_time_max_s: float | None,
+    how: _Waits,
 ) -> RunStatus | None:
-    claimed = await asyncio.to_thread(_claim, context, run_id)
+    claimed = await asyncio.to_thread(_claim, context, run_id, how.paced)
     if claimed is None:
         logger.info("agent run skipped: not queued", extra={"run_id": str(run_id)})
         return None
-    run, seq = claimed
+    if isinstance(claimed, str):
+        logger.info("agent run waits its turn", extra={"run_id": str(run_id)})
+        return RunStatus.queued
+    run, seq = claimed.run, claimed.seq
     recorder = Recorder(context, run_id, seq)
     started = time.monotonic()
     state = _State()
@@ -1690,6 +1833,8 @@ async def _execute(
             prompt = definition.prompt(data, run.job_id)
         # The fake backend's stream may name what the definition says of this run (jobs J23).
         variables.update(definition.stream_variables(data))
+        # The fake's `before_try` and `from_try` (A13).
+        variables["try"] = str(len(claimed.refused) + 1)
         binding: Mapping[str, Any] | None = None
         if definition.bind is not None:
             # What the run works on, decided here, in code, before a tool or a model call.
@@ -1821,6 +1966,21 @@ async def _execute(
         finally:
             del options, request, prompt
         outcome = outcome_of(state, definition, stopped, model)
+        tokens = _tokens(state)
+        if (
+            how.may_wait
+            and outcome.error == BUSY
+            and busy.untouched(state.tool_calls, state.denied, state.text_blocks, *tokens)
+        ):
+            at = await asyncio.to_thread(
+                _wait_again, context, run_id, recorder.seq, claimed, state, how
+            )
+            if at is not None:
+                outcome = None  # not ended: the run is queued again, its end comes later
+                logger.info(
+                    "agent run waits: Anthropic busy", extra={**log, "until": at.isoformat()}
+                )
+                return RunStatus.queued
         if state.budget is not None and state.budget.unsure:
             logger.error("agent run stopped: its token count could not be confirmed", extra=log)
         if (

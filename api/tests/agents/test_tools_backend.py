@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from claude_agent_sdk import (
     AssistantMessage,
+    RateLimitEvent,
     ResultMessage,
     StreamEvent,
     SystemMessage,
@@ -100,6 +101,8 @@ def test_every_recorded_stream_parses(name: str) -> None:
     script = fake_backend.load(name)
     variables = {"model": "claude-opus-5-5", "session_id": "s", "message": "m", "job_id": "j"}
     allowed_keys = {"sleep", "message", "raise", "if_prompt", "unless_prompt"}
+    # Agents A13: a step replayed on some tries of a run only.
+    allowed_keys |= {"before_try", "from_try"}
     # Jobs J25: an `each` step is one copy of its step per item of a JSON list variable; check
     # its own shape, then parse two copies of it (the replayed stream).
     for step in script["steps"]:
@@ -111,7 +114,7 @@ def test_every_recorded_stream_parses(name: str) -> None:
     steps = fake_backend.expanded(script["steps"], variables)
     seen = []
     for step in steps:
-        assert set(step) <= {"sleep", "message", "raise", "if_prompt", "unless_prompt"}, step
+        assert set(step) <= allowed_keys, step
         if "message" in step:
             message = fake_backend.parse_message(fake_backend._fill(step["message"], variables))
             seen.append(type(message))
@@ -126,6 +129,8 @@ def test_every_recorded_stream_parses(name: str) -> None:
         complete = (SystemMessage, AssistantMessage, UserMessage, ResultMessage)
         # Only the recording of the CLI's partial messages holds stream events itself (issue #33).
         allowed = (*complete, StreamEvent) if name == "partial_recorded" else complete
+        if name == "busy_resets":  # agents A13: the rate limit event that refuses the run
+            allowed = (*complete, RateLimitEvent)
         assert all(t in allowed for t in seen)
     if name == "partial_recorded":
         assert StreamEvent in seen

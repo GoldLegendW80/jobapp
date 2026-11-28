@@ -1,0 +1,166 @@
+{
+ "description": "Agents A13: Anthropic answers 429 on the reader ceo's first try, then the reader reports MAYBE on an invented CV, then a closing line (documents_panel_reader_ceo).",
+ "steps": [
+  {
+   "message": {
+    "type": "system",
+    "subtype": "init",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000001",
+    "cwd": "/tmp/run",
+    "model": "{model}",
+    "permissionMode": "dontAsk",
+    "tools": [
+     "mcp__app__report_review"
+    ],
+    "mcp_servers": [
+     {
+      "name": "app",
+      "status": "connected"
+     }
+    ],
+    "apiKeySource": "ANTHROPIC_API_KEY",
+    "claude_code_version": "2.1.286"
+   }
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": true,
+    "duration_ms": 1830,
+    "duration_api_ms": 1500,
+    "num_turns": 0,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "result": "Rate limited",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0,
+    "usage": {
+     "input_tokens": 0,
+     "output_tokens": 0,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "permission_denials": [],
+    "terminal_reason": "api_error",
+    "api_error_status": 429
+   },
+   "before_try": 2
+  },
+  {
+   "sleep": 0.1,
+   "from_try": 2
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000101",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_readerceo_1",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "",
+       "signature": "sig"
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_readerceo_01",
+       "name": "mcp__app__report_review",
+       "input": {
+        "verdict": "MAYBE",
+        "hurt_most": {
+         "quote": "Backend",
+         "why": "No change measured."
+        },
+        "problems": [],
+        "note": "Impact is not said."
+       }
+      }
+     ],
+     "stop_reason": "tool_use",
+     "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 150,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "from_try": 2
+  },
+  {
+   "sleep": 0.1,
+   "from_try": 2
+  },
+  {
+   "message": {
+    "type": "assistant",
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-000000000102",
+    "parent_tool_use_id": null,
+    "message": {
+     "id": "msg_fake_readerceo_2",
+     "type": "message",
+     "role": "assistant",
+     "model": "{model}",
+     "content": [
+      {
+       "type": "text",
+       "text": "Review reported."
+      }
+     ],
+     "stop_reason": "end_turn",
+     "usage": {
+      "input_tokens": 3200,
+      "output_tokens": 6,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0
+     }
+    }
+   },
+   "from_try": 2
+  },
+  {
+   "message": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 1800,
+    "duration_api_ms": 1600,
+    "num_turns": 2,
+    "session_id": "{session_id}",
+    "uuid": "00000000-0000-4000-8000-0000000009ff",
+    "result": "Review reported.",
+    "stop_reason": "end_turn",
+    "total_cost_usd": 0.0209,
+    "usage": {
+     "input_tokens": 6200,
+     "output_tokens": 156,
+     "cache_creation_input_tokens": 0,
+     "cache_read_input_tokens": 0
+    },
+    "modelUsage": {
+     "{model}": {
+      "inputTokens": 6200,
+      "outputTokens": 156,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0,
+      "webSearchRequests": 0,
+      "costUSD": 0.0209,
+      "contextWindow": 200000
+     }
+    },
+    "permission_denials": [],
+    "terminal_reason": "completed"
+   },
+   "from_try": 2
+  }
+ ]
+}

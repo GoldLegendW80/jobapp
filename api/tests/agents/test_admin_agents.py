@@ -913,7 +913,7 @@ def test_a_raised_run_gets_its_own_job_bound_and_another_keeps_the_queues(
         return timeout(delay)
 
     async def fake_execute(
-        context: Any, run_id: uuid.UUID, *, wall_time_max_s: float | None = None
+        context: Any, run_id: uuid.UUID, *, wall_time_max_s: float | None = None, **_: Any
     ) -> RunStatus:
         capped.append(wall_time_max_s)
         return RunStatus.done

@@ -43,6 +43,10 @@ STOPPED = "Interrupted: the worker stopped while this run was running."
 LOST = "The run never started: its queue message was lost."
 STALE = "The run stopped reporting and was marked failed."
 QUEUE_DOWN = "The agent queue is unavailable. Try again in a minute."
+# Agents A13: a waiting run whose time passed this long ago, and whose job is gone from the
+# queue (the worker's reaper asks it), lost whoever was to start it.
+WAIT_LOST_AFTER = timedelta(minutes=10)
+WAIT_LOST = "The run was waiting to start and its queue message was lost."
 
 
 class ActiveRunsError(Exception):
@@ -175,6 +179,11 @@ def create_run(
     db.flush()
     append_event(db, run.id, 1, "status", {"status": RunStatus.queued.value}, now)
     return run
+
+
+def lock_user(db: Session, user_id: uuid.UUID) -> None:
+    """The person's run lock, until the transaction ends (create_run's, and the claim's pace)."""
+    db.execute(sa.select(sa.func.pg_advisory_xact_lock(_lock_key(user_id))))
 
 
 def _lock_key(user_id: uuid.UUID) -> int:
@@ -314,6 +323,36 @@ def finish(db: Session, run_id: uuid.UUID, outcome: Outcome, now: datetime) -> b
     return bool(result.rowcount)
 
 
+def requeue(
+    db: Session, run_id: uuid.UUID, seq: int, waiting: dict[str, Any], now: datetime
+) -> bool:
+    """running -> queued, for a run Anthropic refused before it did anything (agents A13,
+    busy.py): its `status` step and its `waiting` step from `seq`. False when it was no longer
+    running. The caller (the run's own runner, its only writer while it runs) commits."""
+    result = db.execute(
+        sa.update(AgentRun)
+        .where(AgentRun.id == run_id, AgentRun.status == RunStatus.running)
+        .values(status=RunStatus.queued)
+        .execution_options(synchronize_session=False)
+    )
+    if not result.rowcount:
+        return False
+    append_event(db, run_id, seq, "status", {"status": RunStatus.queued.value}, now)
+    append_event(db, run_id, seq + 1, "waiting", waiting, now)
+    return True
+
+
+def hold_queued(db: Session, run_id: uuid.UUID, waiting: dict[str, Any], now: datetime) -> bool:
+    """A `waiting` step on a queued run, under its row lock, so that a Cancel (which writes the
+    run's next step too) comes before or after it, never beside it. False when it is no longer
+    queued. The caller commits."""
+    status = db.scalar(sa.select(AgentRun.status).where(AgentRun.id == run_id).with_for_update())
+    if status is not RunStatus.queued:
+        return False
+    append_event(db, run_id, next_seq(db, run_id), "waiting", waiting, now)
+    return True
+
+
 def fail_queued(db: Session, run_id: uuid.UUID, error: str, now: datetime) -> bool:
     """queued -> failed (the queue refused the job). The caller commits."""
     result = db.execute(
@@ -410,3 +449,20 @@ def reap_stale(
         AgentRun.status == RunStatus.queued, AgentRun.created_at < now - queued_after
     )
     return count + _fail_where(db, stale_queued, LOST, now)
+
+
+def fail_lost_waits(db: Session, lost: Sequence[tuple[uuid.UUID, int]], now: datetime) -> int:
+    """Agents A13: each run of `lost` still `queued` whose last step is still the `waiting` step
+    of that seq (the one whose job the reaper found gone) fails with WAIT_LOST, under the run's
+    row lock: a job that claims or holds it meanwhile comes before or after, never beside. The
+    caller commits."""
+    count = 0
+    for run_id, seq in lost:
+        status = db.scalar(
+            sa.select(AgentRun.status).where(AgentRun.id == run_id).with_for_update()
+        )
+        if status is not RunStatus.queued or next_seq(db, run_id) != seq + 1:
+            continue
+        still = sa.and_(AgentRun.id == run_id, AgentRun.status == RunStatus.queued)
+        count += _fail_where(db, still, WAIT_LOST, now)
+    return count
