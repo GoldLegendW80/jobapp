@@ -58,7 +58,7 @@ MAX_TURNS = 8
 WALL_TIME_S = 600.0
 POINTS_MAX = 3
 WORDS_MAX = 120  # characters of one strength or gap
-FACTS_SHOWN_MAX = 6_000
+FACTS_SHOWN_MAX = 30_000
 INSTRUCTIONS_SHOWN_MAX = 2_000
 PROMPT_PATH = Path(__file__).parent / "prompts" / "match.md"
 FIRST_MESSAGE = (
@@ -332,9 +332,11 @@ def _words(points: list[str]) -> list[str] | None:
     out = []
     for point in points:
         line = reader._line(point, WORDS_MAX)
-        if line is None:
+        plain = assess._undash(line) if line is not None else None
+        # A point of dashes alone is empty once undashed; a glued dash becomes ", ", one longer.
+        if not plain or len(plain) > WORDS_MAX:
             return None
-        out.append(assess._undash(line) or line)
+        out.append(plain)
     return out
 
 

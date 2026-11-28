@@ -257,6 +257,10 @@ def test_each_row_is_checked_alone(factory: sessionmaker[Session]) -> None:
     again = match.submit(factory, user, binding, {"ratings": [row(0), row(1)]}, NOW, frozenset({0}))
     assert (again.stored, again.dropped) == ([1], {match.TWICE: ["posting 0"]})
     assert "Every posting is rated" not in again.text
+    # A dash alone is empty once undashed; glued dashes make the line longer than WORDS_MAX.
+    dashed = [row(2, gaps=["\u2014"]), row(2, strengths=["Remote\u2014" * 17])]
+    undashed = match.submit(factory, user, binding, {"ratings": dashed}, NOW, frozenset({0, 1}))
+    assert (undashed.stored, undashed.dropped) == ([], {match.WORDS: ["posting 2", "posting 2"]})
     refused = match.submit(factory, user, binding, {"ratings": []}, NOW)
     assert (refused.error, refused.stored) == (True, [])
 
@@ -314,7 +318,7 @@ def test_what_the_model_is_shown(factory: sessionmaker[Session]) -> None:
                 }
             ]
         },
-        "facts": {"blocks": [{"title": "Workplace", "body": "I want " + "a calm team. " * 900}]},
+        "facts": {"blocks": [{"title": "Workplace", "body": "I want " + "a calm team. " * 3_000}]},
         "identity": {"name": "Someone Invented", "email": "e2e-someone@example.org"},
     }
     view = match.profile_view(sections)
@@ -512,6 +516,7 @@ def test_the_reader_first_and_one_run_at_a_time_for_both(
     user = person(factory, keyring, "first")
     add(factory, user)
     unread = add(factory, user, read_at=None)
+    assert start(factory) == []  # a posting left to read: no rating for the person
     [reading] = backlog(factory)
     assert run_of(factory, reading).agent == reader.NAME
     assert backlog(factory) == []  # the reading runs
