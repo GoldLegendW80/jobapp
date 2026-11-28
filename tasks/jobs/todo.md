@@ -446,3 +446,17 @@ Acceptance: the issue's items 1 to 7. Decided by the build (planner defaults the
 So the bound is 30,000 and the career wording stays. A batch shows at most 10 postings of 15,000 characters and the profile (30,000 for the facts, 2,000 for the instructions).
 
 Left: the reading on the posting's page and in the lists, the blend in their order (the owner's choice, on numbers from production), a rating again after the profile changed.
+
+### J41: the career and culture reading on the posting's page
+
+Plan [#856](https://github.com/GoldLegendW80/jobapp/issues/856), row 6, second slice, web only. Follows J38 (#876), which stores and serves the reading and shows it nowhere. Spec: [SPEC-jobs, Career and culture](../../SPEC-jobs.md#career-and-culture-jobs-j38-876). Branch `jobs/J41-reading-on-the-posting-page`.
+
+| Id | Issue | What | Scope | Depends on | Migration | Group |
+|---|---|---|---|---|---|---|
+| J41 | #884 | A block on the posting's page for the reading: both scores with a band in a word, strengths and gaps as lists, the day it was read, one line that it is the assistant's reading apart from the keyword fit, one line when the text changed since; nothing without a reading; used by no list, sort or filter | S | #876 | none | 1 |
+
+Owns: `web/src/components/shared/jobs/posting/posting-match.tsx` (placed after the posting's content in `job-posting.tsx`), `web/src/features/jobs/helpers/match-bands.ts`, its story, `web/src/components/test/posting-match.test.tsx`, `web/src/design-system/fixtures/posting-match.ts`, the J41 lines of SPEC-jobs.
+
+Acceptance: the issue's items 1 to 7. Decided by the build (planner defaults the owner may change): the bands are Strong (80 to 100), Good (60 to 79), Partial (40 to 59) and Weak (0 to 39), for both scores; the section is an h2 "Career and culture" with h3 "Strengths" and "Gaps in the match" (not "Gaps", which the posting's keyword gaps already use); the line of explanation is "The assistant's reading of this posting against your profile. It is separate from your keyword fit, which counts your profile's words." (the page already says "keyword fit"); no new colour, the bands are outline badges. Journeys: the groups that render a posting's page were not run (no image builds on the build laptop). Measure after the deploy: the owner reads the block on ten postings of his own and says whether the two scores and the words are right.
+
+Left: the blend in the order of the lists and "Show postings from" (the owner's choice).
