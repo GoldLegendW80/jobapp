@@ -22,6 +22,7 @@ import pytest
 
 from app.browser import finder
 from app.browser.client import BrowserError
+from tests.browser.posting_pages import dressed
 from tests.browser.test_b20_agent import HOME, RESULTS, START, Site, run, selected, text_of, tool
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -35,8 +36,10 @@ BOARD_PAGE = '- heading "Robot jobs" [level=1]\n- paragraph: Loading results'
 SEEN_1 = START + "jobs/7001"
 SEEN_2 = START + "jobs/7002"  # on page 2, which the script fetched from the board's origin
 MADE_UP = START + "jobs/9999"
-POSTING_1 = '- heading "Robot Arm Engineer" [level=1]\n- paragraph: Build invented robot arms.'
-POSTING_2 = '- heading "Robot Welder" [level=1]\n- paragraph: Weld invented robot frames.'
+POSTING_1 = dressed(
+    '- heading "Robot Arm Engineer" [level=1]\n- paragraph: Build invented robot arms.'
+)
+POSTING_2 = dressed('- heading "Robot Welder" [level=1]\n- paragraph: Weld invented robot frames.')
 CHECK_PAGE = '- heading "Just a moment" [level=1]\n- paragraph: Checking your browser'
 CARDS = [
     {"title": "Robot Arm Engineer", "company": "Invented Robotics", "link": SEEN_1},
@@ -477,7 +480,7 @@ def test_the_app_opens_at_most_twenty_postings_per_call(carded: bool):
     ]
     site = board(evaluated=scripted(cards))
     for i, link in enumerate(links):
-        site.pages[link] = f'- heading "Robot Role {i}" [level=1]\n- paragraph: Invented.'
+        site.pages[link] = dressed(f'- heading "Robot Role {i}" [level=1]\n- paragraph: Invented.')
     postings = [
         {"title": f"Robot Role {i}", "url": u, "text": "A card."} for i, u in enumerate(links)
     ]

@@ -10,7 +10,9 @@ from app.jobs.slug import (
     FALLBACK_SLUG,
     SLUG_MAX,
     PostingKey,
+    as_https,
     find_duplicate,
+    posting_url_key,
     slug,
     slugify,
     text_key,
@@ -132,6 +134,37 @@ def test_same_url(a: str, b: str) -> None:
 )
 def test_different_urls(a: str, b: str) -> None:
     assert url_key(a) != url_key(b)
+
+
+JK = "5f1c2d3e4a5b6c7d"
+LI = "4012345678"
+VIEW = f"https://ch.indeed.com/viewjob?jk={JK}"
+LI_VIEW = f"https://www.linkedin.com/jobs/view/{LI}/"
+CAREERS = "https://careers.example.org/jobs/1"
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "same"),
+    [
+        # http on its default port reads as https, a board's posting id too.
+        (VIEW, f"http://ch.indeed.com/viewjob?jk={JK}", True),
+        (VIEW, f"HTTP://CH.indeed.com:80/rc/clk?jk={JK}", True),
+        (LI_VIEW, f"http://linkedin.com/jobs/view/x-{LI}", True),
+        (CAREERS, "http://careers.example.org:80/jobs/1/", True),
+        # Another port, another id, or no posting id: another posting.
+        (VIEW, f"http://ch.indeed.com:8080/viewjob?jk={JK}", False),
+        (VIEW, f"http://ch.indeed.com:443/viewjob?jk={JK}", False),
+        (VIEW, f"http://ch.indeed.com/viewjob?jk={JK[:-1]}0", False),
+        (VIEW, f"http://ch.indeed.com/viewjob?vjk={JK}", False),
+        (LI_VIEW, f"http://x.linkedin.com/jobs/view/{LI}/", False),
+        (CAREERS, "http://careers.example.org:8080/jobs/1", False),
+    ],
+)
+def test_the_stores_key_reads_http_on_its_default_port_as_https(a: str, b: str, same: bool) -> None:
+    assert (posting_url_key(a) == posting_url_key(b)) is same
+    assert as_https("http://[::1]:80/a?b=1#c") == "https://[::1]/a?b=1#c"
+    assert as_https("http://x.example:notaport/1") == "http://x.example:notaport/1"
+    assert as_https("ftp://x.example/1") == "ftp://x.example/1"
 
 
 def test_url_key_edge_cases() -> None:

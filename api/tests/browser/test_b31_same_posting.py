@@ -23,6 +23,7 @@ import pytest
 
 from app.browser import finder, same_posting, sources
 from app.jobs import slug
+from tests.browser.posting_pages import dressed
 
 JK = "5f1c2d3e4a5b6c7d"  # an Indeed key's shape: 16 lowercase hex digits
 JK2 = "0a1b2c3d4e5f6a7b"
@@ -371,7 +372,7 @@ def listed(one: finder.FinderSession, *items: dict[str, Any]) -> dict[str, Any]:
 
 
 def posting(title: str) -> str:
-    return f'- heading "{title}" [level=1]\n- paragraph: Build invented robots in Bern.'
+    return dressed(f'- heading "{title}" [level=1]\n- paragraph: Build invented robots in Bern.')
 
 
 def indeed_list(keys: list[str], page: int = 1) -> tuple[str, str]:
