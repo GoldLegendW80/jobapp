@@ -661,9 +661,19 @@ def test_the_schedule_cron_enqueues_each_due_slot_once(
                 return len(rows) == 2 and all(r.status is SweepStatus.done for r in rows)
 
         await wait_for(all_done)
-        for user_id, clock in ((alice, "06:17"), (bob, "06:15")):
-            key = queues.schedule_job_id(user_id, f"2026-10-10T{clock} Europe/Paris")
-            assert await sweeps_worker.pool.exists(f"arq:result:{key}")
+        keys = [
+            queues.schedule_job_id(user_id, f"2026-10-10T{clock} Europe/Paris")
+            for user_id, clock in ((alice, "06:17"), (bob, "06:15"))
+        ]
+
+        # arq writes a job's result after the function returns, so after the sweep is done.
+        async def results_written() -> bool:
+            return await sweeps_worker.pool.exists(*[f"arq:result:{k}" for k in keys]) == len(keys)
+
+        deadline = time.monotonic() + 30
+        while not await results_written():
+            assert time.monotonic() < deadline, "arq results not written in time"
+            await asyncio.sleep(0.1)
 
     serve_until(settings, ctx, scenario)
     with factory() as db:
