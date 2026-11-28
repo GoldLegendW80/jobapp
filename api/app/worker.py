@@ -26,6 +26,9 @@ Sweeps queue (app.queue.SWEEPS):
 - rescore_tick: cron every 10 seconds (rescore.TICK_SECONDS): the rescore a change of the skills
   section asked for, one person after the other, never two of one person at once
   (app/jobs/rescore.py). No model call: the fit is code.
+- cron:liveness_timer: every minute, the pages of the open postings checked by the worker, a few
+  at a time and one tick at a time (jobs J37, app/jobs/liveness_timer.py `tick`), and the open
+  postings whose stated closing date passed closed.
 
 Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
 - run_agent(run_id): one agent run, at most MAX_AGENT_RUNS (2) at a time; a third waits in
@@ -157,7 +160,7 @@ from app.db import build_engine, build_sessionmaker
 from app.documents import render_job
 from app.identity.service import utcnow
 from app.ingestion import jobs as ingestion_jobs
-from app.jobs import reader, rescore, schedule, searches, service, sweep
+from app.jobs import liveness_timer, reader, rescore, schedule, searches, service, sweep
 from app.jobs.models import Sweep
 from app.logging_config import configure_logging
 
@@ -637,6 +640,12 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
             func(scheduled_sweeps, name="scheduled_sweeps", timeout=240, max_tries=1),
             func(reap_sweeps, name="reap_sweeps", timeout=60, max_tries=1),
             func(rescore_tick, name="rescore_tick", timeout=rescore.TICK_TIMEOUT_S, max_tries=1),
+            func(
+                liveness_timer.tick,
+                name="liveness_timer",
+                timeout=liveness_timer.TICK_TIMEOUT_S,
+                max_tries=1,
+            ),
         ],
         cron_jobs=[
             cron(
@@ -654,9 +663,16 @@ def sweeps_queue(fast: bool = False) -> QueueSpec:
                 second=set(range(0, 60, rescore.TICK_SECONDS)),
                 timeout=rescore.TICK_TIMEOUT_S,
             ),
+            cron(
+                liveness_timer.tick,
+                name="cron:liveness_timer",
+                second=liveness_timer.TICK_SECOND,
+                timeout=liveness_timer.TICK_TIMEOUT_S,
+            ),
         ],
-        # Two users' sweeps at once, plus room for the cron jobs (a long rescore among them).
-        max_jobs=MAX_SWEEPS + 3,
+        # Two users' sweeps at once, plus room for the cron jobs (a long rescore and the liveness
+        # timer's checks among them).
+        max_jobs=MAX_SWEEPS + 4,
         job_timeout_s=SWEEP_JOB_TIMEOUT_S,
         on_start=reap_sweeps,
     )

@@ -4,8 +4,9 @@ that would spend on a closed posting.
 
 - When: the person's clicks that write documents or apply (Write, Apply, a Like, Apply to the
   selected postings) and the apply run before it starts (apply/posting_check.py), each reusing a
-  check younger than FRESH; "Check now" (POST /api/jobs/{id}/check) always asks again. Never on
-  a timer, never in a sweep.
+  check younger than FRESH; "Check now" (POST /api/jobs/{id}/check) always asks again; the
+  worker's timer for the open postings, a few at a time (jobs J37, app/jobs/liveness_timer.py).
+  Never in a sweep.
 - What: a plain GET of the posting's own address (`jobs.url`): no cookie, no proxy from the
   environment, a User-Agent naming the app, at most REDIRECTS_MAX redirects, the first BODY_MAX
   bytes of the page (gzip and deflate decoded within that bound, another coding `unreadable`),
@@ -428,6 +429,8 @@ def record(
     finding: Finding,
     now: datetime,
     checked: str | None,
+    *,
+    close_from: frozenset[JobStatus] = AUTO_CLOSE_FROM,
 ) -> Outcome | None:
     """Store the finding on the posting under its row lock, and move it to closed when the
     finding says so (module docstring), while `checked` is still the posting's address; else
@@ -441,7 +444,7 @@ def record(
         db.rollback()
         logger.info("jobs.liveness.dropped", extra={"job_id": str(job_id)})
         return outcome
-    stored = store(db, job, finding, now)
+    stored = store(db, job, finding, now, close_from=close_from)
     status = job.status
     db.commit()
     logger.info(
@@ -456,14 +459,22 @@ def record(
     return Outcome(status, stored)
 
 
-def store(db: Session, job: Job, finding: Finding, now: datetime) -> dict[str, Any]:
+def store(
+    db: Session,
+    job: Job,
+    finding: Finding,
+    now: datetime,
+    *,
+    close_from: frozenset[JobStatus] = AUTO_CLOSE_FROM,
+) -> dict[str, Any]:
     """The finding on the locked posting, which moves it to closed when it says so (module
-    docstring); the caller commits. Jobs J36 closes a posting kept from a card whose page the
-    app read gone with it. The finding as stored."""
+    docstring) from a status of `close_from` (the timer's: found and shortlisted only); the
+    caller commits. Jobs J36 closes a posting kept from a card whose page the app read gone
+    with it, jobs J37 one whose closing date passed. The finding as stored."""
     user_id = job.user_id
     moved = (
         finding.verdict == CLOSED
-        and job.status in AUTO_CLOSE_FROM
+        and job.status in close_from
         and not _closed_by_the_app_before(db, job)
     )
     stored = {
@@ -525,6 +536,8 @@ def closed_sentence(stored: dict[str, Any] | None) -> str:
             return f"{CLOSED_SENTENCE} Its page says: \u201c{stored['sentence']}\u201d"
         if stored.get("reason") in ("http_404", "http_410"):
             return "This posting is closed: its page no longer exists."
+        if stored.get("reason") == "closing_date":
+            return "This posting is closed: its closing date passed."
     return CLOSED_SENTENCE
 
 
