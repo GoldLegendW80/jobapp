@@ -697,3 +697,15 @@ Part of the plan #856 (row 1), issue #873; branch `browser/B33-more-memory-close
 **Stats (item 3):** no new stat. A source's `result_pages` and `tab_closed_reasons` (its `memory` count) already give the result pages read per close for memory; `tab_closed_mib` keeps the first `TAB_CLOSED_MIB_MAX` (20) working sets.
 
 **Measure after the deploy:** the result pages a signed in LinkedIn search reads (10 on 2026-11-28) and what it finds (30), over three searches.
+
+### B34: the browser image follows Debian's Chromium
+
+Issue #879, follow up of B30 (#841); branch `browser/B34-chromium-follows-debian`. Decision: "Browser and apply" in [decisions](../../docs/decisions.md) (2026-11-28, orchestrator default, reversible); spec: [SPEC-browser](../../SPEC-browser.md), Chromium for Linux arm64.
+
+**Evidence.** On 2026-11-28 the pin set on 2026-11-26 (`156.0.8078.108-1~deb13u1`) was stale: trixie-security served `156.0.8078.114-1~deb13u1`, and the archive keeps only its latest Chromium, so the next deploy would have failed to build the browser image as run 45842936320 did. Third time in a month that the Chromium package stopped a deploy; the pin lasted two days.
+
+**As built:** `ARG CHROMIUM_VERSION=` in `browser/Dockerfile`, empty by default, so `chromium${CHROMIUM_VERSION:+=${CHROMIUM_VERSION}}` installs the archive's current Chromium and the `dpkg-query` line prints its version. `--build-arg CHROMIUM_VERSION=<version>` still holds one, and fails once Debian publishes an update. SPEC-browser's line on Chromium and a decisions line follow. No test reads the argument.
+
+**Proof without a build (2026-11-28, `debian:trixie-slim`, linux/arm64, simulated installs):** the unpinned install resolves `chromium` and `chromium-common` at `156.0.8078.114-1~deb13u1` from Debian-Security; the pin `156.0.8078.108-1~deb13u1` answers "E: Version '156.0.8078.108-1~deb13u1' for 'chromium' was not found".
+
+**Not in this task (#834):** a browser image that fails to build should leave production with the browser it had. The image was not built here: the next deploy's verify line (`browser=healthy`) and its build log (`chromium <version>`) are the measure.

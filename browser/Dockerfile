@@ -11,17 +11,14 @@
 # Debian 13 (trixie), the stable release: on 2026-11-05 the deploy found no Chromium at all for
 # arm64 in Debian 12 (bookworm, oldstable: "Package chromium is not available"), so the browser
 # image did not build and the browser was not deployed (browser B22).
-# Chromium comes from trixie-security. CHROMIUM_VERSION pins it when set (build with
-# --build-arg CHROMIUM_VERSION=<version>); unset, the build installs the archive's current one and
-# prints it ("chromium <version>" in the build log), the version to pin next. trixie-security
-# serves only its latest Chromium, so a pin fails the build once Debian publishes an update: set
-# the Candidate this prints: docker run --rm debian:trixie-slim sh -c
-# 'apt-get update -qq && apt-cache policy chromium'
+# Chromium comes from trixie-security and follows its updates at each build: the archive serves
+# only its latest Chromium, so a pin can only match it or break the build. CHROMIUM_VERSION is
+# empty by default; the build prints "chromium <version>". --build-arg CHROMIUM_VERSION=<version>
+# holds one on purpose, and that build fails once Debian publishes an update (run 45842936320,
+# 2026-11-26). The deploy's check of the browser's health tells a Chromium that misbehaves.
 FROM debian:trixie-slim
 
-# trixie-security's Candidate on 2026-11-26: its update failed the pin 156.0.8078.79-1~deb13u1
-# (chromium-common not installable) in deploy run 45842936320, which left production without a browser.
-ARG CHROMIUM_VERSION=156.0.8078.108-1~deb13u1
+ARG CHROMIUM_VERSION=
 ARG PLAYWRIGHT_VERSION=1.55.0
 # web_fetch's HTTP client (browserd/tools/fetch.py, B28): the api's own pin (api/pyproject.toml).
 ARG HTTPX_VERSION=0.28.1
