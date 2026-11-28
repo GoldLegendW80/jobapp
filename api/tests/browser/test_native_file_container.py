@@ -1,4 +1,4 @@
-"""Current native FileList evidence through the real lease API and pinned Chromium."""
+"""Current native FileList evidence through the real lease API and the image's Chromium."""
 
 import pytest
 
