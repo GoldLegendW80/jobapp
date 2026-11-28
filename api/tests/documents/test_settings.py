@@ -9,7 +9,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.config import Settings
-from app.documents.settings import BANNED_PHRASES_MAX, DEFAULT, DocumentSettings
+from app.documents.settings import (
+    BANNED_PHRASES_MAX,
+    DEFAULT,
+    LETTER_WORDS_MAX,
+    LETTER_WORDS_MIN,
+    DocumentSettings,
+)
 
 DEFAULTS = {
     "DOCUMENTS_RENDER_TIMEOUT_S": 30,
@@ -70,6 +76,21 @@ def test_out_of_range_values_are_refused(
 def test_the_writing_rules_are_off_for_a_new_user() -> None:
     assert DEFAULT.no_dash_separators is False
     assert DEFAULT.banned_phrases == ()
+    assert DEFAULT.letter_words == 350
+
+
+@pytest.mark.parametrize("value", [150, 350, 600])
+def test_a_letters_length_within_its_bounds(value: int) -> None:
+    assert DocumentSettings.model_validate({"letter_words": value}).letter_words == value
+    assert (LETTER_WORDS_MIN, LETTER_WORDS_MAX) == (150, 600)
+
+
+@pytest.mark.parametrize("value", [149, 601, 0, "350", 350.0, True, None])
+def test_a_letters_length_out_of_its_bounds_or_not_a_whole_number_is_refused(
+    value: object,
+) -> None:
+    with pytest.raises(ValidationError):
+        DocumentSettings.model_validate({"letter_words": value})
 
 
 def test_banned_phrases_are_cleaned_and_deduplicated() -> None:

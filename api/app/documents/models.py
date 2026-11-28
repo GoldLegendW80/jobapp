@@ -453,6 +453,9 @@ class DocumentConsent(Base):
 
 class DocumentSettingsRow(Base):
     __tablename__ = "document_settings"
+    __table_args__ = (
+        sa.CheckConstraint("letter_words BETWEEN 150 AND 600", name="letter_words_bounds"),
+    )
 
     user_id: Mapped[uuid.UUID] = _user_fk(primary_key=True)
     no_dash_separators: Mapped[bool] = mapped_column(
@@ -463,6 +466,9 @@ class DocumentSettingsRow(Base):
     )
     starter_phrases: Mapped[bool] = mapped_column(
         sa.Boolean, nullable=False, default=False, server_default=sa.false()
+    )
+    letter_words: Mapped[int] = mapped_column(
+        sa.Integer, nullable=False, default=350, server_default=sa.text("350")
     )
     updated_at: Mapped[datetime] = _now()
 

@@ -189,7 +189,9 @@ def letter_words(content: c.LetterContent) -> int:
 
 
 def letter_bounds(target: int) -> tuple[int, int]:
-    """The lengths of a letter's body past which a note is shown: 250 and 420 for 350."""
+    """The lengths of a letter's body past which a note is shown: five sevenths and six fifths
+    of the length the person set, rounded (250 and 420 for 350, 107 and 180 for 150, 429 and
+    720 for 600); neither fraction falls on a half, so the rounding has no tie."""
     return round(target * 5 / 7), round(target * 6 / 5)
 
 

@@ -12,8 +12,8 @@ letter, the one correction pass, then the removal by code).
 
 A letter is never shortened by a second pass: the render fits the font (D3) and a letter that
 still overflows is kept and shown. The input holds ids, the document's language, the person's
-tone (a code), the template's soft limits (numbers) and the fake backend's `script`: never a text
-of the person or the posting.
+tone (a code), the template's soft limits and the length of the person's writing rules
+(numbers) and the fake backend's `script`: never a text of the person or the posting.
 """
 
 from __future__ import annotations
@@ -33,6 +33,7 @@ from app.agents.models import AgentRun, CredentialKind
 from app.documents import content as c
 from app.documents import panel_hold, writer_cv
 from app.documents.models import Kind
+from app.documents.settings import LETTER_WORDS_MAX, LETTER_WORDS_MIN
 
 if importlib.util.find_spec("claude_agent_sdk") is not None:
     # The worker, which runs the tools (the api image has no SDK, as writer_cv.py).
@@ -63,6 +64,8 @@ class LetterInput(BaseModel):
     limits: dict[str, int | None] = Field(default_factory=dict, max_length=12)
     # `panel` only: the key of the hiring panel's instructions, held in this process (D29).
     panel: str | None = Field(default=None, pattern=panel_hold.KEY_PATTERN)
+    # The words the paragraphs aim at together: the person's `letter_words` (D32).
+    words: int = Field(default=c.LETTER_WORDS, ge=LETTER_WORDS_MIN, le=LETTER_WORDS_MAX)
     token_budget: int = Field(ge=0)
     script: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,40}$")
 
@@ -81,6 +84,15 @@ LENGTH_AND_VOICE = (
 )
 
 
+def words_of(data: Mapping[str, Any]) -> int:
+    """The length a run asks for: its input's `words`, the default for a run queued before the
+    input held it."""
+    words = data.get("words")
+    if type(words) is int and LETTER_WORDS_MIN <= words <= LETTER_WORDS_MAX:
+        return words
+    return c.LETTER_WORDS
+
+
 @dataclass(frozen=True)
 class LetterWriter(definitions.AgentDefinition):
     """The definition, with a first message built from the run's input."""
@@ -88,7 +100,7 @@ class LetterWriter(definitions.AgentDefinition):
     def prompt(self, data: dict[str, Any], job_id: uuid.UUID | None) -> str:
         language = writer_cv.LANGUAGES.get(str(data.get("language")), "English")
         limits = writer_cv.limits_line(data.get("limits") or {})
-        limits = f"{limits} {LENGTH_AND_VOICE.format(words=c.LETTER_WORDS)}".strip()
+        limits = f"{limits} {LENGTH_AND_VOICE.format(words=words_of(data))}".strip()
         if data.get("mode") == "panel":
             text = (
                 f"{panel_hold.read(data.get('panel'))}\n\n"

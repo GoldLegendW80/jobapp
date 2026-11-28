@@ -484,6 +484,7 @@ def test_templates_thumbnails_and_settings(two: dict[str, Any], api: Api) -> Non
         "no_dash_separators": False,
         "banned_phrases": [],
         "starter_phrases": False,
+        "letter_words": 350,
         "starter_list": list(STARTER_PHRASES),
     }
     saved = api.request(

@@ -155,6 +155,7 @@ test("the writing rules are saved at once and read back after a reload", async (
     banned_phrases: ["passionate about"],
     starter_phrases: false,
     starter_list: expect.any(Array),
+    letter_words: 350,
   });
   expect(errors).toEqual([]);
 });

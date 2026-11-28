@@ -296,7 +296,8 @@ choice made by the build that stands until the owner says otherwise.
 - 2026-11-27 (D32, issue #862): asked which length a letter should have (the app's letters had
   a median of about 590 words on one page), the owner answered: "Environ 350 mots". A letter's
   body aims at about 350 words, a default the person can change; a body far from it is noted,
-  never refused.
+  never refused. It is now her setting: "Letter length" of the writing rules, 150 to 600
+  (`document_settings.letter_words`, D32's second slice).
 - 2026-11-10 (D31, issue #778): asked whether the offer letter reader should stop asking for
   ingestion's consent, the owner answered: "yes". Reading an offer letter and the chat of its
   notes never ask for or wait for a consent; the model credential is still required. Fill my

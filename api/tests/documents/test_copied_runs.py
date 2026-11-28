@@ -191,14 +191,100 @@ def test_the_posting_is_read_up_to_its_cap() -> None:
 
 
 def test_a_hostile_posting_and_field_stay_linear() -> None:
-    posting = "a " * (copied_runs.POSTING_CHARS_MAX // 2)
-    against = copied_runs.posting(posting, ("a a",) * 50)
+    posting = "w " * (copied_runs.POSTING_CHARS_MAX // 2)
+    against = copied_runs.posting(posting, ("w w",) * 50)
     assert against is not None
     assert len(against.automaton.lengths) <= 2 * (copied_runs.POSTING_CHARS_MAX // 2) + 1
-    field = "a " * 1000
+    field = "w " * 1000
     assert copied_runs.runs(field, copied_runs.posting(posting, ())) == [(0, len(field) - 1)]
-    quotes = '"a" ' * 500
+    quotes = '"w" ' * 500
     assert copied_runs.runs(quotes, against) == []
+    small = "to " * 1000
+    assert copied_runs.runs(small, copied_runs.posting("to " * 30_000, ())) == []
+    phrases = "in order to " * 1000
+    assert copied_runs.runs(phrases, copied_runs.posting(phrases * 9, ())) == []
+
+
+# A posting full of small words, in English, French and German.
+SMALL_POSTING = (
+    "In order to be able to ship every week, you will be part of a team that is able to work "
+    "as well as it can. We are looking for a person who will be one of the first.\n"
+    "We are 12 people in a team of 3, and we are looking for a mentor.\n"
+    "Track each order to the warehouse.\n"
+    "Afin de pouvoir livrer chaque semaine, vous rejoindrez l'équipe qui est en mesure de le "
+    "faire.\n"
+    "Sie sind in der Lage, mit uns an der Plattform zu arbeiten."
+)
+
+# (case, field text, the runs found). A run of 5 counted words or more needs 2 of them that are
+# not small words (SMALL_WORDS, or a word of a SMALL_PHRASES phrase where the phrase stands).
+SMALL_TABLE = [
+    ("only small words", "I write tests in order to be able to ship.", []),
+    ("only small words, in capitals and with commas", "IN ORDER TO, BE ABLE TO.", []),
+    ("one word that is not small", "We are looking for a new role.", []),
+    ("small words and one word that is not", "I will be one of the first to say so.", []),
+    ("two phrases and one word", "I am able to work as well as it can, I think.", []),
+    ("you will be part of a, one word", "As you will be part of a group, I say so.", []),
+    ("French, one word", "Celle qui est en mesure de le faire, c'est moi.", []),
+    ("French, an elision", "Je suis l'équipe qui est en mesure de.", []),
+    (
+        "a phrase cut short is no phrase",
+        "Je suis l'équipe qui est en mesure.",
+        ["l'équipe qui est en mesure"],
+    ),
+    ("German, no word", "Wir sind in der Lage, mit uns an der Sache.", []),
+    (
+        "two words that are not small",
+        "I work in order to be able to ship every week.",
+        ["in order to be able to ship every week"],
+    ),
+    (
+        "part and team",
+        "This time you will be part of a team that ships.",
+        ["you will be part of a team that"],
+    ),
+    (
+        "order outside its phrase counts",
+        "I track each order to the warehouse.",
+        ["track each order to the warehouse"],
+    ),
+    ("two phrases at the start of a field", "Able to work as well as it can.", []),
+    ("hyphens part words as spaces do", "In-order-to be-able-to, I write.", []),
+    ("a number counts as a word", "We are 12 people in a team.", ["We are 12 people in a team"]),
+    ("an apostrophe parts a contraction", "I know we're looking for a role.", []),
+    (
+        "French, two words",
+        "Je rejoindrez l'équipe qui est en mesure de le faire.",
+        ["rejoindrez l'équipe qui est en mesure de le faire"],
+    ),
+    (
+        "German, two words",
+        "Ich will mit uns an der Plattform zu arbeiten.",
+        ["mit uns an der Plattform zu arbeiten"],
+    ),
+    (
+        "a team that is able to work",
+        "I lead a team that is able to work alone.",
+        ["a team that is able to work"],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "runs"), [case[1:] for case in SMALL_TABLE], ids=[case[0] for case in SMALL_TABLE]
+)
+def test_a_run_needs_two_words_that_are_not_small(text: str, runs: list[str]) -> None:
+    assert found(text, SMALL_POSTING) == runs
+
+
+def test_the_small_words_are_single_folded_words() -> None:
+    for word in copied_runs.SMALL_WORDS:
+        assert [w.folded for w in copied_runs.words(word)] == [word]
+    for phrase in copied_runs.SMALL_PHRASES:
+        assert len(copied_runs.words(phrase)) >= 2
+    # Words of the postings' content are never small.
+    for word in ("order", "able", "team", "data", "work", "ship", "week", "plattform", "faire"):
+        assert word not in copied_runs.SMALL_WORDS
 
 
 # --- in the checks of a document -------------------------------------------------------------
@@ -319,6 +405,37 @@ def test_the_length_note_of_a_letters_body(count: int, codes: list[str]) -> None
     assert not result.invalid
 
 
+# (the person's length, the body's words, the note): the bounds are 5/7 and 6/5 of the length.
+LENGTHS = [
+    (150, 106, [rules.LETTER_UNDER_LENGTH]),
+    (150, 107, []),
+    (150, 180, []),
+    (150, 181, [rules.LETTER_OVER_LENGTH]),
+    (500, 356, [rules.LETTER_UNDER_LENGTH]),
+    (500, 357, []),
+    (500, 421, []),
+    (500, 600, []),
+    (500, 601, [rules.LETTER_OVER_LENGTH]),
+    (600, 428, [rules.LETTER_UNDER_LENGTH]),
+    (600, 429, []),
+    (600, 720, []),
+]
+
+
+@pytest.mark.parametrize(("target", "count", "codes"), LENGTHS)
+def test_the_length_note_follows_the_persons_length(
+    target: int, count: int, codes: list[str]
+) -> None:
+    mine = DocumentSettings(letter_words=target)
+    paragraphs = [" ".join(["word"] * (count // 5 + (i < count % 5))) for i in range(5)]
+    result = checks.run("letter", _letter(paragraphs), _sources("letter", ""), mine)
+    assert rules.letter_words(result.content) == count  # type: ignore[arg-type]
+    assert [i.code for i in result.notes if i.field == "paragraphs"] == codes
+    assert (
+        rules.letter_bounds(target) == {150: (107, 180), 500: (357, 600), 600: (429, 720)}[target]
+    )
+
+
 def test_the_length_note_counts_every_paragraph_and_skips_an_empty_letter() -> None:
     content = c.parse("letter", _letter(["one two three"] * 4))
     assert rules.letter_words(content) == 12  # type: ignore[arg-type]
@@ -333,3 +450,16 @@ def test_the_letter_writer_is_told_the_length() -> None:
     message = definition.prompt({"language": "en", "limits": {}}, None)
     assert f"about {c.LETTER_WORDS} words" in message
     assert "five or more words copied from the posting" in message
+
+
+@pytest.mark.parametrize(
+    ("words", "told"),
+    [(480, 480), (150, 150), (600, 600), (None, 350), (149, 350), (601, 350), (True, 350)],
+)
+def test_the_letter_writer_is_told_the_persons_length(words: object, told: int) -> None:
+    # A run queued before its input held `words`, or with a value no input allows, asks 350.
+    data: dict[str, Any] = {"language": "en", "limits": {}}
+    if words is not None:
+        data["words"] = words
+    message = writer_letter._definition().prompt(data, None)
+    assert f"The paragraphs together: about {told} words." in message

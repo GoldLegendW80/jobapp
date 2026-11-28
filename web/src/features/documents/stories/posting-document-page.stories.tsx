@@ -174,6 +174,32 @@ export const CvRunsOverOnePage: Story = {
   },
 };
 
+/** As a job seeker, I want to know when an application system cannot read part of my PDF, so that I change the template before I send it. */
+export const SeeWhatAnApplicationSystemCannotRead: Story = {
+  beforeEach: () => {
+    fakeSession(camille);
+    fakePostingDocuments(
+      JOB,
+      [
+        postingDocument("cv", JOB.id, {
+          latest: {
+            ...latest,
+            pdf_text: [
+              {
+                code: "pdf_email_not_text",
+                message:
+                  "Your e-mail is not text in this PDF, so an application system cannot read it. Choose another template, or check the e-mail of your profile.",
+              },
+            ],
+          },
+          generation: { status: "done", wait_reason: null },
+        }),
+      ],
+      [first],
+    );
+  },
+};
+
 /** As a job seeker, I want the letter page to say it was never written, so that I go back and write it. */
 export const LetterNotWrittenYet: Story = {
   render: () => <AppAt path={`${PATH}/letter`} />,

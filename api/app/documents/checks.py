@@ -14,7 +14,8 @@ api (the notes on a hand edit) and the chat all call it. It finds, in this order
    `copied_fields`, a `needs_rewrite` claim: said again in the person's words, never cut;
 3. `separator`: with the person's dash rule on, each dash used as a separator;
 4. `note`: the template's soft lengths, given `soft_limits`, an empty required field, and a
-   letter's body far from the length its writer is asked for (`rules.letter_length`).
+   letter's body far from the length its writer is asked for, the person's `letter_words`
+   (`rules.letter_length`).
 
 Nothing here refuses a render, a download or a send: `invalid` is answered to a writer at
 submit, everything else is corrected (`corrections`) or shown. Each claim carries `rewrite`
@@ -1217,7 +1218,7 @@ def run(
     if soft_limits is not None:
         issues += rules.soft_lengths(model, soft_limits)
     issues += rules.required_empty(model)
-    issues += rules.letter_length(model)
+    issues += rules.letter_length(model, settings.letter_words)
     issues = _classify(issues, dict(fields), sources)
     terms = sources.terms if isinstance(sources, DocumentSources) else ()
     return Checks(kind, model, tuple(_sorted(issues, order)), terms or sources.known_terms)

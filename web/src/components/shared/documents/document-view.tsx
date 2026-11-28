@@ -24,6 +24,7 @@ import { CoverageNote } from "./document-view/coverage-note";
 import { DocumentFacts } from "./document-view/document-facts";
 import { DocumentStatus } from "./document-view/document-status";
 import { FitNote } from "./document-view/fit-note";
+import { PdfTextNote } from "./document-view/pdf-text-note";
 import { RestoreVersionDialog } from "./document-view/restore-version-dialog";
 import { VersionCorrections } from "./document-view/version-corrections";
 import { VersionHistory } from "./document-view/version-history";
@@ -139,7 +140,10 @@ function LoadedDocument({
     ),
     fit:
       shown === undefined ? null : (
-        <FitNote {...panel} version={shown} isLatest={isLatest} />
+        <>
+          <FitNote {...panel} version={shown} isLatest={isLatest} />
+          <PdfTextNote version={shown} />
+        </>
       ),
     below:
       shown !== undefined && shown.corrections_count > 0 ? (

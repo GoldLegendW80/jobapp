@@ -290,6 +290,7 @@ const CASES: Case[] = [
         banned_phrases: ["synergy"],
         starter_phrases: true,
         starter_list: ["leveraged"],
+        letter_words: 480,
       }),
     method: "PUT",
     url: "/api/documents/settings",
@@ -297,6 +298,7 @@ const CASES: Case[] = [
       no_dash_separators: true,
       banned_phrases: ["synergy"],
       starter_phrases: true,
+      letter_words: 480,
     },
     reply: { no_dash_separators: true, banned_phrases: ["synergy"] },
   },
@@ -439,6 +441,36 @@ describe("the separate capture read contract", () => {
   ])("refuses a malformed present capture %j", (capture) => {
     expect(
       api.baseCvSchema.safeParse({ ...cv, design_generation: capture }).success,
+    ).toBe(false);
+  });
+});
+
+describe("the fields an older api leaves out", () => {
+  it("reads 350 words when the settings hold no letter_words", () => {
+    const older = { no_dash_separators: false, banned_phrases: [] };
+    expect(api.settingsSchema.parse(older).letter_words).toBe(350);
+    expect(
+      api.settingsSchema.parse({ ...older, letter_words: 480 }).letter_words,
+    ).toBe(480);
+    expect(
+      api.settingsSchema.safeParse({ ...older, letter_words: "480" }).success,
+    ).toBe(false);
+  });
+
+  it("reads a version with no pdf_text, a null one and its findings", () => {
+    const older: Record<string, unknown> = { ...fakeVersion() };
+    delete older.pdf_text;
+    expect(api.versionSummarySchema.parse(older).pdf_text).toBeUndefined();
+    expect(
+      api.versionSummarySchema.parse({ ...older, pdf_text: null }).pdf_text,
+    ).toBeNull();
+    const findings = [{ code: "pdf_email_not_text", message: "Your e-mail." }];
+    expect(
+      api.versionSummarySchema.parse({ ...older, pdf_text: findings }).pdf_text,
+    ).toEqual(findings);
+    expect(
+      api.versionSummarySchema.safeParse({ ...older, pdf_text: "none" })
+        .success,
     ).toBe(false);
   });
 });
