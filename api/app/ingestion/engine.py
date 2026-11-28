@@ -94,7 +94,15 @@ CREDENTIAL_CHANGED = (
 )
 TRANSCRIBE_NAME = "document_transcribe"  # registered by G14
 AGENT_OF = {plan.StepKind.extract: agents.EXTRACT_NAME, plan.StepKind.transcribe: TRANSCRIBE_NAME}
-REAPED = frozenset({agent_runs.INTERRUPTED, agent_runs.STOPPED, agent_runs.LOST, agent_runs.STALE})
+REAPED = frozenset(
+    {
+        agent_runs.INTERRUPTED,
+        agent_runs.STOPPED,
+        agent_runs.LOST,
+        agent_runs.STALE,
+        agent_runs.WAIT_LOST,
+    }
+)
 _TIME_LIMIT = failures.TIME_LIMIT.split("{", 1)[0]
 # The key of `RunContext.services` (and so of `FinalRun.services`) under which the worker gives
 # the hook what enqueues an agent run.

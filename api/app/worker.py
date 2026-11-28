@@ -38,7 +38,9 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   reading run (one for the whole worker, reader.SWEEP_READS_AT_ONCE): about 145 MiB plus 5 x 240
   MiB measured in A2 and A5, within the 1536m limit (two browsers at once, 2026-11-06, and the
   reading, 2026-11-09, not measured on the Jetson yet). Tried once: a run whose worker died is
-  never started again behind the user's back.
+  never started again behind the user's back. A run Anthropic refused as busy before it did
+  anything, or whose turn among its person's starts of the minute has not come, waits `queued`
+  and gets a job of its own at its time (agents A13, `start_again`, app/agents/busy.py).
 - apply_decide(application_id): the decision of one `ready` Full auto item, its check by model
   (`apply_check`, one agent run in this process) first (apply A13c, app/apply/submit.py
   `decision`), queued by the apply tick. Here, not on the apply queue, so a call of up to 120 s
@@ -63,7 +65,8 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   kept: a lost one is seen as lost by the api once its time on its way has passed.
 - reap_agent_runs: once at start (every run still `running` belonged to the process that died:
   failed as interrupted) and as a cron every minute (runs running far past any limit, runs queued
-  so long that their message must be lost).
+  so long that their message must be lost, and waiting runs whose job is gone from the queue,
+  agents A13, `reap_lost_waits`).
 
 Ingestion queue (app.queue.INGESTION, ingestion G2b, app/ingestion/jobs.py):
 - parse_document(document_id): reads one uploaded document. One at a time (max_jobs 1): the
@@ -149,6 +152,7 @@ from arq import cron, func
 from arq.connections import ArqRedis
 from arq.constants import in_progress_key_prefix, result_key_prefix
 from arq.cron import CronJob
+from arq.jobs import Job, JobStatus
 from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -156,6 +160,7 @@ from app import queue, worker_health
 from app.agents import catalog as agent_catalog
 from app.agents import definitions, token_check
 from app.agents import runs as agent_runs
+from app.agents.models import RunStatus
 from app.browser import removals as browser_removals
 from app.config import Settings, get_settings, refuse_send_key
 from app.db import build_engine, build_sessionmaker
@@ -199,7 +204,9 @@ AGENT_STALE_QUEUED = timedelta(hours=6)
 STOP_WAIT_S = 12.0
 INGESTION_ADVANCE_SECOND = 20  # the tick of the ingestion chain, once a minute
 DOCUMENTS_RESEND_SECOND = 50  # the render queue's resend, once a minute
-DOCUMENTS_PANEL_TIMEOUT_S = 1_500  # documents.panel.JOB_TIMEOUT_S (D29)
+# documents.panel.JOB_TIMEOUT_S (D29), the job's own: under panel.STALE_S, so the documents tick
+# never takes a live panel for lost (agents A13).
+DOCUMENTS_PANEL_TIMEOUT_S = 1_500
 DOCUMENTS_TICK_SECOND = 5  # the documents tick (D10, D29), once a minute
 DOCUMENTS_TICK_TIMEOUT_S = 50
 
@@ -542,9 +549,57 @@ async def run_agent(
     bound = run_job_timeout_s(wall, default_s)
     async with asyncio.timeout(bound):
         status = await runner.execute(
-            agent_context(ctx), run, wall_time_max_s=bound - AGENT_JOB_MARGIN_S
+            agent_context(ctx),
+            run,
+            wall_time_max_s=bound - AGENT_JOB_MARGIN_S,
+            may_wait=True,
+            paced=True,
         )
+    if status is RunStatus.queued:
+        await start_again(ctx, run)
     return status.value if status is not None else None
+
+
+async def start_again(ctx: dict[str, Any], run_id: uuid.UUID) -> bool:
+    """A run that waits (agents A13, app/agents/busy.py) gets its next run_agent job at the time
+    of its `waiting` step, under an id of its own (its step's seq): the job that ends now still
+    holds the run's first id. The queue refusing it: the run fails as busy, never left queued."""
+    from app.agents import busy, failures
+
+    def waiting() -> tuple[int, Any] | None:
+        with sessions_of(ctx)() as db:
+            return busy.last_wait(db, run_id)
+
+    found = await asyncio.to_thread(waiting)
+    if found is None:
+        return False  # cancelled meanwhile
+    seq, step = found
+    job = None
+    pool = ctx.get("redis")
+    try:
+        at = datetime.fromisoformat(str(step.get("at")))
+        if pool is not None:
+            job = await pool.enqueue_job(
+                "run_agent",
+                str(run_id),
+                _job_id=f"{queue.agent_run_job_id(run_id)}:{seq}",
+                _queue_name=queue.AGENTS,
+                _defer_until=at,
+            )
+    except Exception as exc:
+        logger.warning(
+            "agent run not queued again", extra={"run_id": str(run_id), "error": type(exc).__name__}
+        )
+    if job is not None:
+        return True
+
+    def fail() -> None:
+        with sessions_of(ctx)() as db:
+            if agent_runs.fail_queued(db, run_id, failures.BUSY, clock_of(ctx)()):
+                db.commit()
+
+    await asyncio.to_thread(fail)
+    return False
 
 
 def own_stale_after(saved_wall_time_s: float) -> timedelta:
@@ -568,9 +623,48 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
 async def reap_agent_runs(ctx: dict[str, Any], at_start: bool = False) -> int:
     await asyncio.to_thread(agent_catalog.publish_once, sessions_of(ctx), clock_of(ctx)())  # A6
     count = await asyncio.to_thread(_reap_agent_runs, sessions_of(ctx), clock_of(ctx)(), at_start)
+    if not at_start:
+        count += await reap_lost_waits(ctx)
     if count:
         logger.warning("agent runs failed by the reaper", extra={"count": count, "start": at_start})
     return count
+
+
+async def reap_lost_waits(ctx: dict[str, Any]) -> int:
+    """Agents A13: a run waiting `queued` whose time passed `WAIT_LOST_AFTER` ago fails only when
+    its run_agent job (`start_again`'s id) is gone from the queue: a job late behind busy slots
+    still comes. The queue unreadable, none fails; a queued run's own bound (AGENT_STALE_QUEUED)
+    still holds."""
+    from app.agents import busy
+
+    pool = ctx.get("redis")
+    if pool is None:
+        return 0
+    now = clock_of(ctx)()
+
+    def overdue() -> list[tuple[uuid.UUID, int]]:
+        with sessions_of(ctx)() as db:
+            return busy.overdue(db, now - agent_runs.WAIT_LOST_AFTER)
+
+    gone: list[tuple[uuid.UUID, int]] = []
+    try:
+        for run_id, seq in await asyncio.to_thread(overdue):
+            job = Job(f"{queue.agent_run_job_id(run_id)}:{seq}", pool, _queue_name=queue.AGENTS)
+            if await job.status() in (JobStatus.complete, JobStatus.not_found):
+                gone.append((run_id, seq))
+    except Exception as exc:
+        logger.warning("agent waits not checked", extra={"error": type(exc).__name__})
+        return 0
+    if not gone:
+        return 0
+
+    def fail() -> int:
+        with sessions_of(ctx)() as db:
+            count = agent_runs.fail_lost_waits(db, gone, now)
+            db.commit()
+            return count
+
+    return await asyncio.to_thread(fail)
 
 
 async def reap_agent_runs_at_start(ctx: dict[str, Any]) -> int:
@@ -705,7 +799,7 @@ def agents_queue() -> QueueSpec:
             func(
                 documents_panel,
                 name="documents_panel",
-                timeout=max(job_timeout_s, DOCUMENTS_PANEL_TIMEOUT_S),
+                timeout=DOCUMENTS_PANEL_TIMEOUT_S,
                 max_tries=1,
                 keep_result=0,
             ),

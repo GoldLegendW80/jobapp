@@ -131,10 +131,18 @@ def load(name: str) -> dict[str, Any]:
     return script
 
 
-def kept(step: dict[str, Any], prompt: str) -> bool:
-    """Whether `step` is replayed for a run of this prompt (`if_prompt`, `unless_prompt`)."""
+def kept(step: dict[str, Any], prompt: str, attempt: int = 1) -> bool:
+    """Whether `step` is replayed for a run of this prompt (`if_prompt`, `unless_prompt`) on its
+    try number `attempt` (`before_try`, `from_try`: agents A13, a run Anthropic refused as busy
+    is started again, and the stream answers busy on its first tries only)."""
     has, lacks = step.get("if_prompt"), step.get("unless_prompt")
-    return (has is None or str(has) in prompt) and (lacks is None or str(lacks) not in prompt)
+    below, since = step.get("before_try"), step.get("from_try")
+    return (
+        (has is None or str(has) in prompt)
+        and (lacks is None or str(lacks) not in prompt)
+        and (below is None or attempt < int(below))
+        and (since is None or attempt >= int(since))
+    )
 
 
 def load_script(name: str) -> list[dict[str, Any]]:
@@ -234,6 +242,7 @@ class FakeBackend:
             **request.variables,
         }
         script = load(request.script or DEFAULT_SCRIPT)
+        attempt = int(variables.get("try") or 1)
         steps: list[dict[str, Any]] = expanded(script["steps"], variables)
         asked = script.get("gate", "all")
         if asked not in ("all", "offered"):
@@ -252,7 +261,7 @@ class FakeBackend:
         self._session_cost = 0.0
         replayed: set[int] = set()  # recorded steps already yielded ahead of their turn
         for position, step in enumerate(steps):
-            if position in replayed or not kept(step, request.prompt or ""):
+            if position in replayed or not kept(step, request.prompt or "", attempt):
                 continue
             if self._interrupted.is_set():
                 yield self._result(variables, started, turns, "error_during_execution", True)
