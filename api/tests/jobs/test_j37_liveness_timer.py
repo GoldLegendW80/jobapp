@@ -315,6 +315,17 @@ def test_a_click_s_check_takes_from_the_day_s_room(
 ) -> None:
     add(factory, ann, [{"n": n, "liveness": checked(NOW - timedelta(hours=2))} for n in (1, 2)])
     add(factory, ann, [{"n": n} for n in (3, 4, 5)])
+    # Findings stored without a request leave the room as it was.
+    asked_nothing = [checked(NOW - timedelta(hours=1), r, "unconfirmed") for r in ("linkedin",)]
+    asked_nothing.append(checked(NOW - timedelta(hours=1), "closing_date", "closed"))
+    add(
+        factory,
+        ann,
+        [
+            {"n": 20 + i, "status": JobStatus.closed, "liveness": stored}
+            for i, stored in enumerate(asked_nothing)
+        ],
+    )
     web = Web()
     assert tick(factory, web, per_day=3) == 1
 
@@ -456,6 +467,7 @@ def test_the_worker_runs_the_tick_every_minute() -> None:
     spec = worker.sweeps_queue()
     (found,) = [c for c in spec.cron_jobs if c.name == "cron:liveness_timer"]
     assert found.coroutine is liveness_timer.tick
+    assert (found.minute, found.second) == (None, liveness_timer.TICK_SECOND)
     assert found.timeout_s == liveness_timer.TICK_TIMEOUT_S
     assert "liveness_timer" in {f.name for f in spec.functions}
 
