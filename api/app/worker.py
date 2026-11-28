@@ -35,7 +35,9 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   reading run (one for the whole worker, reader.SWEEP_READS_AT_ONCE): about 145 MiB plus 5 x 240
   MiB measured in A2 and A5, within the 1536m limit (two browsers at once, 2026-11-06, and the
   reading, 2026-11-09, not measured on the Jetson yet). Tried once: a run whose worker died is
-  never started again behind the user's back.
+  never started again behind the user's back. A run Anthropic refused as busy before it did
+  anything, or whose turn among its person's starts of the minute has not come, waits `queued`
+  and gets a job of its own at its time (agents A13, `start_again`, app/agents/busy.py).
 - apply_decide(application_id): the decision of one `ready` Full auto item, its check by model
   (`apply_check`, one agent run in this process) first (apply A13c, app/apply/submit.py
   `decision`), queued by the apply tick. Here, not on the apply queue, so a call of up to 120 s
