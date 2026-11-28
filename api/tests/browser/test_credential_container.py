@@ -1,4 +1,4 @@
-"""browserd's read of credential inputs through the real lease API and pinned Chromium: the
+"""browserd's read of credential inputs through the real lease API and the image's Chromium: the
 snapshot's `credentials`, the refusal to type into one, and the api reading a two step login's
 first page as a sign in wall (tests/browser_pages/b5/credentials.html)."""
 

@@ -11,11 +11,11 @@
 # Debian 13 (trixie), the stable release: on 2026-11-05 the deploy found no Chromium at all for
 # arm64 in Debian 12 (bookworm, oldstable: "Package chromium is not available"), so the browser
 # image did not build and the browser was not deployed (browser B22).
-# Chromium comes from trixie-security and follows its updates at each build: the archive serves
-# only its latest Chromium, so a pin can only match it or break the build. CHROMIUM_VERSION is
-# empty by default; the build prints "chromium <version>". --build-arg CHROMIUM_VERSION=<version>
-# holds one on purpose, and that build fails once Debian publishes an update (run 45842936320,
-# 2026-11-26). The deploy's check of the browser's health tells a Chromium that misbehaves.
+# Chromium is the one trixie-security serves (only its latest) when the layer below is built, and
+# a deploy reuses that layer from its build cache (when it is built again: tasks/browser/todo.md,
+# B34). CHROMIUM_VERSION is empty by default and the build prints "chromium <version>"; a value
+# (--build-arg, or this default for the deploy) holds one, and its build fails once Debian
+# publishes an update. No step of the deploy starts Chromium: a broken one shows at the first lease.
 FROM debian:trixie-slim
 
 ARG CHROMIUM_VERSION=
