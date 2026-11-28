@@ -209,22 +209,51 @@ def test_a_posting_that_left_the_open_ones_after_the_plan_is_not_asked_nor_close
     checker = ctx(factory, web, NOW)["liveness"]
     assert asyncio.run(liveness_timer._check(checker, factory, pick, lambda: NOW, {})) is False
     assert web.seen == []
-    # A finding that lands once the person acted is stored, the posting left as she set it.
+
+
+def acted(factory: sessionmaker[Session], user: uuid.UUID, posting: uuid.UUID) -> None:
+    """The person's click (Write), in a session of its own."""
     with factory() as db:
-        liveness_check.record(
-            db,
-            ann,
-            posting,
-            Finding(CLOSED, "http_404"),
-            NOW,
-            pick.url,
-            close_from=liveness_timer.OPEN,
-        )
+        job = jobs_service.lock_job(db, user, posting)
+        assert job is not None
+        jobs_service.set_status(db, job, JobStatus.cv_ready, NOW)
+        db.commit()
+
+
+def test_a_posting_the_person_acts_on_during_its_request_is_not_closed(
+    factory: sessionmaker[Session], ann: uuid.UUID
+) -> None:
+    (posting,) = add(factory, ann, [{"n": 1}])
+
+    def gone_after_the_click(request: httpx.Request) -> httpx.Response:
+        acted(factory, ann, posting)
+        return httpx.Response(410, stream=httpx.ByteStream(b"gone"))
+
+    assert tick(factory, gone_after_the_click) == 1
     (job,) = jobs(factory, [posting])
     assert job.status is JobStatus.cv_ready
     assert job.liveness is not None
-    assert job.liveness["verdict"] == CLOSED
-    assert job.liveness["moved"] is False
+    assert (job.liveness["verdict"], job.liveness["moved"]) == (CLOSED, False)
+    assert [event["to"] for event in status_events(factory, posting)] == ["cv_ready"]
+
+
+def test_a_closing_date_leaves_a_posting_the_person_acted_on_after_it_was_read(
+    factory: sessionmaker[Session], ann: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (posting,) = add(factory, ann, [{"n": 1, "closes_on": date(2026, 11, 20)}])
+    real = liveness_timer._reopened
+
+    def click_then_reopened(db: Session, job_ids: list[uuid.UUID]) -> set[uuid.UUID]:
+        # Between the pass's read of the open postings and its row lock.
+        acted(factory, ann, posting)
+        return real(db, job_ids)
+
+    monkeypatch.setattr(liveness_timer, "_reopened", click_then_reopened)
+    assert liveness_timer.close_passed(factory, NOW) == 0
+    (job,) = jobs(factory, [posting])
+    assert job.status is JobStatus.cv_ready
+    assert job.liveness is None
+    assert [event["to"] for event in status_events(factory, posting)] == ["cv_ready"]
 
 
 # --- what a check does ---------------------------------------------------------------------------
