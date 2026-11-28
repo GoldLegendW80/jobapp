@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.jobs import feeds, scoring, service, signals, sweep
 from app.jobs.boards.run import BoardFinding
-from app.jobs.models import Job, JobEvent, JobStatus
+from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
 from app.jobs.schemas import ImportJob
 from app.jobs.visible_text import visible
 from app.mail.alerts.source import AlertFinding
@@ -429,3 +429,111 @@ def test_the_readers_cut_of_an_old_text_is_stored_as_a_reader_sees_it(
     assert job.signals == signals.stored(job.posting_text)["signals"]
     expected = scoring.score(job.posting_text or "", SKILLED, title=job.title)
     assert job.competencies == list(expected.competencies)
+
+
+# --- the two wirings every caller passes by (each test red without its own line) ---------------
+
+
+def test_create_job_reads_a_raw_new_posting_as_it_is_stored(
+    factory: sessionmaker[Session],
+) -> None:
+    user = new_user(factory, "e2e-j39-newjob@example.org")
+    at = datetime(2026, 11, 28, 9, 0, tzinfo=UTC)
+    raw = service.NewJob(
+        company=DIRTY_COMPANY,
+        title=DIRTY_TITLE,
+        location=DIRTY_PLACE,
+        description=TYPED[:300],
+        posting_text=TYPED,
+    )
+    with factory() as db, db.begin():
+        job = service.create_job(db, user, raw, at)
+        assert job.signals == signals.stored(CLEAN)["signals"]  # derived before the column
+        assert job.slug.startswith("example-robotics-ai-engineer")
+        twin = service.NewJob(company=COMPANY, title="AI⁠ engineer", location=PLACE)
+        with pytest.raises(service.DuplicateJobError):
+            service.create_job(db, user, twin, at)
+
+
+def test_page_text_reads_the_text_it_is_given_as_it_is_stored(
+    factory: sessionmaker[Session],
+) -> None:
+    user = new_user(factory, "e2e-j39-pagetext@example.org")
+    [seeded] = seed(
+        factory,
+        user,
+        [{"title": TITLE, "company": COMPANY, "location": PLACE, "list_url": WEBSITE_URL}],
+    )
+    with factory() as db, db.begin():
+        job = db.get(Job, seeded.id)
+        assert job is not None
+        service.page_text(
+            db, job, TYPED, (JobEventKind.edit, {"text_pasted": {}}), now(),
+            rule=None, excluded="", skills=SKILLED, search=None, via="pasted",
+        )  # fmt: skip
+        db.flush()
+    assert_seen(_stored(factory, seeded.id))
+
+
+# --- a text of hidden characters alone is nothing, on every store path -------------------------
+
+HIDDEN = "​﻿⁠"
+
+
+def test_a_text_of_hidden_characters_alone_is_stored_as_nothing_on_every_path(
+    factory: sessionmaker[Session],
+) -> None:
+    user = new_user(factory, "e2e-j39-nothing@example.org")
+    set_profile(factory, user, search())
+    at = datetime(2026, 11, 28, 9, 0, tzinfo=UTC)
+    ids: dict[str, uuid.UUID] = {}
+    job = Job(user_id=user, slug="example-robotics-ai-0", company=COMPANY, title=TITLE)
+    job.posting_text, job.description = HIDDEN, HIDDEN
+    assert (job.posting_text, job.description) == (None, None)  # on the object
+    with factory() as db, db.begin():
+        db.add(job)
+        db.flush()
+        ids["the model"] = job.id
+        ids["a statement"] = uuid.uuid4()
+        db.execute(
+            pg_insert(Job).values(
+                id=ids["a statement"], user_id=user, slug="example-robotics-ai-1",
+                company=COMPANY, title=TITLE, description=HIDDEN, posting_text=HIDDEN,
+            )
+        )  # fmt: skip
+        new = service.NewJob(
+            company=COMPANY, title="Data engineer", description=HIDDEN, posting_text=HIDDEN
+        )
+        assert (new.description, new.posting_text) == (None, None)
+        ids["create_job"] = service.create_job(db, user, new, at).id
+        imported = ImportJob(
+            slug="example-robotics-ml-engineer",
+            company=COMPANY,
+            title="ML engineer",
+            description=HIDDEN,
+            posting_text=HIDDEN,
+        )
+        assert service.import_jobs(db, user, [imported], at).created == 1
+    _store(
+        factory,
+        _claimed(factory, user),
+        "arbeitnow",
+        _feed(HIDDEN, "Robotics engineer", ARBEITNOW_URL),
+    )
+    for job in jobs_of(factory, user):
+        ids.setdefault(job.title, job.id)
+    assert {"ML engineer", "Robotics engineer"} <= ids.keys()
+    for path, job_id in ids.items():
+        row = raw(factory, job_id)
+        assert (row["description"], row["posting_text"]) == (None, None), path
+    with factory() as db, db.begin():  # an import of the same row again changes nothing
+        assert service.import_jobs(db, user, [imported], at).unchanged == 1
+
+
+def test_a_posting_added_by_hand_with_a_text_of_hidden_characters_has_none(
+    factory: sessionmaker[Session], api: Api, person: Signed
+) -> None:
+    body = {"company": COMPANY, "title": TITLE, "location": PLACE, "posting_text": HIDDEN}
+    response = api.post("/api/jobs", token=person.token, json=body)
+    assert response.status_code == 201, response.text
+    assert raw(factory, uuid.UUID(response.json()["id"]))["posting_text"] is None

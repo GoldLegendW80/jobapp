@@ -1,7 +1,8 @@
 """Jobs J39 (issue #877, items 1 and 6): `visible_text.visible`, a text as a reader sees it, by
-Unicode category. Each class of character it drops, each kind it keeps (a decomposed accent, an
-emoji with its selector, Greek and Cyrillic), the variation selectors' rule, no normalisation,
-idempotence over every code point, and a work bound proved by counting, never by a clock."""
+Unicode category. Each class of character it drops, the control characters seen as a line break
+(a line feed in their place), each kind it keeps (a decomposed accent, an emoji with its selector,
+Greek and Cyrillic), the variation selectors' rule, no normalisation, idempotence over every code
+point, and a work bound proved by counting, never by a clock."""
 
 import sys
 import unicodedata
@@ -11,17 +12,16 @@ from typing import Any
 import pytest
 
 from app.jobs import visible_text
-from app.jobs.visible_text import visible
+from app.jobs.visible_text import visible, visible_or_none
 
 DROPPED = [
     pytest.param("\x00", id="nul"),
     pytest.param("\x01", id="start of heading"),
     pytest.param("\x1b", id="escape"),
-    pytest.param("\x0b", id="vertical tab"),
-    pytest.param("\x0c", id="form feed"),
     pytest.param("\x7f", id="delete"),
-    pytest.param("\x85", id="next line, C1"),
     pytest.param("\x9f", id="application program command, C1"),
+    pytest.param("\x1f", id="unit separator, no line break"),
+    pytest.param("\x80", id="padding character, C1"),
     pytest.param("\u200b", id="zero width space"),
     pytest.param("\u200c", id="zero width non joiner"),
     pytest.param("\u200d", id="zero width joiner"),
@@ -59,6 +59,34 @@ DROPPED = [
 def test_each_class_of_invisible_character_goes(hidden: str) -> None:
     assert visible(f"Py{hidden}thon engineer") == "Python engineer"
     assert visible(hidden * 3) == ""
+
+
+# The control characters a reader sees as a line break (`str.splitlines` breaks on each).
+BREAKS = [
+    pytest.param("\x0b", id="vertical tab"),
+    pytest.param("\x0c", id="form feed"),
+    pytest.param("\x1c", id="file separator"),
+    pytest.param("\x1d", id="group separator"),
+    pytest.param("\x1e", id="record separator"),
+    pytest.param("\x85", id="next line, C1"),
+]
+
+
+@pytest.mark.parametrize("hidden", BREAKS)
+def test_a_control_character_seen_as_a_line_break_becomes_a_line_feed(hidden: str) -> None:
+    assert f"word1{hidden}word2".splitlines() == ["word1", "word2"]
+    assert visible(f"word1{hidden}word2") == "word1\nword2"
+    assert visible(f"Python\u200b{hidden}\u200bSQL") == "Python\nSQL"
+    assert visible(hidden * 3) == "\n\n\n"
+    assert visible(f"line{hidden}\ufe0f") == "line\n"  # a selector after it goes, as after \n
+
+
+def test_a_text_of_hidden_characters_alone_is_nothing_where_a_column_may_hold_it() -> None:
+    assert visible_or_none("\u200b\ufeff\x00") is None
+    assert visible_or_none("\u200b \u200b") == " "  # a space is seen
+    assert visible_or_none("\x0b") == "\n"
+    assert (visible_or_none(""), visible_or_none(None)) == ("", None)
+    assert visible_or_none("Py\u200bthon") == "Python"
 
 
 KEPT = [
@@ -140,13 +168,15 @@ def test_the_known_and_accepted_losses(text: str, seen: str) -> None:
     assert visible(text) == seen
 
 
-def _kept_alone(char: str) -> bool:
+def _kept_alone(char: str) -> str:
     """What the module docstring keeps of a character on its own (no selector)."""
     category = unicodedata.category(char)
     if char in "\t\n\r":
-        return True
+        return char
+    if char in "\x0b\x0c\x1c\x1d\x1e\x85":
+        return "\n"
     low, high = visible_text.SUPPLEMENTARY_SELECTORS
-    return category not in visible_text.DROPPED and not low <= ord(char) <= high
+    return char if category not in visible_text.DROPPED and not low <= ord(char) <= high else ""
 
 
 EVERY = "".join(chr(point) for point in range(sys.maxunicode + 1))
@@ -156,9 +186,7 @@ def test_every_code_point_is_dropped_or_kept_by_its_category_and_twice_is_once()
     seen = visible(EVERY)
     # In code point order the selectors stand in runs (U+180E between two of them is a format
     # character), so none of them stays.
-    expected = "".join(
-        c for c in EVERY if _kept_alone(c) and not visible_text.SELECTORS.fullmatch(c)
-    )
+    expected = "".join(_kept_alone(c) for c in EVERY if not visible_text.SELECTORS.fullmatch(c))
     assert seen == expected
     assert visible(seen) == seen
 
