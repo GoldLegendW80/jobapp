@@ -462,7 +462,7 @@ def test_one_posting_of_a_host_a_tick(factory: sessionmaker[Session], ann: uuid.
     assert len(web.seen) == 2
 
 
-def test_a_host_that_turned_a_check_away_rests_a_day_for_every_posting_of_the_person(
+def test_a_host_that_turned_a_check_away_rests_a_day_for_every_person(
     factory: sessionmaker[Session], ann: uuid.UUID, ben: uuid.UUID
 ) -> None:
     site = "careers.example-robotics.example"
@@ -471,23 +471,25 @@ def test_a_host_that_turned_a_check_away_rests_a_day_for_every_posting_of_the_pe
     web = Web({path(site, 1): Page(429, b"slow down")})
     assert tick(factory, web) == 1
     assert web.seen == [path(site, 1)]
-    add(factory, ben, [{"n": 3, "host": site}])
-    # Ann's other posting of that host waits; Ben's is his own.
-    assert tick(factory, web, NOW + timedelta(minutes=1)) == 1
-    assert web.seen[-1] == path(site, 3)
+    later += add(factory, ben, [{"n": 3, "host": site}, {"n": 4, "host": f"www.{site}"}])
+    # The host turned the machine's one address away: Ann's other posting and Ben's wait.
+    assert tick(factory, web, NOW + timedelta(minutes=1)) == 0
     assert tick(factory, web, NOW + timedelta(hours=23, minutes=59)) == 0
-    assert tick(factory, web, NOW + timedelta(hours=24, minutes=1)) == 1
-    assert web.seen[-1] == path(site, 2)
-    assert jobs(factory, later)[0].liveness is not None
+    assert web.seen == [path(site, 1)]
+    for minute in (1, 2, 3):
+        assert tick(factory, web, NOW + timedelta(hours=24, minutes=minute)) == 1
+    assert sorted(web.seen[1:]) == [path(site, 2), path(site, 3), path(f"www.{site}", 4)]
+    assert all(job.liveness is not None for job in jobs(factory, later))
 
 
 @pytest.mark.parametrize("reason", sorted(liveness_timer.REST_REASONS))
 def test_every_wall_rests_its_host(
-    factory: sessionmaker[Session], ann: uuid.UUID, reason: str
+    factory: sessionmaker[Session], ann: uuid.UUID, ben: uuid.UUID, reason: str
 ) -> None:
     site = "careers.example-robotics.example"
     add(factory, ann, [{"n": 1, "host": site, "liveness": checked(NOW, reason, "unconfirmed")}])
     add(factory, ann, [{"n": 2, "host": site}])
+    add(factory, ben, [{"n": 3, "host": site}])
     web = Web()
     assert tick(factory, web) == 0
     assert web.seen == []

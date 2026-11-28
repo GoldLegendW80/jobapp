@@ -11,10 +11,11 @@ stored as a click's is.
 - Bounds (Settings, JOBS_LIVENESS_*): at most `per_tick` checks a tick in all, the persons in
   turn; at most `per_day` checks of a person's postings in the last 24 hours, counted from the
   checks stored on them (`jobs.liveness.checked_at`, a click's included); one posting of a host
-  a tick; a host whose answer to a check of the person in the last `rest_hours` was a wall
-  (REST_REASONS) is left alone for every posting of hers; a host a running search reads
-  (its sources' hosts) is left alone while it runs. Each request is paced by the shared pacer, as
-  a click's. A person with no open posting costs no query of her own and no request.
+  a tick; a host whose answer to a check of anyone's posting in the last `rest_hours` was a wall
+  (REST_REASONS) is left alone for every person (the checks all leave from the machine's one
+  address); a host a running search reads (its sources' hosts) is left alone while it runs.
+  Each request is paced by the shared pacer, as a click's. A person with no open posting costs
+  no query of her own and no request.
 - One tick at a time, whatever the number of workers: the tick holds a transaction advisory lock
   (LOCK) for its whole run on a session of its own, and a tick that finds it held does nothing.
   A dead worker's connection ends, and its lock with it.
@@ -160,12 +161,12 @@ def checks_today(db: Session, user_id: uuid.UUID, now: datetime) -> int:
     )
 
 
-def resting_hosts(db: Session, user_id: uuid.UUID, now: datetime, bounds: Bounds) -> set[str]:
-    """The hosts whose answer to a check of one of the person's postings, within the rest, was
-    a wall (REST_REASONS)."""
+def resting_hosts(db: Session, now: datetime, bounds: Bounds) -> set[str]:
+    """The hosts left alone this tick for every person, whose answer to a check of anyone's
+    posting within the rest was a wall (REST_REASONS): every check leaves from the machine's
+    one address, so the host turned that address away, whoever's posting it asked for."""
     urls = db.scalars(
         sa.select(Job.url).where(
-            Job.user_id == user_id,
             Job.url.is_not(None),
             Job.liveness["reason"].astext.in_(REST_REASONS),
             checked_at() > now - timedelta(hours=bounds.rest_hours),
@@ -212,7 +213,7 @@ def plan(
     if not people:
         return []
     unstored = _remembered(unstored or {}, now, bounds)
-    taken = searched_hosts(db)
+    taken = searched_hosts(db) | resting_hosts(db, now, bounds)
     lists: list[list[Pick]] = []
     for person in people:
         kept = sum(
@@ -221,11 +222,10 @@ def plan(
         room = min(bounds.per_day - checks_today(db, person, now) - kept, bounds.per_tick)
         if room <= 0:
             continue
-        resting = resting_hosts(db, person, now, bounds)
         picks: list[Pick] = []
         for row in due(db, person, now, bounds):
             host = host_key(row.url)
-            if not host or host in taken or host in resting or row.id in unstored:
+            if not host or host in taken or row.id in unstored:
                 continue
             taken.add(host)
             picks.append(Pick(person, row.id, row.url, host))
