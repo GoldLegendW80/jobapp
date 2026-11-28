@@ -19,8 +19,9 @@ Jobs J39 (issue #877): some answers hold their description's HTML escaped twice 
 decides on the answer itself, before any conversion (`escaped_twice`): a description holding an
 escaped tag of the converter's block list (`_Text.BLOCKS`) and no real tag is unescaped once, then
 converted once, as every feed's text is, only when the conversion keeps every word a reader sees
-(`kept_words`; else it is converted the plain way, its tags staying words); nothing is converted
-a second time, so the 50,000 characters of `plain_text` bound the final text. The pass over old
+in what it reads and keeps (`converted`, `kept_words`; else it is converted the plain way, its
+tags staying words); nothing is converted a second time, so the 50,000 characters of `plain_text`
+bound the final text. The pass over old
 postings (app/jobs/visible_pass.py) repairs this feed's stored texts (`is_its`) by `repair`, which
 removes markup and never a word: only a text of the failed shape (`failed_shape`) whose conversion
 keeps every word a reader sees (`kept_words`); any other text is left as stored, and said why.
@@ -43,6 +44,7 @@ from app.jobs.feeds import (
     Fetched,
     Finding,
     _Text,
+    as_written,
     epoch,
     line,
     plain_text,
@@ -67,8 +69,12 @@ _BLOCK_NAMES = "|".join(sorted(BLOCKS))
 # An escaped start or end tag of BLOCKS in an answer ("&lt;p&gt;", "&lt;/li&gt;", "&lt;br/&gt;").
 ESCAPED_BLOCK = re.compile(rf"&lt;/?(?:{_BLOCK_NAMES})(?=[\s/]|&gt;)", re.IGNORECASE)
 REAL_TAG = re.compile(r"</?[A-Za-z]")
-# html.escape writes at most 6 characters for one: the 4 * TEXT_MAX `plain_text` reads are here.
-RAW_MAX = 6 * 4 * TEXT_MAX
+# What `plain_text` reads of a value of TEXT_MAX characters at most (its docstring).
+READ_MAX = 4 * TEXT_MAX
+# html.escape writes at most 6 characters for one: the READ_MAX characters read are here.
+RAW_MAX = 6 * READ_MAX
+# The end of a text cut inside a tag or a reference ("<span style=\"col", "&nbs", "&#x1F6").
+CUT_END = re.compile(r"(?:</?[A-Za-z][^<>]*|&#?[A-Za-z0-9]{0,32})\Z")
 
 # The repair. Markup is a tag of BLOCKS or of these inline tags, whose words the conversion keeps;
 # any other tag written in a stored text (`<String>`, `<script>`) is a reader's words.
@@ -113,18 +119,40 @@ def escaped_twice(description: str) -> bool:
 
 def text_of(description: object) -> str:
     """A posting's text: its description converted once, as every feed's is. When it is escaped
-    twice (`escaped_twice`) it is unescaped once first, if the conversion then keeps every word a
-    reader sees (`kept_words`), in order; else (a tag outside MARKUP, a comment, a conversion that
-    raises) it is converted the plain way, its tags staying words."""
+    twice (`escaped_twice`) it is unescaped once first, if the conversion of what it reads then
+    keeps every word a reader sees there (`converted`); else (a tag outside MARKUP, a comment, a
+    script) it is converted the plain way, its tags staying words."""
     if isinstance(description, str) and escaped_twice(raw := description[:RAW_MAX]):
-        unescaped = html.unescape(raw)
-        try:
-            converted = plain_text(unescaped)
-            if visible(converted).split() == kept_words(unescaped):
-                return converted
-        except ValueError:  # a numeric reference too long for int(): read the plain way
-            pass
+        unescaped = html.unescape(as_written(raw))
+        body = unescaped[:READ_MAX]
+        if len(description) > RAW_MAX or len(unescaped) > READ_MAX:
+            body = CUT_END.sub("", body)  # a tag or a reference the read bound cut is not read
+        text = converted(body)
+        if text is not None:
+            return text
     return plain_text(description)
+
+
+def converted(body: str) -> str | None:
+    """`plain_text(body)` when it keeps every word a reader sees in `body` (`kept_words`), in
+    order, to its TEXT_MAX cut, where its last word may stop short; None when it loses or changes
+    one (a `<script>`, a `<style>` or a comment hides the words after it)."""
+    # body is within what it reads (READ_MAX): one character more than it keeps tells a cut.
+    longer = plain_text(body, TEXT_MAX + 1)
+    text = longer[:TEXT_MAX]
+    words, expected = visible(text).split(), kept_words(body)
+    if len(longer) <= TEXT_MAX:
+        return text if words == expected else None
+    return text if _cut_short(words, expected) else None
+
+
+def _cut_short(words: list[str], expected: list[str]) -> bool:
+    """Whether `words` are the first words of `expected`, in order, the last alone maybe cut."""
+    if not words:
+        return True
+    *whole, last = words
+    at = len(whole)
+    return len(expected) > at and expected[:at] == whole and expected[at].startswith(last)
 
 
 @dataclass(frozen=True)
@@ -182,15 +210,13 @@ def repair(text: str) -> Repair:
         return Repair(left="not_a_document")
     cut = CUT_TAG.search(text) if len(text) >= TEXT_MAX else None
     body = text[: cut.start()] if cut and cut.group(2).lower() in MARKUP else text
-    try:
-        converted = visible(plain_text(body))
-    except ValueError:  # a numeric reference too long for int(): the conversion cannot read it
+    # Equal words, never a prefix: a conversion cut at TEXT_MAX would drop stored words.
+    repaired = visible(plain_text(body))
+    if repaired.split() != kept_words(body):
         return Repair(left="loses_words")
-    if converted.split() != kept_words(body):
-        return Repair(left="loses_words")
-    if failed_shape(converted):  # escaped once more: a second walk would convert it again
+    if failed_shape(repaired):  # escaped once more: a second walk would convert it again
         return Repair(left="still_markup")
-    return Repair(text=converted)
+    return Repair(text=repaired)
 
 
 def is_its(source: str | None) -> bool:

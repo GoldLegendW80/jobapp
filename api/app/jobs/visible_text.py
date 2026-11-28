@@ -8,7 +8,8 @@ What goes, by Unicode category (`unicodedata.category`, the Unicode version of t
 runs the app, `unicodedata.unidata_version`), never by a list of characters:
 - Cc, the control characters (NUL included), but the tab, the line feed and the carriage return,
   and those a reader sees as a line break (`LINE_BREAKS`: the vertical tab, the form feed, the
-  next line and the information separators U+001C to U+001E), each of which becomes a line feed;
+  next line and the information separators U+001C to U+001E), each of which becomes a line feed,
+  or a space in a one line value (`visible_line`: a posting's title, company and place);
 - Cf, the format characters: zero-width spaces and joiners, direction marks and overrides, the
   tag block, the byte order mark, the soft hyphen;
 - Cs, a lone surrogate; Co, a private use character (an icon font's bullet); Cn, an unassigned
@@ -86,11 +87,20 @@ def _selector(match: re.Match[str]) -> str:
     return ""
 
 
-def visible(text: str) -> str:
-    """`text` without what a reader cannot see (module docstring)."""
+def _visible(text: str, line_break: str) -> str:
     if not text:
         return text
-    return SELECTORS.sub(_selector, BREAKS.sub("\n", _dropped().sub(_kept, text)))
+    return SELECTORS.sub(_selector, BREAKS.sub(line_break, _dropped().sub(_kept, text)))
+
+
+def visible(text: str) -> str:
+    """`text` without what a reader cannot see (module docstring)."""
+    return _visible(text, "\n")
+
+
+def visible_line(text: str) -> str:
+    """`visible(text)` for a one line value: what a reader sees as a line break is a space."""
+    return _visible(text, " ")
 
 
 def visible_or_none(text: str | None) -> str | None:

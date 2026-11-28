@@ -130,7 +130,7 @@ from app.jobs.models import (
     SweepTrigger,
 )
 from app.jobs.never_apply import NeverApplyRule
-from app.jobs.visible_text import visible
+from app.jobs.visible_text import visible, visible_line
 from app.opportunities import pay as pays
 from app.profile import matching
 from app.profile.models import Profile
@@ -1710,15 +1710,15 @@ def discovery_date(finding: Any) -> str:
 
 
 class _Seen:
-    """Jobs J39: a source's finding with its title, company, place and text as a reader sees
-    them (app/jobs/visible_text.py), so its keys, rules, score and signals read what is stored;
-    every other attribute is the finding's own."""
+    """Jobs J39: a source's finding with its title, company, place (one line each) and text as a
+    reader sees them (app/jobs/visible_text.py), so its keys, rules, score and signals read what is
+    stored; every other attribute is the finding's own."""
 
     def __init__(self, finding: Any) -> None:
         self._finding = finding
-        self.title = visible(finding.title)
-        self.company = visible(finding.company) if finding.company else finding.company
-        self.location = visible(finding.location)
+        self.title = visible_line(finding.title)
+        self.company = visible_line(finding.company) if finding.company else finding.company
+        self.location = visible_line(finding.location)
         self.text = visible(finding.text)
 
     def __getattr__(self, name: str) -> Any:

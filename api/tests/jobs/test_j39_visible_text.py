@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 from app.jobs import visible_text
-from app.jobs.visible_text import visible, visible_or_none
+from app.jobs.visible_text import visible, visible_line, visible_or_none
 
 DROPPED = [
     pytest.param("\x00", id="nul"),
@@ -79,6 +79,22 @@ def test_a_control_character_seen_as_a_line_break_becomes_a_line_feed(hidden: st
     assert visible(f"Python\u200b{hidden}\u200bSQL") == "Python\nSQL"
     assert visible(hidden * 3) == "\n\n\n"
     assert visible(f"line{hidden}\ufe0f") == "line\n"  # a selector after it goes, as after \n
+
+
+@pytest.mark.parametrize("hidden", BREAKS)
+def test_in_a_one_line_value_a_line_break_a_reader_sees_becomes_a_space(hidden: str) -> None:
+    assert visible_line(f"AI{hidden}engineer") == "AI engineer"
+    assert visible_line(f"Python\u200b{hidden}\u200bSQL") == "Python SQL"
+    assert visible_line(hidden * 3) == "   "
+    assert visible_line(f"line{hidden}\ufe0f") == "line "  # a selector after it goes, as after \n
+    assert visible_line(visible_line(f"a{hidden}\ufe0fb")) == "a b"
+
+
+def test_a_one_line_value_is_otherwise_what_a_reader_sees() -> None:
+    plain = "".join(char for char in EVERY if char not in visible_text.LINE_BREAKS)
+    assert visible_line(plain) == visible(plain)
+    assert visible_line("AI\nengineer") == "AI\nengineer"  # written as a line feed: as it is
+    assert (visible_line(""), visible_line("\u200b")) == ("", "")
 
 
 def test_a_text_of_hidden_characters_alone_is_nothing_where_a_column_may_hold_it() -> None:

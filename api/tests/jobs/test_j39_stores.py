@@ -6,6 +6,7 @@ read itself, the person's paste (a NUL answers 200), a posting added by hand, an
 the reader's cut, and a statement no store wrote (the column's own type). Invented postings and
 `e2e-*@example.org` accounts only."""
 
+import html
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -25,8 +26,20 @@ from app.mail.alerts.source import AlertFinding
 from tests.identity.api_helpers import Api
 from tests.jobs import test_reader
 from tests.jobs.conftest import new_user
-from tests.jobs.sweep_helpers import SKILLS, finding, jobs_of, new_sweep, now, search, set_profile
+from tests.jobs.sweep_helpers import (
+    SKILLS,
+    finding,
+    jobs_of,
+    new_sweep,
+    now,
+    read_sweep,
+    search,
+    set_profile,
+)
 from tests.jobs.test_api import Signed, seed, sign_in
+from tests.jobs.test_job_feeds import Api as FakeApi
+from tests.jobs.test_job_feeds import stamp
+from tests.jobs.test_job_feeds_sweep import feeds_search, run_feeds
 from tests.jobs.test_scoring import skills
 
 CLEAN = (
@@ -537,3 +550,120 @@ def test_a_posting_added_by_hand_with_a_text_of_hidden_characters_has_none(
     response = api.post("/api/jobs", token=person.token, json=body)
     assert response.status_code == 201, response.text
     assert raw(factory, uuid.UUID(response.json()["id"]))["posting_text"] is None
+
+
+# --- a one line value stays on one line -----------------------------------------------------------
+
+LINE_BREAKS = [
+    pytest.param("\x0b", id="vertical tab"),
+    pytest.param("\x0c", id="form feed"),
+    pytest.param("\x1c", id="file separator"),
+    pytest.param("\x1e", id="record separator"),
+    pytest.param("\x85", id="next line"),
+]
+
+
+@pytest.mark.parametrize("brk", LINE_BREAKS)
+def test_a_line_break_a_reader_sees_is_a_space_in_a_title_a_company_and_a_place(
+    factory: sessionmaker[Session], brk: str
+) -> None:
+    user = new_user(factory, f"e2e-j39-{uuid.uuid4().hex[:6]}@example.org")
+    set_profile(factory, user, search())
+    company, place, text = f"Example{brk}Robotics", f"Paris,{brk}France", f"{CLEAN}{brk}Apply now."
+    found = feeds.Finding(
+        source="arbeitnow", external_id="ai-engineer-paris-1", title=f"AI{brk}engineer",
+        company=company, location=place, url=ARBEITNOW_URL, text=text,
+    )  # fmt: skip
+    _store(factory, _claimed(factory, user), "arbeitnow", found)
+    [job] = jobs_of(factory, user)
+    statement_id = uuid.uuid4()
+    with factory() as db, db.begin():
+        db.execute(
+            pg_insert(Job).values(
+                id=statement_id, user_id=user, slug="example-robotics-data", company=company,
+                title=f"Data{brk}engineer", location=place, posting_text=text,
+            )
+        )  # fmt: skip
+        new = service.NewJob(
+            company=company, title=f"ML{brk}engineer", location=place, posting_text=text
+        )
+    assert (new.title, new.company, new.location) == ("ML engineer", COMPANY, PLACE)
+    assert new.posting_text == f"{CLEAN}\nApply now."
+    for job_id, title in ((job.id, TITLE), (statement_id, "Data engineer")):
+        row = raw(factory, job_id)
+        assert (row["title"], row["company"], row["location"]) == (title, COMPANY, PLACE)
+        assert row["posting_text"] == f"{CLEAN}\nApply now."  # the text keeps its line feed
+
+
+# --- one description never stops a fetch ----------------------------------------------------------
+
+DIGITS = "9" * 5_000  # past the 4,300 digits int() reads
+TOO_LONG = [
+    pytest.param(f"&#{DIGITS};", id="5,000 decimal digits"),
+    pytest.param(f"&#x{'F' * 5_000};", id="5,000 hexadecimal digits"),
+    pytest.param("&#00000233;", id="8 decimal digits"),
+    pytest.param("&#x0001F600;", id="7 hexadecimal digits"),
+]
+
+
+@pytest.mark.parametrize("reference", TOO_LONG)
+def test_a_numeric_reference_too_long_to_be_a_code_point_stays_as_written(reference: str) -> None:
+    for value in (
+        f"Pay {reference} a year",
+        f"<p>Pay {reference} a year</p>",
+        f'<p><a href="https://example.org/{reference}">Pay</a> {reference} a year</p>',
+    ):
+        assert feeds.plain_text(value) == f"Pay {reference} a year"
+    assert feeds.line(f"<b>Pay</b> {reference}", 20) == f"Pay {reference}"[:20]
+
+
+def test_an_ordinary_numeric_reference_still_reads() -> None:
+    written = "<p>Caf&#233; &#x1F600; &#0000233; &#x01F600; &eacute; &#9999999;</p>"
+    assert feeds.plain_text(written) == "Caf\u00e9 \U0001f600 \u00e9 \U0001f600 \u00e9 \ufffd"
+
+
+REFERENCE = f"&#{DIGITS};"
+LONG_HTML = "".join(
+    f"<p>Paragraph {n}: Example Robotics plans its routes.</p>" for n in range(5_000)
+)
+# Each kind of description with such a reference, then an ordinary posting.
+DESCRIPTIONS = {
+    "HTML": f"<p>AI engineer in Paris.</p><p>Pay {REFERENCE} a year.</p>",
+    "plain text": f"AI engineer in Paris. Pay {REFERENCE} a year.",
+    "escaped twice": f"&lt;p&gt;AI engineer in Paris.&lt;/p&gt;&lt;p&gt;Pay {REFERENCE} a year.",
+    "past 200,000 characters": html.escape(LONG_HTML) + f"&lt;p&gt;Pay {REFERENCE} a year.",
+    "ordinary": "<p>AI engineer in Paris.</p><p>Pay 70k a year.</p>",
+}
+
+
+def test_a_description_with_such_a_reference_is_stored_and_the_fetch_goes_on(
+    factory: sessionmaker[Session],
+) -> None:
+    user = new_user(factory, f"e2e-j39-{uuid.uuid4().hex[:6]}@example.org")
+    set_profile(factory, user, feeds_search(job_feeds=["arbeitnow"]))
+    assert len(LONG_HTML) > 4 * feeds.TEXT_MAX  # the reference is past what the conversion reads
+    items = [
+        {
+            "slug": f"ai-engineer-paris-{n}",
+            "company_name": f"Example Robotics {n}",
+            "title": "AI Engineer",
+            "description": description,
+            "url": f"https://www.arbeitnow.com/jobs/companies/example-robotics-{n}/ai-engineer-{n}",
+            "location": "Paris, France",
+            "created_at": stamp(hours=n + 1),
+        }
+        for n, description in enumerate(DESCRIPTIONS.values())
+    ]
+    api = FakeApi({("www.arbeitnow.com", "1"): {"data": items, "links": {"next": None}}})
+    sweep_id = new_sweep(factory, user)
+    run_feeds(factory, sweep_id, api, None)
+    row = read_sweep(factory, sweep_id)
+    [entry] = row.stats["sources"]
+    assert (entry["outcome"], entry["error"], entry["found"]) == ("complete", None, 5)
+    assert entry["cursor"] == stamp(hours=1)
+    texts = {job.company: job.posting_text or "" for job in jobs_of(factory, user)}
+    assert len(texts) == 5
+    for n in range(3):
+        assert texts[f"Example Robotics {n}"].endswith(f"Pay {REFERENCE} a year.")
+    assert texts["Example Robotics 3"].startswith("Paragraph 0: Example Robotics plans its routes.")
+    assert texts["Example Robotics 4"] == "AI engineer in Paris.\nPay 70k a year."

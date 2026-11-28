@@ -443,6 +443,115 @@ def test_a_long_answer_escaped_twice_keeps_its_end() -> None:
     assert text.endswith("of its people, part 399.")
 
 
+SAID = (
+    "Paragraph {n}: Example Robotics plans the routes of its warehouse robots and of its people, "
+    "part {n}."
+)
+WORD_STYLE = "font-family: Arial, sans-serif; font-size: 11pt; color: #000000;"
+
+
+def long_answer(count: int, *, spans: bool = False, before: dict[int, str] | None = None) -> str:
+    """The re-check's long answers (escaped once): `count` paragraphs, each word in its own styled
+    span (Word's HTML) or not, with `before[n]` written before paragraph n."""
+
+    def said(n: int) -> str:
+        words = SAID.format(n=n).split()
+        return " ".join(f'<span style="{WORD_STYLE}">{w}</span>' if spans else w for w in words)
+
+    return "".join((before or {}).get(n, "") + f"<p>{said(n)}</p>" for n in range(count))
+
+
+# Past the 50,000 characters the conversion keeps (its text, cut there, ends in part 492), and past
+# the 200,000 it reads (its text ends in part 126, read up to a span's tag).
+LONG = [
+    pytest.param(long_answer(600), 64_580, "Paragraph 492: Example Robotics plan", id="kept"),
+    pytest.param(
+        long_answer(160, spans=True), 250_980, "Example Robotics plans the routes of its", id="read"
+    ),
+]
+
+
+@pytest.mark.parametrize(("once", "size", "end"), LONG)
+def test_a_long_answer_escaped_twice_is_stored_as_escaped_once(
+    once: str, size: int, end: str
+) -> None:
+    assert len(once) == size
+    twice = html.escape(once)
+    assert arbeitnow.escaped_twice(twice)
+    text = arbeitnow.text_of(twice)
+    assert text == arbeitnow.text_of(once) == plain_text(once)
+    assert text.endswith(end)
+    assert "<" not in text
+    assert "Paragraph 492:" in text if size < 4 * TEXT_MAX else "Paragraph 126:" in text
+
+
+SCRIPT = "<script>track('apply');</script>"
+# Something hides words in what the conversion reads and keeps: the old way, as before J39.
+HIDDEN_IN_LONG = [
+    pytest.param(long_answer(600, before={10: SCRIPT}), id="a script, past what it keeps"),
+    pytest.param(
+        long_answer(160, spans=True, before={10: SCRIPT}), id="a script, past what it reads"
+    ),
+    pytest.param(
+        long_answer(600, before={300: "<style>p { color: red; }"}),
+        id="a style never closed, before the cut of what it keeps",
+    ),
+    pytest.param(
+        long_answer(160, spans=True, before={100: "<!-- the old benefits "}),
+        id="a comment never closed, in what it reads",
+    ),
+    pytest.param(
+        long_answer(160, spans=True, before={100: "<script>track('apply');"}),
+        id="a script closed past what it reads",
+    ),
+]
+
+
+@pytest.mark.parametrize("once", HIDDEN_IN_LONG)
+def test_a_long_answer_escaped_twice_hiding_words_is_stored_the_old_way(once: str) -> None:
+    twice = html.escape(once)
+    text = arbeitnow.text_of(twice)
+    assert text == plain_text(twice)
+    assert "<p>" in text
+    if SCRIPT in once:  # its words and those after it, as written
+        assert text.index("track('apply');") < text.index("10:")
+
+
+# The read bound falls in the paragraph after the padding: inside a word, a tag or a reference.
+TAIL = (
+    f'<p>Send it to Example Robotics by email&nbsp;today <span style="{WORD_STYLE}">now</span></p>'
+)
+CUT_INSIDE = [
+    pytest.param("email", 2, "Send it to Example Robotics by em", id="a word"),
+    pytest.param("style=", 3, "Send it to Example Robotics by email today", id="a tag"),
+    pytest.param("&nbsp;", 3, "Send it to Example Robotics by email", id="a reference"),
+]
+
+
+@pytest.mark.parametrize(("where", "into", "end"), CUT_INSIDE)
+def test_a_long_answer_cut_by_what_the_conversion_reads(where: str, into: int, end: str) -> None:
+    head = long_answer(100, spans=True)
+    pad = 4 * TEXT_MAX - len(head) - len("<p>Padding.</p>") - TAIL.index(where) - into
+    once = head + "<p>Padding." + " " * pad + "</p>" + TAIL + long_answer(20)
+    assert once[: 4 * TEXT_MAX].endswith(where[:into])
+    text = arbeitnow.text_of(html.escape(once))
+    assert text.endswith(f"Padding.\n{end}")
+    assert "<" not in text
+    assert "&" not in text
+    if where != "&nbsp;":
+        assert text == arbeitnow.text_of(once)
+    else:  # read once, the cut reference is written as is: "&nb"
+        assert arbeitnow.text_of(once) == f"{text}&nb"
+
+
+def test_a_failed_shape_whose_conversion_would_be_cut_is_left_as_stored() -> None:
+    # No feed stores one (its text is TEXT_MAX at most, and a failed shape converts shorter).
+    stored = "\n".join(f"<p>{SAID.format(n=n)}</p>" for n in range(600))
+    assert len(visible(plain_text(stored))) == TEXT_MAX
+    assert arbeitnow.failed_shape(stored)
+    assert arbeitnow.repair(stored) == arbeitnow.Repair(left="loses_words")
+
+
 def test_an_answer_finding_is_its_text_converted_once() -> None:
     item = {
         "slug": "ai-engineer-example-robotics-1",
