@@ -527,6 +527,60 @@ def test_every_wall_rests_its_host(
     assert web.seen == []
 
 
+def test_a_host_down_twice_in_a_row_is_asked_once_an_hour(
+    factory: sessionmaker[Session], ann: uuid.UUID, ben: uuid.UUID
+) -> None:
+    site = "careers.example-robotics.example"
+    add(factory, ann, [{"n": n, "host": site, "published_on": date(2026, n, 1)} for n in (1, 2, 3)])
+    add(factory, ben, [{"n": 4, "host": f"www.{site}", "published_on": date(2026, 4, 1)}])
+    web = Web({path(site, n): Page(503, b"busy") for n in (1, 2, 3)})
+    web.pages[path(f"www.{site}", 4)] = Page(500, b"error")
+    assert tick(factory, web) == 1
+    assert tick(factory, web, NOW + timedelta(minutes=1)) == 1
+    # Down twice in a row: nobody's posting of the host is asked for an hour.
+    assert tick(factory, web, NOW + timedelta(minutes=2)) == 0
+    assert tick(factory, web, NOW + timedelta(minutes=60)) == 0
+    assert tick(factory, web, NOW + timedelta(minutes=61, seconds=1)) == 1
+    assert tick(factory, web, NOW + timedelta(minutes=62)) == 0
+    assert len(web.seen) == 3
+
+
+@pytest.mark.parametrize(
+    ("latest", "before", "ago", "asked"),
+    [
+        ("server_error", "server_error", timedelta(minutes=59), 0),
+        ("timeout", "network", timedelta(minutes=59), 0),
+        ("network", "timeout", timedelta(minutes=10), 0),
+        # Once, or after a good answer, or past the hour: asked.
+        ("server_error", "none", timedelta(minutes=10), 1),
+        ("none", "server_error", timedelta(minutes=10), 1),
+        ("server_error", "server_error", timedelta(minutes=61), 1),
+        ("unexpected_answer", "server_error", timedelta(minutes=10), 1),
+        ("server_error", "unreadable", timedelta(minutes=10), 1),
+    ],
+)
+def test_two_down_answers_in_a_row_rest_the_host(
+    factory: sessionmaker[Session],
+    ann: uuid.UUID,
+    latest: str,
+    before: str,
+    ago: timedelta,
+    asked: int,
+) -> None:
+    site = "careers.example-robotics.example"
+    stored = [(latest, NOW - ago), (before, NOW - ago - timedelta(minutes=1))]
+    add(
+        factory,
+        ann,
+        [
+            {"n": 1 + i, "host": site, "liveness": checked(at, reason, "unconfirmed")}
+            for i, (reason, at) in enumerate(stored)
+        ],
+    )
+    add(factory, ann, [{"n": 3, "host": site}])
+    assert tick(factory, Web()) == asked
+
+
 def test_a_host_a_running_search_reads_is_left_alone(
     factory: sessionmaker[Session], ann: uuid.UUID, ben: uuid.UUID
 ) -> None:

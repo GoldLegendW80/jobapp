@@ -14,7 +14,8 @@ stored as a click's is.
   checks stored on them (`jobs.liveness.checked_at`, a click's included); one posting of a host
   a tick; a host whose answer to a check of anyone's posting in the last `rest_hours` was a wall
   (REST_REASONS) is left alone for every person (the checks all leave from the machine's one
-  address); a host a running search reads (its sources' hosts) is left alone while it runs.
+  address), and so is for DOWN_REST a host whose two latest checks found it down (DOWN_REASONS);
+  a host a running search reads (its sources' hosts) is left alone while it runs.
   Each request is paced by the shared pacer, as a click's. A person with no open posting costs
   no query of her own and no request.
 - One tick at a time, whatever the number of workers: the tick holds a transaction advisory lock
@@ -55,6 +56,9 @@ OPEN = frozenset({JobStatus.found, JobStatus.shortlisted})
 NOT_STORED = Finding(UNCONFIRMED, "check_failed")
 # The answers that say the host turned the app away: it is asked again only after a rest.
 REST_REASONS = frozenset({"rate_limited", "bot_check", "refused", "sign_in"})
+# The answers of a host that is down (5xx, the time, the network): twice in a row, a rest.
+DOWN_REASONS = frozenset({"server_error", "timeout", "network"})
+DOWN_REST = timedelta(hours=1)
 # The findings stored without a request: they leave the day's room as it was.
 NO_REQUEST = (liveness_check.CLOSING_DATE, "linkedin", "no_address")
 LOCK = 0x6A6F_624C_6976_65
@@ -180,7 +184,34 @@ def resting_hosts(db: Session, now: datetime, bounds: Bounds) -> set[str]:
             checked_at() > now - timedelta(hours=bounds.rest_hours),
         )
     )
-    return {host_key(url) for url in urls if url}
+    return {host_key(url) for url in urls if url} | down_hosts(db, now)
+
+
+def down_hosts(db: Session, now: datetime) -> set[str]:
+    """The hosts whose two latest checks within a day, of anyone's postings, both found them
+    down (DOWN_REASONS), the latest within DOWN_REST: a broken site is asked once a DOWN_REST."""
+    when = checked_at()
+    rows = db.execute(
+        sa.select(Job.url, answered(), when)
+        .where(
+            Job.url.is_not(None),
+            when > now - timedelta(hours=24),
+            answered().not_in(NO_REQUEST),
+        )
+        .order_by(when.desc(), Job.id)
+    )
+    latest: dict[str, list[tuple[str, datetime]]] = {}
+    for url, reason, at in rows:
+        seen = latest.setdefault(host_key(url), [])
+        if len(seen) < 2:
+            seen.append((reason, at))
+    return {
+        host
+        for host, seen in latest.items()
+        if len(seen) == 2
+        and all(reason in DOWN_REASONS for reason, _ in seen)
+        and seen[0][1] > now - DOWN_REST
+    }
 
 
 def due(db: Session, user_id: uuid.UUID, now: datetime, bounds: Bounds) -> list[Any]:
