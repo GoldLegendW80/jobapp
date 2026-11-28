@@ -1700,17 +1700,18 @@ async def execute_waiting(context: RunContext, run_id: uuid.UUID) -> RunStatus |
     nor lock (the hiring panel): a run that must wait (agents A13) waits here, `queued`, and
     starts again at its time. None when it was not queued, or was cancelled while it waited.
     Cancelled itself (the job ends) while the run waits: the run fails as stopped."""
-    while True:
-        status = await execute(context, run_id, may_wait=True)
-        if status is not RunStatus.queued:
-            return status
-        try:
+    try:
+        while True:
+            status = await execute(context, run_id, may_wait=True)
+            if status is not RunStatus.queued:
+                return status
             if not await _wait_turn(context, run_id):
                 return None
-        except asyncio.CancelledError:
-            with contextlib.suppress(Exception):
-                await asyncio.shield(asyncio.to_thread(_stop_waiting, context, run_id))
-            raise
+    except asyncio.CancelledError:
+        # Whether it landed in the wait or in the end of a try that queued the run again.
+        with contextlib.suppress(Exception):
+            await asyncio.shield(asyncio.to_thread(_stop_waiting, context, run_id))
+        raise
 
 
 def _wait_until(context: RunContext, run_id: uuid.UUID) -> datetime | None:
