@@ -114,6 +114,8 @@ def test_the_summary_answer_names_the_counter() -> None:
         "listed",
         "listed_read",
         "cards_refused",
+        # Jobs J36: how far the list was paged, absent from an older stats row.
+        "listed_pages",
         # Jobs J9: the frozen source identity and progress.
         "source_id",
         "mode",
@@ -192,6 +194,8 @@ def test_parser_skips_survive_serialization_alongside_rules_and_errors() -> None
         "listed": 0,
         "listed_read": 0,
         "cards_refused": {},
+        # Jobs J36: no paging report in an older stats row.
+        "listed_pages": None,
         # Jobs J9: the frozen source identity and progress, absent from an older stats row.
         "source_id": None,
         "mode": None,
