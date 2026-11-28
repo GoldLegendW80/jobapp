@@ -61,6 +61,11 @@ def first(name: str, raw: bytes | None = None) -> ats.BoardPosting:
 GREENHOUSE_PAGE = html.unescape(json.loads(body("greenhouse"))["jobs"][0]["content"])
 OLD = before_j42(GREENHOUSE_PAGE)
 NEW = first("greenhouse").text
+WORKABLE_OLD = before_j42(json.loads(body("workable"))["jobs"][0]["description"])
+WORKABLE_NEW = first("workable").text
+_OFFER = json.loads(body("recruitee"))["offers"][0]
+RECRUITEE_OLD = before_j42(f"{_OFFER['description']} {_OFFER['requirements']}")
+RECRUITEE_NEW = first("recruitee").text
 
 
 # --- the readers ----------------------------------------------------------------------------------
@@ -225,6 +230,41 @@ ACCEPTED = [
     pytest.param("A b. A b.", "A b.\nA b.\nA b.", "", "A b.\nA b.", id="a repeated paragraph"),
     pytest.param("one two three", "zero\none two\nthree\nfour", "", "one two\nthree", id="a run"),
     pytest.param("one two", "one\ntwo three", "", "one\ntwo", id="a text the store cut at its end"),
+    pytest.param(WORKABLE_OLD, WORKABLE_NEW, "", WORKABLE_NEW, id="workable's fixture"),
+    pytest.param(RECRUITEE_OLD, RECRUITEE_NEW, "", RECRUITEE_NEW, id="recruitee's fixture"),
+    pytest.param("a b c", "a\tb\nc", "", "a\tb\nc", id="a tab"),
+    pytest.param("• Python • SQL", "• Python\n• SQL", "", "• Python\n• SQL", id="bullets"),
+    pytest.param(
+        "Apply on our site here",
+        "Apply on our\nsite here.",
+        "",
+        "Apply on our\nsite here",
+        id="a cut that left the closing punctuation out",
+    ),
+    pytest.param(
+        "agents that read job postings, write tests for them and ship",
+        NEW,
+        "",
+        "agents that read job postings, write tests for them\nand ship",
+        id="a cut starting and ending inside lines",
+    ),
+    pytest.param(
+        f"{TITLE}\n\n{OLD[:CUT_END]}",
+        NEW,
+        TITLE,
+        f"{TITLE}\n\n{NEW[: NEW.index('for this role') + len('for this role')]}",
+        id="the title and a cut",
+    ),
+    pytest.param(
+        "مهندس ذكاء اصطناعي في باريس",
+        "مهندس ذكاء\nاصطناعي في باريس",
+        "",
+        "مهندس ذكاء\nاصطناعي في باريس",
+        id="a right to left text",
+    ),
+    pytest.param("R&D lab , Paris", "R&D lab,\nParis", "", "R&D lab,\nParis", id="an ampersand"),
+    pytest.param("  a b  ", "a\nb", "", "a\nb", id="spaces around the stored text"),
+    pytest.param("x" * 50_000 + " y", "x" * 50_000 + "\ny", "", "x" * 50_000 + "\ny", id="long"),
 ]
 
 
@@ -262,6 +302,11 @@ REFUSED = [
     pytest.param("alert(1) Build agents", "<script>\nBuild agents", "", id="a script's words"),
     pytest.param("a b", "ab\nc", "", id="a word the board writes whole on one line"),
     pytest.param("ab", "a\nc b", "", id="characters apart"),
+    pytest.param("an e-mail to us", "an email\nto us", "", id="a hyphen added"),
+    pytest.param(OLD.replace("70k", "170k"), NEW, "", id="a digit added"),
+    pytest.param("ok ❤️ thanks", "ok\nthanks", "", id="an emoji removed"),
+    pytest.param("a b c", "a\nb\nd", "", id="the last character changed"),
+    pytest.param("Z a b", "a\nb", "", id="the first character changed"),
 ]
 
 
