@@ -210,6 +210,43 @@ describe("the document view", () => {
     expect(document.body.textContent).not.toMatch(SEPARATOR);
   });
 
+  it("shows what the PDF's text check found beside the fit, and keeps the download", async () => {
+    const api = fakeDocuments();
+    const found = fakeVersion({
+      number: 4,
+      fit: "overflow",
+      pdf_text: [
+        {
+          code: "pdf_phone_not_text",
+          message:
+            "Your phone number is not text in this PDF, so an application system cannot read it. Choose another template, or check the phone number of your profile.",
+        },
+      ],
+    });
+    const passed = fakeVersion({ number: 3, pdf_text: [] });
+    api.documents.set(
+      "a",
+      fakeDocumentOf(fakeCv({ id: "a" }), { latest: found }),
+    );
+    api.versions.set("a", [found, passed]);
+    const user = userEvent.setup();
+    view(<DocumentView documentId="a" />);
+    const note = await screen.findByTestId("pdf-text-note");
+    expect(note).toHaveTextContent("Your phone number is not text in this PDF");
+    expect(screen.getByTestId("overflow-note")).toBeVisible();
+    expect(screen.getByRole("link", { name: "Download PDF" })).toBeVisible();
+    expect(document.body.textContent).not.toMatch(SEPARATOR);
+    // A version whose check passed shows no note.
+    const history = await screen.findByRole("region", { name: "Versions" });
+    await user.click(
+      within(history).getByRole("button", { name: "Open version 3" }),
+    );
+    expect(
+      await screen.findByRole("img", { name: "Page 1 of version 3" }),
+    ).toBeVisible();
+    expect(screen.queryByTestId("pdf-text-note")).toBeNull();
+  });
+
   it("shows the state while the first version is written, with no page", async () => {
     const api = fakeDocuments();
     const cv = fakeCv({ id: "a", last_version_at: null });

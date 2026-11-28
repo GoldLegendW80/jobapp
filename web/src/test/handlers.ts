@@ -287,6 +287,7 @@ export const handlers = [
       banned_phrases: [],
       starter_phrases: false,
       starter_list: ["passionate about", "proven track record", "leveraged"],
+      letter_words: 350,
     }),
   ),
   // No application started for a posting (job detail's Apply section).

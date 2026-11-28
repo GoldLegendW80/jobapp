@@ -127,6 +127,46 @@ export const LookBackAtPastSearchSettings: Story = {
   },
 };
 
+/** As a job seeker, I want to set how long my letters are, so that each new letter is as long as I like to send. */
+export const SetTheLengthOfMyLetters: Story = {
+  beforeEach: () => {
+    camilleSearch();
+    server.use(
+      http.get("*/api/documents/settings", () =>
+        HttpResponse.json({
+          no_dash_separators: true,
+          banned_phrases: ["synergy"],
+          starter_phrases: false,
+          starter_list: ["passionate about", "proven track record"],
+          letter_words: 300,
+        }),
+      ),
+    );
+  },
+  play: async ({ canvasElement }) => {
+    const length = await within(canvasElement).findByRole("spinbutton", {
+      name: "Letter length",
+    });
+    length.scrollIntoView({ block: "center" });
+  },
+};
+
+/** As a job seeker, I want to be told when a letter length cannot be kept, so that I choose one the writer can aim at. */
+export const ChooseALengthTheWriterCanAimAt: Story = {
+  beforeEach: () => {
+    camilleSearch();
+  },
+  play: async ({ canvasElement }) => {
+    const length = await within(canvasElement).findByRole("spinbutton", {
+      name: "Letter length",
+    });
+    length.scrollIntoView({ block: "center" });
+    await userEvent.clear(length);
+    await userEvent.type(length, "900");
+    await userEvent.tab();
+  },
+};
+
 /** As a job seeker, I want to change my search on my phone, so that I can widen it the moment I think of it. */
 export const ChangeMySearchOnMyPhone: Story = {
   globals: { viewport: { value: "mobile2", isRotated: false } },

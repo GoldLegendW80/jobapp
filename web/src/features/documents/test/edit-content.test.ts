@@ -132,8 +132,8 @@ describe("the draft of the Edit view", () => {
     ).map((note) => note.sentence);
     expect(sentences).toEqual([
       "A run of words copied from the posting",
-      "A letter shorter than about 350 words",
-      "A letter longer than about 350 words",
+      "A letter far shorter than the length of your writing rules",
+      "A letter far longer than the length of your writing rules",
     ]);
   });
 

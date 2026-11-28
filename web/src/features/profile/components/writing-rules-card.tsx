@@ -1,7 +1,8 @@
 /**
  * The card "Writing rules" of the Search tab (SPEC-documents.md, Decision 9): the rules code
  * enforces on the CVs and letters the writer makes (the dash rule, the starter list of common
- * phrases, the person's banned phrases), through `GET` and `PUT /api/documents/settings`. Each change
+ * phrases, the length of a letter, the person's banned phrases), through `GET` and
+ * `PUT /api/documents/settings`. Each change
  * shows at once and is saved at once, the whole value at a time, one save after the other in the
  * order asked; a refused save puts back what the api answered last (between two tabs the last
  * save wins: the api keeps no revision). It sits inside the Search form, so nothing here submits it.
@@ -25,7 +26,11 @@ import { Switch } from "@/components/ui/switch";
 import { SettingsSection } from "@/components/shared/profile/settings-frame";
 
 import { failureSentence } from "@/features/documents/api/documents-api";
-import { type DocumentSettings } from "@/features/documents/api/document-settings-api";
+import {
+  LETTER_WORDS_MAX,
+  LETTER_WORDS_MIN,
+  type DocumentSettings,
+} from "@/features/documents/api/document-settings-api";
 import {
   useDocumentSettings,
   useSaveDocumentSettings,
@@ -161,6 +166,13 @@ function Rules({ saved: first }: { saved: DocumentSettings }) {
         </FieldContent>
       </Field>
 
+      <LetterLength
+        value={shown.letter_words}
+        onSave={(words) => {
+          save({ ...shown, letter_words: words });
+        }}
+      />
+
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 id={`${id}-phrases`} className="text-sm font-medium">
@@ -264,5 +276,67 @@ function Rules({ saved: first }: { saved: DocumentSettings }) {
         </Alert>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The words a letter's paragraphs aim at together. Typing changes nothing until the field is
+ * left or Enter is pressed; a number out of its bounds is said and never sent.
+ */
+function LetterLength({
+  value,
+  onSave,
+}: {
+  value: number;
+  onSave: (words: number) => void;
+}) {
+  const id = useId();
+  // What is typed and not saved yet; undefined shows the saved value.
+  const [typed, setTyped] = useState<string>();
+  const text = typed ?? String(value);
+  const words = /^\d+$/u.test(text) ? Number(text) : Number.NaN;
+  const valid = words >= LETTER_WORDS_MIN && words <= LETTER_WORDS_MAX;
+  const commit = () => {
+    if (typed === undefined || !valid) return;
+    setTyped(undefined);
+    if (words !== value) onSave(words);
+  };
+  return (
+    <Field>
+      <FieldLabel htmlFor={`${id}-input`}>Letter length</FieldLabel>
+      <div className="flex items-center gap-2">
+        <Input
+          id={`${id}-input`}
+          type="number"
+          inputMode="numeric"
+          min={LETTER_WORDS_MIN}
+          max={LETTER_WORDS_MAX}
+          step={10}
+          className="w-24 tabular-nums"
+          aria-describedby={valid ? `${id}-help` : `${id}-help ${id}-problem`}
+          aria-invalid={valid ? undefined : true}
+          value={text}
+          onChange={(event) => {
+            setTyped(event.target.value);
+          }}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              commit();
+            }
+          }}
+        />
+        <span className="text-sm text-muted-foreground">words</span>
+      </div>
+      <FieldDescription id={`${id}-help`} className="text-xs">
+        {`The writer aims each new letter at about this many words, from ${String(LETTER_WORDS_MIN)} to ${String(LETTER_WORDS_MAX)}, and notes a letter far shorter or longer.`}
+      </FieldDescription>
+      {valid ? null : (
+        <p id={`${id}-problem`} className="text-sm text-destructive">
+          {`Choose a number of words from ${String(LETTER_WORDS_MIN)} to ${String(LETTER_WORDS_MAX)}.`}
+        </p>
+      )}
+    </Field>
   );
 }

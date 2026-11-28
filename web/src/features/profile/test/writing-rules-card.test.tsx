@@ -23,6 +23,7 @@ function fakeRules(initial: Partial<DocumentSettings> = {}) {
     banned_phrases: [],
     starter_phrases: false,
     starter_list: ["passionate about", "leveraged"],
+    letter_words: 350,
     ...initial,
   };
   const state = {
@@ -70,6 +71,7 @@ const phrases = () =>
     .getAllByRole("listitem")
     .map((item) => item.textContent);
 const DASHES = /[‒–—―−]|\s-\s/u;
+const length = () => screen.getByRole("spinbutton", { name: "Letter length" });
 
 describe("writing rules", () => {
   it("starts off for a new user, with no phrase", async () => {
@@ -91,6 +93,7 @@ describe("writing rules", () => {
         no_dash_separators: true,
         banned_phrases: ["synergy"],
         starter_phrases: false,
+        letter_words: 350,
       },
     ]);
     expect(dashes()).toBeChecked();
@@ -107,7 +110,12 @@ describe("writing rules", () => {
     await user.click(starter);
     await screen.findByText("Writing rules saved.");
     expect(rules.puts).toEqual([
-      { no_dash_separators: false, banned_phrases: [], starter_phrases: true },
+      {
+        no_dash_separators: false,
+        banned_phrases: [],
+        starter_phrases: true,
+        letter_words: 350,
+      },
     ]);
     expect(starter).toBeChecked();
     expect(card().textContent).not.toMatch(DASHES);
@@ -122,7 +130,12 @@ describe("writing rules", () => {
     await user.keyboard(" ");
     await screen.findByText("Writing rules saved.");
     expect(rules.puts).toEqual([
-      { no_dash_separators: true, banned_phrases: [], starter_phrases: false },
+      {
+        no_dash_separators: true,
+        banned_phrases: [],
+        starter_phrases: false,
+        letter_words: 350,
+      },
     ]);
     expect(dashes()).toBeChecked();
     expect(dashes()).toHaveFocus();
@@ -229,6 +242,7 @@ describe("writing rules", () => {
         no_dash_separators: true,
         banned_phrases: ["synergy", "rockstar"],
         starter_phrases: false,
+        letter_words: 350,
       });
     });
     expect(rules.puts).toEqual([
@@ -236,11 +250,13 @@ describe("writing rules", () => {
         no_dash_separators: true,
         banned_phrases: ["synergy"],
         starter_phrases: false,
+        letter_words: 350,
       },
       {
         no_dash_separators: true,
         banned_phrases: ["synergy", "rockstar"],
         starter_phrases: false,
+        letter_words: 350,
       },
     ]);
     await waitFor(() => {
@@ -298,5 +314,110 @@ describe("writing rules", () => {
     await waitFor(() => {
       expect(phrases()).toEqual(["go getter"]);
     });
+  });
+
+  it("shows the length of a letter, 350 words for a new user, with what it does", async () => {
+    await openRules();
+    expect(length()).toHaveValue(350);
+    expect(length()).toHaveAccessibleDescription(
+      "The writer aims each new letter at about this many words, from 150 to 600, and notes a letter far shorter or longer.",
+    );
+    expect(length()).toHaveAttribute("min", "150");
+    expect(length()).toHaveAttribute("max", "600");
+    expect(card().textContent).not.toMatch(DASHES);
+  });
+
+  it("saves a length when the field is left, and with Enter, apart from the Search section", async () => {
+    const { user, rules, profile } = await openRules({
+      banned_phrases: ["synergy"],
+    });
+    await user.clear(length());
+    await user.type(length(), "480");
+    expect(rules.puts).toHaveLength(0);
+    await user.tab();
+    await screen.findByText("Writing rules saved.");
+    await user.clear(length());
+    await user.type(length(), "200{Enter}");
+    await waitFor(() => {
+      expect(rules.value.letter_words).toBe(200);
+    });
+    expect(rules.puts).toEqual([
+      {
+        no_dash_separators: false,
+        banned_phrases: ["synergy"],
+        starter_phrases: false,
+        letter_words: 480,
+      },
+      {
+        no_dash_separators: false,
+        banned_phrases: ["synergy"],
+        starter_phrases: false,
+        letter_words: 200,
+      },
+    ]);
+    expect(length()).toHaveValue(200);
+    expect(profile.saves).toHaveLength(0);
+  });
+
+  it.each(["149", "601", "0", ""])(
+    "says why %j words cannot be kept and sends nothing",
+    async (typed) => {
+      const { user, rules } = await openRules({ letter_words: 420 });
+      await user.clear(length());
+      if (typed !== "") await user.type(length(), typed);
+      await user.tab();
+      expect(
+        screen.getByText("Choose a number of words from 150 to 600."),
+      ).toBeVisible();
+      expect(length()).toHaveAttribute("aria-invalid", "true");
+      expect(rules.puts).toHaveLength(0);
+      await user.clear(length());
+      await user.type(length(), "150{Enter}");
+      await waitFor(() => {
+        expect(rules.value.letter_words).toBe(150);
+      });
+      expect(
+        screen.queryByText("Choose a number of words from 150 to 600."),
+      ).toBeNull();
+    },
+  );
+
+  it("sends nothing when the length is left as it was", async () => {
+    const { user, rules } = await openRules({ letter_words: 420 });
+    await user.clear(length());
+    await user.type(length(), "420");
+    await user.tab();
+    expect(rules.puts).toHaveLength(0);
+    expect(length()).toHaveValue(420);
+  });
+
+  it("keeps a length being typed when the switch is saved", async () => {
+    const { user, rules } = await openRules();
+    await user.clear(length());
+    await user.type(length(), "5");
+    expect(length()).toHaveValue(5);
+    await user.click(dashes());
+    await waitFor(() => {
+      expect(rules.puts).toHaveLength(1);
+    });
+    expect(rules.puts[0]!.letter_words).toBe(350);
+    expect(length()).toHaveValue(5);
+    expect(
+      screen.getByText("Choose a number of words from 150 to 600."),
+    ).toBeVisible();
+  });
+
+  it("puts the saved length back when its save is refused", async () => {
+    const { user, rules } = await openRules({ letter_words: 420 });
+    rules.refuse = { status: 422, detail: "Invalid settings: letter_words" };
+    await user.clear(length());
+    await user.type(length(), "500{Enter}");
+    expect(
+      await screen.findByText(
+        "The writing rules were not saved. Invalid settings: letter_words",
+      ),
+    ).toBeVisible();
+    expect(length()).toHaveValue(420);
+    expect(rules.value.letter_words).toBe(420);
   });
 });
