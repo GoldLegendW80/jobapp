@@ -80,7 +80,7 @@ from app.db import get_session, read_snapshot
 from app.identity import deps
 from app.identity.models import User
 from app.identity.schemas import ErrorOut
-from app.jobs import languages, liveness_check, notices, places, service
+from app.jobs import languages, liveness_check, match, notices, places, scoring, service
 from app.jobs import rescore as auto_rescore
 from app.jobs import undo as undo_tokens
 from app.jobs.importer import kind
@@ -106,6 +106,7 @@ from app.jobs.schemas import (
     JobPatchIn,
     JobsImportDocument,
     JobTextIn,
+    MatchOut,
     MissingOut,
     RescoreIn,
     RescoreOut,
@@ -164,7 +165,16 @@ def _invalid(field: str, message: str) -> RequestValidationError:
 
 # JobListItem's fields that are no Job column
 _COMPUTED = frozenset(
-    {"file_count", "languages_missing", "page_given_up", "page_walled", "page_elsewhere"}
+    {
+        "file_count",
+        "languages_missing",
+        "page_given_up",
+        "page_walled",
+        "page_elsewhere",
+        "match_career",
+        "match_culture",
+        "blend",
+    }
 )
 
 
@@ -177,8 +187,13 @@ def _item(
     data = {name: getattr(job, name) for name in JobListItem.model_fields if name not in _COMPUTED}
     missing = languages.missing(job.languages, spoken)
     reason = (given_up or {}).get(job.id)
+    read = match.reading(job.match)
+    career, culture = (read.career, read.culture) if read else (None, None)
     return JobListItem(
         **data,
+        match_career=career,
+        match_culture=culture,
+        blend=scoring.blend(job.fit, career, culture),
         file_count=file_count,
         languages_missing=missing,
         page_given_up=reason is not None,
@@ -424,7 +439,16 @@ def _detail(db: Session, user: User, job: Job, today: date) -> JobDetail:
         events=[EventOut.model_validate(e) for e in events],
         events_total=events_total,
         notices=notices.notices_of(db, user.id, [job], today)[job.id],
+        match=_match_of(job),
     )
+
+
+def _match_of(job: Job) -> MatchOut | None:
+    read = match.reading(job.match)
+    if read is None:
+        return None
+    current = match.is_current(read, job.posting_text)
+    return MatchOut(**read.model_dump(exclude={"text"}), current=current)
 
 
 @router.post(

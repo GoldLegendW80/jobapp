@@ -43,6 +43,7 @@ STARTERS = {
 # Who starts an agent whose package's sentence above would be wrong for it.
 STARTER_OF = {
     "apply_followup": "The Write a draft button of an application the person follows up",
+    "jobs_match": "The reader's backlog tick, once it has nothing left to read",
     "posting_reader": "A sweep once its sources ended, and the backlog tick every minute",
     "profile_interpret": "Done on a part of the About you document",
     "profile_titles": "The More ideas button, and the tick after a change to the profile",
@@ -132,6 +133,7 @@ CATEGORY_OF: dict[str, str] = {
     "echo": "test",
     "job_chat": "jobs",
     "jobs_assess": "jobs",
+    "jobs_match": "finding",
     "posting_reader": "finding",
     "profile_extract": "profile",
     "profile_interpret": "profile",
@@ -218,6 +220,7 @@ NAMES: dict[str, str] = {
     "documents_proposal": "Proposal writer",
     "job_chat": "Job chat",
     "jobs_assess": "Posting assessor",
+    "jobs_match": "Career and culture reader",
     "posting_reader": "Posting reader",
     "profile_extract": "Profile extractor",
     "profile_interpret": "About you reader",
@@ -267,6 +270,7 @@ FLOWS: dict[str, Flow] = {
             _agent("browser_discovery", 2, 0),
             _agent("web_discovery", 2, 1),
             _agent("posting_reader", 2, 2),
+            _agent("jobs_match", 2, 3),
             _step("person", "help", "Let the assistant continue", 3, 0),
             _step("data", "postings", "Job postings", 3, 1),
         ),
@@ -289,6 +293,9 @@ FLOWS: dict[str, Flow] = {
             # worker.py cron:posting_reader, reader.tick.
             ("backlog", "posting_reader", "reads the unread ones"),
             ("posting_reader", "postings", "fills facts and text"),
+            # reader.start_backlog, once it starts no reading: match.start.
+            ("backlog", "jobs_match", "then rates the read ones"),
+            ("jobs_match", "postings", "stores career and culture"),
         ),
     ),
     "applying": Flow(
@@ -571,6 +578,7 @@ def load() -> dict[str, definitions.AgentDefinition]:
     from app.documents import writer_proposal as _proposal  # noqa: F401
     from app.ingestion import agents as _ingestion  # noqa: F401  (profile_extract, transcribe)
     from app.jobs import assess as _assess  # noqa: F401  (jobs_assess)
+    from app.jobs import match as _match  # noqa: F401  (jobs_match)
     from app.jobs import reader as _reader  # noqa: F401  (posting_reader)
     from app.profile import agents as _profile  # noqa: F401  (profile_titles, profile_interpret)
 

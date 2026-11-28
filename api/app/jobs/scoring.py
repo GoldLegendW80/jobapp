@@ -453,3 +453,17 @@ def bonus(posting_text: str, title: str, search: SearchSection) -> Bonus:
     parts = sum(1 for matched in (levels, industries, kinds) if matched)
     points = round(BONUS_CAP * parts / BONUS_PARTS)
     return Bonus(points=points, seniority=levels, industries=industries, company_types=kinds)
+
+
+# Jobs J38: the weights of the fit, the career score and the culture score in `blend` (planner
+# defaults of 2026-11-28, fixed: weights fitted on a person's own decisions ordered worse).
+BLEND_WEIGHTS = (40, 30, 30)
+
+
+def blend(fit: int | None, career: int | None, culture: int | None) -> int | None:
+    """The fit (set by hand or not), the career and the culture scores weighed by BLEND_WEIGHTS,
+    rounded half up, within 0 to 100; None when one is missing."""
+    if fit is None or career is None or culture is None:
+        return None
+    total = sum(w * v for w, v in zip(BLEND_WEIGHTS, (fit, career, culture), strict=True))
+    return max(0, min(100, (total + 50) // 100))

@@ -62,6 +62,14 @@ WORKFLOWS: tuple[Workflow, ...] = (
         ("backlog", "posting_reader", "postings"),
     ),
     Workflow(
+        "posting_rating",
+        "Career and culture reading",
+        "The postings read, rated a few at a time for your career and culture by the reader's "
+        "tick.",
+        "finding",
+        ("backlog", "jobs_match", "postings"),
+    ),
+    Workflow(
         "posting_documents",
         "Documents for a posting",
         "A CV and a letter written for one posting, each screened by the hiring panel.",
@@ -185,6 +193,7 @@ AGENT_WORKFLOW: dict[str, str] = {
     "browser_discovery": "job_search",
     "web_discovery": "job_search",
     "posting_reader": "posting_reading",
+    "jobs_match": "posting_rating",
     "documents_cv": "posting_documents",
     "documents_letter": "posting_documents",
     "documents_base": "base_cv",

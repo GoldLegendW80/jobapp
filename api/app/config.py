@@ -128,6 +128,10 @@ class Settings(BaseSettings):
     # Tests only: the base address of the fake freehire interface (app/jobs/feeds/freehire.py)
     # instead of https://freehire.me. Refused in production.
     freehire_base_url: str | None = None
+    # Jobs J38 (app/jobs/match.py): the least fit a posting needs for its career and culture
+    # reading, and the postings given to that reading in 24 hours per person (0: none).
+    jobs_match_daily_max: int = Field(default=200, ge=0, le=10_000)
+    jobs_match_fit_floor: int = Field(default=50, ge=0, le=100)
     # Documents (SPEC-documents.md, app/documents/). Every setting of the module, added at once
     # by task D2 so that no later task edits this file. A render: its wall time in seconds, the
     # renders one renderer process runs at once, the largest PDF kept.

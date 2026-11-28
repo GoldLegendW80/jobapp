@@ -49,7 +49,9 @@ Agents queue (app.queue.AGENTS, agents A2, app/agents/runner.py):
   one batch of saved postings not read yet as a run_agent job, one such run at a time for the
   whole app, so it holds at most one of the MAX_AGENT_RUNS slots. A sweep reads the postings it
   stored in its own job once its websites ended (reader.SweepReader), never on this queue, one
-  run at a time for every sweep of the worker together (reader.SWEEP_READS_AT_ONCE).
+  run at a time for every sweep of the worker together (reader.SWEEP_READS_AT_ONCE). With
+  nothing to read, the same tick queues a batch of the career and culture reading (jobs J38,
+  app/jobs/match.py `start`), counted in that one run.
 - profile_titles_tick: cron every minute: starts the automatic job title suggestions due after
   a profile save, an accepted Fill my profile item, an upload or a base CV (titles.py `due`).
 - check_model_token(user_id, updated_at, attempt): the check of a saved subscription token, one
