@@ -27,9 +27,12 @@ clear message).
 Parsing never raises for one odd posting: a posting that is not an object or lacks a title or an
 address is counted (`Parsed.invalid`) and skipped. A body of the wrong shape raises
 BoardError("invalid_response"). A posting's HTML (Greenhouse, Workable, Recruitee) becomes text
-as the job feeds' does (`feeds.plain_text`, jobs J42): a paragraph, a heading, a list item and a
-table row each end a line, a row's cells stand apart, entities are read, scripts and styles left
-out, a numeric reference too long to be a code point stays as written; at most TEXT_MAX
+as the job feeds' does (`feeds.plain_text`, jobs J42): every element a browser shows on its own
+line ends a line (a paragraph, a heading, a list item, a definition list's term and description,
+a section, a blockquote, a rule, a `pre` with its line breaks, a table row, and the others of
+`_Text.BLOCKS` and `_Text.OWN_LINE`), a row's cells stand apart, inline elements join, entities
+are read, scripts and styles left out, a numeric reference too long to be a code point stays as
+written; at most TEXT_MAX
 characters kept, read from the first 4 * TEXT_MAX of the HTML. Ashby's and Lever's text is the
 plain text their API gives. Text is made storable (NUL characters and lone surrogates removed). A
 posting's location is every place the ATS names, then "Remote" when it says the posting is
