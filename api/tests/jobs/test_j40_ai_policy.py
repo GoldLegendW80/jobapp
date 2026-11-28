@@ -156,6 +156,8 @@ EMPLOYER_SIDE = [
     "Atelier Cobalt utilise des outils d'IA afin d'évaluer nos dossiers lors de l'entretien.",
     "Atelier Cobalt utilise des outils d'IA afin de trier les cv lors de l'entretien.",
     "Des outils d'IA peuvent aider les recruteurs pendant le processus de recrutement.",
+    "Nous aidons les recruteurs à utiliser l'IA tout au long du processus de recrutement.",
+    "Nous aidons les recruteurs à utiliser l'IA dans leurs entretiens d'embauche.",
     "Les outils d'IA servent à la décision d'embauche dans le processus de recrutement.",
     "L'IA est utilisée pour les décisions de recrutement pendant le processus de recrutement.",
     "L'IA est utilisée pour les décisions automatisées pendant le processus de recrutement.",
@@ -336,6 +338,64 @@ BOILERPLATE = [
     "Ihre Bewerbungsdaten können mit KI-Werkzeugen verarbeitet werden.",
     "Our AI policy for applicants and employees is published on our website.",
 ]
+# The hiring words are the matter of the AI work: a third party's process, a product built, a
+# detection (list 3, _OTHERS_WORK).
+THIRD_PARTY = [
+    "You will use AI to summarise interview transcripts throughout the hiring process for "
+    "enterprise clients.",
+    "You will use AI to build a matching engine for the recruitment process at large employers.",
+    "As a machine learning engineer you will use generative AI in the interview process of a "
+    "staffing platform.",
+    "Our engineers use AI to review the application process at partner universities.",
+    "You will use generative AI in the interview process of a recruiting start-up.",
+    "Vous utiliserez l'IA pour analyser les entretiens d'embauche enregistrés par nos clients.",
+    "Vous utiliserez l'IA dans le processus de recrutement proposé par des cabinets.",
+    "Sie nutzen LLMs, um Vorstellungsgespräche für Personalberatungen automatisch "
+    "zusammenzufassen.",
+    "Sie nutzen KI im Bewerbungsprozess bei unseren Kunden.",
+    "We build AI tools that recruiters use throughout the hiring process.",
+    "You will ship AI tools used by candidates during the application process.",
+    "Vous concevrez des outils d'IA pour le processus de recrutement.",
+    "Sie entwickeln KI-Tools für den Bewerbungsprozess.",
+    "Sie bauen KI-Funktionen für den Bewerbungsprozess.",
+    "Use LLMs to detect AI generated cover letters for our customers.",
+    "You will train models that flag AI written answers in online assessments.",
+    "Vous concevrez des modèles pour détecter les candidatures rédigées par l'IA.",
+]
+# The candidate's rights over the employer's AI (list 3, _RIGHTS).
+RIGHTS = [
+    "Applicants have the right to request a human review of any AI-assisted step in the "
+    "application process.",
+    "If you need an accommodation during the interview process, including an alternative to "
+    "AI-based tools, contact us.",
+    "Candidates may opt out of AI-assisted screening during the application process by "
+    "emailing us.",
+    "Vous pouvez refuser l'usage d'outils d'IA lors de votre entretien vidéo.",
+    "Vous pouvez demander une intervention humaine pour l'IA du processus de candidature.",
+    "Bewerber können der Nutzung von KI im Bewerbungsverfahren jederzeit widersprechen.",
+    "Sie haben ein Widerspruchsrecht gegen KI im Bewerbungsverfahren.",
+]
+# An AI that asks the questions, called an assistant or a tool (list 3, _AI_ASKS).
+AI_ASKS = [
+    "In the first interview you will speak with an AI assistant for 15 minutes.",
+    "During the video interview, an AI assistant will ask you five questions.",
+    "Pendant l'entretien vidéo, un assistant IA vous posera cinq questions.",
+    "Pendant l'entretien, un outil d'IA vous interrogera sur votre parcours.",
+    "In the final interview you will talk with an AI tool about your experience.",
+    "In the online interview an AI tool conducts the conversation with you.",
+    "Im ersten Interview führt ein KI-Tool das Gespräch.",
+    "Im Vorstellungsgespräch stellt Ihnen eine KI die Fragen, ein KI-Tool führt das Gespräch.",
+]
+# Still a policy: the same words in the candidate's own rule.
+KEPT = [
+    "We will flag AI generated cover letters.",
+    "If you need an accommodation for the interview, tell us; AI tools are not allowed during "
+    "the coding test.",
+    "Using AI tools during the coding test will lead to disqualification.",
+    "Der Einsatz von KI im Vorstellungsgespräch führt zum Ausschluss.",
+    "Applicants can use AI during interviews as long as they say so.",
+    "You may draft your cover letter with an AI assistant.",
+]
 INTERVIEWER = [
     "Our ATS uses AI to parse your resume.",
     "Your first interview is with an AI interviewer and lasts twenty minutes.",
@@ -361,6 +421,9 @@ OTHER_LANGUAGES = [
     "Kandidaten mogen geen AI gebruiken tijdens het sollicitatiegesprek.",
 ]
 SILENT = [
+    *THIRD_PARTY,
+    *RIGHTS,
+    *AI_ASKS,
     *EMPLOYER,
     *EMPLOYER_SIDE,
     *PRODUCT,
@@ -385,6 +448,11 @@ def test_a_policy_on_candidates_using_ai_is_a_signal_with_its_quote(text: str) -
     assert [s for s in read(text) if s.code == "ai_policy"] == [Signal("ai_policy", text)]
 
 
+@pytest.mark.parametrize("text", KEPT)
+def test_the_same_words_in_the_candidates_own_rule_stay_a_policy(text: str) -> None:
+    assert "ai_policy" in codes(text)
+
+
 @pytest.mark.parametrize("text", SILENT)
 def test_what_is_not_a_policy_on_candidates_gives_no_signal(text: str) -> None:
     assert "ai_policy" not in codes(text)
@@ -395,6 +463,11 @@ def test_the_tables_are_wide_enough_to_measure() -> None:
     assert len(SILENT) >= 60
     assert len(EMPLOYER_SIDE) >= 12
     assert len(NEAR_THE_LIST) >= 6
+
+
+def test_a_policy_about_an_interview_held_at_the_clients_site_is_a_declared_miss() -> None:
+    text = "Wir bitten Sie, im Vorstellungsgespräch bei unseren Kunden keine KI zu nutzen."
+    assert "ai_policy" not in codes(text)
 
 
 def test_a_sentence_with_the_employer_side_and_the_candidates_step_is_a_declared_miss() -> None:

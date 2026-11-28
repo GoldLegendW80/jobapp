@@ -105,7 +105,7 @@ _TIMED_STEP = _compile(
     r"|onsite|remote|video|online|virtual|behavioral|behavioural|job))? (?:interviews?"
     r"|assessments?|(?:coding|technical) (?:tests?|challenges?|exercises?|assessments?"
     r"|interviews?)|take home (?:exercises?|assignments?|tests?|tasks?|challenges?|projects?)"
-    r"|live coding(?: (?:sessions?|interviews?|exercises?))?)\b(?! (?:of|with)\b)",
+    r"|live coding(?: (?:sessions?|interviews?|exercises?))?)\b(?! (?:of|with|process(?:es)?)\b)",
     rf"\b(?:in|during|throughout|for) the application\b(?! (?:of|{_SOFTWARE})\b)",
     r"\b(?:pendant|durant|lors|au cours|tout au long|dans|pour)(?: (?:de|du|des|d))?(?: (?:l|la"
     r"|le|les|vos|votre|nos|notre|cet|ce|chaque|ces))? (?:entretiens?|evaluations?"
@@ -305,7 +305,7 @@ _EMPLOYER_USES = _compile(
     r"\bautomated decision",
     r"\b(?:evaluer|preselectionner|trier) (?:(?:les|des|nos) )?(?:candidatures?|candidats?|cv"
     r"|dossiers?|profils?)\b",
-    r"\b(?:aider|aide|aident|assister|soutenir) (?:(?:nos|les|l) )?(?:recruteurs?"
+    r"\b(?:aider|aide|aident|aidons|assister|soutenir) (?:(?:nos|les|l) )?(?:recruteurs?"
     r"|equipes? de recrutement)\b",
     r"\bdecisions? (?:d embauche|de recrutement|automatisees?)\b",
     r"\b(?:bewerbungen|bewerber\w*|kandidaten)(?: [a-z]+)? (?:zu )?(?:bewerten|vorauswahlen"
@@ -314,6 +314,35 @@ _EMPLOYER_USES = _compile(
     r"|personalabteilung\w*|personaler\w*)\b",
     r"\b(?:einstellungsentscheidung\w*|personalentscheidung\w*|automatisierte\w*"
     r" entscheidung\w*)\b",
+)
+# The hiring words are the matter of the work: a third party's process, a product built, a
+# detection of documents made by AI.
+_OTHERS_WORK = _compile(
+    r"\b(?:for|at|of)(?: [a-z0-9]+){0,2}? (?:clients|customers|companies|employers|businesses"
+    r"|enterprises|organi[sz]ations|universities|schools|agencies)\b",
+    r"\b(?:pour|par|chez|aupres de|des)(?: [a-z]+){0,2}? (?:clients|entreprises|societes"
+    r"|employeurs|pme|ecoles|universites|cabinets)\b",
+    r"\b(?:fur|von|bei|im|unserer|unseren|unseres)(?: [a-z]+){0,2}? (?:kunden|firmen"
+    r"|arbeitgeber\w*|mittelstand|personalberatung\w*|personalberater\w*|hochschulen|schulen)\b",
+    rf"\b(?:build|builds|building|built|ship|ships|shipping|design|designs|develop|develops|power"
+    rf"|powers|concevoir|concoit|concevez|concevrez|developper|developpe|developpez|entwickeln"
+    rf"|entwickelt|bauen|baut)(?: [a-z]+){{0,3}}? (?:{_AI}|features?|tools?|products?|outils?"
+    rf"|produits?|fonctionnalites|werkzeuge|produkte?|funktionen)\b",
+    rf"\b(?:to|that|which|pour|um) (?:detect|flag|identify|spot|classify|detecter|reperer"
+    rf"|identifier)\w*(?: [a-z]+){{0,3}}? (?:{_AI}|candidatures?)\b",
+)
+# The candidate's rights over the employer's own AI: an accommodation, an opt out, a review.
+_RIGHTS = _compile(
+    r"\b(?:opt out|opt outs|human review|human reviewer|accommodations?|alternative to"
+    r"|object to|intervention humaine|refuser|vous opposer|widersprechen|widerspruch)\b",
+)
+# An AI that asks the questions is the employer's own use, called an assistant or a tool.
+_AI_ASKS = _compile(
+    rf"\b(?:speak|talk|chat|interview)(?: [a-z]+)? with (?:an?|the) {_AI}\b",
+    rf"\b(?:un|une) (?:assistant|agent|outil|chatbot)s? (?:d )?{_AI} vous (?:pose|posera"
+    r"|interroge|interrogera)\b",
+    rf"\b{_AI}(?: [a-z]+){{0,2}}(?: (?:will|you))* (?:ask|asks|conduct|conducts)\b",
+    rf"\b(?:fuhrt|stellt)(?: ihnen)? (?:ein|eine|einen) {_AI}\b",
 )
 _NOT_THEIRS = (
     _EMPLOYER,
@@ -325,6 +354,9 @@ _NOT_THEIRS = (
     _TOPIC,
     _TASK,
     _EMPLOYER_USES,
+    _OTHERS_WORK,
+    _RIGHTS,
+    _AI_ASKS,
 )
 
 # A negated sentence states a rule only through these: "do not use", "interdit", "nicht erlaubt".
