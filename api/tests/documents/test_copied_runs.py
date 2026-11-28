@@ -209,6 +209,7 @@ def test_a_hostile_posting_and_field_stay_linear() -> None:
 SMALL_POSTING = (
     "In order to be able to ship every week, you will be part of a team that is able to work "
     "as well as it can. We are looking for a person who will be one of the first.\n"
+    "We are 12 people in a team of 3, and we are looking for a mentor.\n"
     "Track each order to the warehouse.\n"
     "Afin de pouvoir livrer chaque semaine, vous rejoindrez l'équipe qui est en mesure de le "
     "faire.\n"
@@ -247,7 +248,10 @@ SMALL_TABLE = [
         "I track each order to the warehouse.",
         ["track each order to the warehouse"],
     ),
-    ("able outside its phrase is no phrase", "Able to work as well as it can.", []),
+    ("two phrases at the start of a field", "Able to work as well as it can.", []),
+    ("hyphens part words as spaces do", "In-order-to be-able-to, I write.", []),
+    ("a number counts as a word", "We are 12 people in a team.", ["We are 12 people in a team"]),
+    ("an apostrophe parts a contraction", "I know we're looking for a role.", []),
     (
         "French, two words",
         "Je rejoindrez l'équipe qui est en mesure de le faire.",
