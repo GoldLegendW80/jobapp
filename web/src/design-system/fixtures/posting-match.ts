@@ -30,7 +30,7 @@ export const MATCH_LONGEST: Match = {
   gaps: [0, 1, 2].map((i) => LONG_LINE.slice(10, 129) + String(i)),
 };
 
-/** A score in each band: 100, 79, 40 and 0 at the edges of Strong, Good, Partial and Weak. */
+/** Each band at both its edges: the career at the top of Strong, Good, Partial and Weak (100, 79, 59, 39), the culture at the bottom (80, 60, 40, 0). */
 export const MATCH_BANDS: Match[] = [
   { ...MATCH, career: 100, culture: 80 },
   { ...MATCH, career: 79, culture: 60 },

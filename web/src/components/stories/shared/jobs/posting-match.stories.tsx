@@ -53,13 +53,13 @@ export const Bands: Story = {
   ),
 };
 
-/** On a phone. */
+/** On a phone, and in the Jobs list's pane at its narrowest: the block's own width decides, so the lists are stacked. */
 export const OnAPhone: Story = {
   name: "On a phone",
   args: { match: MATCH_LONGEST },
   decorators: [
     (Story) => (
-      <div className="max-w-sm">
+      <div className="w-80 max-w-full">
         <Story />
       </div>
     ),

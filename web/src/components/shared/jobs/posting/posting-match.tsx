@@ -21,20 +21,20 @@ export function PostingMatch({ match }: { match: Match | null | undefined }) {
       description="The assistant's reading of this posting against your profile. It is separate from your keyword fit, which counts your profile's words."
     >
       <Card>
-        <CardContent className="flex flex-col gap-6">
-          <dl className="grid gap-4 sm:grid-cols-2">
+        <CardContent className="@container flex flex-col gap-6">
+          <dl className="grid gap-4 @md:grid-cols-2">
             <Score label="Career" score={match.career} />
             <Score label="Culture" score={match.culture} />
           </dl>
-          <div className="grid gap-6 sm:grid-cols-2">
+          <div className="grid gap-6 @md:grid-cols-2">
             <Points title="Strengths" lines={match.strengths} />
             <Points title="Gaps in the match" lines={match.gaps} />
           </div>
           <p className="max-w-prose text-sm text-muted-foreground">
-            Read on {formatDate(match.rated_at)}.
+            Read by the assistant on {formatDate(match.rated_at)}.
             {match.current
               ? ""
-              : " The posting's text changed since, so it will be read again."}
+              : " The posting's text changed since this reading."}
           </p>
         </CardContent>
       </Card>
@@ -65,7 +65,7 @@ function Points({ title, lines }: { title: string; lines: string[] }) {
         className="flex list-disc flex-col gap-1.5 pl-5 text-sm"
       >
         {lines.map((line, index) => (
-          <li key={index} className="break-words">
+          <li key={index} dir="auto" className="break-words">
             {line}
           </li>
         ))}
