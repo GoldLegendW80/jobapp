@@ -86,6 +86,13 @@ function sweepLine(data: Record<string, unknown>): string {
   return "Seen again by a search";
 }
 
+/** Why the app's check of a posting closed it (SPEC-jobs, "Liveness"). */
+const CHECKS: Record<string, string> = {
+  http_404: "its page no longer exists",
+  http_410: "its page no longer exists",
+  page_says: "its page says it is closed",
+};
+
 /** One line for an event of the timeline. */
 export function describeEvent(
   kind: string,
@@ -102,7 +109,9 @@ export function describeEvent(
             ? " (agent proposal accepted)"
             : data.via === "reader"
               ? " (posting read)"
-              : "";
+              : data.via === "liveness"
+                ? ` (checked by the app: ${CHECKS[show(data.check)] ?? "its page says it is closed"})`
+                : "";
   switch (kind) {
     case "created":
       return data.via === "import" ? "Imported" : "Added";

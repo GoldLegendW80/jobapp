@@ -1,8 +1,9 @@
 """/api/insights: your search in numbers (insights.py), and the close of the silent applications.
 
 - GET /api/insights: the funnel, the interview rate by fit band, by applicant tracking system and
-  by source, the days to a first answer, the reasons of the Passes and the silent applications,
-  as of the clock's today, read in one snapshot. A rate or a median under its floor is null.
+  by source, the days to a first answer, the reasons of the Passes, the silent applications and
+  the postings the app's checks closed or propose as maybe closed, as of the clock's today, read
+  in one snapshot. A rate or a median under its floor is null.
 - POST /api/insights/silent/close `{ids}` (1 to 500): closes those still silent, on the person's
   click only; 200 `{closed, skipped, undo_token, undo_expires_at}`, the token undone by the
   jobs module's `POST /api/jobs/bulk/undo`. An id that is not the caller's is skipped.
@@ -85,6 +86,14 @@ class SilentOut(_Out):
     days: int
 
 
+class ClosedByChecksOut(_Out):
+    page: int
+    recent: int
+    proposed_page: int
+    proposed_date: int
+    days: int
+
+
 class InsightsOut(_Out):
     silent_days: int
     funnel: FunnelOut
@@ -96,6 +105,7 @@ class InsightsOut(_Out):
     passes_without_reason: int
     silent: list[SilentOut]
     silent_undated: int
+    closed_by_checks: ClosedByChecksOut
 
 
 class CloseIn(BaseModel):

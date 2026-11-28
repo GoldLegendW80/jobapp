@@ -14,6 +14,7 @@ import { useInsights, type Insights } from "../api/insights-api";
 import { FunnelSection } from "../components/insights/funnel-section";
 import { OutcomeTable } from "../components/insights/outcome-table";
 import {
+  ClosedByChecksSection,
   FirstAnswerSection,
   PassReasonsSection,
 } from "../components/insights/side-sections";
@@ -37,6 +38,7 @@ function Numbers({ data }: { data: Insights }) {
             reasons={data.pass_reasons}
             without={data.passes_without_reason}
           />
+          <ClosedByChecksSection closed={data.closed_by_checks} />
         </>
       }
     >

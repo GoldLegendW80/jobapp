@@ -12,5 +12,7 @@ export const livenessSchema = z.object({
   checked_at: z.string(),
   /** This check moved the posting to Closed; absent on a check stored before the field. */
   moved: z.boolean().optional(),
+  /** On a closing date's proposal the timer kept after asking the page: the page's reason. */
+  page: z.string().nullable().optional(),
 });
 export type Liveness = z.infer<typeof livenessSchema>;
