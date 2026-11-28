@@ -231,6 +231,37 @@ function usageView(
   };
 }
 
+/** A run that waits before it starts (agents A13, api app/agents/busy.py): Anthropic refused it
+ * as busy before it did anything, or many of the person's runs started in the last minute. */
+function waitingView(data: Record<string, unknown>): StepView {
+  const at = new Date(text(data.at));
+  const when = Number.isNaN(at.getTime())
+    ? "in a moment"
+    : `at ${at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+  if (data.reason === "pace") {
+    return {
+      icon: "status",
+      title: "Waiting its turn",
+      body: {
+        kind: "note",
+        text: `Several of your runs started in the last minute, so this one starts ${when}. Cancel stops it now.`,
+      },
+      tone: "muted",
+    };
+  }
+  const attempt = Number(data.try ?? 0);
+  const of = Number(data.of ?? 0);
+  return {
+    icon: "status",
+    title: "Anthropic is busy",
+    body: {
+      kind: "note",
+      text: `Anthropic is busy or rate limiting your credential. The app tries again ${when} (try ${attempt} of ${of}). Cancel stops it now.`,
+    },
+    tone: "warning",
+  };
+}
+
 /** One step as the timeline shows it, or null for a step it does not show. */
 export function describeStep(
   step: RunStep,
@@ -300,6 +331,8 @@ export function describeStep(
         },
         tone: "warning",
       };
+    case "waiting":
+      return waitingView(data);
     case "rate_limit":
       return {
         icon: "problem",
