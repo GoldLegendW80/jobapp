@@ -18,11 +18,12 @@ Jobs J39 (issue #877): some answers hold their description's HTML escaped twice 
 "&amp;nbsp;"): converted once, the tags came out as words and were stored as such. `text_of`
 decides on the answer itself, before any conversion (`escaped_twice`): a description holding an
 escaped tag of the converter's block list (`_Text.BLOCKS`) and no real tag is unescaped once, then
-converted once, as every feed's text is; nothing is converted a second time, so the 50,000
-characters of `plain_text` bound the final text. The pass over old postings
-(app/jobs/visible_pass.py) repairs this feed's stored texts (`is_its`) by `repair`, which removes
-markup and never a word: only a text of the failed shape (`failed_shape`) whose conversion keeps
-every word a reader sees (`kept_words`); any other text is left as stored, and said why.
+converted once, as every feed's text is, only when the conversion keeps every word a reader sees
+(`kept_words`; else it is converted the plain way, its tags staying words); nothing is converted
+a second time, so the 50,000 characters of `plain_text` bound the final text. The pass over old
+postings (app/jobs/visible_pass.py) repairs this feed's stored texts (`is_its`) by `repair`, which
+removes markup and never a word: only a text of the failed shape (`failed_shape`) whose conversion
+keeps every word a reader sees (`kept_words`); any other text is left as stored, and said why.
 """
 
 import html
@@ -111,10 +112,18 @@ def escaped_twice(description: str) -> bool:
 
 
 def text_of(description: object) -> str:
-    """A posting's text: its description converted once, as every feed's is, after unescaping it
-    once when it is escaped twice (`escaped_twice`)."""
+    """A posting's text: its description converted once, as every feed's is. When it is escaped
+    twice (`escaped_twice`) it is unescaped once first, if the conversion then keeps every word a
+    reader sees (`kept_words`), in order; else (a tag outside MARKUP, a comment, a conversion that
+    raises) it is converted the plain way, its tags staying words."""
     if isinstance(description, str) and escaped_twice(raw := description[:RAW_MAX]):
-        return plain_text(html.unescape(raw))
+        unescaped = html.unescape(raw)
+        try:
+            converted = plain_text(unescaped)
+            if visible(converted).split() == kept_words(unescaped):
+                return converted
+        except ValueError:  # a numeric reference too long for int(): read the plain way
+            pass
     return plain_text(description)
 
 

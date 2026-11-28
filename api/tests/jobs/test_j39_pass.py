@@ -373,6 +373,53 @@ def test_the_feed_decides_the_double_escape_on_the_answer_itself(
     assert arbeitnow.escaped_twice(description) is twice
 
 
+# A plain text description (no real tag) whose prose writes an escaped block tag, then a tag the
+# conversion would swallow with the words after it: read as escaped twice it would lose words.
+PLAIN_PROSE = [
+    pytest.param("&lt;script&gt;track('apply')&lt;/script&gt;", id="a script tag"),
+    pytest.param("&lt;style&gt;p { color: red; }&lt;/style&gt;", id="a style tag"),
+    pytest.param("&lt;!-- the old benefits ", id="an unclosed comment"),
+]
+
+
+@pytest.mark.parametrize("hidden", PLAIN_PROSE)
+def test_a_plain_text_naming_escaped_tags_is_stored_with_every_word(hidden: str) -> None:
+    description = (
+        f"Lists use &lt;li&gt; items. Avoid {hidden} tags for safety. "
+        "Benefits: 30 days off, remote. Apply now."
+    )
+    assert arbeitnow.escaped_twice(description)
+    text = arbeitnow.text_of(description)
+    assert text == plain_text(description)
+    assert text.endswith("tags for safety. Benefits: 30 days off, remote. Apply now.")
+    assert "<li>" in text
+
+
+# An answer escaped twice holding a tag outside the closed list: converted the plain way, as
+# before J39, its tags staying words; the pass leaves it as stored.
+OUTSIDE_THE_LIST = [
+    pytest.param(
+        '<p><img src="https://example.org/logo.png" alt="Example Robotics"></p>',
+        id="an image",
+    ),
+    pytest.param("<table><tr><td>Salary: 70k</td></tr></table>", id="a table"),
+]
+
+
+@pytest.mark.parametrize("inserted", OUTSIDE_THE_LIST)
+def test_an_answer_escaped_twice_with_a_tag_outside_the_list_is_stored_the_old_way(
+    inserted: str,
+) -> None:
+    twice = html.escape(_with(answer(20, 24), inserted))
+    assert arbeitnow.escaped_twice(twice)
+    text = arbeitnow.text_of(twice)
+    assert text == plain_text(twice)
+    assert "<p>" in text
+    assert "Paragraph 19:" in text
+    assert "Duty 23 with" in text
+    assert arbeitnow.repair(text) == arbeitnow.Repair(left="loses_words")
+
+
 @pytest.mark.parametrize("once", TWINS)
 def test_an_answer_escaped_twice_is_converted_once_as_every_feeds_is(once: str) -> None:
     twice = html.escape(once)
