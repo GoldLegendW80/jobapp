@@ -237,6 +237,25 @@ def test_the_rescore_tick_gives_the_pass_its_slice(
     assert row_of(factory, job_id)["posting_text"] == CLEAN
 
 
+def test_a_posting_whose_rewrite_fails_fails_alone(
+    factory: sessionmaker[Session], person: uuid.UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    poisoned, good = sorted(add(factory, person) for _ in range(2))
+    derived = visible_pass._derived
+
+    def failing(job: Job, texts: dict[str, Any], who: Any) -> dict[str, Any]:
+        if job.id == poisoned:
+            raise RuntimeError("a store that fails")
+        return derived(job, texts, who)
+
+    monkeypatch.setattr(visible_pass, "_derived", failing)
+    assert walk(factory) == 1  # the walk goes on and ends
+    assert row_of(factory, good)["posting_text"] == CLEAN
+    assert row_of(factory, poisoned)["posting_text"] == OLD  # left to the next walk, unchanged
+    monkeypatch.setattr(visible_pass, "_derived", derived)
+    assert walk(factory) == 1
+
+
 # --- Arbeitnow's HTML left in -------------------------------------------------------------------
 
 ESCAPED = (
@@ -248,6 +267,31 @@ PROSE = (
     "Frontend engineer at Example Labs. You know when a <li> belongs in a <ul> and when a "
     "&nbsp; keeps two words together.\n</p> closes a paragraph."
 )
+
+
+AGAIN = [
+    pytest.param("<p>Python</p>", "Python", id="a paragraph"),
+    pytest.param("<P>Python</P>", "Python", id="upper case"),
+    pytest.param("Python<br/>SQL", "Python\nSQL", id="a line break"),
+    pytest.param('<li class="x">Python</li>', "Python", id="an attribute"),
+    pytest.param("<ul><li>Python</li></ul>", "Python", id="a list"),
+    pytest.param("<h2>Role</h2>x", "Role\nx", id="a heading"),
+    pytest.param("<tr>a</tr>", "a", id="a table row"),
+    pytest.param("List<String> and Map<K, V>", None, id="generics"),
+    pytest.param("a <b>bold</b> <em>word</em>", None, id="inline tags only"),
+    pytest.param("x < 5 and y > 3", None, id="comparisons"),
+    pytest.param("<pre>code</pre> <param> <track>", None, id="other tags starting alike"),
+    pytest.param("&nbsp; alone", None, id="an entity with no tag"),
+    pytest.param("<li", None, id="an open tag never closed"),
+    pytest.param("", None, id="empty"),
+]
+
+
+@pytest.mark.parametrize(("text", "converted"), AGAIN)
+def test_only_a_text_still_holding_a_block_tag_is_converted_again(
+    text: str, converted: str | None
+) -> None:
+    assert arbeitnow.again(text) == (text if converted is None else converted)
 
 
 def test_an_answer_escaped_twice_is_converted_as_every_feeds_is() -> None:

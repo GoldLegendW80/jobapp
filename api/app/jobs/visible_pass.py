@@ -42,7 +42,7 @@ from app.profile.schemas import SearchSection, SkillsSection
 logger = logging.getLogger("app.jobs.visible_pass")
 
 SLICE_S = 5.0  # of each rescore tick, after the rescores asked for
-SCAN_ROWS = 200
+SCAN_ROWS = 50  # texts of at most 200,000 characters each: 10 million at most in memory
 
 
 @dataclass
@@ -125,42 +125,55 @@ def clean(
     people: dict[uuid.UUID, _Person] | None = None,
 ) -> int:
     """Rewrite these postings' texts, one transaction each (module docstring); those left for
-    now join `held`. Returns how many were written."""
+    now join `held`. A posting whose rewrite raises is logged and left to the next walk, the
+    others go on. Returns how many were written."""
     people = {} if people is None else people
     written = 0
     for job_id in ids:
-        with sessions() as db:
-            job = db.execute(
-                sa.select(Job)
-                .where(Job.id == job_id)
-                .options(undefer(Job.posting_text))
-                .with_for_update(key_share=True, skip_locked=True)
-                .execution_options(populate_existing=True)
-            ).scalar_one_or_none()
-            if job is None:
-                if db.scalar(sa.select(Job.id).where(Job.id == job_id)) is not None:
-                    held.add(job_id)  # another transaction holds it
-                continue
-            texts = texts_of(job)
-            if not texts:
-                continue
-            if _bound(job) or _searching(db, job.user_id):
-                held.add(job_id)
-                continue
-            if job.user_id not in people:
-                people[job.user_id] = _Person(
-                    service.user_skills(db, job.user_id), service.user_search(db, job.user_id)
-                )
-            values = {**texts, **_derived(job, texts, people[job.user_id])}
-            db.execute(
-                sa.update(Job)
-                .where(Job.id == job_id)
-                .values(**values, updated_at=Job.updated_at)
-                .execution_options(synchronize_session=False)
-            )
-            db.commit()
-            written += 1
+        try:
+            written += _clean_one(sessions, job_id, held, people)
+        except Exception:
+            logger.exception("jobs.visible_pass.posting_failed", extra={"job_id": str(job_id)})
     return written
+
+
+def _clean_one(
+    sessions: sessionmaker[Session],
+    job_id: uuid.UUID,
+    held: set[uuid.UUID],
+    people: dict[uuid.UUID, _Person],
+) -> int:
+    with sessions() as db:
+        job = db.execute(
+            sa.select(Job)
+            .where(Job.id == job_id)
+            .options(undefer(Job.posting_text))
+            .with_for_update(key_share=True, skip_locked=True)
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        if job is None:
+            if db.scalar(sa.select(Job.id).where(Job.id == job_id)) is not None:
+                held.add(job_id)  # another transaction holds it
+            return 0
+        texts = texts_of(job)
+        if not texts:
+            return 0
+        if _bound(job) or _searching(db, job.user_id):
+            held.add(job_id)
+            return 0
+        if job.user_id not in people:
+            people[job.user_id] = _Person(
+                service.user_skills(db, job.user_id), service.user_search(db, job.user_id)
+            )
+        values = {**texts, **_derived(job, texts, people[job.user_id])}
+        db.execute(
+            sa.update(Job)
+            .where(Job.id == job_id)
+            .values(**values, updated_at=Job.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        db.commit()
+        return 1
 
 
 def _scan(
