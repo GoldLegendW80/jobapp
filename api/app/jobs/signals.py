@@ -7,7 +7,8 @@ database, linear in the text's length.
   `work_permit` (it requires the right to work in a place, never one it sponsors or arranges;
   `value` the place, a name of `app.apply.answers.COUNTRIES`, one signal a place), `degree` (it
   requires a degree), `contractor` (independent contractor, 1099, auto-entrepreneur, portage
-  salarial), `fixed_term`, `unpaid`, `candidate_fee` (the candidate pays), and `closing` (the
+  salarial), `fixed_term`, `unpaid`, `candidate_fee` (the candidate pays), `ai_policy` (it says
+  something about the candidates' own use of AI, app/jobs/ai_policy.py), and `closing` (the
   closing date it states, `value` its ISO date).
 - `closing(text)`: that closing date and its sentence, or None.
 - `fingerprint(text)`: a 64-bit SimHash of the text's distinct word pairs (a signed bigint), or
@@ -16,11 +17,11 @@ database, linear in the text's length.
 - `stored(text)`: the three columns a store or a rescore writes (`signals`, `text_fingerprint`,
   `closes_on`, migration 0038).
 
-Rules are allow lists of English and French sentences, matched one sentence at a time on its
-words (folded as `never_apply.fold` folds, then every sign but letters, digits and "+" read as a
-space). A sentence a rule does not recognise gives nothing: silence is the absence of a signal,
-never a claim. A rule that offers or requires something skips a sentence that negates it, and a
-closing date is read only in an unambiguous form with its year.
+Rules are allow lists of English and French sentences (German too for `ai_policy`), matched one
+sentence at a time on its words (folded as `never_apply.fold` folds, then every sign but letters,
+digits and "+" read as a space). A sentence a rule does not recognise gives nothing: silence is
+the absence of a signal, never a claim. A rule that offers or requires something skips a sentence
+that negates it, and a closing date is read only in an unambiguous form with its year.
 """
 
 import hashlib
@@ -30,6 +31,7 @@ from datetime import date
 from typing import Any
 
 from app.apply.answers import COUNTRIES
+from app.jobs import ai_policy
 from app.jobs.never_apply import fold
 
 TEXT_MAX = 200_000  # characters read; a longer posting is read up to here
@@ -502,6 +504,8 @@ def _sentence_signals(said: str) -> list[tuple[str, str | None]]:
         and _any(_CANDIDATE_FEE, said)
     ):
         found.append(("candidate_fee", None))
+    if ai_policy.says(said):
+        found.append(("ai_policy", None))
     return found
 
 
