@@ -37,12 +37,12 @@ _USE = (
     r"|leveraging|help|helps|helped|helping|tools?|tooling|assistance|assistants?|assisted"
     r"|generated|written|created|drafted|produced|authored|policy|policies|guidance|guidelines?"
     r"|rules|disclose|disclosed|disclosure"
-    r"|utilis(?:er|ez|ent|ons|ant|ation|e|es|ee|ees)|recours|recourir|recourez|recourent|aide de"
+    r"|utilis\w*|recour\w*|aide de"
     r"|aide d|outils?|assistante?s?|assistee?s?|generee?s?|redigee?s?|ecrite?s?|politique|charte"
     r"|regles|consignes|lignes directrices|recommandations|declarer|indiquer|preciser|signaler"
-    r"|nutzen|nutzt|nutzung|genutzt|benutzen|benutzt|benutzung|verwenden|verwendet|verwendung"
-    r"|einsetzen|eingesetzt|einsatz|einzusetzen|gebrauch|umgang|hilfe von|mithilfe|gestutzte?n?"
-    r"|werkzeuge?n?|hilfsmittel|generierte?n?|erstellte?n?|geschrieben|verfasste?n?"
+    r"|nutz(?:en|t|te|ten|ung)|genutzt|benutz(?:en|t|te|ten|ung)|verwend(?:en|et|ete|eten|ung)"
+    r"|einsetzen|eingesetzt|einsatz|einzusetzen|setzen|setzt|gebrauch|umgang|hilfe von|mithilfe"
+    r"|gestutzte?n?|werkzeuge?n?|hilfsmittel|generierte?n?|erstellte?n?|geschrieben|verfasste?n?"
     r"|richtlinien?|leitfaden|regeln|regelungen|hinweise|angeben|offenlegen)"
 )
 
@@ -77,18 +77,25 @@ def _compile(*patterns: str) -> tuple[re.Pattern[str], ...]:
 _AI_USE = re.compile(rf"\b{_AI}{_GAP}{{0,5}}? {_USE}\b|\b{_USE}{_GAP}{{0,5}}? {_AI}\b")
 
 # List 2: the candidate's own path, each part in English, French and German.
+_STEPS_EN = (
+    r"(?:(?:own|first|written|technical|job|final|online|video|live|next|whole|entire) )?"
+    r"(?:applications?|cover letters?|motivation letters?|resumes?|cvs?|curriculum vitae"
+    r"|interviews?|assessments?|answers|responses|take home (?:exercises?|assignments?|tests?"
+    rf"|tasks?)|coding (?:tests?|challenges?|exercises?))\b(?! (?:of|{_SOFTWARE})\b)"
+)
+_STEPS_FR = (
+    r"(?:(?:propre|premier|premiere|prochain|prochaine) )?(?:candidatures?|cv|curriculum vitae"
+    r"|lettres? de motivation|entretiens?|reponses|dossiers? de candidature|tests? techniques?)\b"
+)
+# "their" and "leur" are the candidates' only when the sentence names them first.
 _OWN_STEP = _compile(
-    r"\b(?:your|their) (?:(?:own|first|written|technical|job|final|online|video|live|next"
-    r"|whole|entire) )?(?:applications?|cover letters?|motivation letters?|resumes?|cvs?"
-    r"|curriculum vitae|interviews?|assessments?|answers|responses|take home (?:exercises?"
-    rf"|assignments?|tests?|tasks?)|coding (?:tests?|challenges?|exercises?))\b"
-    rf"(?! (?:of|{_SOFTWARE})\b)",
-    r"\b(?:votre|vos|leur|leurs|ta|tes|ton) (?:(?:propre|premier|premiere|prochain|prochaine) )?"
-    r"(?:candidatures?|cv|curriculum vitae|lettres? de motivation|entretiens?|reponses"
-    r"|dossiers? de candidature|tests? techniques?)\b(?! (?:de|des|du)\b)",
+    rf"\byour {_STEPS_EN}",
+    rf"\b{_CAND_EN}{_GAP}{{0,10}}? their {_STEPS_EN}",
+    rf"\b(?:votre|vos|ta|tes|ton) {_STEPS_FR}",
+    rf"\b{_CAND_FR}{_GAP}{{0,10}}? (?:leur|leurs) {_STEPS_FR}",
     r"\b(?:ihre|ihrer|ihren|ihrem|ihr|deine|deiner|deinen|deinem|dein)(?: eigene[nmrs]?)?"
     r" (?:bewerbung\w*|lebenslauf\w*|anschreiben|motivationsschreiben|vorstellungsgesprach\w*"
-    r"|antworten)\b(?! (?:unserer|unseres|der|des|von)\b)",
+    r"|antworten)\b",
 )
 _TIMED_STEP = _compile(
     r"\b(?:(?:during|throughout|in|at)(?: (?:the|your|our|any|all|each|every|this|these|their|a"
@@ -105,7 +112,7 @@ _TIMED_STEP = _compile(
     r"\b(?:im|beim|wahrend des|wahrend der|wahrend eines|in der|in den|in einem|bei der|fur die"
     r"|fur das|fur den)(?: (?:technischen|personlichen|ersten|zweiten))? (?:interviews?"
     r"|bewerbung|coding test|programmiertest|assessments?|fallstudie|probearbeit\w*"
-    r"|vorstellungsgesprach\w*)\b(?! (?:unserer|unseres|der|des|von)\b)",
+    r"|vorstellungsgesprach\w*)\b(?! (?:mit|von|unserer|unseres|der|des)\b)",
 )
 _PROCESS = _compile(
     r"\b(?:(?:application|applying) (?:process(?:es)?|stages?|phases?)|(?:the|your|this|any"
@@ -181,13 +188,11 @@ _EMPLOYER = _compile(
     r"|ats|processus|ia)|nos(?: [a-z]+)? (?:equipes|recruteurs|outils|systemes|algorithmes))"
     r"(?: (?:pouvons|pourrons|pourrions|allons|avons|sommes|ne|n|y|en|aussi|egalement|parfois))"
     r"{0,4} (?:utilisons|utiliser|utilise|utilisent|exploitons|exploiter|exploite|analysons"
-    r"|analyser|analyse|analysent|appuyons|recourons|recourir|trions|evaluons|deployons|aide"
-    r"|aident)\b",
+    r"|analyser|analyse|analysent|appuyons|recourons|recourir|trions|evaluons|deployons)\b",
     r"\b(?:wir|unser\w*(?: [a-z]+)? (?:team|plattform|system|tool|tools|software|produkt"
     r"|recruiting|recruiter\w*|personalabteilung|ki|ats))(?: (?:konnen|werden|durfen|mochten"
     r"|auch|ggf|gegebenenfalls|teilweise|bereits|nicht)){0,3} (?:nutzen|verwenden|benutzen"
-    r"|setzen|einsetzen|analysieren|prufen|sichten|werten|hilft|helfen|unterstutzt"
-    r"|unterstutzen)\b",
+    r"|setzen|einsetzen|analysieren|prufen|sichten|werten)\b",
     r"\b(?:nutzen|verwenden|benutzen|setzen|analysieren|prufen|sichten) wir\b",
 )
 # The employer acts on the applications with AI: a review, a screening, a passive.
@@ -281,8 +286,8 @@ _TASK = _compile(
     rf"|einstellungsprozess\w*){_GAP}{{0,3}}? (?:zu )?(?:verbessern|optimieren|automatisieren"
     r"|modernisieren|digitalisieren|vereinfachen|beschleunigen|transformieren)\b",
     r"\b(?:verbesser|optimier|automatisier|modernisier|digitalisier|vereinfach|beschleunig"
-    r"|revolutionier)\w* (?:den |die |das |unsere[nm]? |ihre[nm]? )?(?:[a-z]+ )?"
-    r"(?:bewerbungsprozess\w*|auswahlverfahren\w*|bewerbungsverfahren\w*|recruiting\w*)\b",
+    rf"|revolutionier)\w*{_GAP}{{0,3}}? (?:bewerbungsprozess\w*|auswahlverfahren\w*"
+    r"|bewerbungsverfahren\w*|recruiting\w*)\b",
 )
 _NOT_THEIRS = (_EMPLOYER, _ACTS_ON, _PRODUCT, _HELPS, _MESSAGES, _SKILL, _TOPIC, _TASK)
 
@@ -297,7 +302,6 @@ _KEEPS = re.compile(
     r"|rely on|accept|accepted|tolerate|tolerated|used|consider|considered|reviewed)\b"
     r"|\b(?:not|never) (?:to use|to rely|allowed|permitted|welcome|accepted|expected|considered"
     r"|tolerated|acceptable|permissible|tolerable)\b"
-    r"|\b(?:refrain from|avoid|abstain from)(?: [a-z]+)? (?:use|using)\b"
     r"|\b(?:prohibit\w*|forbid\w*|forbidden|banned?|bans|interdit\w*|interdire|interdisons"
     r"|verboten|untersag\w*|verbieten)\b"
     r"|\b(?:ne|n)(?: [a-z]+){0,4}? pas(?: [a-z]+){0,2}? (?:utiliser|utilisez|utilisent|recourir"
