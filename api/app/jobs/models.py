@@ -32,7 +32,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql as pg
 from sqlalchemy.orm import Mapped, mapped_column, validates
 
-from app.jobs.visible_text import visible
+from app.jobs.visible_text import visible, visible_or_none
 from app.models_base import Base
 
 SHA256_BYTES = 32
@@ -61,8 +61,17 @@ PAY_CHECK = (
 # The last check of a posting's address (migration 0039): an object or nothing.
 LIVENESS_CHECK = "liveness IS NULL OR jsonb_typeof(liveness) = 'object'"
 
-# Jobs J39: the texts of a posting that come from outside, stored as a reader sees them.
+# Jobs J39: the texts of a posting that come from outside, stored as a reader sees them; those
+# that may hold nothing hold nothing when they held only what a reader cannot see.
 VISIBLE_COLUMNS = ("company", "title", "location", "description", "posting_text")
+VISIBLE_OR_NONE = frozenset({"description", "posting_text"})
+
+
+def as_stored(name: str, value: object) -> object:
+    """A value of the column `name` (one of VISIBLE_COLUMNS) as that column stores it."""
+    if not isinstance(value, str):
+        return value
+    return visible_or_none(value) if name in VISIBLE_OR_NONE else visible(value)
 
 
 class VisibleText(sa.TypeDecorator[str]):
@@ -76,6 +85,15 @@ class VisibleText(sa.TypeDecorator[str]):
 
     def process_bind_param(self, value: str | None, dialect: sa.Dialect) -> str | None:
         return visible(value) if isinstance(value, str) else value
+
+
+class VisibleTextOrNone(VisibleText):
+    """`VisibleText` for a column that may hold nothing (VISIBLE_OR_NONE)."""
+
+    cache_ok = True
+
+    def process_bind_param(self, value: str | None, dialect: sa.Dialect) -> str | None:
+        return visible_or_none(value)
 
 
 class ContractType(enum.StrEnum):
@@ -234,8 +252,8 @@ class Job(Base):
     )
     competencies: Mapped[list[str]] = _empty_text_array()
     gaps: Mapped[list[str]] = _empty_text_array()
-    description: Mapped[str | None] = mapped_column(VisibleText)
-    posting_text: Mapped[str | None] = mapped_column(VisibleText, deferred=True)
+    description: Mapped[str | None] = mapped_column(VisibleTextOrNone)
+    posting_text: Mapped[str | None] = mapped_column(VisibleTextOrNone, deferred=True)
     published_on: Mapped[date | None] = mapped_column(sa.Date)
     # Pay and work mode (opportunities O3): what the ATS or the posting's text states, or the
     # person's own edit; null when nothing was stated. Never a guess (app/opportunities/pay.py).
@@ -297,8 +315,8 @@ class Job(Base):
 
     # The row object holds what its column stores, so what a store derives from it reads that.
     @validates(*VISIBLE_COLUMNS)
-    def _visible(self, _name: str, value: object) -> object:
-        return visible(value) if isinstance(value, str) else value
+    def _visible(self, name: str, value: object) -> object:
+        return as_stored(name, value)
 
 
 class JobEvent(Base):

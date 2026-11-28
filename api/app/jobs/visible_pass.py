@@ -1,7 +1,7 @@
 """The pass over the postings stored before jobs J39 (issue #877; SPEC-jobs.md, "Text as a reader
 sees it"): their texts become what a store writes now, by the same function
-(app/jobs/visible_text.py), and an Arbeitnow posting stored with its HTML left in is converted
-again (feeds/arbeitnow.py, `again`), with nobody's click.
+(app/jobs/visible_text.py), and an Arbeitnow posting stored with its HTML left in is repaired
+(feeds/arbeitnow.py, `repair`: markup removed, never a word), with nobody's click.
 
 The rescore's tick (rescore.py, a cron of the sweeps queue every TICK_SECONDS) gives it SLICE_S
 after the rescores asked for. `step` walks every posting in id order, SCAN_ROWS at a time (a plain
@@ -19,13 +19,15 @@ read, no lock), and rewrites the ones whose texts change, one posting per transa
 
 A posting is done when its texts are what a store writes now: the walk then writes nothing for
 it. The worker remembers that a walk ended with nothing left held (`State.done`) and walks no
-more until it restarts; after a restart it walks once more and writes nothing. Logs carry counts
-only.
+more until it restarts; after a restart it walks once more and writes nothing. An Arbeitnow
+posting whose text holds a block tag the repair leaves (`State.left`, by reason) is counted in
+the log line with its id. Logs carry ids and counts only, never a text.
 """
 
 import logging
 import time
 import uuid
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -35,44 +37,45 @@ from sqlalchemy.orm import Session, sessionmaker, undefer
 
 from app.jobs import scoring, service, signals
 from app.jobs.feeds import arbeitnow
-from app.jobs.models import VISIBLE_COLUMNS, Job, Sweep, SweepStatus
-from app.jobs.visible_text import visible
+from app.jobs.models import VISIBLE_COLUMNS, Job, Sweep, SweepStatus, as_stored
 from app.profile.schemas import SearchSection, SkillsSection
 
 logger = logging.getLogger("app.jobs.visible_pass")
 
 SLICE_S = 5.0  # of each rescore tick, after the rescores asked for
 SCAN_ROWS = 50  # texts of at most 200,000 characters each: 10 million at most in memory
+LOGGED_IDS = 50  # of the postings the repair left, in the log line
 
 
 @dataclass
 class State:
     """Where this worker's walk is: the last id read, the postings left for now, whether it
-    ended with none left."""
+    ended with none left, and the Arbeitnow postings the repair left as stored, with why."""
 
     after: uuid.UUID | None = None
     walked: bool = False
     held: set[uuid.UUID] = field(default_factory=set)
     done: bool = False
+    left: dict[uuid.UUID, str] = field(default_factory=dict)
 
 
 _STATE = State()
 
 
-def texts_of(row: Any) -> dict[str, Any]:
-    """The texts a store writes now for a stored posting (`row`: its five texts and its
-    source), only those that differ from the stored ones."""
-    new = {
-        name: visible(value) if isinstance(value := getattr(row, name), str) else value
-        for name in VISIBLE_COLUMNS
-    }
-    text = new["posting_text"]
-    if text and arbeitnow.is_its(row.source):
-        converted = visible(arbeitnow.again(text))
-        if converted != text:
+def texts_of(row: Any, left: dict[uuid.UUID, str] | None = None) -> dict[str, Any]:
+    """The texts a store writes now for a stored posting (`row`: its id, its five texts and its
+    source), only those that differ from the stored ones. An Arbeitnow text the repair leaves
+    as stored joins `left` with why."""
+    new = {name: as_stored(name, getattr(row, name)) for name in VISIBLE_COLUMNS}
+    stored = row.posting_text
+    if stored and arbeitnow.is_its(row.source):
+        repair = arbeitnow.repair(stored)
+        if repair.text is not None:
             # As the feed stores a posting: its description is the head of its text.
-            new["posting_text"] = converted
-            new["description"] = converted[: service.DESCRIPTION_CHARS] or None
+            new["posting_text"] = repair.text or None
+            new["description"] = repair.text[: service.DESCRIPTION_CHARS] or None
+        elif repair.left is not None and left is not None:
+            left[row.id] = repair.left
     return {name: value for name, value in new.items() if value != getattr(row, name)}
 
 
@@ -177,16 +180,17 @@ def _clean_one(
 
 
 def _scan(
-    db: Session, after: uuid.UUID | None, rows: int
+    db: Session, after: uuid.UUID | None, rows: int, left: dict[uuid.UUID, str]
 ) -> tuple[uuid.UUID | None, list[uuid.UUID]]:
-    """The last id of the next `rows` postings after `after`, and those of them to rewrite."""
+    """The last id of the next `rows` postings after `after`, and those of them to rewrite;
+    the Arbeitnow postings the repair leaves join `left`."""
     query = sa.select(Job.id, Job.source, *(getattr(Job, n) for n in VISIBLE_COLUMNS))
     if after is not None:
         query = query.where(Job.id > after)
     found = db.execute(query.order_by(Job.id).limit(rows)).all()
     if not found:
         return None, []
-    return found[-1].id, [row.id for row in found if texts_of(row)]
+    return found[-1].id, [row.id for row in found if texts_of(row, left)]
 
 
 def step(
@@ -207,7 +211,7 @@ def step(
     while not state.done and monotonic() - started < budget_s:
         if not state.walked:
             with sessions() as db:
-                last, dirty = _scan(db, state.after, scan_rows)
+                last, dirty = _scan(db, state.after, scan_rows, state.left)
             if last is None:
                 state.walked = True
                 continue
@@ -225,6 +229,13 @@ def step(
     if written or state.done:
         logger.info(
             "jobs.visible_pass",
-            extra={"written": written, "held": len(state.held), "done": state.done},
+            extra={
+                "written": written,
+                "held": len(state.held),
+                "done": state.done,
+                "not_repaired": len(state.left),
+                "not_repaired_by_reason": dict(Counter(state.left.values())),
+                "not_repaired_ids": [str(i) for i in sorted(state.left)[:LOGGED_IDS]],
+            },
         )
     return written

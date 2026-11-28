@@ -45,6 +45,7 @@ from app.jobs.models import (
     SweepStatus,
     SweepTrigger,
     WorkMode,
+    as_stored,
 )
 from app.jobs.never_apply import NeverApplyRule
 from app.jobs.schemas import ImportFile, ImportJob
@@ -742,9 +743,7 @@ class NewJob:
         # Jobs J39: what create_job and its callers derive (the slug, the duplicate, the signals,
         # the fit) reads the texts as they are stored.
         for name in VISIBLE_COLUMNS:
-            value = getattr(self, name)
-            if isinstance(value, str):
-                setattr(self, name, visible(value))
+            setattr(self, name, as_stored(name, getattr(self, name)))
 
 
 def create_job(db: Session, user_id: uuid.UUID, new: NewJob, now: datetime) -> Job:
@@ -1363,9 +1362,9 @@ def _visible_item(item: ImportJob) -> ImportJob:
     """Jobs J39: the row's texts as they are stored, so its match, its fit and its changes read
     them; a row with nothing to drop is the same object."""
     changed = {
-        name: visible(value)
+        name: stored
         for name in VISIBLE_COLUMNS
-        if isinstance(value := getattr(item, name), str) and visible(value) != value
+        if (stored := as_stored(name, value := getattr(item, name))) != value
     }
     return item.model_copy(update=changed) if changed else item
 

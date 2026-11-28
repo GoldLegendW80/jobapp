@@ -4,9 +4,13 @@ fit computed again from them (a fit set by hand kept), and nothing else moves: n
 `updated_at`, the reader's `read_at` and attempts, the status. A row another transaction holds, a
 row a reader's or a rating's run is bound to, and a person's row while her search runs are left
 and come back; the walk survives a restart and two workers, and once it ended it reads nothing.
-The Arbeitnow postings stored with their HTML left in are converted again, a posting of another
-source that writes `<li>` in its prose stays as it is. Invented postings only."""
+The feed decides an answer escaped twice on the answer itself and converts it once; the pass
+repairs the Arbeitnow postings stored with their HTML left in only when they are that failed shape
+and the conversion keeps every word, and leaves every other text as stored, counted. Invented
+postings only."""
 
+import html
+import logging
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -16,9 +20,10 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.jobs import rescore, scoring, signals, visible_pass
-from app.jobs.feeds import arbeitnow
+from app.jobs import rescore, scoring, service, signals, visible_pass
+from app.jobs.feeds import TEXT_MAX, arbeitnow, plain_text
 from app.jobs.models import Job, JobStatus, Sweep, SweepStatus, SweepTrigger
+from app.jobs.visible_text import visible
 from tests.jobs.conftest import new_user
 from tests.jobs.sweep_helpers import jobs_of, search, set_profile
 from tests.jobs.test_api import seed
@@ -119,7 +124,7 @@ def test_the_pass_rewrites_old_texts_and_what_derives_from_them_and_nothing_else
     after = row_of(factory, dirty)
     expected = scoring.score(CLEAN, SKILLED, title="AI engineer")
     assert after["posting_text"] == CLEAN
-    assert after["description"] == visible_pass.visible(OLD[:300])
+    assert after["description"] == visible(OLD[:300])
     assert (after["fit"], after["competencies"]) == (expected.fit, list(expected.competencies))
     assert after["signals"] == signals.stored(CLEAN)["signals"]
     for name in ("updated_at", "read_at", "read_attempts", "status", "events", "fit_overridden"):
@@ -258,84 +263,274 @@ def test_a_posting_whose_rewrite_fails_fails_alone(
 
 # --- Arbeitnow's HTML left in -------------------------------------------------------------------
 
-ESCAPED = (
-    "&lt;p&gt;AI engineer at Example Robotics.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;"
-    "&lt;li&gt;LLM&amp;nbsp;agents&lt;/li&gt;&lt;/ul&gt;&lt;p&gt;Remote&amp;nbsp;days.&lt;/p&gt;"
-)
-CONVERTED = "AI engineer at Example Robotics.\nPython\nLLM agents\nRemote days."
-PROSE = (
-    "Frontend engineer at Example Labs. You know when a <li> belongs in a <ul> and when a "
-    "&nbsp; keeps two words together.\n</p> closes a paragraph."
+STYLE = (
+    "font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.6; "
+    "color: #1f2933; background-color: transparent; font-weight: 400; font-style: normal; "
+    "text-decoration: none; vertical-align: baseline; white-space: pre-wrap"
 )
 
 
-AGAIN = [
-    pytest.param("<p>Python</p>", "Python", id="a paragraph"),
-    pytest.param("<P>Python</P>", "Python", id="upper case"),
-    pytest.param("Python<br/>SQL", "Python\nSQL", id="a line break"),
-    pytest.param('<li class="x">Python</li>', "Python", id="an attribute"),
-    pytest.param("<ul><li>Python</li></ul>", "Python", id="a list"),
-    pytest.param("<h2>Role</h2>x", "Role\nx", id="a heading"),
-    pytest.param("<tr>a</tr>", "a", id="a table row"),
-    pytest.param("List<String> and Map<K, V>", None, id="generics"),
-    pytest.param("a <b>bold</b> <em>word</em>", None, id="inline tags only"),
-    pytest.param("x < 5 and y > 3", None, id="comparisons"),
-    pytest.param("<pre>code</pre> <param> <track>", None, id="other tags starting alike"),
-    pytest.param("&nbsp; alone", None, id="an entity with no tag"),
-    pytest.param("<li", None, id="an open tag never closed"),
-    pytest.param("", None, id="empty"),
+def answer(paragraphs: int, items: int, *, spans: bool = False, newlines: bool = False) -> str:
+    """An invented description's HTML as an employer writes it (escaped once): paragraphs, then a
+    list, each text wrapped in a styled span or not, the blocks on one line or one each."""
+    gap = "\n" if newlines else ""
+
+    def wrap(text: str) -> str:
+        return f'<span style="{STYLE}">{text}</span>' if spans else text
+
+    said = (
+        f"Paragraph {n}: Example Robotics plans the routes of its warehouse robots, part {n}."
+        for n in range(paragraphs)
+    )
+    blocks = [f"<p>{wrap(words)}</p>" for words in said]
+    duties = (f"<li>{wrap(f'Duty {n} with&nbsp;Python &amp; SQL')}</li>" for n in range(items))
+    blocks.append("<ul>" + gap.join(duties) + "</ul>")
+    return gap.join(blocks)
+
+
+def stored_before(html_once: str) -> str:
+    """What the feed stored before J39 for the same answer escaped twice: one conversion."""
+    return plain_text(html.escape(html_once))
+
+
+# Invented twins of the three texts the measure found (about 90, 120 and 600 tags; the third's
+# markup passed the store's 50,000 characters, so its stored text ends inside a span's tag).
+TWINS = [
+    pytest.param(answer(20, 24), id="90 tags on one line"),
+    pytest.param(answer(25, 34, newlines=True), id="120 tags, a block a line"),
+    pytest.param(answer(150, 5, spans=True), id="600 tags with styled spans, cut by the store"),
+]
+MEASURED = (
+    "<p>Lists use &lt;li&gt; items.</p><p>Avoid inline &lt;script&gt; tags for safety.</p>"
+    "<p>Benefits: 30 days off, remote, a salary of 70k.</p><p>Apply now.</p>"
+)
+MEASURED_TEXT = (
+    "Lists use <li> items.\nAvoid inline <script> tags for safety.\n"
+    "Benefits: 30 days off, remote, a salary of 70k.\nApply now."
+)
+# Escaped once, its prose naming tags and entities: converted once, every word kept.
+PROSE_ANSWERS = [
+    pytest.param(MEASURED, MEASURED_TEXT, id="the review's measured example"),
+    pytest.param(
+        "<p>Java: List&lt;String&gt;, Map&lt;K, V&gt; and a &lt;p&gt; in templates.</p>",
+        "Java: List<String>, Map<K, V> and a <p> in templates.",
+        id="generics beside a block tag",
+    ),
+    pytest.param(
+        "<p>Read the terms&amp;notice first.</p><ul><li>A &lt;div&gt; per card</li></ul>",
+        "Read the terms&notice first.\nA <div> per card",
+        id="an entity of a word beside a block tag",
+    ),
+    pytest.param(
+        "<p>Never &lt;style&gt; inline, keep &lt;!-- notes --&gt; out of &lt;br&gt; pages.</p>",
+        "Never <style> inline, keep <!-- notes --> out of <br> pages.",
+        id="a style tag and a comment named in prose",
+    ),
 ]
 
 
-@pytest.mark.parametrize(("text", "converted"), AGAIN)
-def test_only_a_text_still_holding_a_block_tag_is_converted_again(
-    text: str, converted: str | None
+@pytest.mark.parametrize(("description", "text"), PROSE_ANSWERS)
+def test_an_answer_escaped_once_is_converted_once_whatever_its_prose_names(
+    description: str, text: str
 ) -> None:
-    assert arbeitnow.again(text) == (text if converted is None else converted)
+    assert not arbeitnow.escaped_twice(description)
+    assert arbeitnow.text_of(description) == text
 
 
-def test_an_answer_escaped_twice_is_converted_as_every_feeds_is() -> None:
+ESCAPED_TWICE = [
+    pytest.param("&lt;p&gt;Python&lt;/p&gt;", True, id="a paragraph"),
+    pytest.param("&lt;P&gt;Python&lt;/P&gt;", True, id="upper case"),
+    pytest.param("Python&lt;br/&gt;SQL", True, id="a line break"),
+    pytest.param("Python&lt;br /&gt;SQL", True, id="a line break with a space"),
+    pytest.param("&lt;li class=&quot;x&quot;&gt;Python&lt;/li&gt;", True, id="an attribute"),
+    pytest.param("&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;/ul&gt;", True, id="a list"),
+    pytest.param("&lt;h2&gt;Role&lt;/h2&gt;x", True, id="a heading"),
+    pytest.param("&lt;tr&gt;a&lt;/tr&gt;", True, id="a table row"),
+    pytest.param("&lt;div\n&gt;x", True, id="a line break inside the tag"),
+    pytest.param("Remote&lt;/p&gt;", True, id="an end tag alone"),
+    pytest.param("<p>Python</p>", False, id="a real tag"),
+    pytest.param("<p>Lists use &lt;li&gt; items</p>", False, id="a real tag beside an escaped one"),
+    pytest.param("&lt;p&gt;Python&lt;/p&gt;<br>", False, id="one real tag anywhere"),
+    pytest.param("a<b and &lt;p&gt;", False, id="a real tag in prose"),
+    pytest.param("&lt;span&gt;x&lt;/span&gt;", False, id="inline tags only"),
+    pytest.param("&lt;pre&gt;code&lt;/pre&gt;", False, id="a tag starting like p"),
+    pytest.param("&lt;param&gt; &lt;track&gt;", False, id="other tags starting alike"),
+    pytest.param("List&lt;String&gt;", False, id="generics"),
+    pytest.param("x &lt; 5 and y &gt; 3", False, id="comparisons"),
+    pytest.param("&amp;lt;p&amp;gt;", False, id="escaped three times"),
+    pytest.param("&lt;p", False, id="an escaped tag never closed"),
+    pytest.param("Python &lt;3", False, id="a heart"),
+    pytest.param("&lt;li-item&gt;", False, id="a custom element"),
+    pytest.param("&nbsp; alone", False, id="an entity alone"),
+    pytest.param("", False, id="empty"),
+]
+
+
+@pytest.mark.parametrize(("description", "twice"), ESCAPED_TWICE)
+def test_the_feed_decides_the_double_escape_on_the_answer_itself(
+    description: str, twice: bool
+) -> None:
+    assert arbeitnow.escaped_twice(description) is twice
+
+
+@pytest.mark.parametrize("once", TWINS)
+def test_an_answer_escaped_twice_is_converted_once_as_every_feeds_is(once: str) -> None:
+    twice = html.escape(once)
+    assert arbeitnow.escaped_twice(twice)
+    text = arbeitnow.text_of(twice)
+    assert text == arbeitnow.text_of(once)
+    assert "<" not in text
+    assert "&" not in text.replace("Python & SQL", "")
+
+
+def test_a_long_answer_escaped_twice_keeps_its_end() -> None:
+    once = "".join(
+        f'<p><span style="{STYLE}">Paragraph {n}: Example Robotics plans the routes of its '
+        f"warehouse robots and of its people, part {n}.</span></p>"
+        for n in range(400)
+    )
+    assert len(once) > 2 * TEXT_MAX
+    text = arbeitnow.text_of(html.escape(once))
+    assert text == arbeitnow.text_of(once)
+    assert len(text) < TEXT_MAX
+    assert text.endswith("of its people, part 399.")
+
+
+def test_an_answer_finding_is_its_text_converted_once() -> None:
     item = {
         "slug": "ai-engineer-example-robotics-1",
         "title": "AI engineer",
         "company_name": "Example Robotics",
         "location": "Berlin",
         "url": "https://www.arbeitnow.com/jobs/companies/example-robotics/ai-engineer-1",
-        "description": ESCAPED,
+        "description": html.escape(answer(2, 2)),
         "created_at": 1_764_000_000,
     }
     found = arbeitnow.finding_of(item, T0)
     assert found is not None
-    assert found.text == CONVERTED
-    plain = arbeitnow.finding_of(
-        {
-            **item,
-            "description": ESCAPED.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&"),
-        },
-        T0,
-    )
-    assert plain is not None
-    assert plain.text == CONVERTED
-    assert arbeitnow.again(CONVERTED) == CONVERTED
+    assert found.text == arbeitnow.text_of(answer(2, 2))
+    measured = arbeitnow.finding_of({**item, "description": MEASURED}, T0)
+    assert measured is not None
+    assert measured.text == MEASURED_TEXT
 
 
-def test_the_pass_converts_arbeitnows_stored_html_and_no_other_sources_prose(
+@pytest.mark.parametrize("once", TWINS)
+def test_the_failed_shape_is_repaired_and_keeps_every_word(once: str) -> None:
+    stored = stored_before(once)
+    assert arbeitnow.failed_shape(stored)
+    repaired = arbeitnow.repair(stored).text
+    assert repaired is not None
+    whole = arbeitnow.text_of(once)  # the employer's answer read once: every word a reader sees
+    if len(stored) < TEXT_MAX:
+        assert repaired == whole
+    else:  # the store cut it inside a tag: the words up to the cut, in order, none lost
+        assert stored.rfind("<") > stored.rfind(">")
+        assert whole.startswith(repaired)
+        assert len(repaired.split()) > 1_000
+
+
+def _with(once: str, inserted: str) -> str:
+    """A twin's HTML with `inserted` written in the middle, as the employer wrote it."""
+    middle = once.index("<p>Paragraph 10")
+    return once[:middle] + inserted + once[middle:]
+
+
+# The failed shape with something the conversion reads as more than markup: the repair would lose
+# words, so the text is left exactly as stored, its tags as words, and nothing is lost.
+LEFT = [
+    pytest.param(_with(answer(20, 24), "<style>p { color: #1f2933; }</style>"), id="a style block"),
+    pytest.param(_with(answer(20, 24), "<script>track('apply')</script>"), id="a script block"),
+    pytest.param(_with(answer(20, 24), "<!-- the old benefits "), id="an unclosed comment"),
+    pytest.param(_with(answer(20, 24), "<p>Java: List<String> in services</p>"), id="a <Word>"),
+    pytest.param(_with(answer(20, 24), "<p>Read the terms&notice first.</p>"), id="terms&notice"),
+]
+
+
+@pytest.mark.parametrize("once", LEFT)
+def test_the_failed_shape_with_more_than_markup_is_left_as_stored(once: str) -> None:
+    stored = stored_before(once)
+    assert arbeitnow.failed_shape(stored)
+    assert arbeitnow.repair(stored) == arbeitnow.Repair(left="loses_words")
+    # What a conversion would have done: words after the markup, or a word's own letters, gone.
+    assert plain_text(stored).split() != arbeitnow.kept_words(stored)
+
+
+def test_an_escaped_tag_in_the_prose_of_the_failed_shape_is_a_word_after_the_repair() -> None:
+    once = _with(answer(20, 24), "<p>Java: List&lt;String&gt; and a &lt;script&gt; tag.</p>")
+    repaired = arbeitnow.repair(stored_before(once)).text
+    assert repaired is not None
+    assert "Java: List<String> and a <script> tag." in repaired.split("\n")
+    assert repaired == arbeitnow.text_of(once)
+
+
+NOT_THE_SHAPE = [
+    pytest.param(MEASURED_TEXT, id="the review's measured example"),
+    pytest.param("Use <li> and </li>, <p> and </p>, <ul> and </ul>.", id="six tags, one line"),
+    pytest.param(
+        "\n".join(["Frontend engineer at Example Labs."] * 30 + ["<p>" * 15 + "</p>" * 15]),
+        id="thirty tags on one line of thirty one",
+    ),
+    pytest.param("<br>" * 40, id="start tags only"),
+    pytest.param("</p>" * 40, id="end tags only"),
+    pytest.param("<p>a</p>" * 9 + "<li>", id="nineteen tags"),
+    pytest.param("&lt;p&gt;a&lt;/p&gt;" * 20, id="escaped tags are words"),
+    pytest.param("<span>a</span>" * 20, id="inline tags only"),
+]
+
+
+@pytest.mark.parametrize("text", NOT_THE_SHAPE)
+def test_prose_that_names_a_tag_is_not_the_failed_shape(text: str) -> None:
+    assert not arbeitnow.failed_shape(text)
+    assert arbeitnow.repair(text).text is None
+
+
+def test_a_text_with_no_block_tag_is_not_counted() -> None:
+    assert arbeitnow.repair("Python and SQL, a <String> or two.") == arbeitnow.Repair()
+
+
+def _pass_log(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
+    [record] = [r for r in caplog.records if r.getMessage() == "jobs.visible_pass"]
+    return record
+
+
+def test_the_pass_repairs_arbeitnows_failed_shape_and_leaves_every_other_text(
+    factory: sessionmaker[Session], person: uuid.UUID, caplog: pytest.LogCaptureFixture
+) -> None:
+    twins = [stored_before(p.values[0]) for p in TWINS]
+    repaired = [add(factory, person, text, source="arbeitnow, www.linkedin.com") for text in twins]
+    measured = add(factory, person, MEASURED_TEXT, source="arbeitnow")
+    styled = add(factory, person, stored_before(LEFT[0].values[0]), source="arbeitnow")
+    other = add(factory, person, twins[0], source="www.welcometothejungle.com")
+    first_elsewhere = add(factory, person, twins[0], source="www.linkedin.com, arbeitnow")
+    kept = (measured, styled, other, first_elsewhere)
+    before = {job_id: row_of(factory, job_id) for job_id in kept}
+    caplog.set_level(logging.INFO, logger="app.jobs.visible_pass")
+    assert walk(factory) == 3
+    for job_id, text, param in zip(repaired, twins, TWINS, strict=True):
+        row = row_of(factory, job_id)
+        assert row["posting_text"] == arbeitnow.repair(text).text
+        assert arbeitnow.text_of(param.values[0]).startswith(row["posting_text"])
+        assert row["description"] == row["posting_text"][: service.DESCRIPTION_CHARS]
+        assert row["signals"] == signals.stored(row["posting_text"])["signals"]
+        assert row["updated_at"] == T0
+    for job_id, row in before.items():
+        assert row_of(factory, job_id) == row  # not written at all: its version is the same
+    record = _pass_log(caplog)
+    assert record.__dict__["not_repaired"] == 2
+    assert record.__dict__["not_repaired_by_reason"] == {"not_a_document": 1, "loses_words": 1}
+    assert record.__dict__["not_repaired_ids"] == sorted(str(i) for i in (measured, styled))
+    # The pass run twice changes nothing the second time.
+    after = {job_id: row_of(factory, job_id) for job_id in (*repaired, *kept)}
+    assert walk(factory) == 0
+    for job_id, row in after.items():
+        assert row_of(factory, job_id) == row
+    assert jobs_of(factory, person)
+
+
+def test_a_text_that_held_only_hidden_characters_is_stored_as_nothing(
     factory: sessionmaker[Session], person: uuid.UUID
 ) -> None:
-    stored = arbeitnow.plain_text(ESCAPED)  # what the feed stored before J39
-    assert "<li>" in stored
-    feed = add(factory, person, stored, source="arbeitnow, www.linkedin.com")
-    feed_ok = add(factory, person, CONVERTED, source="arbeitnow")
-    other = add(factory, person, PROSE, source="www.welcometothejungle.com")
-    first_elsewhere = add(factory, person, stored, source="www.linkedin.com, arbeitnow")
-    before = {job_id: row_of(factory, job_id) for job_id in (feed_ok, other, first_elsewhere)}
+    job_id = add(factory, person, "\u200b\ufeff\u2060")
     assert walk(factory) == 1
-    repaired = row_of(factory, feed)
-    assert repaired["posting_text"] == CONVERTED
-    assert repaired["description"] == CONVERTED
-    assert repaired["signals"] == signals.stored(CONVERTED)["signals"]
-    assert repaired["updated_at"] == T0
-    for job_id, row in before.items():
-        assert row_of(factory, job_id) == row
-    assert walk(factory) == 0
-    assert jobs_of(factory, person)
+    row = row_of(factory, job_id)
+    assert (row["posting_text"], row["description"]) == (None, None)

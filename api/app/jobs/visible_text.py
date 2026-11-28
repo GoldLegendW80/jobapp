@@ -6,7 +6,9 @@ measure of 2026-11-28 found nothing for it in 334 postings, and one false alarm)
 
 What goes, by Unicode category (`unicodedata.category`, the Unicode version of the Python that
 runs the app, `unicodedata.unidata_version`), never by a list of characters:
-- Cc, the control characters (NUL included), but the tab, the line feed and the carriage return;
+- Cc, the control characters (NUL included), but the tab, the line feed and the carriage return,
+  and those a reader sees as a line break (`LINE_BREAKS`: the vertical tab, the form feed, the
+  next line and the information separators U+001C to U+001E), each of which becomes a line feed;
 - Cf, the format characters: zero-width spaces and joiners, direction marks and overrides, the
   tag block, the byte order mark, the soft hyphen;
 - Cs, a lone surrogate; Co, a private use character (an icon font's bullet); Cn, an unassigned
@@ -18,9 +20,11 @@ runs the app, `unicodedata.unidata_version`), never by a list of characters:
   bytes, goes whole.
 
 Everything else stays as it is: letters, marks (an accent written as a combining mark), numbers,
-punctuation, symbols, emoji and spaces; no normalisation, no trimming. The function is pure,
-idempotent and linear in the text's length: two substitutions of one character class each, the
-class built once from the category table.
+punctuation, symbols, emoji and spaces (the line and paragraph separators U+2028 and U+2029
+too); no normalisation, no trimming. The function is pure, idempotent and linear in the text's
+length: three substitutions of one character class each, the first class built once from the
+category table. `visible_or_none` is what a column that may hold nothing stores: nothing for a
+text that held only what a reader cannot see.
 """
 
 import functools
@@ -30,6 +34,8 @@ import unicodedata
 
 DROPPED = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
 KEPT_CONTROLS = frozenset("\t\n\r")
+LINE_BREAKS = frozenset("\x0b\x0c\x1c\x1d\x1e\x85")
+BREAKS = re.compile("[\x0b\x0c\x1c-\x1e\x85]")
 SUPPLEMENTARY_SELECTORS = (0xE0100, 0xE01EF)
 SELECTORS = re.compile(r"[\u180b-\u180d\u180f\ufe00-\ufe0f]+")
 # The first letter of the categories a variation selector may follow alone.
@@ -54,7 +60,9 @@ def _drops(char: str) -> bool:
     low, high = SUPPLEMENTARY_SELECTORS
     if low <= ord(char) <= high:
         return True
-    return unicodedata.category(char) in DROPPED and char not in KEPT_CONTROLS
+    if char in KEPT_CONTROLS or char in LINE_BREAKS:
+        return False
+    return unicodedata.category(char) in DROPPED
 
 
 # A class of a few hundred astral ranges is checked range by range for every character: the
@@ -82,4 +90,11 @@ def visible(text: str) -> str:
     """`text` without what a reader cannot see (module docstring)."""
     if not text:
         return text
-    return SELECTORS.sub(_selector, _dropped().sub(_kept, text))
+    return SELECTORS.sub(_selector, BREAKS.sub("\n", _dropped().sub(_kept, text)))
+
+
+def visible_or_none(text: str | None) -> str | None:
+    """`visible(text)`, None for a text that held only what a reader cannot see."""
+    if not text:
+        return text
+    return visible(text) or None
