@@ -119,7 +119,7 @@ def last_passed(now: datetime) -> date:
     return (now.astimezone(UTC) - LAST_ZONE).date() - timedelta(days=1)
 
 
-# --- which postings a tick checks -----------------------------------------------------------------
+# --- which postings a tick checks ----------------------------------------------------------------
 
 
 def _open(user_id: uuid.UUID | None = None) -> sa.ColumnElement[bool]:
@@ -200,6 +200,8 @@ def plan(db: Session, now: datetime, bounds: Bounds) -> list[Pick]:
             sa.select(Job.user_id).where(_open()).group_by(Job.user_id).order_by(Job.user_id)
         )
     )
+    if not people:
+        return []
     taken = searched_hosts(db)
     lists: list[list[Pick]] = []
     for person in people:
@@ -229,7 +231,7 @@ def _in_turn(lists: Iterable[list[Pick]]) -> list[Pick]:
     return out
 
 
-# --- a closing date that passed -------------------------------------------------------------------
+# --- a closing date that passed ------------------------------------------------------------------
 
 
 def _reopened(db: Session, job_ids: list[uuid.UUID]) -> set[uuid.UUID]:
