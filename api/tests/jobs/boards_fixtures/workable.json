@@ -16,7 +16,7 @@
         {"country": "France", "countryCode": "FR", "city": "Paris", "hidden": false},
         {"country": "Germany", "countryCode": "DE", "city": "Munich", "hidden": true}
       ],
-      "description": "<p>Agents &amp; evaluation in Python.</p>"
+      "description": "<p><strong>Example Models</strong> trains small models for search and ranking.</p><p><br></p><p><strong>Requirements</strong></p><ul><li><p>Agents &amp; evaluation in Python</p></li><li><p>Three years with&nbsp;PyTorch</p></li></ul><p>Apply by 15 December 2026</p>"
     }
   ]
 }

@@ -34,11 +34,22 @@ def test_ashby_listed_postings_with_every_place_remote_and_contract() -> None:
     assert (intern.location, intern.contract) == ("Remote", ContractType.Stage)
 
 
-def test_greenhouse_text_unescaped_twice_and_dates() -> None:
+def test_greenhouse_text_unescaped_once_converted_once_and_dates() -> None:
     parsed = ats.parse("greenhouse", "examplelabs", body("greenhouse"))
     assert parsed.invalid == 1
     first, remote = parsed.postings
-    assert first.text == "Build agents & tools in Python."
+    # Jobs J42: a paragraph, a heading, a line break and a list item each keep their line; the
+    # tag and the entity the prose writes as words stay words.
+    assert first.text.split("\n")[:7] == [
+        "Example Labs builds evaluation tools for language models & the agents that use them.",
+        "About the role",
+        "You will design agents that read job postings, write tests for them",
+        "and ship them to production every week.",
+        "What you will do",
+        "Build agents & tools in Python",
+        "Own the evaluation pipeline",
+    ]
+    assert "Draw charts with the <canvas> element and its &nbsp; entity" in first.text
     assert (first.location, first.published, first.contract) == ("London, UK", "2026-10-02", None)
     assert remote.published == "2026-10-06"  # no first_published: updated_at
 
@@ -70,7 +81,11 @@ def test_smartrecruiters_posting_address_and_no_text() -> None:
 def test_workable_hidden_places_left_out() -> None:
     (one,) = ats.parse("workable", "examplemodels", body("workable")).postings
     assert one.location == "Paris, France, Remote"
-    assert (one.text, one.published) == ("Agents & evaluation in Python.", "2026-10-05")
+    assert one.text == (
+        "Example Models trains small models for search and ranking.\nRequirements\n"
+        "Agents & evaluation in Python\nThree years with PyTorch\nApply by 15 December 2026"
+    )
+    assert one.published == "2026-10-05"
     assert one.contract is None  # "Full-time" names a schedule
 
 
@@ -93,7 +108,12 @@ def test_workable_locations_that_are_not_a_list_fall_back_to_the_city(places: An
 
 def test_recruitee_text_and_internship() -> None:
     (one,) = ats.parse("recruitee", "examplelabs", body("recruitee")).postings
-    assert (one.text, one.contract, one.published) == ("LLM agents. Python", "Stage", "2026-10-06")
+    # The description, then the requirements, each with its lines; a row's cells stand apart.
+    assert one.text == (
+        "The team\nLLM agents for travel bookings.\nRemote friendly, office in Paris & Lyon.\n"
+        "Python\nasyncio\nSQL\nLevel Salary\nSenior 65k"
+    )
+    assert (one.contract, one.published) == ("Stage", "2026-10-06")
 
 
 @pytest.mark.parametrize("kind", sorted(ats.PARSERS))
