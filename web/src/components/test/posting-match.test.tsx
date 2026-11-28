@@ -4,27 +4,12 @@ import { describe, expect, it } from "vitest";
 import { PostingMatch } from "@/components/shared/jobs/posting/posting-match";
 import {
   MATCH,
+  MATCH_BANDS,
   MATCH_LONGEST,
   MATCH_OLDER_TEXT,
 } from "@/design-system/fixtures/posting-match";
 import { jobDetailSchema } from "@/features/jobs/api/jobs-api";
-import { matchBand } from "@/features/jobs/helpers/match-bands";
 import { makeDetail } from "@/test/jobs";
-
-describe("matchBand", () => {
-  it.each([
-    [100, "Strong"],
-    [80, "Strong"],
-    [79, "Good"],
-    [60, "Good"],
-    [59, "Partial"],
-    [40, "Partial"],
-    [39, "Weak"],
-    [0, "Weak"],
-  ])("reads %i as %s", (score, word) => {
-    expect(matchBand(score)).toBe(word);
-  });
-});
 
 describe("PostingMatch", () => {
   it("shows both scores with their label and band, and the lists", () => {
@@ -49,15 +34,19 @@ describe("PostingMatch", () => {
         screen.getByRole("list", { name: "Gaps in the match" }),
       ).getAllByRole("listitem"),
     ).toHaveLength(1);
+    for (const point of screen.getAllByRole("listitem"))
+      expect(point).toHaveAttribute("dir", "auto");
     expect(screen.getByText(/keyword fit/)).toBeInTheDocument();
-    expect(screen.getByText(/Read on 27 Nov 2026/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Read by the assistant on 27 Nov 2026/),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/changed since/)).toBeNull();
   });
 
   it("keeps a reading on an older text with one line that says so", () => {
     render(<PostingMatch match={MATCH_OLDER_TEXT} />);
     expect(screen.getByText(/text changed since/)).toHaveTextContent(
-      "will be read again",
+      /^Read by the assistant on 27 Nov 2026\. The posting's text changed since this reading\.$/,
     );
     expect(screen.getByText("Career")).toBeInTheDocument();
   });
@@ -100,6 +89,11 @@ describe("the detail's reading", () => {
     expect(parsed.match?.career).toBe(72);
   });
 
+  it("keeps a reading at every band's edge, 0 and 100 included", () => {
+    for (const match of MATCH_BANDS)
+      expect(jobDetailSchema.parse(makeDetail({ match })).match).toEqual(match);
+  });
+
   it("parses an older api's detail with no reading, which renders nothing", () => {
     const older: Partial<ReturnType<typeof makeDetail>> = makeDetail();
     delete older.match;
@@ -107,5 +101,19 @@ describe("the detail's reading", () => {
     expect(parsed.match).toBeUndefined();
     const { container } = render(<PostingMatch match={parsed.match} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("parses a reading it cannot read as none, and the block shows nothing", () => {
+    for (const bad of [
+      { ...MATCH, career: 140 },
+      { ...MATCH, culture: -3 },
+      { ...MATCH, gaps: undefined },
+      { ...MATCH, strengths: "none" },
+    ]) {
+      const parsed = jobDetailSchema.parse(makeDetail({ match: bad as never }));
+      expect(parsed.match).toBeNull();
+      const { container } = render(<PostingMatch match={parsed.match} />);
+      expect(container).toBeEmptyDOMElement();
+    }
   });
 });

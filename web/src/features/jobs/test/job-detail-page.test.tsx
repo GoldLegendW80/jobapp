@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MATCH } from "@/design-system/fixtures/posting-match";
 import { admin, fakeSession } from "@/test/auth";
 import { csvJobs, fakeJobDetail, fakeJobsApi, makeDetail } from "@/test/jobs";
 import { renderApp } from "@/test/render";
@@ -198,6 +199,40 @@ describe("job detail", () => {
     expect(
       screen.getByRole("list", { name: "History, newest first" }),
     ).toBeVisible();
+  });
+
+  it("shows the career and culture reading under the posting, in the main column", async () => {
+    fakeJobDetail(makeDetail({ match: MATCH }));
+    await openDetail();
+    const region = (name: string) => screen.getByRole("region", { name });
+    const reading = region("Career and culture");
+    expect(rail()).not.toContainElement(reading);
+    expect(before(region("Posting"), reading)).toBe(true);
+    expect(before(reading, region("Notes"))).toBe(true);
+  });
+
+  it("shows no career and culture section for a posting with no reading", async () => {
+    fakeJobDetail(makeDetail());
+    await openDetail();
+    expect(
+      screen.queryByRole("heading", { name: "Career and culture" }),
+    ).toBeNull();
+  });
+
+  it("still opens the posting when its reading cannot be read, with no block", async () => {
+    fakeJobDetail(
+      makeDetail({
+        title: "Data Engineer",
+        match: { ...MATCH, career: 140 },
+      }),
+    );
+    await openDetail();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Data Engineer" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Career and culture" }),
+    ).toBeNull();
   });
 
   it("keeps one h1, the posting's title, and puts every section a level below it", async () => {
