@@ -97,6 +97,7 @@ def test_each_reader_gives_a_paragraph_a_heading_and_a_list_item_their_own_line(
 def test_a_row_of_a_table_reads_its_cells_apart_on_one_line() -> None:
     assert first("recruitee").text.endswith("\nLevel Salary\nSenior 65k")
     assert plain_text("<table><tr><td>Salary</td><td>50k</td></tr></table>") == "Salary 50k"
+    assert plain_text("<tr><th>Level<td>Senior<td>65k</tr>") == "Level Senior 65k"  # unclosed
     assert plain_text("<p>Salary<b>50</b>k</p>") == "Salary50k"  # inline tags join, as shown
 
 
