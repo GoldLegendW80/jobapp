@@ -125,6 +125,8 @@ class Settings(BaseSettings):
     browser_listed_pages_s: int = Field(default=600, ge=0, le=86_400)
     # Past this share of the browser container's memory limit, browserd closes the newest tab.
     browser_mem_guard_pct: int = Field(default=90, ge=50, le=99)
+    # B33: the closes for memory a website's search goes through before it ends `browser_memory`.
+    browser_memory_closes_max: int = Field(default=10, ge=1, le=50)
     # Two browsers at once (owner, 2026-11-06): BROWSER_SLOTS as browserd reads it, the fills
     # that may run at once (one per slot of a person's browser); 1 keeps one at a time.
     browser_slots: int = Field(default=2, ge=1, le=2)

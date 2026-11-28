@@ -506,11 +506,14 @@ class Runner:
         guest_cooldown: Any = None,
         linkedin_page: bool = False,
         listed_pages_s: float = 600.0,
+        memory_closes_max: int = 10,
     ) -> None:
         self.leases, self.tools_for, self.base_url = leases, tools_for, base_url
         # Jobs J36: the time a website's reading of the pages of its postings seen only in a
         # list may take after its agent (BROWSER_LISTED_PAGES_S), per website and search.
         self.listed_pages_s = listed_pages_s
+        # B33: the closes for memory a website's search goes through (BROWSER_MEMORY_CLOSES_MAX).
+        self.memory_closes_max = memory_closes_max
         # LinkedIn's public job search page in the browser when its public API refused (jobs
         # J22, linkedin_page): the worker's runner reads it, a runner built without it does not.
         self.linkedin_page = linkedin_page
@@ -630,6 +633,7 @@ def runner_for(settings: Any, redis: Any, sessions: Any, agent_context: Any = No
         guest_cooldown=RedisCooldown(pool),
         linkedin_page=True,
         listed_pages_s=settings.browser_listed_pages_s,
+        memory_closes_max=settings.browser_memory_closes_max,
     )
 
 
