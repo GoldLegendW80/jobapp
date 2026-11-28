@@ -136,18 +136,19 @@ export const jobDetailSchema = jobListItemSchema.extend({
   events: z.array(jobEventSchema),
   events_total: z.number().int().nonnegative(),
   notices: noticesSchema.optional(),
-  // Jobs J38: the whole reading; `current` is false once the posting's text changed since.
+  // Jobs J38: the whole reading; `current` is false once the posting's text changed since. A reading the web cannot parse reads as none.
   match: z
     .object({
-      career: z.number().int(),
-      culture: z.number().int(),
+      career: z.number().int().min(0).max(100),
+      culture: z.number().int().min(0).max(100),
       strengths: z.array(z.string()),
       gaps: z.array(z.string()),
       rated_at: z.string(),
       current: z.boolean(),
     })
     .nullable()
-    .optional(),
+    .optional()
+    .catch(null),
 });
 export type JobDetail = z.infer<typeof jobDetailSchema>;
 
