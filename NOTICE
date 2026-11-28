@@ -102,6 +102,11 @@ asked at a level that may be higher is flagged, never passed in silence; anythin
 The career and culture reading of a posting (api/app/jobs/match.py, api/app/jobs/prompts/match.md)
 adapts two dimensions of its evaluation rubric (04-job-evaluation.md: career alignment and
 behavioral or culture fit) and their four bands; the prompt is written anew in this app's words.
+The removal of what a reader cannot see from a posting's text (api/app/jobs/visible_text.py, by
+Unicode category, at every store and over the postings stored before) takes the idea of its code
+gate in front of a model that reads a posting (tools/posting_guard.py: what a reader cannot see
+is removed first); its scan of the lines shaped like an instruction is not taken. Written anew in
+this app's own shape; no code of it is copied.
 
 MIT License
 
