@@ -1420,54 +1420,69 @@ class _Claimed:
     refused: tuple[datetime, ...] = ()  # when Anthropic refused it as busy before (A13)
 
 
+@dataclass(frozen=True)
+class _Waits:
+    """How a run Anthropic refuses may wait (agents A13, `execute`)."""
+
+    may_wait: bool = False
+    paced: bool = False
+    until: datetime | None = None
+
+
 def _claim(context: RunContext, run_id: uuid.UUID, paced: bool) -> _Claimed | str | None:
-    """The run, now running; "waits" when its turn has not come (agents A13, `busy.start_at`:
-    its `waiting` step is written); None when it is not queued."""
+    """The run, now running; "waits" when `paced` and its turn among the person's starts on the
+    agents queue has not come (agents A13, `busy.start_at`: its `waiting` step is written); None
+    when it is not queued."""
     with context.sessions() as db:
         now = context.clock()
-        user_id = db.scalar(
-            sa.select(AgentRun.user_id).where(
-                AgentRun.id == run_id, AgentRun.status == RunStatus.queued
-            )
-        )
-        if user_id is None:
-            return None
-        runs.lock_user(db, user_id)
-        queued = db.get(AgentRun, run_id, populate_existing=True)
-        if queued is None or queued.status is not RunStatus.queued:
-            db.rollback()
-            return None
-        limits = busy.bounds(context.settings)
         refused = tuple(busy.refusals(db, run_id))
-        turn = busy.start_at(db, queued, now, limits, paced)
-        if turn is not None:
-            reason, at = turn
-            step = busy.wait_step(reason, at, "held", len(refused) + 1, limits)
-            held = runs.hold_queued(db, run_id, step, now)
-            db.commit()
-            return "waits" if held else None
+        if paced:
+            user_id = db.scalar(
+                sa.select(AgentRun.user_id).where(
+                    AgentRun.id == run_id, AgentRun.status == RunStatus.queued
+                )
+            )
+            if user_id is None:
+                return None
+            runs.lock_user(db, user_id)
+            queued = db.get(AgentRun, run_id, populate_existing=True)
+            if queued is None or queued.status is not RunStatus.queued:
+                db.rollback()
+                return None
+            limits = busy.bounds(context.settings)
+            turn = busy.start_at(db, queued, now, limits)
+            if turn is not None:
+                step = busy.wait_step(busy.PACE, turn, "held", len(refused) + 1, limits, paced)
+                held = runs.hold_queued(db, run_id, step, now)
+                db.commit()
+                return "waits" if held else None
         run = runs.claim(db, run_id, now)
         if run is None:
             db.rollback()
             return None
         seq = runs.next_seq(db, run_id)
-        runs.append_event(db, run_id, seq, "status", {"status": "running"}, now)
+        runs.append_event(db, run_id, seq, "status", busy.running(paced), now)
         db.commit()
         return _Claimed(run, seq + 1, refused)
 
 
 def _wait_again(
-    context: RunContext, run_id: uuid.UUID, seq: int, refused: tuple[datetime, ...], state: _State
+    context: RunContext,
+    run_id: uuid.UUID,
+    seq: int,
+    claimed: _Claimed,
+    state: _State,
+    how: _Waits,
 ) -> datetime | None:
     """A run Anthropic refused before it did anything goes back to `queued` with its `waiting`
     step (agents A13); None when its tries or its time are used up, and it fails as before."""
     now = context.clock()
     limits = busy.bounds(context.settings)
     provider = (state.resets_at - now).total_seconds() if state.resets_at is not None else None
-    at = busy.plan(refused, now, provider, limits)
+    at = busy.plan(claimed.refused, now, provider, limits, how.until)
     if at is None:
         return None
-    step = busy.wait_step(busy.BUSY, at, "refused", len(refused) + 2, limits)
+    step = busy.wait_step(busy.BUSY, at, "refused", len(claimed.refused) + 2, limits, how.paced)
     with context.sessions() as db:
         if not runs.requeue(db, run_id, seq, step, now):
             db.rollback()
@@ -1680,29 +1695,35 @@ async def execute(
     wall_time_max_s: float | None = None,
     may_wait: bool = False,
     paced: bool = False,
+    wait_until: datetime | None = None,
 ) -> RunStatus | None:
     """Run one queued run to its end (module docstring). None when it was not queued.
 
     `may_wait` (agents A13): the caller starts the run again when this answers `queued`, at the
     time of its last `waiting` step: a run Anthropic refused as busy before it did anything then
-    waits instead of failing, and a try again waits for the person's other runs. `paced`: the
-    run also waits its turn among the starts of the person's minute (the agents queue).
+    waits instead of failing, for a try that starts by `wait_until` when it is given. `paced`:
+    the agents queue's own start, counted among the person's starts of the minute and waiting
+    its turn there.
 
     From the moment the credential is decrypted to the end of this call, it is replaced in
     every log record of the process, whoever logs (app/logging_config.py): the SDK, the HTTP
     client and the queue log on their own, outside the scrub of what the run stores."""
+    how = _Waits(may_wait, paced and may_wait, wait_until)
     with contextlib.ExitStack() as held:
-        return await _execute(context, run_id, held, wall_time_max_s, may_wait, paced and may_wait)
+        return await _execute(context, run_id, held, wall_time_max_s, how)
 
 
-async def execute_waiting(context: RunContext, run_id: uuid.UUID) -> RunStatus | None:
+async def execute_waiting(
+    context: RunContext, run_id: uuid.UUID, until: datetime | None = None
+) -> RunStatus | None:
     """`execute` for a caller that runs the agent in its own process and holds no browser lease
-    nor lock (the hiring panel): a run that must wait (agents A13) waits here, `queued`, and
-    starts again at its time. None when it was not queued, or was cancelled while it waited.
-    Cancelled itself (the job ends) while the run waits: the run fails as stopped."""
+    nor lock (the hiring panel): a run Anthropic refused before it did anything waits here,
+    `queued`, and starts again at its time, for a try that starts by `until` (the caller's own
+    bound), else it fails as before. None when it was not queued, or was cancelled while it
+    waited. Cancelled itself (the job ends) while the run waits: the run fails as stopped."""
     try:
         while True:
-            status = await execute(context, run_id, may_wait=True)
+            status = await execute(context, run_id, may_wait=True, wait_until=until)
             if status is not RunStatus.queued:
                 return status
             if not await _wait_turn(context, run_id):
@@ -1749,18 +1770,17 @@ async def _execute(
     context: RunContext,
     run_id: uuid.UUID,
     held: contextlib.ExitStack,
-    wall_time_max_s: float | None = None,
-    may_wait: bool = False,
-    paced: bool = False,
+    wall_time_max_s: float | None,
+    how: _Waits,
 ) -> RunStatus | None:
-    claimed = await asyncio.to_thread(_claim, context, run_id, paced)
+    claimed = await asyncio.to_thread(_claim, context, run_id, how.paced)
     if claimed is None:
         logger.info("agent run skipped: not queued", extra={"run_id": str(run_id)})
         return None
     if isinstance(claimed, str):
         logger.info("agent run waits its turn", extra={"run_id": str(run_id)})
         return RunStatus.queued
-    run, seq, refused = claimed.run, claimed.seq, claimed.refused
+    run, seq = claimed.run, claimed.seq
     recorder = Recorder(context, run_id, seq)
     started = time.monotonic()
     state = _State()
@@ -1813,7 +1833,8 @@ async def _execute(
             prompt = definition.prompt(data, run.job_id)
         # The fake backend's stream may name what the definition says of this run (jobs J23).
         variables.update(definition.stream_variables(data))
-        variables["try"] = str(len(refused) + 1)  # the fake's `before_try` and `from_try` (A13)
+        # The fake's `before_try` and `from_try` (A13).
+        variables["try"] = str(len(claimed.refused) + 1)
         binding: Mapping[str, Any] | None = None
         if definition.bind is not None:
             # What the run works on, decided here, in code, before a tool or a model call.
@@ -1947,11 +1968,13 @@ async def _execute(
         outcome = outcome_of(state, definition, stopped, model)
         tokens = _tokens(state)
         if (
-            may_wait
+            how.may_wait
             and outcome.error == BUSY
             and busy.untouched(state.tool_calls, state.denied, state.text_blocks, *tokens)
         ):
-            at = await asyncio.to_thread(_wait_again, context, run_id, recorder.seq, refused, state)
+            at = await asyncio.to_thread(
+                _wait_again, context, run_id, recorder.seq, claimed, state, how
+            )
             if at is not None:
                 outcome = None  # not ended: the run is queued again, its end comes later
                 logger.info(

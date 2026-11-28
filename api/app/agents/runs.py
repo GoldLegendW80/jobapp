@@ -27,7 +27,6 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
-from app.agents import busy
 from app.agents.models import (
     FINAL_STATUSES,
     AgentEvent,
@@ -44,8 +43,10 @@ STOPPED = "Interrupted: the worker stopped while this run was running."
 LOST = "The run never started: its queue message was lost."
 STALE = "The run stopped reporting and was marked failed."
 QUEUE_DOWN = "The agent queue is unavailable. Try again in a minute."
-# A waiting run whose time passed this long ago lost whoever was to start it (agents A13).
+# Agents A13: a waiting run whose time passed this long ago, and whose job is gone from the
+# queue (the worker's reaper asks it), lost whoever was to start it.
 WAIT_LOST_AFTER = timedelta(minutes=10)
+WAIT_LOST = "The run was waiting to start and its queue message was lost."
 
 
 class ActiveRunsError(Exception):
@@ -447,10 +448,21 @@ def reap_stale(
     stale_queued = sa.and_(
         AgentRun.status == RunStatus.queued, AgentRun.created_at < now - queued_after
     )
-    count += _fail_where(db, stale_queued, LOST, now)
-    # A run that waits (agents A13) and was not started again well after its time.
-    lost = busy.overdue(db, now - WAIT_LOST_AFTER)
-    if lost:
-        waits = sa.and_(AgentRun.status == RunStatus.queued, AgentRun.id.in_(lost))
-        count += _fail_where(db, waits, LOST, now)
+    return count + _fail_where(db, stale_queued, LOST, now)
+
+
+def fail_lost_waits(db: Session, lost: Sequence[tuple[uuid.UUID, int]], now: datetime) -> int:
+    """Agents A13: each run of `lost` still `queued` whose last step is still the `waiting` step
+    of that seq (the one whose job the reaper found gone) fails with WAIT_LOST, under the run's
+    row lock: a job that claims or holds it meanwhile comes before or after, never beside. The
+    caller commits."""
+    count = 0
+    for run_id, seq in lost:
+        status = db.scalar(
+            sa.select(AgentRun.status).where(AgentRun.id == run_id).with_for_update()
+        )
+        if status is not RunStatus.queued or next_seq(db, run_id) != seq + 1:
+            continue
+        still = sa.and_(AgentRun.id == run_id, AgentRun.status == RunStatus.queued)
+        count += _fail_where(db, still, WAIT_LOST, now)
     return count

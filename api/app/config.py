@@ -72,8 +72,9 @@ class Settings(BaseSettings):
     agents_busy_retry_max_delay_s: int = Field(default=600, ge=1, le=3600)
     agents_busy_retry_tries: int = Field(default=4, ge=1, le=10)
     agents_busy_retry_window_s: int = Field(default=1800, ge=60, le=21_600)
-    # At most this many runs of one person's credential start in a minute on the agents queue.
-    agents_starts_per_minute: int = Field(default=6, ge=1, le=120)
+    # At most this many runs of one person's credential start in a minute on the agents queue;
+    # 0: no pace (the journeys' stacks, whose fake backend is never rate limited).
+    agents_starts_per_minute: int = Field(default=6, ge=0, le=120)
     # Mail (mail M1, app/mail/google.py). The OAuth client of the Google Cloud project: both or
     # neither. Without them the mail routes answer that Gmail is not configured.
     google_oauth_client_id: str | None = None

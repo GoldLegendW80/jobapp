@@ -110,6 +110,8 @@ AT_ONCE = 3
 REVIEW_CHARS = 1_500  # what one review adds to the merge's reads, at most
 JOB_TIMEOUT_S = 1_500  # 3 waves of reviews, the merge, the rebuild and the screen, with room
 STALE_S = 1_800  # over JOB_TIMEOUT_S: a panel still running then lost its job
+# What a run takes beyond its wall time (its start, the stop's grace, its end), for `waits_s`.
+RUN_GRACE_S = 30.0
 NOTE_WORDS = 120
 DOCUMENT_MAX = 20_000
 BRIEF_TEXT_MAX = 12_000
@@ -150,6 +152,20 @@ ROLE_OF = {role.key: role for role in ROLES}
 READERS = tuple(role for role in ROLES if role.key.startswith("reader_"))
 MERGE_AGENT = "documents_panel_merge"
 AGENT_NAMES = (*(role.agent for role in ROLES), MERGE_AGENT)
+WAVES = -(-len(ROLES) // AT_ONCE)  # the reviews, AT_ONCE at a time
+
+
+def waits_s(settings: Any) -> float:
+    """Agents A13: how long after the job's start a run of the panel Anthropic refused as busy
+    may still try again (`runner.execute_waiting`'s bound); past it, the run fails as before.
+    JOB_TIMEOUT_S less the job's steps at their longest (the waves of reviews, the merge and the
+    screen after at WALL_TIME_S, the rebuild at the writer's wall time, each with RUN_GRACE_S),
+    so that a job that waited still ends within JOB_TIMEOUT_S, under STALE_S."""
+    rebuild = float(settings.documents_generation_wall_s)
+    longest = (WAVES + 2) * (WALL_TIME_S + RUN_GRACE_S) + rebuild + RUN_GRACE_S
+    return max(0.0, JOB_TIMEOUT_S - longest)
+
+
 # Why a reviewer's answer is missing.
 MISSING = ("no_credential", "busy", "token_budget", "cancelled", "error", "no_report")
 
@@ -586,6 +602,8 @@ class RuntimeCall:
     _calls: dict[str, int] = field(default_factory=dict)
     # The panel its runs review for: they join its writer run's workflow run (Activity, A10).
     panel_id: uuid.UUID | None = None
+    # Agents A13: a run refused as busy waits for a try by this time only (`job`, `waits_s`).
+    waits_until: datetime | None = None
 
     def _script(self, agent: str) -> str | None:
         found = self.scripts.get(agent)
@@ -638,7 +656,7 @@ class RuntimeCall:
             _EXPECTS[created] = expects
             try:
                 # Refused as busy before it did anything, the run waits here (agents A13).
-                await runner.execute_waiting(context, created)
+                await runner.execute_waiting(context, created, self.waits_until)
             finally:
                 reported = _REPORTED.pop(created, None)
                 _EXPECTS.pop(created, None)
@@ -1512,12 +1530,15 @@ async def job(
     context: Any, panel_id: uuid.UUID, *, scripts: dict[str, str | list[str]] | None = None
 ) -> str:
     """The arq job `documents_panel` (app/worker.py): the panel on the agents runtime of this
-    process, then the letter of a CV, whatever the panel's outcome."""
+    process, then the letter of a CV, whatever the panel's outcome. A run Anthropic refuses as
+    busy before it did anything waits in the job for a try within `waits_s` of its start."""
     from app.agents import runner
     from app.documents import generate
 
+    until = context.clock() + timedelta(seconds=waits_s(context.settings))
+
     async def execute(run_id: uuid.UUID) -> None:
-        await runner.execute_waiting(context, run_id)
+        await runner.execute_waiting(context, run_id, until)
 
     async def after(cv_run: uuid.UUID | None, status: str) -> None:
         if cv_run is not None:
@@ -1530,7 +1551,7 @@ async def job(
         await generate._send(context, send, "documents.panel.not_queued", panel_id=str(turn))
 
     steps = Steps(
-        call=RuntimeCall(context, dict(scripts or {}), panel_id=panel_id),
+        call=RuntimeCall(context, dict(scripts or {}), panel_id=panel_id, waits_until=until),
         execute=execute,
         sessions=context.sessions,
         clock=context.clock,

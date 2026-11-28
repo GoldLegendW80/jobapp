@@ -146,6 +146,7 @@ from arq import cron, func
 from arq.connections import ArqRedis
 from arq.constants import in_progress_key_prefix, result_key_prefix
 from arq.cron import CronJob
+from arq.jobs import Job, JobStatus
 from arq.worker import Function, Worker
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -197,7 +198,9 @@ AGENT_STALE_QUEUED = timedelta(hours=6)
 STOP_WAIT_S = 12.0
 INGESTION_ADVANCE_SECOND = 20  # the tick of the ingestion chain, once a minute
 DOCUMENTS_RESEND_SECOND = 50  # the render queue's resend, once a minute
-DOCUMENTS_PANEL_TIMEOUT_S = 1_500  # documents.panel.JOB_TIMEOUT_S (D29)
+# documents.panel.JOB_TIMEOUT_S (D29), the job's own: under panel.STALE_S, so the documents tick
+# never takes a live panel for lost (agents A13).
+DOCUMENTS_PANEL_TIMEOUT_S = 1_500
 DOCUMENTS_TICK_SECOND = 5  # the documents tick (D10, D29), once a minute
 DOCUMENTS_TICK_TIMEOUT_S = 50
 
@@ -614,9 +617,48 @@ def _reap_agent_runs(sessions: sessionmaker[Session], now: datetime, at_start: b
 async def reap_agent_runs(ctx: dict[str, Any], at_start: bool = False) -> int:
     await asyncio.to_thread(agent_catalog.publish_once, sessions_of(ctx), clock_of(ctx)())  # A6
     count = await asyncio.to_thread(_reap_agent_runs, sessions_of(ctx), clock_of(ctx)(), at_start)
+    if not at_start:
+        count += await reap_lost_waits(ctx)
     if count:
         logger.warning("agent runs failed by the reaper", extra={"count": count, "start": at_start})
     return count
+
+
+async def reap_lost_waits(ctx: dict[str, Any]) -> int:
+    """Agents A13: a run waiting `queued` whose time passed `WAIT_LOST_AFTER` ago fails only when
+    its run_agent job (`start_again`'s id) is gone from the queue: a job late behind busy slots
+    still comes. The queue unreadable, none fails; a queued run's own bound (AGENT_STALE_QUEUED)
+    still holds."""
+    from app.agents import busy
+
+    pool = ctx.get("redis")
+    if pool is None:
+        return 0
+    now = clock_of(ctx)()
+
+    def overdue() -> list[tuple[uuid.UUID, int]]:
+        with sessions_of(ctx)() as db:
+            return busy.overdue(db, now - agent_runs.WAIT_LOST_AFTER)
+
+    gone: list[tuple[uuid.UUID, int]] = []
+    try:
+        for run_id, seq in await asyncio.to_thread(overdue):
+            job = Job(f"{queue.agent_run_job_id(run_id)}:{seq}", pool, _queue_name=queue.AGENTS)
+            if await job.status() in (JobStatus.complete, JobStatus.not_found):
+                gone.append((run_id, seq))
+    except Exception as exc:
+        logger.warning("agent waits not checked", extra={"error": type(exc).__name__})
+        return 0
+    if not gone:
+        return 0
+
+    def fail() -> int:
+        with sessions_of(ctx)() as db:
+            count = agent_runs.fail_lost_waits(db, gone, now)
+            db.commit()
+            return count
+
+    return await asyncio.to_thread(fail)
 
 
 async def reap_agent_runs_at_start(ctx: dict[str, Any]) -> int:
@@ -738,7 +780,7 @@ def agents_queue() -> QueueSpec:
             func(
                 documents_panel,
                 name="documents_panel",
-                timeout=max(job_timeout_s, DOCUMENTS_PANEL_TIMEOUT_S),
+                timeout=DOCUMENTS_PANEL_TIMEOUT_S,
                 max_tries=1,
                 keep_result=0,
             ),

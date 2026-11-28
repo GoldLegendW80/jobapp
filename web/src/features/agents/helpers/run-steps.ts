@@ -232,12 +232,27 @@ function usageView(
 }
 
 /** A run that waits before it starts (agents A13, api app/agents/busy.py): Anthropic refused it
- * as busy before it did anything, or many of the person's runs started in the last minute. */
+ * as busy before it did anything, or many of the person's runs started on the agents queue in
+ * the last minute. Only a refusal names a try: a run that has not tried yet never reads one. */
 function waitingView(data: Record<string, unknown>): StepView {
   const at = new Date(text(data.at));
   const when = Number.isNaN(at.getTime())
     ? "in a moment"
     : `at ${at.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+  const attempt = Number(data.try ?? 0);
+  const of = Number(data.of ?? 0);
+  if (data.reason === "busy" && data.retry !== "held" && attempt >= 2) {
+    const count = of >= attempt ? ` (try ${attempt} of ${of})` : "";
+    return {
+      icon: "status",
+      title: "Anthropic is busy",
+      body: {
+        kind: "note",
+        text: `Anthropic is busy or rate limiting your credential. The app tries again ${when}${count}. Cancel stops it now.`,
+      },
+      tone: "warning",
+    };
+  }
   if (data.reason === "pace") {
     return {
       icon: "status",
@@ -249,16 +264,14 @@ function waitingView(data: Record<string, unknown>): StepView {
       tone: "muted",
     };
   }
-  const attempt = Number(data.try ?? 0);
-  const of = Number(data.of ?? 0);
   return {
     icon: "status",
-    title: "Anthropic is busy",
+    title: "Waiting to start",
     body: {
       kind: "note",
-      text: `Anthropic is busy or rate limiting your credential. The app tries again ${when} (try ${attempt} of ${of}). Cancel stops it now.`,
+      text: `The app starts this run ${when}. Cancel stops it now.`,
     },
-    tone: "warning",
+    tone: "muted",
   };
 }
 

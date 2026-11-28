@@ -54,6 +54,36 @@ describe("a run that waits in the step log", () => {
     expect(words).not.toMatch(DASHES);
   });
 
+  it("never names a try for a run that has not tried yet", () => {
+    for (const data of [
+      {
+        reason: "busy",
+        at: "2026-11-28T10:00:30Z",
+        retry: "held",
+        try: 1,
+        of: 4,
+      },
+      { reason: "busy", at: "2026-11-28T10:00:30Z", try: 1, of: 4 },
+      {
+        reason: "pace",
+        at: "2026-11-28T10:00:30Z",
+        retry: "held",
+        try: 1,
+        of: 4,
+      },
+    ]) {
+      const view = describeStep(step(data), null);
+      const body = view?.body;
+      const words = body && "text" in body ? body.text : "";
+      expect(view?.title).not.toBe("Anthropic is busy");
+      expect(words).not.toMatch(/tries again|try \d/);
+      expect(words).toMatch(
+        /starts? (this run )?at \d{2}:\d{2}\. Cancel stops it now\.$/,
+      );
+      expect(words).not.toMatch(DASHES);
+    }
+  });
+
   it("says in a moment when the time cannot be read", () => {
     const view = describeStep(
       step({ reason: "busy", at: "soon", try: 3, of: 4 }),

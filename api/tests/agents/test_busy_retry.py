@@ -1,6 +1,7 @@
 """Agents A13: a run Anthropic refuses as busy before it did anything waits and starts again,
-and the starts of one person's credential are paced (app/agents/busy.py, runner.execute,
-worker.start_again), on the fake backend answering busy and a real Postgres."""
+and the starts of one person's credential on the agents queue are paced (app/agents/busy.py,
+runner.execute, worker.start_again, worker.reap_lost_waits), on the fake backend answering busy,
+a real Postgres and, for the reaper, a real Redis."""
 
 import asyncio
 import uuid
@@ -11,6 +12,7 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from arq.connections import RedisSettings, create_pool
 from sqlalchemy.orm import Session, sessionmaker
 
 from app import worker
@@ -18,6 +20,7 @@ from app.agents import busy, failures, runner, runs
 from app.agents.crypto import Keyring
 from app.agents.models import AgentRun, RunStatus
 from app.config import Settings
+from app.ingestion import engine as ingestion_engine
 from tests.agents.run_helpers import (
     Backends,
     add_job,
@@ -29,6 +32,9 @@ from tests.agents.run_helpers import (
     save_credential,
 )
 from tests.conftest import make_settings
+from tests.jobs.test_worker import flush_redis, redis_url
+
+__all__ = ["redis_url"]
 
 T0 = datetime(2029, 12, 31, 23, 0, tzinfo=UTC)
 RESETS = datetime(2030, 1, 1, tzinfo=UTC)  # the `resetsAt` of the busy_resets stream
@@ -101,6 +107,7 @@ def test_a_run_refused_once_waits_the_first_delay_then_succeeds_with_no_failure_
         "retry": "refused",
         "try": 2,
         "of": 4,
+        "paced": False,
     }
     assert events(factory, run_id)[-2:] == [("status", {"status": "queued"}), ("waiting", wait)]
 
@@ -342,27 +349,86 @@ def test_two_workers_claiming_at_once_start_one_run_of_a_full_minute(
     assert sorted(str(status) for status in asyncio.run(both())) == ["done", "queued"]
 
 
-def test_after_a_refusal_runs_of_that_credential_start_one_at_a_time(
+def test_a_refused_run_holds_no_other_run_of_its_person(
     settings: Settings, factory: sessionmaker[Session], keyring: Keyring, person: uuid.UUID
 ) -> None:
+    """While a run waits on a refusal, a new queue run of the person starts at once, also while
+    another run of the person runs for hours (an apply agent or a website search stands for it),
+    and the refused run starts again at its own time all the same."""
     clock = Clock()
     rc = _context(settings, factory, keyring, clock)
     refused = new_run(factory, person, {"message": "hello", "script": "busy_once"})
-    assert _run(rc, refused, may_wait=True) is RunStatus.queued
+    assert _run(rc, refused, may_wait=True, paced=True) is RunStatus.queued
+    assert _run(rc, new_run(factory, person), may_wait=True, paced=True) is RunStatus.done
     going = new_run(factory, person)
     with factory() as db:
-        db.execute(sa.update(AgentRun).where(AgentRun.id == going).values(status=RunStatus.running))
+        db.execute(
+            sa.update(AgentRun)
+            .where(AgentRun.id == going)
+            .values(status=RunStatus.running, started_at=T0 - timedelta(hours=2))
+        )
         db.commit()
-    waiting = new_run(factory, person)
-    assert _run(rc, waiting, may_wait=True, paced=True) is RunStatus.queued
-    assert _waits(factory, waiting)[-1]["reason"] == "busy"
+    assert _run(rc, new_run(factory, person), may_wait=True, paced=True) is RunStatus.done
     clock.move(30)
-    assert _run(rc, refused, may_wait=True) is RunStatus.queued  # the try waits its turn too
-    assert _waits(factory, refused)[-1]["retry"] == "held"
-    with factory() as db:
-        db.execute(sa.update(AgentRun).where(AgentRun.id == going).values(status=RunStatus.done))
-        db.commit()
-    assert _run(rc, refused, may_wait=True) is RunStatus.done
+    assert _run(rc, refused, may_wait=True, paced=True) is RunStatus.done
+    assert [wait["retry"] for wait in _waits(factory, refused)] == ["refused"]
+    assert run_row(factory, going).status is RunStatus.running
+
+
+def test_only_the_agents_queue_s_starts_count_toward_the_pace(
+    migrated_url: str,
+    key: str,
+    tmp_path: Path,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    person: uuid.UUID,
+) -> None:
+    settings = _paced(migrated_url, key, tmp_path, per_minute=1)
+    rc = _context(settings, factory, keyring, Clock())
+    # Started in a caller's own process (the hiring panel, the apply agent): neither counts.
+    assert _run(rc, new_run(factory, person)) is RunStatus.done
+    waits = new_run(factory, person, {"message": "hello", "script": "busy"})
+    assert _run(rc, waits, may_wait=True) is RunStatus.queued
+    assert _waits(factory, waits)[-1]["paced"] is False
+    assert _run(rc, new_run(factory, person), may_wait=True, paced=True) is RunStatus.done
+    held = new_run(factory, person)
+    assert _run(rc, held, may_wait=True, paced=True) is RunStatus.queued
+    assert _waits(factory, held)[-1] == {
+        "reason": "pace",
+        "at": (T0 + timedelta(seconds=60)).isoformat(),
+        "retry": "held",
+        "try": 1,
+        "of": 4,
+        "paced": True,
+    }
+
+
+def test_the_pace_at_0_holds_no_start(
+    migrated_url: str,
+    key: str,
+    tmp_path: Path,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    person: uuid.UUID,
+) -> None:
+    settings = _paced(migrated_url, key, tmp_path, per_minute=0)
+    rc = _context(settings, factory, keyring, Clock())
+    for _ in range(8):
+        assert _run(rc, new_run(factory, person), may_wait=True, paced=True) is RunStatus.done
+
+
+def test_a_run_that_waits_in_its_caller_s_job_fails_as_before_past_the_caller_s_bound(
+    settings: Settings, factory: sessionmaker[Session], keyring: Keyring, person: uuid.UUID
+) -> None:
+    rc = _context(settings, factory, keyring, Clock(step=timedelta(seconds=1)))
+    run_id = new_run(factory, person, {"message": "hello", "script": "busy"})
+    until = T0 + timedelta(seconds=100)
+    assert asyncio.run(runner.execute_waiting(rc, run_id, until)) is RunStatus.failed
+    row = run_row(factory, run_id)
+    assert (row.status, row.error) == (RunStatus.failed, failures.BUSY)
+    # The second wait (2 min) would end past the bound: the run failed instead of waiting.
+    [wait] = _waits(factory, run_id)
+    assert datetime.fromisoformat(wait["at"]) <= until
 
 
 class Pool:
@@ -398,24 +464,65 @@ def test_the_worker_queues_a_waiting_run_at_its_time_or_fails_it_when_it_cannot(
     assert (row.status, row.error) == (RunStatus.failed, failures.BUSY)
 
 
-def test_a_wait_nobody_ended_is_failed_by_the_reaper(
+def test_a_wait_whose_job_is_only_late_is_kept_and_one_whose_job_is_gone_fails(
+    settings: Settings,
+    factory: sessionmaker[Session],
+    keyring: Keyring,
+    person: uuid.UUID,
+    redis_url: str,
+) -> None:
+    flush_redis(redis_url)
+    rc = _context(settings, factory, keyring, Clock())
+    late = new_run(factory, person, {"message": "hello", "script": "busy_once"})
+    gone = new_run(factory, person, {"message": "hello", "script": "busy"})
+    with factory() as db:  # created at T0: the 6 hour bound of a queued run is not what fails it
+        db.execute(sa.update(AgentRun).where(AgentRun.id.in_([late, gone])).values(created_at=T0))
+        db.commit()
+    for run_id in (late, gone):
+        assert _run(rc, run_id, may_wait=True) is RunStatus.queued
+    at = T0 + timedelta(seconds=30)
+    clock = Clock(at + timedelta(minutes=9))
+
+    async def reaped() -> list[Any]:
+        pool = await create_pool(RedisSettings.from_dsn(redis_url))
+        ctx = worker.make_context(settings, clock)
+        ctx.update(redis=pool, agent_backend=Backends(), agent_cancel_poll_s=0.02)
+        try:
+            assert await worker.start_again(ctx, late)  # its job, deferred to `at`; none for gone
+            seen: list[Any] = [await worker.reap_agent_runs(ctx)]
+            clock.at = at + timedelta(hours=1)  # both slots of the queue busy for an hour
+            seen += [await worker.reap_agent_runs(ctx), run_row(factory, late).status]
+            seen.append(await worker.run_agent(ctx, str(late)))  # its job runs at last
+            return seen
+        finally:
+            await pool.aclose()
+            ctx["engine"].dispose()
+
+    assert asyncio.run(reaped()) == [0, 1, RunStatus.queued, "done"]
+    assert run_row(factory, late).error is None
+    row = run_row(factory, gone)
+    assert (row.status, row.error) == (RunStatus.failed, runs.WAIT_LOST)
+    assert events(factory, gone)[-1] == ("status", {"status": "failed", "error": runs.WAIT_LOST})
+    # An ingestion step whose run was failed so runs once more, as for the other reaped runs.
+    assert runs.WAIT_LOST in ingestion_engine.REAPED
+
+
+def test_the_reaper_fails_a_wait_only_while_it_is_still_the_wait_it_found(
     settings: Settings, factory: sessionmaker[Session], keyring: Keyring, person: uuid.UUID
 ) -> None:
     rc = _context(settings, factory, keyring, Clock())
     run_id = new_run(factory, person, {"message": "hello", "script": "busy"})
     assert _run(rc, run_id, may_wait=True) is RunStatus.queued
-    at = T0 + timedelta(seconds=30)
     with factory() as db:
-        kept = runs.reap_stale(
-            db, at + timedelta(minutes=9), timedelta(hours=1), timedelta(days=36500)
-        )
-        assert kept == 0
-        gone = runs.reap_stale(
-            db, at + timedelta(minutes=11), timedelta(hours=1), timedelta(days=36500)
-        )
+        [(found, seq)] = busy.overdue(db, T0 + timedelta(minutes=1))
+        assert found == run_id
+        # A job claimed it meanwhile and gave it a new turn: the wait the reaper found is over.
+        step = busy.wait_step(busy.PACE, T0, "held", 2, busy.Bounds(), True)
+        assert runs.hold_queued(db, run_id, step, T0)
+        assert runs.fail_lost_waits(db, [(run_id, seq)], T0) == 0
+        assert runs.fail_lost_waits(db, [(run_id, seq + 1)], T0) == 1
         db.commit()
-    assert gone == 1
-    assert run_row(factory, run_id).error == runs.LOST
+    assert run_row(factory, run_id).error == runs.WAIT_LOST
 
 
 def test_plan_counts_the_tries_and_the_window() -> None:
@@ -428,6 +535,9 @@ def test_plan_counts_the_tries_and_the_window() -> None:
     assert busy.plan([], T0, 9999.0, limits) == T0 + timedelta(seconds=600)
     late = T0 + timedelta(seconds=1700)
     assert busy.plan([T0], late, 200.0, limits) is None
+    # The caller's own bound (the hiring panel's job) cuts the window shorter.
+    assert busy.plan([], T0, None, limits, T0 + timedelta(seconds=30)) == T0 + timedelta(seconds=30)
+    assert busy.plan([], T0, None, limits, T0 + timedelta(seconds=29)) is None
     assert busy.untouched(0, 0, 0, None, None)
     assert busy.untouched(0, 0, 0, 0, 0)
     for acted in ((1, 0, 0, 0, 0), (0, 1, 0, 0, 0), (0, 0, 1, 0, 0), (0, 0, 0, 5, 0)):
