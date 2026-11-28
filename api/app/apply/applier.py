@@ -2715,7 +2715,7 @@ class RuntimeApplier:
     async def __call__(self, session: ApplySession, first_message: str) -> Ran:
         from app.agents import runner  # the SDK: the worker's image only
         from app.apply import run
-        from app.apply.agents import _ended, _release
+        from app.apply.agents import _release
 
         context = self.context()
         key = secrets.token_hex(16)
@@ -2741,20 +2741,23 @@ class RuntimeApplier:
             with _LOCK:
                 _MESSAGES.pop(key, None)
                 _SESSIONS.pop(created, None)
-        ended = await asyncio.to_thread(
-            run._in_db, context.sessions, lambda db: _ended(db, created)
-        )
-        status = ended.status
-        stopped = "" if status is RunStatus.done else (
-            "cancelled" if status is RunStatus.cancelled else "error"
-        )  # fmt: skip
-        if stopped == "error" and await asyncio.to_thread(
-            run._in_db, context.sessions, lambda db: busy.refused_untouched(db, created, BUSY)
-        ):
-            # Anthropic refused it before any act: the application's own retry, lease let go
-            # (agents A13; a waiting run never holds a browser lease).
-            stopped = "busy"
-        return Ran(ended.input_tokens, ended.output_tokens, stopped)
+        return await asyncio.to_thread(run._in_db, context.sessions, lambda db: ran_of(db, created))
+
+
+def ran_of(db: Session, run_id: uuid.UUID) -> Ran:
+    """How the `apply_agent` run ended, for `finish`. Refused by Anthropic as busy before any
+    act, it is `busy`: the application's own retry, its lease let go (agents A13: a run that
+    waits never holds a browser lease); refused after one, an error as before."""
+    from app.apply.agents import _ended
+
+    ended = _ended(db, run_id)
+    status = ended.status
+    stopped = "" if status is RunStatus.done else (
+        "cancelled" if status is RunStatus.cancelled else "error"
+    )  # fmt: skip
+    if stopped == "error" and busy.refused_untouched(db, run_id, BUSY):
+        stopped = "busy"
+    return Ran(ended.input_tokens, ended.output_tokens, stopped)
 
 
 if importlib.util.find_spec("claude_agent_sdk") is not None:
