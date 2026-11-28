@@ -305,13 +305,16 @@ class _Text(HTMLParser):
             self.parts.append(data)
 
 
-# A numeric reference with more digits than any code point has (7 decimal, 6 hexadecimal).
-NOT_A_REFERENCE = re.compile(r"&(?=#(?:[0-9]{8}|[xX][0-9A-Fa-f]{7}))")
+# A numeric reference with more significant digits than any code point has (7 decimal, 6
+# hexadecimal), after its leading zeros, or with a thousand zeros (int() refuses 4,300 digits).
+NOT_A_REFERENCE = re.compile(
+    r"&(?=#(?:0*[1-9][0-9]{7}|0{1000})|#[xX](?:0*[1-9A-Fa-f][0-9A-Fa-f]{6}|0{1000}))"
+)
 
 
 def as_written(value: str) -> str:
-    """`value` with the `&` of each numeric reference too long to be a code point escaped, so an
-    HTML reading keeps it as the characters written (read whole, 4,300 digits make int() raise)."""
+    """`value` with the `&` of each numeric reference too long to be a code point (its digits after
+    the zeros) escaped, so an HTML reading keeps it as written (4,300 digits make int() raise)."""
     return NOT_A_REFERENCE.sub("&amp;", value)
 
 

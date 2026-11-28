@@ -601,8 +601,12 @@ DIGITS = "9" * 5_000  # past the 4,300 digits int() reads
 TOO_LONG = [
     pytest.param(f"&#{DIGITS};", id="5,000 decimal digits"),
     pytest.param(f"&#x{'F' * 5_000};", id="5,000 hexadecimal digits"),
-    pytest.param("&#00000233;", id="8 decimal digits"),
-    pytest.param("&#x0001F600;", id="7 hexadecimal digits"),
+    pytest.param("&#00099999999;", id="8 significant decimal digits, zero padded"),
+    pytest.param("&#x00001F60000;", id="7 significant hexadecimal digits, zero padded"),
+]
+ZEROS = [
+    pytest.param(f"&#{'0' * 5_000};", id="5,000 decimal zeros"),
+    pytest.param(f"&#x{'0' * 5_000}1F600;", id="5,000 hexadecimal zeros then a code point"),
 ]
 
 
@@ -617,9 +621,31 @@ def test_a_numeric_reference_too_long_to_be_a_code_point_stays_as_written(refere
     assert feeds.line(f"<b>Pay</b> {reference}", 20) == f"Pay {reference}"[:20]
 
 
+@pytest.mark.parametrize("reference", ZEROS)
+def test_a_numeric_reference_of_a_thousand_zeros_stays_as_written(reference: str) -> None:
+    assert feeds.plain_text(f"<p>Pay {reference} a year</p>") == f"Pay {reference} a year"
+
+
 def test_an_ordinary_numeric_reference_still_reads() -> None:
     written = "<p>Caf&#233; &#x1F600; &#0000233; &#x01F600; &eacute; &#9999999;</p>"
     assert feeds.plain_text(written) == "Caf\u00e9 \U0001f600 \u00e9 \U0001f600 \u00e9 \ufffd"
+
+
+@pytest.mark.parametrize(
+    ("written", "read"),
+    [
+        ("&#00000233;", "\u00e9"),
+        ("&#x0001F600;", "\U0001f600"),
+        ("&#00000000;", "\ufffd"),
+        ("&#x0000000;", "\ufffd"),
+        (f"&#{'0' * 900}233;", "\u00e9"),
+    ],
+    ids=["8 decimal digits", "7 hexadecimal digits", "decimal zeros only", "hex zeros only", "900"],
+)
+def test_a_zero_padded_numeric_reference_is_read_as_a_browser_reads_it(
+    written: str, read: str
+) -> None:
+    assert feeds.plain_text(f"<p>Pay {written} a year</p>") == f"Pay {read} a year"
 
 
 REFERENCE = f"&#{DIGITS};"

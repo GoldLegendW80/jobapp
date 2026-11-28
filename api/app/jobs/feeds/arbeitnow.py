@@ -18,10 +18,10 @@ Jobs J39 (issue #877): some answers hold their description's HTML escaped twice 
 "&amp;nbsp;"): converted once, the tags came out as words and were stored as such. `text_of`
 decides on the answer itself, before any conversion (`escaped_twice`): a description holding an
 escaped tag of the converter's block list (`_Text.BLOCKS`) and no real tag is unescaped once, then
-converted once, as every feed's text is, only when the conversion keeps every word a reader sees
-in what it reads and keeps (`converted`, `kept_words`; else it is converted the plain way, its
-tags staying words); nothing is converted a second time, so the 50,000 characters of `plain_text`
-bound the final text. The pass over old
+converted once, as every feed's text is, only when the conversion of all it reads keeps every
+word a reader sees there, the whole lists of words equal (`converted`, `kept_words`; else it is
+converted the plain way, its tags staying words, which is never worse than before J39); the
+50,000 characters of `plain_text` then cut the text kept. The pass over old
 postings (app/jobs/visible_pass.py) repairs this feed's stored texts (`is_its`) by `repair`, which
 removes markup and never a word: only a text of the failed shape (`failed_shape`) whose conversion
 keeps every word a reader sees (`kept_words`); any other text is left as stored, and said why.
@@ -120,8 +120,8 @@ def escaped_twice(description: str) -> bool:
 def text_of(description: object) -> str:
     """A posting's text: its description converted once, as every feed's is. When it is escaped
     twice (`escaped_twice`) it is unescaped once first, if the conversion of what it reads then
-    keeps every word a reader sees there (`converted`); else (a tag outside MARKUP, a comment, a
-    script) it is converted the plain way, its tags staying words."""
+    keeps every word a reader sees there, however far (`converted`); else (a tag outside MARKUP, a
+    comment, a script) it is converted the plain way, its tags staying words."""
     if isinstance(description, str) and escaped_twice(raw := description[:RAW_MAX]):
         unescaped = html.unescape(as_written(raw))
         body = unescaped[:READ_MAX]
@@ -134,25 +134,13 @@ def text_of(description: object) -> str:
 
 
 def converted(body: str) -> str | None:
-    """`plain_text(body)` when it keeps every word a reader sees in `body` (`kept_words`), in
-    order, to its TEXT_MAX cut, where its last word may stop short; None when it loses or changes
-    one (a `<script>`, a `<style>` or a comment hides the words after it)."""
-    # body is within what it reads (READ_MAX): one character more than it keeps tells a cut.
-    longer = plain_text(body, TEXT_MAX + 1)
-    text = longer[:TEXT_MAX]
-    words, expected = visible(text).split(), kept_words(body)
-    if len(longer) <= TEXT_MAX:
-        return text if words == expected else None
-    return text if _cut_short(words, expected) else None
-
-
-def _cut_short(words: list[str], expected: list[str]) -> bool:
-    """Whether `words` are the first words of `expected`, in order, the last alone maybe cut."""
-    if not words:
-        return True
-    *whole, last = words
-    at = len(whole)
-    return len(expected) > at and expected[:at] == whole and expected[at].startswith(last)
+    """`plain_text(body)` when the conversion of the whole of `body` keeps every word a reader sees
+    in it (`kept_words`), the lists of words equal; None when it loses or changes one (a
+    `<script>`, a `<style>` or a comment hides the words after it, even past the TEXT_MAX
+    characters kept). Never a prefix of the words: characters that make no word fill the cut."""
+    # body is READ_MAX at most: all of it is read, nothing of its text is cut before the check.
+    full = plain_text(body, READ_MAX)
+    return full[:TEXT_MAX] if visible(full).split() == kept_words(body) else None
 
 
 @dataclass(frozen=True)

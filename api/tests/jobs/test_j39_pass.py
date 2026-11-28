@@ -537,6 +537,37 @@ def test_a_long_answer_escaped_twice_hiding_words_is_stored_the_old_way(once: st
         assert text.index("track('apply');") < text.index("10:")
 
 
+FILL = "\u200b" * 60_000
+HIDDEN_WORDS = "secret words kept by the old way"
+# A block the conversion hides, then characters that make no word up to past what it keeps.
+FILLED = [
+    pytest.param(f"<script>{HIDDEN_WORDS}</script>", id="a script"),
+    pytest.param(f"<!-- {HIDDEN_WORDS} -->", id="a comment"),
+    pytest.param(f'<img alt="{HIDDEN_WORDS}">', id="an image's alt text"),
+]
+
+
+@pytest.mark.parametrize("hidden", FILLED)
+def test_a_hidden_block_followed_by_characters_that_make_no_word_goes_the_old_way(
+    hidden: str,
+) -> None:
+    twice = html.escape(f"<p>Hello world</p>{hidden}{FILL}<p>more</p>")
+    assert arbeitnow.escaped_twice(twice)
+    text = arbeitnow.text_of(twice)
+    assert text == plain_text(twice)
+    assert HIDDEN_WORDS in text
+
+
+def test_a_plain_text_naming_an_escaped_script_followed_by_a_fill_keeps_every_word() -> None:
+    description = (
+        "Lists use &lt;li&gt; items. Avoid inline &lt;script&gt; tags, they hide words "
+        f"&lt;/script&gt;{'\u200b' * 50_000} Apply now."
+    )
+    text = arbeitnow.text_of(description)
+    assert text == plain_text(description)
+    assert "tags, they hide words" in text
+
+
 # The read bound falls in the paragraph after the padding: inside a word, a tag or a reference.
 TAIL = (
     f'<p>Send it to Example Robotics by email&nbsp;today <span style="{WORD_STYLE}">now</span></p>'
@@ -566,8 +597,12 @@ def test_a_long_answer_cut_by_what_the_conversion_reads(where: str, into: int, e
 
 def test_a_failed_shape_whose_conversion_would_be_cut_is_left_as_stored() -> None:
     # No feed stores one (its text is TEXT_MAX at most, and a failed shape converts shorter).
-    stored = "\n".join(f"<p>{SAID.format(n=n)}</p>" for n in range(600))
+    # The cut falls after a whole word, so its words are a prefix of the stored ones.
+    head = "\n".join(f"<p>{SAID.format(n=n)}</p>" for n in range(480))
+    word = "x" * (TEXT_MAX - len(plain_text(head)) - 1)
+    stored = f"{head}\n<p>{word}</p>\n" + "\n".join(f"<p>{SAID.format(n=n)}</p>" for n in range(20))
     assert len(visible(plain_text(stored))) == TEXT_MAX
+    assert visible(plain_text(stored)).split()[-1] == word
     assert arbeitnow.failed_shape(stored)
     assert arbeitnow.repair(stored) == arbeitnow.Repair(left="loses_words")
 
