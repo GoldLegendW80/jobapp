@@ -116,6 +116,16 @@ describe("describeEvent", () => {
       "Status changed from Skipped to Found (undone)",
     ],
     [
+      "status",
+      { from: "shortlisted", to: "closed", via: "liveness", check: "http_410" },
+      "Status changed from Shortlisted to Closed (checked by the app: its page no longer exists)",
+    ],
+    [
+      "status",
+      { from: "found", to: "closed", via: "liveness", check: "page_says" },
+      "Status changed from Found to Closed (checked by the app: its page says it is closed)",
+    ],
+    [
       "fit",
       { from: 70, to: 42, manual: true },
       "Fit set by hand from 70 to 42",

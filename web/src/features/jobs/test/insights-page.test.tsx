@@ -67,6 +67,15 @@ describe("Your search in numbers", () => {
     expect(within(bySource).getByText("Remote OK")).toBeInTheDocument();
     expect(screen.getByText("Pay too low")).toBeInTheDocument();
     expect(screen.getByText("9 days")).toBeInTheDocument();
+    const closedByApp = screen.getByRole("region", {
+      name: "Closed by the app",
+    });
+    expect(closedByApp).toHaveTextContent("Page gone or closed23");
+    expect(closedByApp).toHaveTextContent("Closed in the last 7 days6");
+    expect(closedByApp).toHaveTextContent("May be closed: their page4");
+    expect(closedByApp).toHaveTextContent(
+      "May be closed: closing date passed9",
+    );
   });
 
   it("says too few to say, with no benchmark, under 20 applications", async () => {
