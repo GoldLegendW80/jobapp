@@ -2,7 +2,12 @@ import type { MouseEvent } from "react";
 
 import { cn } from "@/lib/utils";
 
-import { LISTED_MENTION } from "@/features/jobs/helpers/listed-words";
+import {
+  LISTED_ELSEWHERE,
+  LISTED_GIVEN_UP,
+  LISTED_MENTION,
+  LISTED_WALLED,
+} from "@/features/jobs/helpers/listed-words";
 import { safeHttpUrl } from "@/features/jobs/helpers/text";
 
 /** A row's click selects it: a link of the mention opens its page and leaves the row as it is. */
@@ -20,7 +25,13 @@ export function ListedMention({
   focusable = true,
   className,
 }: {
-  job: { list_url?: string | null; url: string | null };
+  job: {
+    list_url?: string | null;
+    url: string | null;
+    page_given_up?: boolean;
+    page_walled?: boolean;
+    page_elsewhere?: boolean;
+  };
   /** In a row of the list, its links are tab stops only while the row has the focus. */
   focusable?: boolean;
   className?: string;
@@ -59,6 +70,11 @@ export function ListedMention({
           ))}
           .
         </>
+      ) : null}
+      {job.page_given_up ? (
+        <> {job.page_walled ? LISTED_WALLED : LISTED_GIVEN_UP}</>
+      ) : job.page_elsewhere ? (
+        <> {LISTED_ELSEWHERE}</>
       ) : null}
     </p>
   );

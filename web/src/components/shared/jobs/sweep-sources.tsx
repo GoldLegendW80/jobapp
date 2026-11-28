@@ -21,6 +21,7 @@ import {
   sourceName,
   tabClosedSentence,
 } from "@/features/jobs/helpers/labels";
+import { listedPagesSentence } from "@/features/jobs/helpers/listed-words";
 import { reportedSentences } from "@/features/jobs/helpers/reported-words";
 import { plural } from "@/features/jobs/helpers/selection";
 import type { SweepSource } from "@/features/jobs/api/sweeps-api";
@@ -109,6 +110,7 @@ function sourceStatus(source: SweepSource): string {
     reportedSentences(source),
     refusalsSentence(source),
     tabClosedSentence(source),
+    listedPagesSentence(source.listed_pages),
   ]
     .filter((part) => part !== "")
     .join(" ");

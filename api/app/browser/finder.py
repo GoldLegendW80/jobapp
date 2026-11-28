@@ -774,6 +774,20 @@ def lease_hosts(start: str) -> list[str]:
     return [domain, f"*.{domain}" if countries else f"www.{domain}"]
 
 
+def on_lease_hosts(url: str, start: str) -> bool:
+    """Whether an address is on a website's own hosts (jobs J36): its family's when the start is
+    on one (its `*.` names narrowed to the family, `family_of`), else the start's host (as
+    `lease_hosts`) with or without its `www.`."""
+    address = canonical(url)
+    host = urlsplit(address).hostname if address else None
+    if not host:
+        return False
+    family = family_of(canonical(start))
+    if family is not None:
+        return family_of(address) == family
+    return host.removeprefix("www.") in {own.removeprefix("www.") for own in lease_hosts(start)}
+
+
 def _item_ids(one: dict[str, Any], board: Board) -> dict[str, str]:
     """The posting id an object of a script's result gives in its own fields (B31): a field the
     board names (`Board.fields`) holding an id of the board's shape, a number, or a value naming
@@ -818,6 +832,22 @@ class VerifiedFinding:
 
 # A card's title units (J31): each a whole text of the card, None for one too long to read whole.
 Units = tuple[str | None, ...]
+
+
+@dataclass(frozen=True)
+class AppOpen:
+    """What the app's own open of an address answered (`FinderSession.open_page`): where it
+    landed ("" when the page did not load or browserd refused it), browserd's HTTP status, whether
+    its page was read (a status that is no error), whether the agent's tab was selected again,
+    whether browserd's navigate was called (`tried`: False when no tab of its own was made), and
+    whether browserd gave a status outside 100 to 599 (`odd_status`: LinkedIn's 999)."""
+
+    landed: str = ""
+    status: int | None = None
+    read: bool = False
+    restored: bool = False
+    tried: bool = False
+    odd_status: bool = False
 
 
 @dataclass(frozen=True)
@@ -1254,6 +1284,17 @@ def _on_page(text: str, page: PageRead) -> bool:
     accents, spacing and punctuation aside (B21: a word sequence, never a pattern)."""
     words = _words(text)
     return bool(words) and f" {words} " in page.words
+
+
+def primary_holds(page: PageRead, title: str) -> bool:
+    """Whether the page's one level 1 heading (`PageRead.primary`) holds the whole title as a
+    sequence of whole words, the folding of `title_on` (a gender marker at its end aside)."""
+    words = _words(title)
+    bare = _words(_bare(title))
+    if not words or not bare:
+        return False
+    held = page.heading((words,) if bare == words else (words, bare), equal=False)
+    return held is not None and held < page.primary_heads
 
 
 def title_on(page: PageRead, title: str) -> tuple[str, str] | None:
@@ -3133,20 +3174,30 @@ class FinderSession:
         return self._with_plan(answer), False
 
     async def _open_for_report(self, url: str) -> str:
-        """Open a reported address the agent did not open (B27), as the agent would: a tab of
-        its own on the same lease (so the agent's tab and its kept snapshot stay), after a pause
-        of APP_OPEN_PAUSE_S, by browserd's navigate through the same line, egress and request
-        floor, then read and recorded as any page read (`_read`). The tab is closed and the
-        agent's selected again whatever happens; when that fails the search stops (the agent's
-        next action would land elsewhere). The address it landed on, else "" (no tab free, an
-        error status, a page that did not load or that browserd refused). What `navigate` stops
-        on stops the website here too (browserd's `guard_failed`, a lease ended, a budget spent),
-        with its own code. It never clicks or types: a security check is left as it is, and the
-        report is refused."""
+        """Open a reported address the agent did not open (B27, `open_page`) and count the page
+        read (`opened_by_app`): the address it landed on, else "" (no tab free, an error status,
+        a page that did not load or that browserd refused, or the agent's tab not selected
+        again). It never clicks or types: a security check is left as it is, and the report is
+        refused."""
+        opened = await self.open_page(url)
+        if opened.read:
+            self.opened_by_app += 1  # a page the app opened and read, its tab given back or not
+        return opened.landed if opened.read and opened.restored else ""
+
+    async def open_page(self, url: str) -> AppOpen:
+        """Open an address as the agent would (B27; jobs J36 reads the pages of the postings kept
+        from a card with it): a tab of its own on the same lease (so the agent's tab and its
+        kept snapshot stay), after a pause of APP_OPEN_PAUSE_S, by browserd's navigate through
+        the same line, egress and request floor, then read and recorded as any page read
+        (`_read`) when its status is no error. The tab is closed and the agent's selected again
+        whatever happens; when that fails the search stops (the agent's next action would land
+        elsewhere). What `navigate` stops on stops the website here too (browserd's
+        `guard_failed`, a lease ended, a budget spent, a permission taken back), with its own
+        code."""
         from app.browser.sources import SourceError
 
         if self.interactive is None or not url:
-            return ""
+            return AppOpen()
         scope = {"_discovery": "native_get", "_discovery_scope": self.interactive.tool_scope()}
         tools = self.pages.tools
         try:
@@ -3154,13 +3205,13 @@ class FinderSession:
         except BrowserError as exc:
             if exc.code == "ended":
                 self.stopped = self.stopped or "lease_ended"
-            return ""  # no tab made: the agent's is still the one selected
+            return AppOpen()  # no tab made: the agent's is still the one selected
         except SourceError as exc:  # a permission withdrawn (GuardedTools): as `navigate`
             self.stopped = self.stopped or exc.code
-            return ""
+            return AppOpen()
         self._closed(made, agent=False)  # B29: the agent's tab, opened again: told by its call
         if not made.get("ok"):
-            return ""
+            return AppOpen()
         index = next(
             (
                 tab["index"]
@@ -3176,24 +3227,28 @@ class FinderSession:
             # browserd made a tab the session cannot name: the agent's is selected again, and
             # nothing is opened in a tab that may be the agent's.
             await self._restore_tab(None)
-            return ""
+            return AppOpen()
         result: dict[str, Any] = {}
+        tried = False
 
         async def go() -> dict[str, Any]:
-            nonlocal result
+            nonlocal result, tried
+            tried = True
             result = await tools.call("browser_navigate", {"url": url, **scope})
             return result
 
-        opened = read = ""
+        landed, status, read, odd = "", None, False, False
         try:
             await self.pages.sleep(self.pages.rng.uniform(*APP_OPEN_PAUSE_S))
             await self.pages._act(go)
             landed = canonical(self.pages.last_url)
-            status = result.get("status")
+            given = result.get("status")
+            status = given if type(given) is int and 100 <= given <= 599 else None
+            odd = type(given) is int and status is None
             self._statuses({url, landed}, status)
-            if landed and not (isinstance(status, int) and status >= 400):
+            if landed and not (status is not None and status >= 400):
                 await self._read_off_loop(landed, self.pages.last_text)
-                opened = read = landed
+                read = True
         except SourceError as exc:
             # As `navigate`: a page that did not load, or an address browserd refused, leaves
             # the posting to the agent; browserd's guard_failed and every other code stop.
@@ -3202,11 +3257,9 @@ class FinderSession:
             elif exc.code != "page_failed":
                 self._stop_with(exc.code)
         finally:
-            if not await self._restore_tab(made_tab):
-                opened = ""
-        if read:
-            self.opened_by_app += 1  # a page the app opened and read, its tab given back or not
-        return opened
+            self._closed(result, agent=False)  # B29: a close its navigate names, counted once
+            restored = await self._restore_tab(made_tab)
+        return AppOpen(landed, status, read, restored, tried, odd)
 
     async def _restore_tab(self, made: int | None) -> bool:
         """Close the tab `_open_for_report` made (`made`, never the agent's) and select the
@@ -3320,6 +3373,15 @@ class FinderSession:
         if page is None:
             # B27: an address seen on a page or in a script result; never one made up.
             return None, "detail_not_opened" if seen else "not_seen"
+        return self.page_finding({**item, "title": title}, url, page)
+
+    def page_finding(
+        self, item: dict[str, Any], url: str, page: PageRead
+    ) -> tuple[VerifiedFinding | None, str]:
+        """The posting a page read shows (B21): its title as the page writes it (`title_on`), the
+        labelled fields, else the item's when their words are on the page; refused
+        `title_not_on_page` or `missing_field` (an empty page)."""
+        title = item["title"]
         found = title_on(page, title)
         if found is None:
             return None, "title_not_on_page"

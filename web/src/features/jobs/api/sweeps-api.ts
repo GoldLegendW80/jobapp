@@ -94,6 +94,20 @@ export const sweepSourceSchema = z.object({
   cards_refused: z
     .record(z.string(), z.number().int().nonnegative())
     .optional(),
+  // Jobs J36: the pages of its postings seen only in a list the app read after its agent (read,
+  // closed as gone, failed, of which no longer tried), those still waiting and why it ended;
+  // null when it read none. Absent from an older api.
+  listed_pages: z
+    .object({
+      read: z.number().int().nonnegative(),
+      closed: z.number().int().nonnegative(),
+      unread: z.number().int().nonnegative(),
+      given_up: z.number().int().nonnegative(),
+      left: z.number().int().nonnegative().nullable(),
+      ended: z.string(),
+    })
+    .nullable()
+    .optional(),
   error: z.string().nullable(),
 });
 export type SweepSource = z.infer<typeof sweepSourceSchema>;

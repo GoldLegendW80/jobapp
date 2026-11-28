@@ -130,6 +130,79 @@ TEXT_SHORT = (
 PAGE_READ_ALREADY = "Its own page was read meanwhile: the posting already has its text."
 
 
+# Jobs J36: a failed reading of the page of a posting seen only in a list, a `sweep` event of
+# the posting holding this key, written once a day (Europe/Paris); after PAGE_TRIES_DAYS such
+# days the app no longer opens its page.
+PAGE_UNREAD = "page_unread"
+PAGE_TRIES_DAYS = 3
+PAGE_TRIES_TZ = "Europe/Paris"  # sweep.SWEEP_TZ
+
+
+def unread_day() -> Any:
+    """The day, in PAGE_TRIES_TZ, of a job event (J36)."""
+    return sa.func.date(sa.func.timezone(PAGE_TRIES_TZ, JobEvent.at))
+
+
+def given_up(user_id: uuid.UUID) -> sa.Select[tuple[uuid.UUID]]:
+    """Jobs J36: the person's postings whose page the app failed to read on PAGE_TRIES_DAYS
+    different days: no longer tried, their mention says so."""
+    return (
+        sa.select(JobEvent.job_id)
+        .where(
+            JobEvent.user_id == user_id,
+            JobEvent.kind == JobEventKind.sweep,
+            JobEvent.data.has_key(PAGE_UNREAD),
+        )
+        .group_by(JobEvent.job_id)
+        .having(sa.func.count(sa.distinct(unread_day())) >= PAGE_TRIES_DAYS)
+    )
+
+
+def pages_given_up(
+    db: Session, user_id: uuid.UUID, ids: Iterable[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Which of these postings the app no longer tries to read (J36, `given_up`), each with the
+    reason of its latest failed reading (`walled`: its page asked to sign in, to pass a check
+    or to slow down; else "")."""
+    wanted = list(ids)
+    if not wanted:
+        return {}
+    gone = given_up(user_id).where(JobEvent.job_id.in_(wanted))
+    rows = db.execute(
+        sa.select(JobEvent.job_id, JobEvent.data[PAGE_UNREAD]["reason"].astext)
+        .where(
+            JobEvent.user_id == user_id,
+            JobEvent.kind == JobEventKind.sweep,
+            JobEvent.data.has_key(PAGE_UNREAD),
+            JobEvent.job_id.in_(gone),
+        )
+        .order_by(JobEvent.at.desc(), JobEvent.id.desc())
+    )
+    latest: dict[uuid.UUID, str] = {}
+    for job_id, reason in rows:
+        latest.setdefault(job_id, reason or "")
+    return latest
+
+
+def page_elsewhere(url: str | None, source: str | None) -> bool:
+    """Jobs J36: whether no website's reading opens the page of this posting seen in a list:
+    its address is on the own hosts (`finder.on_lease_hosts`) of none of the websites that
+    found it (an employer's application system, another board, the web source)."""
+    from urllib.parse import urlsplit
+
+    from app.browser import finder
+
+    try:
+        parts = urlsplit(url or "")
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return True
+    hosts = [name for name in (source or "").split(SOURCES_SEP) if name]
+    return not any(
+        finder.on_lease_hosts(url or "", f"{parts.scheme}://{host}{port}/") for host in hosts
+    )
+
+
 class TextRefusedError(Exception):
     """Jobs J31b: a text the person pasted that the posting does not take, with its code, its
     sentence and its status."""

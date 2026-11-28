@@ -167,7 +167,8 @@ def test_list_item_fields(api: Api, alice: Signed, factory: sessionmaker[Session
         "fit", "fit_overridden", "competencies", "gaps", "description", "published_on",
         "found_on", "applied_on", "notes", "file_count", "created_at", "updated_at",
         "pay_min", "pay_max", "pay_currency", "pay_period", "work_mode", "liveness",
-        "outside_criteria", "list_url", "languages", "languages_missing",
+        "outside_criteria", "list_url", "page_given_up", "page_walled", "page_elsewhere",
+        "languages", "languages_missing",
     }  # fmt: skip
     assert (item["id"], item["contract_type"], item["fit"], item["file_count"]) == (
         str(job.id),

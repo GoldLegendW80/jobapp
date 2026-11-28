@@ -162,13 +162,35 @@ def _invalid(field: str, message: str) -> RequestValidationError:
     )
 
 
-_COMPUTED = frozenset({"file_count", "languages_missing"})
+# JobListItem's fields that are no Job column
+_COMPUTED = frozenset(
+    {"file_count", "languages_missing", "page_given_up", "page_walled", "page_elsewhere"}
+)
 
 
-def _item(job: Job, file_count: int, spoken: tuple[languages.Spoken, ...]) -> JobListItem:
+def _item(
+    job: Job,
+    file_count: int,
+    spoken: tuple[languages.Spoken, ...],
+    given_up: dict[uuid.UUID, str] | None = None,
+) -> JobListItem:
     data = {name: getattr(job, name) for name in JobListItem.model_fields if name not in _COMPUTED}
     missing = languages.missing(job.languages, spoken)
-    return JobListItem(**data, file_count=file_count, languages_missing=missing)
+    reason = (given_up or {}).get(job.id)
+    return JobListItem(
+        **data,
+        file_count=file_count,
+        languages_missing=missing,
+        page_given_up=reason is not None,
+        page_walled=reason == "walled",
+        page_elsewhere=job.list_url is not None and service.page_elsewhere(job.url, job.source),
+    )
+
+
+def _given_up(db: Session, user: User, jobs: list[Job]) -> dict[uuid.UUID, str]:
+    """Jobs J36: of these postings seen only in a list, those whose page the app no longer
+    tries to read, with the reason of the latest failed reading."""
+    return service.pages_given_up(db, user.id, [job.id for job in jobs if job.list_url])
 
 
 def _filters(
@@ -262,8 +284,9 @@ def list_jobs(
     buckets, unscored = service.fit_histogram(db, user.id, filters)
     spoken = languages.spoken_of(db, user.id)
     selected = filters.statuses or tuple(JobStatus)
+    given_up = _given_up(db, user, [job for job, _ in page.rows])
     return JobListPage(
-        items=[_item(job, files, spoken) for job, files in page.rows],
+        items=[_item(job, files, spoken, given_up) for job, files in page.rows],
         next_cursor=page.next_cursor,
         total=sum(counts[s] for s in selected),
         counts_by_status=counts,
@@ -392,7 +415,7 @@ def _today(request: Request) -> date:
 def _detail(db: Session, user: User, job: Job, today: date) -> JobDetail:
     files = service.list_files(db, user.id, job.id)
     events, events_total = service.recent_events(db, user.id, job.id, EVENTS_IN_DETAIL)
-    item = _item(job, len(files), languages.spoken_of(db, user.id))
+    item = _item(job, len(files), languages.spoken_of(db, user.id), _given_up(db, user, [job]))
     return JobDetail(
         **item.model_dump(),
         posting_text=job.posting_text,

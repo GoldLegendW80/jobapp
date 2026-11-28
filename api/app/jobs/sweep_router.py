@@ -47,6 +47,7 @@ from app.jobs.models import Sweep, SweepStatus
 from app.jobs.schemas import (
     SEARCHES_LISTED,
     BoardFailureOut,
+    ListedPagesOut,
     ScheduleOut,
     SearchRanOut,
     SearchScopeOut,
@@ -91,6 +92,12 @@ def queue_of(request: Request) -> queues.Queue:
 RULE_WORD = re.compile(r"[a-z][a-z0-9_]{0,39}")
 # Why a website's tab closed, as the stats name it (browser B29, finder.TAB_CLOSED_REASONS).
 TAB_CLOSED_REASONS = frozenset({"memory", "crash", "other"})
+# Why the app's reading of the pages of postings seen in a list ended (jobs J36,
+# listed_pages.ENDS).
+LISTED_ENDS = frozenset(
+    {"done", "time_bound", "browser_wanted", "walled", "memory", "permission", "store_failed",
+     "browser_lost", "no_tab", "no_page", "failed"}
+)  # fmt: skip
 
 
 def sweep_out(row: Sweep) -> SweepOut:
@@ -167,6 +174,24 @@ def sweep_out(row: Sweep) -> SweepOut:
             "media_blocked": item.get("media_blocked") is True,
         }
 
+    def listed_pages(value: Any) -> ListedPagesOut | None:
+        """The app's reading of the pages of postings seen in a list (jobs J36), read
+        defensively: counts below zero read as zero, an end it does not know as `failed`."""
+        if not isinstance(value, dict):
+            return None
+        left = value.get("left")
+        ended = value.get("ended")
+        return ListedPagesOut(
+            **{
+                name: max(0, count(value, name))
+                for name in ("read", "closed", "unread", "given_up")
+            },
+            left=left
+            if isinstance(left, int) and not isinstance(left, bool) and left >= 0
+            else None,
+            ended=ended if ended in LISTED_ENDS else "failed",
+        )
+
     def reported(item: dict[str, Any]) -> dict[str, Any]:
         """What happened to what a source reported (jobs J30), read defensively: counts below
         zero read as zero, the verification's reasons as words, the assistant's own count."""
@@ -207,6 +232,7 @@ def sweep_out(row: Sweep) -> SweepOut:
             searched=searched(item.get("searched")),
             refusals=refusals(item.get("refusals")),
             **closes(item),
+            listed_pages=listed_pages(item.get("listed_pages")),
             planned=max(0, count(item, "planned")),
             titles_left_out=max(0, count(item, "titles_left_out")),
             places_left_out=max(0, count(item, "places_left_out")),
