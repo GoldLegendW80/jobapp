@@ -144,16 +144,16 @@ def test_a_letter_already_written_keeps_its_text_and_its_notes_follow_at_its_nex
             db, user, document.id, _letter(4), document.draft_revision, Author.user,
             at=clock(), sources=sources,
         )  # fmt: skip
-        draft, revision = copy.deepcopy(saved.draft), saved.draft_revision
+        draft, revision, document_id = copy.deepcopy(saved.draft), saved.draft_revision, saved.id
         assert [n["code"] for n in saved.checks or [] if n["field"] == "paragraphs"] == []
         store.save_settings(db, user, DocumentSettings(letter_words=600), clock())
         db.commit()
     with factory() as db:
-        kept = store.lock_document(db, user, document.id)
+        kept = store.lock_document(db, user, document_id)
         assert (kept.draft, kept.draft_revision) == (draft, revision)
         assert [n["code"] for n in kept.checks or [] if n["field"] == "paragraphs"] == []
         again = store.save_draft(
-            db, user, document.id, kept.draft, revision, Author.user, at=clock(),
+            db, user, document_id, kept.draft, revision, Author.user, at=clock(),
             sources=sources,
         )  # fmt: skip
         assert [n["code"] for n in again.checks or [] if n["field"] == "paragraphs"] == [

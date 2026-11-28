@@ -191,14 +191,96 @@ def test_the_posting_is_read_up_to_its_cap() -> None:
 
 
 def test_a_hostile_posting_and_field_stay_linear() -> None:
-    posting = "a " * (copied_runs.POSTING_CHARS_MAX // 2)
-    against = copied_runs.posting(posting, ("a a",) * 50)
+    posting = "w " * (copied_runs.POSTING_CHARS_MAX // 2)
+    against = copied_runs.posting(posting, ("w w",) * 50)
     assert against is not None
     assert len(against.automaton.lengths) <= 2 * (copied_runs.POSTING_CHARS_MAX // 2) + 1
-    field = "a " * 1000
+    field = "w " * 1000
     assert copied_runs.runs(field, copied_runs.posting(posting, ())) == [(0, len(field) - 1)]
-    quotes = '"a" ' * 500
+    quotes = '"w" ' * 500
     assert copied_runs.runs(quotes, against) == []
+    small = "to " * 1000
+    assert copied_runs.runs(small, copied_runs.posting("to " * 30_000, ())) == []
+    phrases = "in order to " * 1000
+    assert copied_runs.runs(phrases, copied_runs.posting(phrases * 9, ())) == []
+
+
+# A posting full of small words, in English, French and German.
+SMALL_POSTING = (
+    "In order to be able to ship every week, you will be part of a team that is able to work "
+    "as well as it can. We are looking for a person who will be one of the first.\n"
+    "Track each order to the warehouse.\n"
+    "Afin de pouvoir livrer chaque semaine, vous rejoindrez l'équipe qui est en mesure de le "
+    "faire.\n"
+    "Sie sind in der Lage, mit uns an der Plattform zu arbeiten."
+)
+
+# (case, field text, the runs found). A run of 5 counted words or more needs 2 of them that are
+# not small words (SMALL_WORDS, or a word of a SMALL_PHRASES phrase where the phrase stands).
+SMALL_TABLE = [
+    ("only small words", "I write tests in order to be able to ship.", []),
+    ("only small words, in capitals and with commas", "IN ORDER TO, BE ABLE TO.", []),
+    ("one word that is not small", "We are looking for a new role.", []),
+    ("small words and one word that is not", "I will be one of the first to say so.", []),
+    ("two phrases and one word", "I am able to work as well as it can, I think.", []),
+    ("you will be part of a, one word", "As you will be part of a group, I say so.", []),
+    ("French, one word", "Celle qui est en mesure de le faire, c'est moi.", []),
+    ("French, an elision", "Je suis l'équipe qui est en mesure de.", []),
+    (
+        "a phrase cut short is no phrase",
+        "Je suis l'équipe qui est en mesure.",
+        ["l'équipe qui est en mesure"],
+    ),
+    ("German, no word", "Wir sind in der Lage, mit uns an der Sache.", []),
+    (
+        "two words that are not small",
+        "I work in order to be able to ship every week.",
+        ["in order to be able to ship every week"],
+    ),
+    (
+        "part and team",
+        "This time you will be part of a team that ships.",
+        ["you will be part of a team that"],
+    ),
+    (
+        "order outside its phrase counts",
+        "I track each order to the warehouse.",
+        ["track each order to the warehouse"],
+    ),
+    ("able outside its phrase is no phrase", "Able to work as well as it can.", []),
+    (
+        "French, two words",
+        "Je rejoindrez l'équipe qui est en mesure de le faire.",
+        ["rejoindrez l'équipe qui est en mesure de le faire"],
+    ),
+    (
+        "German, two words",
+        "Ich will mit uns an der Plattform zu arbeiten.",
+        ["mit uns an der Plattform zu arbeiten"],
+    ),
+    (
+        "a team that is able to work",
+        "I lead a team that is able to work alone.",
+        ["a team that is able to work"],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "runs"), [case[1:] for case in SMALL_TABLE], ids=[case[0] for case in SMALL_TABLE]
+)
+def test_a_run_needs_two_words_that_are_not_small(text: str, runs: list[str]) -> None:
+    assert found(text, SMALL_POSTING) == runs
+
+
+def test_the_small_words_are_single_folded_words() -> None:
+    for word in copied_runs.SMALL_WORDS:
+        assert [w.folded for w in copied_runs.words(word)] == [word]
+    for phrase in copied_runs.SMALL_PHRASES:
+        assert len(copied_runs.words(phrase)) >= 2
+    # Words of the postings' content are never small.
+    for word in ("order", "able", "team", "data", "work", "ship", "week", "plattform", "faire"):
+        assert word not in copied_runs.SMALL_WORDS
 
 
 # --- in the checks of a document -------------------------------------------------------------
