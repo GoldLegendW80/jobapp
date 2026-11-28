@@ -128,6 +128,13 @@ class Settings(BaseSettings):
     # Tests only: the base address of the fake freehire interface (app/jobs/feeds/freehire.py)
     # instead of https://freehire.me. Refused in production.
     freehire_base_url: str | None = None
+    # Jobs J37 (app/jobs/liveness_timer.py): the worker's checks of the open postings' pages, at
+    # most this many a day per person (0: none) and a tick in all; a host that turned a check
+    # away rests this many hours; a posting is asked again after this many days.
+    jobs_liveness_checks_per_day: int = Field(default=150, ge=0, le=1000)
+    jobs_liveness_checks_per_tick: int = Field(default=10, ge=0, le=20)
+    jobs_liveness_host_rest_hours: int = Field(default=24, ge=1, le=168)
+    jobs_liveness_again_days: int = Field(default=7, ge=1, le=90)
     # Jobs J38 (app/jobs/match.py): the least fit a posting needs for its career and culture
     # reading, and the postings given to that reading in 24 hours per person (0: none).
     jobs_match_daily_max: int = Field(default=200, ge=0, le=10_000)

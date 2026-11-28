@@ -61,6 +61,12 @@ describe("checkWords", () => {
     ],
     [
       "may_be_closed",
+      "closing_date",
+      "found",
+      "Checked on 7 Nov 2026: its closing date passed, so it may be closed.",
+    ],
+    [
+      "may_be_closed",
       "page_hints",
       "found",
       "Checked on 7 Nov 2026: its page may say it is closed.",
@@ -104,6 +110,31 @@ describe("checkWords", () => {
   ])("%s with %s on a %s posting", (verdict, reason, status, words) => {
     expect(checkWords(check(verdict, reason, true), status)).toBe(words);
   });
+
+  it.each([
+    [null, "."],
+    ["none", "; its page shows no sign of closing."],
+    [
+      "rate_limited",
+      "; its page could not be read, the site asked to slow down.",
+    ],
+    [
+      "a_reason_of_a_newer_api",
+      "; its page could not be read, for a reason this page does not know.",
+    ],
+  ])(
+    "says what the page answered a closing date's proposal (%s)",
+    (page, end) => {
+      expect(
+        checkWords(
+          { ...check("may_be_closed", "closing_date"), page },
+          "found",
+        ),
+      ).toBe(
+        `Checked on 7 Nov 2026: its closing date passed, so it may be closed${end}`,
+      );
+    },
+  );
 
   it.each<[boolean | undefined]>([[false], [undefined]])(
     "says it moved to Closed only when the check moved it (moved: %s)",

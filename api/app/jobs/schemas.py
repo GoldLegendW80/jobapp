@@ -354,6 +354,8 @@ class LivenessOut(BaseModel):
     checked_at: datetime
     # This check moved the posting to closed (a check stored before the field: False).
     moved: bool = False
+    # A closing date's proposal kept through the timer's check of its page: the page's reason.
+    page: str | None = None
 
 
 class FacetOut(BaseModel):
