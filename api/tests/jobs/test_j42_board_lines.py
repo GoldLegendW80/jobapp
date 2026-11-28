@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.jobs import match, reader, scoring, signals, sweep
 from app.jobs.boards import ats, lines
 from app.jobs.boards import run as boards
-from app.jobs.feeds import plain_text
+from app.jobs.feeds import _Text, arbeitnow, himalayas, plain_text
 from app.jobs.models import Job, JobStatus
 from app.profile.schemas import SearchSection, SkillsSection
 from tests.jobs.conftest import new_user
@@ -104,6 +104,108 @@ def test_a_row_of_a_table_reads_its_cells_apart_on_one_line() -> None:
     assert plain_text("<table><tr><td>Salary</td><td>50k</td></tr></table>") == "Salary 50k"
     assert plain_text("<tr><th>Level<td>Senior<td>65k</tr>") == "Level Senior 65k"  # unclosed
     assert plain_text("<p>Salary<b>50</b>k</p>") == "Salary50k"  # inline tags join, as shown
+
+
+# The HTML standard's rendering (15.3): every element it shows as a block, a list item or a table's
+# part, so on its own line. col and colgroup hold no text.
+OWN_LINE = (
+    "address", "article", "aside", "blockquote", "body", "caption", "center", "dd", "details",
+    "dialog", "dir", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1",
+    "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "html", "legend", "li", "listing", "main",
+    "menu", "nav", "ol", "p", "pre", "search", "section", "summary", "table", "tbody", "tfoot",
+    "thead", "tr", "ul", "xmp",
+)  # fmt: skip
+# Phrasing content, and the controls and media a browser lays out inline in the line.
+INLINE = (
+    "a", "abbr", "b", "bdi", "bdo", "button", "cite", "code", "data", "del", "dfn", "em", "font",
+    "i", "ins", "kbd", "label", "mark", "q", "s", "samp", "small", "span", "strike", "strong",
+    "sub", "sup", "time", "tt", "u", "var",
+)  # fmt: skip
+
+
+@pytest.mark.parametrize("tag", OWN_LINE)
+def test_an_element_a_browser_shows_on_its_own_line_ends_a_line(tag: str) -> None:
+    assert plain_text(f"Alpha<{tag}>Beta</{tag}>Gamma") == "Alpha\nBeta\nGamma"
+    assert plain_text(f"<{tag}>Alpha</{tag}><{tag}>Beta</{tag}>") == "Alpha\nBeta"
+
+
+@pytest.mark.parametrize(
+    ("page", "read"),
+    [
+        ("Alpha<hr>Beta", "Alpha\nBeta"),
+        ("Alpha<br/>Beta<hr/>Gamma", "Alpha\nBeta\nGamma"),
+        ("Alpha<plaintext>Beta", "Alpha\nBeta"),  # the rest of the page is its text
+    ],
+)
+def test_an_empty_element_on_its_own_line_ends_a_line(page: str, read: str) -> None:
+    assert plain_text(page) == read
+
+
+@pytest.mark.parametrize("tag", INLINE)
+def test_an_inline_element_stays_in_its_line(tag: str) -> None:
+    assert plain_text(f"Alpha <{tag}>Beta</{tag}>Gamma") == "Alpha BetaGamma"
+
+
+def test_a_pre_keeps_its_line_breaks_and_folds_its_spaces() -> None:
+    """As every line break of a page's text is kept: its indentation and blank lines go."""
+    assert plain_text("<p>Run:</p><pre>make test\n    --fast\n\nmake ship</pre>") == (
+        "Run:\nmake test\n--fast\nmake ship"
+    )
+
+
+def test_arbeitnows_block_list_is_unchanged() -> None:
+    """J39 reads BLOCKS as the markup of an answer escaped twice: an element on its own line
+    outside it is a reader's word there, as before."""
+    headings = {f"h{level}" for level in range(1, 7)}
+    assert headings | {"p", "div", "br", "li", "ul", "ol", "tr"} == arbeitnow.BLOCKS
+    assert not arbeitnow.MARKUP & _Text.OWN_LINE
+
+
+def test_an_arbeitnow_answer_escaped_twice_with_an_element_on_its_own_line_goes_the_old_way() -> (
+    None
+):
+    """Its conversion ends a line at the element and the words it keeps read the tag as a word,
+    so the lists differ and it is converted the plain way, its tags staying words, as before."""
+    twice = html.escape("<p>Pay</p><dl><dt>Salary</dt><dd>50k</dd></dl><p>More</p>")
+    assert arbeitnow.escaped_twice(twice)
+    assert arbeitnow.text_of(twice) == plain_text(twice)
+    assert "<dl><dt>Salary</dt><dd>50k</dd></dl>" in arbeitnow.text_of(twice)
+
+
+def test_a_feeds_text_puts_these_elements_on_their_own_lines_too() -> None:
+    item = {
+        "title": "AI Engineer",
+        "guid": "example-labs-ai-engineer",
+        "applicationLink": "https://himalayas.app/companies/example-labs/jobs/ai-engineer",
+        "description": "<dl><dt>Salary</dt><dd>50k</dd></dl><section>Remote</section>",
+    }
+    assert himalayas.finding_of(item, CLOCK).text == "Salary\n50k\nRemote"
+
+
+SHAPES = (
+    "<dl><dt>Salary</dt><dd>50k</dd></dl>"
+    "<section>First block</section><section>Second block</section>"
+    "<blockquote>Quote</blockquote><blockquote>Other</blockquote>"
+    "Before<hr>After<pre>line one\nline two</pre>"
+)
+SHAPES_READ = (
+    "Salary\n50k\nFirst block\nSecond block\nQuote\nOther\nBefore\nAfter\nline one\nline two"
+)
+
+
+@pytest.mark.parametrize("name", ["greenhouse", "workable", "recruitee"])
+def test_each_reader_keeps_the_words_of_these_elements_apart(name: str) -> None:
+    def edit(data: dict[str, Any]) -> None:
+        if name == "greenhouse":
+            data["jobs"][0]["content"] = html.escape(SHAPES, quote=True)
+        elif name == "workable":
+            data["jobs"][0]["description"] = SHAPES
+        else:
+            data["offers"][0].update(description=SHAPES, requirements="")
+
+    text = first(name, answer(name, edit)).text
+    assert text == SHAPES_READ
+    assert lines.relined(before_j42(SHAPES), text, "") == text  # stored before: its lines
 
 
 def escaped_once(page: str) -> bytes:
@@ -212,7 +314,48 @@ ACCEPTED = [
         "Requirements:\nPython, SQL.",
         id="spaces an end tag put before punctuation",
     ),
-    pytest.param("foo bar baz", "foobar\nbaz", "", "foobar\nbaz", id="a word an inline tag split"),
+    pytest.param(
+        "Salary 50k More",
+        plain_text("<dl><dt>Salary</dt><dd>50k</dd></dl><p>More</p>"),
+        "",
+        "Salary\n50k\nMore",
+        id="a definition list",
+    ),
+    pytest.param(
+        "First block Second block x",
+        plain_text("<section>First block</section><section>Second block</section><p>x</p>"),
+        "",
+        "First block\nSecond block\nx",
+        id="two sections",
+    ),
+    pytest.param(
+        "Quote Other x",
+        plain_text("<blockquote>Quote</blockquote><blockquote>Other</blockquote><p>x</p>"),
+        "",
+        "Quote\nOther\nx",
+        id="two blockquotes",
+    ),
+    pytest.param(
+        "Pay : 70 000 EUR a year ( remote ) . Next",
+        "Pay: 70 000 EUR a year (remote).\nNext",
+        "",
+        "Pay: 70 000 EUR a year (remote).\nNext",
+        id="spaces beside punctuation go, those between digits stay",
+    ),
+    pytest.param(
+        "Инженер Париж ١٢ ٣٤ हिंदी भाषा x",
+        "Инженер\nПариж ١٢ ٣٤\nहिंदी भाषा x",
+        "",
+        "Инженер\nПариж ١٢ ٣٤\nहिंदी भाषा x",
+        id="words and digits of other scripts kept apart",
+    ),
+    pytest.param(
+        "Salary 50k More",
+        plain_text("<table><tr><td>Salary</td><td>50k</td></tr></table><p>More</p>"),
+        "",
+        "Salary 50k\nMore",
+        id="a table's cells",
+    ),
     pytest.param(
         "Salaire 70 k€ par an",
         "Salaire 70 k€\npar an",
@@ -309,9 +452,54 @@ REFUSED = [
     pytest.param("Z a b", "a\nb", "", id="the first character changed"),
 ]
 
+# The board's text glues two words the stored text held apart (a gap of the converter): left.
+GLUED = [
+    pytest.param(
+        "Salary 50k More",
+        plain_text("<x-row>Salary</x-row><x-row>50k</x-row><p>More</p>"),
+        "",
+        id="an element the converter does not know",
+    ),
+    pytest.param(
+        f"{TITLE}\n\nSalary 50k More",
+        plain_text("<x-row>Salary</x-row><x-row>50k</x-row><p>More</p>"),
+        TITLE,
+        id="after the title the store put first",
+    ),
+    pytest.param("Salary 50k More", "Salary50k\nMore", "", id="the review's definition list"),
+    pytest.param(
+        "First block Second block x", "First blockSecond block\nx", "", id="the review's sections"
+    ),
+    pytest.param("Quote Other x", "QuoteOther\nx", "", id="the review's blockquotes"),
+    pytest.param("foo bar baz", "foobar\nbaz", "", id="a word an inline tag split, or a glue"),
+    pytest.param("one two three", "zero\nonetwo\nthree", "", id="inside a run"),
+    pytest.param("a b c", "a\nbc", "", id="the last two characters"),
+    pytest.param("70 000 EUR x", "70000 EUR\nx", "", id="two numbers"),
+    pytest.param("Level 3 x", "Level3\nx", "", id="a word and a digit"),
+    pytest.param("Инженер Париж x", "ИнженерПариж\nx", "", id="cyrillic"),
+    pytest.param("Μηχανικός Αθήνα x", "ΜηχανικόςΑθήνα\nx", "", id="greek"),
+    pytest.param("東京 大阪 x", "東京大阪\nx", "", id="ideographs"),
+    pytest.param("हिंदी भाषा x", "हिंदीभाषा\nx", "", id="a word ending in a vowel sign"),
+    pytest.param("مهندس ذكاء x", "مهندسذكاء\nx", "", id="arabic"),
+    pytest.param("١٢ ٣٤ x", "١٢٣٤\nx", "", id="arabic-indic digits"),
+    pytest.param("ok ❤️ thanks x", "ok\n❤️thanks x", "", id="after an emoji's selector"),
+    pytest.param("70\xa0k x", "70k\nx", "", id="a no-break space"),
+    pytest.param("a　b x", "ab\nx", "", id="an ideographic space"),
+    pytest.param("Prénom Straße x", "PrénomStraße\nx", "", id="accented letters"),
+]
+
 
 @pytest.mark.parametrize(("stored", "board", "title"), REFUSED)
 def test_anything_else_stays_as_stored(stored: str | None, board: str, title: str) -> None:
+    assert lines.relined(stored, board, title) is None
+
+
+@pytest.mark.parametrize(("stored", "board", "title"), GLUED)
+def test_a_board_text_that_glues_two_words_leaves_the_stored_text(
+    stored: str, board: str, title: str
+) -> None:
+    body = stored.removeprefix(f"{title}\n\n") if title else stored
+    assert "".join(body.split()) in "".join(board.split())  # the same characters otherwise
     assert lines.relined(stored, board, title) is None
 
 

@@ -13,8 +13,14 @@ for among the person's postings by its address, and `relined` decides:
 - the stored characters other than spaces and line breaks are, in order and next to each other,
   those of a run of the board's text now: the whole text, or the run the posting reader cut from
   it; the new text is that run, so only the spaces and line breaks between the characters change,
-  and it holds a line break. Any other text stays as stored: a word changed, added or removed,
-  other punctuation, a text with lines already.
+  and it holds a line break;
+- the run never glues: wherever the stored text held two letters, numbers or marks apart (by
+  their Unicode category, any script), the run holds a space or a line break between them too.
+  A word the old reading split at an inline tag ("Soft ware" from `<b>Soft</b>ware`) looks
+  exactly like two words a converter glued, so it keeps its one line.
+
+Any other text stays as stored: a word changed, added, removed or glued, other punctuation, a
+text with lines already.
 
 A posting kept from a card is left to its page's read (J31). Each posting is written in its own
 transaction, locked with SKIP LOCKED and read again under the lock; one another transaction holds,
@@ -32,6 +38,7 @@ import bisect
 import itertools
 import logging
 import re
+import unicodedata
 import uuid
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -64,6 +71,23 @@ def one_line(text: str, title: str) -> bool:
     return "\n" not in body and "\r" not in body
 
 
+def _word(character: str) -> bool:
+    """A letter, a number or a mark, in any script (Unicode categories L, N and M)."""
+    return unicodedata.category(character)[0] in "LNM"
+
+
+def _apart(body: str) -> list[int]:
+    """Where `body` without its white space held two word characters (`_word`) apart: the index
+    in it of the second one."""
+    places, removed = [], 0
+    for match in _SPACES.finditer(body):
+        start, end = match.span()
+        if start > 0 and end < len(body) and _word(body[start - 1]) and _word(body[end]):
+            places.append(start - removed)
+        removed += end - start
+    return places
+
+
 def relined(stored: str | None, text: str, title: str) -> str | None:
     """`stored` with the lines of the board's `text` (module docstring), or None."""
     if not stored or "\n" not in text or not one_line(stored, title):
@@ -75,6 +99,10 @@ def relined(stored: str | None, text: str, title: str) -> str | None:
     if found < 0:
         return None
     ends = list(itertools.accumulate(end - start for start, end in tokens))
+    # Never glue: two word characters the stored text held apart start a new token in the run.
+    starts = set(ends)
+    if any(found + at not in starts for at in _apart(stored[len(head) :])):
+        return None
 
     def position(at: int) -> int:
         token = bisect.bisect_right(ends, at)
