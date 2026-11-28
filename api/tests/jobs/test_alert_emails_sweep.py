@@ -779,7 +779,7 @@ def test_the_alert_e_mails_have_a_time_budget_and_the_websites_still_run(
     cost = source.ALERTS_TIME_S / 2 + 1  # the third read starts past the budget
     mailbox = SlowMailbox(mails, clock, cost)
     hook = source.Reader(
-        factory, mailbox, lambda html: asyncio.sleep(0), monotonic=lambda: clock[0]
+        factory, mailbox, lambda html: asyncio.sleep(0), now=lambda: NOW, monotonic=lambda: clock[0]
     )
     deadlines: list[float] = []
     inner = websites(finding("AI Engineer"))
