@@ -66,8 +66,10 @@ VISIBLE_COLUMNS = ("company", "title", "location", "description", "posting_text"
 
 
 class VisibleText(sa.TypeDecorator[str]):
-    """A text column every write stores as a reader sees it (app/jobs/visible_text.py), from the
-    ORM or from a statement (the sweep's insert, an update): no store can skip it."""
+    """A text column stored as a reader sees it (app/jobs/visible_text.py) by every write made
+    through the model: the ORM's, and a statement built on the table (the sweep's insert, an
+    update). Raw SQL text passes by it (only app/documents/measure.py writes one, from the
+    repository's own fixtures)."""
 
     impl = sa.Text
     cache_ok = True
