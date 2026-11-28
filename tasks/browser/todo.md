@@ -678,3 +678,22 @@ Found by the reviews of #864, issue #865 (plan #856, row 1), in production since
 1. Off a board, a wall answering 200 at the posting's own address with five links or more (a header and a footer) is still a list for `report_listing`: its card does not stand in. A wall answering 401, 403, 429 or 503 is no list (an error page's cards are not noted) and its card stands in as before.
 2. A list reported under a tracking spelling of a list read is now refused `not_a_posting_page` where B31 kept it from a card (`test_a_list_kept_from_a_card_under_another_spelling_stays_a_list`).
 3. A posting page off a board whose title is not in its one level 1 heading (no heading, two h1, the title in a div) and that shows five links or more answers `not_a_posting_page` to `report_listing` instead of `page_readable`; `report_postings` reads it as before.
+
+### B33: a website search goes on through more closes for memory
+
+Part of the plan #856 (row 1), issue #873; branch `browser/B33-more-memory-closes`. Decisions: "A website search goes on after its tab was closed" (B29) and "Search on the Jetson as on the Mac" (B20) in [decisions](../../docs/decisions.md) (Interactive job search); spec: [SPEC-browser, Interactive discovery](../../SPEC-browser.md#interactive-discovery-626).
+
+**Evidence.** On the Jetson a signed in LinkedIn search fills the browser's 2048m in about three result pages, every search: closes at 1877, 1858 and 1874 MiB (2026-11-26), 1867, 1878 and 1923 MiB (2026-11-27), 1844, 1857 and 1847 MiB (2026-11-28, 10 result pages, 60 results read, 30 postings found). Between two closes the search worked and what it read was kept; the stop at the third close (`MEMORY_CLOSES_MAX = 3`) limited the richest source. The website's time, its lease and its token budget still bound the search.
+
+**Acceptance (#873):**
+1. The closes for memory a website search goes through are a setting, default 10 (a planner default the owner may change); the stop at that count stays `browser_memory`, what was read before it is kept.
+2. Nothing else of B29 changes: the lean mode after the first close, the blank page opened again, what the agent is told.
+3. The stats say what is needed to judge the setting.
+4. Tests: 9 closes go on, the 10th stops; the setting's bounds; the B29 tests.
+5. Docs: this section, one line in SPEC-browser and in the B29 bullet of decisions.
+
+**As built:** `BROWSER_MEMORY_CLOSES_MAX` (`Settings.browser_memory_closes_max`, 1 to 50, default 10, `.env.example`), read once by `sources.make_runner` into `Runner.memory_closes_max`, handed by `interactive._search` to each `FinderSession.memory_closes_max`, which `_closed` compares to its count of closes for memory (a search that started keeps its value). `finder.MEMORY_CLOSES_MAX` is now the default, 10. Tests: `api/tests/browser/test_b29_search_goes_on.py` (the 10th close stops, the 9 before go on, the bounds, the runner's value reaches the session).
+
+**Stats (item 3):** no new stat. A source's `result_pages` and `tab_closed_reasons` (its `memory` count) already give the result pages read per close for memory; `tab_closed_mib` keeps the first `TAB_CLOSED_MIB_MAX` (20) working sets.
+
+**Measure after the deploy:** the result pages a signed in LinkedIn search reads (10 on 2026-11-28) and what it finds (30), over three searches.
