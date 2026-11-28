@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 from app.apply import guardrails
 from app.jobs import sweep
 from app.jobs.models import JobEvent, JobStatus
+from app.jobs.visible_text import visible
 from tests.apply.test_a2_guardrails import (
     HIDDEN_FROM_THE_RULE,
     KEPT_BY_OWNER,
@@ -50,7 +51,9 @@ def test_hidden_exclusions_are_stored_skipped_with_the_rule_and_its_events(
     factory: sessionmaker, alice: uuid.UUID
 ) -> None:
     titles = [
-        "AI Engineer, Secu\u00adrity",
+        # Jobs J39: stored as a reader sees it, so a soft hyphen alone no longer tells this
+        # title apart from the look-alike ones below.
+        "AI Engineer, Secu\u00adrity Tools",
         "AI Engineer, Pen\u200btest",
         "AI Engineer, Ѕесurity",
         "AI Engineer, Ｓｅｃｕｒｉｔｙ",
@@ -75,7 +78,7 @@ def test_hidden_exclusions_are_stored_skipped_with_the_rule_and_its_events(
     assert by_title[titles[-1]].status is JobStatus.found
     with factory() as db:
         for title in titles[:-1]:
-            posting = by_title[title]
+            posting = by_title[visible(title)]  # jobs J39: stored as a reader sees it
             assert (posting.status, posting.notes) == (JobStatus.skipped, OWNER.text)
             events = list(db.scalars(sa.select(JobEvent).where(JobEvent.job_id == posting.id)))
             assert any(

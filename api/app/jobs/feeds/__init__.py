@@ -305,12 +305,26 @@ class _Text(HTMLParser):
             self.parts.append(data)
 
 
+# A numeric reference with more significant digits than any code point has (7 decimal, 6
+# hexadecimal), after its leading zeros, or with a thousand zeros (int() refuses 4,300 digits).
+NOT_A_REFERENCE = re.compile(
+    r"&(?=#(?:0*[1-9][0-9]{7}|0{1000})|#[xX](?:0*[1-9A-Fa-f][0-9A-Fa-f]{6}|0{1000}))"
+)
+
+
+def as_written(value: str) -> str:
+    """`value` with the `&` of each numeric reference too long to be a code point (its digits after
+    the zeros) escaped, so an HTML reading keeps it as written (4,300 digits make int() raise)."""
+    return NOT_A_REFERENCE.sub("&amp;", value)
+
+
 def plain_text(value: object, limit: int = TEXT_MAX) -> str:
-    """The text of an API's HTML (or plain) value, lines trimmed, at most `limit` characters."""
+    """The text of an API's HTML (or plain) value, lines trimmed, at most `limit` characters, read
+    from its first `limit * 4`; a numeric reference too long to be a code point stays as written."""
     if not isinstance(value, str) or not value:
         return ""
     parser = _Text()
-    parser.feed(value[: limit * 4])
+    parser.feed(as_written(value[: limit * 4]))
     parser.close()
     lines = (
         re.sub(r"[ \t\r\f\v\xa0]+", " ", line).strip() for line in "".join(parser.parts).split("\n")
