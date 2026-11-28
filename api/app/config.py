@@ -65,6 +65,15 @@ class Settings(BaseSettings):
     # the worker asks Claude Code for partial messages and publishes the text to Redis, the
     # api's run stream relays it. Off: the answer arrives when it is complete, as before.
     agents_live_text: bool = True
+    # A run Anthropic refuses as busy before it did anything waits and starts again (agents A13,
+    # app/agents/busy.py): the waits when Anthropic names none, the longest wait it may name,
+    # the tries in all, and the time from the first refusal within which the last try starts.
+    agents_busy_retry_delays_s: str = "30,120,480"
+    agents_busy_retry_max_delay_s: int = Field(default=600, ge=1, le=3600)
+    agents_busy_retry_tries: int = Field(default=4, ge=1, le=10)
+    agents_busy_retry_window_s: int = Field(default=1800, ge=60, le=21_600)
+    # At most this many runs of one person's credential start in a minute on the agents queue.
+    agents_starts_per_minute: int = Field(default=6, ge=1, le=120)
     # Mail (mail M1, app/mail/google.py). The OAuth client of the Google Cloud project: both or
     # neither. Without them the mail routes answer that Gmail is not configured.
     google_oauth_client_id: str | None = None
@@ -272,6 +281,18 @@ class Settings(BaseSettings):
         except KeyFormatError as exc:
             raise ValueError(f"{(info.field_name or '').upper()} {exc}") from None
         return SecretStr(value.get_secret_value().strip())
+
+    @field_validator("agents_busy_retry_delays_s", mode="after")
+    @classmethod
+    def _busy_delays(cls, value: str) -> str:
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        if not 1 <= len(parts) <= 10 or not all(
+            part.isascii() and part.isdigit() for part in parts
+        ):
+            raise ValueError("AGENTS_BUSY_RETRY_DELAYS_S must be 1 to 10 whole numbers of seconds")
+        if not all(1 <= int(part) <= 3600 for part in parts):
+            raise ValueError("AGENTS_BUSY_RETRY_DELAYS_S values must be between 1 and 3600 seconds")
+        return ",".join(str(int(part)) for part in parts)
 
     @field_validator("apply_retry_delays_s", mode="after")
     @classmethod

@@ -93,7 +93,8 @@ import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.agents import credentials, definitions, runs
+from app.agents import busy, credentials, definitions, runs
+from app.agents.failures import BUSY
 from app.agents.models import CredentialKind, RunStatus
 from app.apply import bank, states
 from app.apply.models import ENDED, AnswerSource, Application, ApplicationAnswer, Mode, State
@@ -2747,6 +2748,12 @@ class RuntimeApplier:
         stopped = "" if status is RunStatus.done else (
             "cancelled" if status is RunStatus.cancelled else "error"
         )  # fmt: skip
+        if stopped == "error" and await asyncio.to_thread(
+            run._in_db, context.sessions, lambda db: busy.refused_untouched(db, created, BUSY)
+        ):
+            # Anthropic refused it before any act: the application's own retry, lease let go
+            # (agents A13; a waiting run never holds a browser lease).
+            stopped = "busy"
         return Ran(ended.input_tokens, ended.output_tokens, stopped)
 
 

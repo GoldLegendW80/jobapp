@@ -637,7 +637,8 @@ class RuntimeCall:
                 return Reply(None, None, created)
             _EXPECTS[created] = expects
             try:
-                await runner.execute(context, created)
+                # Refused as busy before it did anything, the run waits here (agents A13).
+                await runner.execute_waiting(context, created)
             finally:
                 reported = _REPORTED.pop(created, None)
                 _EXPECTS.pop(created, None)
@@ -1516,7 +1517,7 @@ async def job(
     from app.documents import generate
 
     async def execute(run_id: uuid.UUID) -> None:
-        await runner.execute(context, run_id)
+        await runner.execute_waiting(context, run_id)
 
     async def after(cv_run: uuid.UUID | None, status: str) -> None:
         if cv_run is not None:

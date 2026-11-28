@@ -151,6 +151,7 @@ from app import queue, worker_health
 from app.agents import catalog as agent_catalog
 from app.agents import definitions, token_check
 from app.agents import runs as agent_runs
+from app.agents.models import RunStatus
 from app.browser import removals as browser_removals
 from app.config import Settings, get_settings, refuse_send_key
 from app.db import build_engine, build_sessionmaker
@@ -537,9 +538,57 @@ async def run_agent(
     bound = run_job_timeout_s(wall, default_s)
     async with asyncio.timeout(bound):
         status = await runner.execute(
-            agent_context(ctx), run, wall_time_max_s=bound - AGENT_JOB_MARGIN_S
+            agent_context(ctx),
+            run,
+            wall_time_max_s=bound - AGENT_JOB_MARGIN_S,
+            may_wait=True,
+            paced=True,
         )
+    if status is RunStatus.queued:
+        await start_again(ctx, run)
     return status.value if status is not None else None
+
+
+async def start_again(ctx: dict[str, Any], run_id: uuid.UUID) -> bool:
+    """A run that waits (agents A13, app/agents/busy.py) gets its next run_agent job at the time
+    of its `waiting` step, under an id of its own (its step's seq): the job that ends now still
+    holds the run's first id. The queue refusing it: the run fails as busy, never left queued."""
+    from app.agents import busy, failures
+
+    def waiting() -> tuple[int, Any] | None:
+        with sessions_of(ctx)() as db:
+            return busy.last_wait(db, run_id)
+
+    found = await asyncio.to_thread(waiting)
+    if found is None:
+        return False  # cancelled meanwhile
+    seq, step = found
+    job = None
+    pool = ctx.get("redis")
+    try:
+        at = datetime.fromisoformat(str(step.get("at")))
+        if pool is not None:
+            job = await pool.enqueue_job(
+                "run_agent",
+                str(run_id),
+                _job_id=f"{queue.agent_run_job_id(run_id)}:{seq}",
+                _queue_name=queue.AGENTS,
+                _defer_until=at,
+            )
+    except Exception as exc:
+        logger.warning(
+            "agent run not queued again", extra={"run_id": str(run_id), "error": type(exc).__name__}
+        )
+    if job is not None:
+        return True
+
+    def fail() -> None:
+        with sessions_of(ctx)() as db:
+            if agent_runs.fail_queued(db, run_id, failures.BUSY, clock_of(ctx)()):
+                db.commit()
+
+    await asyncio.to_thread(fail)
+    return False
 
 
 def own_stale_after(saved_wall_time_s: float) -> timedelta:
