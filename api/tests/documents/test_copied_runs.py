@@ -319,6 +319,37 @@ def test_the_length_note_of_a_letters_body(count: int, codes: list[str]) -> None
     assert not result.invalid
 
 
+# (the person's length, the body's words, the note): the bounds are 5/7 and 6/5 of the length.
+LENGTHS = [
+    (150, 106, [rules.LETTER_UNDER_LENGTH]),
+    (150, 107, []),
+    (150, 180, []),
+    (150, 181, [rules.LETTER_OVER_LENGTH]),
+    (500, 356, [rules.LETTER_UNDER_LENGTH]),
+    (500, 357, []),
+    (500, 421, []),
+    (500, 600, []),
+    (500, 601, [rules.LETTER_OVER_LENGTH]),
+    (600, 428, [rules.LETTER_UNDER_LENGTH]),
+    (600, 429, []),
+    (600, 720, []),
+]
+
+
+@pytest.mark.parametrize(("target", "count", "codes"), LENGTHS)
+def test_the_length_note_follows_the_persons_length(
+    target: int, count: int, codes: list[str]
+) -> None:
+    mine = DocumentSettings(letter_words=target)
+    paragraphs = [" ".join(["word"] * (count // 5 + (i < count % 5))) for i in range(5)]
+    result = checks.run("letter", _letter(paragraphs), _sources("letter", ""), mine)
+    assert rules.letter_words(result.content) == count  # type: ignore[arg-type]
+    assert [i.code for i in result.notes if i.field == "paragraphs"] == codes
+    assert (
+        rules.letter_bounds(target) == {150: (107, 180), 500: (357, 600), 600: (429, 720)}[target]
+    )
+
+
 def test_the_length_note_counts_every_paragraph_and_skips_an_empty_letter() -> None:
     content = c.parse("letter", _letter(["one two three"] * 4))
     assert rules.letter_words(content) == 12  # type: ignore[arg-type]
@@ -333,3 +364,16 @@ def test_the_letter_writer_is_told_the_length() -> None:
     message = definition.prompt({"language": "en", "limits": {}}, None)
     assert f"about {c.LETTER_WORDS} words" in message
     assert "five or more words copied from the posting" in message
+
+
+@pytest.mark.parametrize(
+    ("words", "told"),
+    [(480, 480), (150, 150), (600, 600), (None, 350), (149, 350), (601, 350), (True, 350)],
+)
+def test_the_letter_writer_is_told_the_persons_length(words: object, told: int) -> None:
+    # A run queued before its input held `words`, or with a value no input allows, asks 350.
+    data: dict[str, Any] = {"language": "en", "limits": {}}
+    if words is not None:
+        data["words"] = words
+    message = writer_letter._definition().prompt(data, None)
+    assert f"The paragraphs together: about {told} words." in message

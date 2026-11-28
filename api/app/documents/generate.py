@@ -428,6 +428,8 @@ def start(
     }
     if document.kind == Kind.cv:
         data["long_fields"] = list(long_fields)
+    if document.kind == Kind.letter:
+        data["words"] = store.settings(db, generation.user_id).letter_words
     if panel is not None:
         data["panel"] = panel  # the hiring panel's rebuild (D29): its instructions' key
     chosen = _script(settings, document.kind, generation.mode, script)
