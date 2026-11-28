@@ -30,8 +30,9 @@ from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql as pg
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
+from app.jobs.visible_text import visible
 from app.models_base import Base
 
 SHA256_BYTES = 32
@@ -59,6 +60,20 @@ PAY_CHECK = (
 
 # The last check of a posting's address (migration 0039): an object or nothing.
 LIVENESS_CHECK = "liveness IS NULL OR jsonb_typeof(liveness) = 'object'"
+
+# Jobs J39: the texts of a posting that come from outside, stored as a reader sees them.
+VISIBLE_COLUMNS = ("company", "title", "location", "description", "posting_text")
+
+
+class VisibleText(sa.TypeDecorator[str]):
+    """A text column every write stores as a reader sees it (app/jobs/visible_text.py), from the
+    ORM or from a statement (the sweep's insert, an update): no store can skip it."""
+
+    impl = sa.Text
+    cache_ok = True
+
+    def process_bind_param(self, value: str | None, dialect: sa.Dialect) -> str | None:
+        return visible(value) if isinstance(value, str) else value
 
 
 class ContractType(enum.StrEnum):
@@ -192,9 +207,9 @@ class Job(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[uuid.UUID] = _user_fk()
     slug: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    company: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    title: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    location: Mapped[str] = mapped_column(sa.Text, nullable=False, server_default="")
+    company: Mapped[str] = mapped_column(VisibleText, nullable=False)
+    title: Mapped[str] = mapped_column(VisibleText, nullable=False)
+    location: Mapped[str] = mapped_column(VisibleText, nullable=False, server_default="")
     contract_type: Mapped[ContractType] = mapped_column(
         CONTRACT_TYPE_ENUM,
         nullable=False,
@@ -217,8 +232,8 @@ class Job(Base):
     )
     competencies: Mapped[list[str]] = _empty_text_array()
     gaps: Mapped[list[str]] = _empty_text_array()
-    description: Mapped[str | None] = mapped_column(sa.Text)
-    posting_text: Mapped[str | None] = mapped_column(sa.Text, deferred=True)
+    description: Mapped[str | None] = mapped_column(VisibleText)
+    posting_text: Mapped[str | None] = mapped_column(VisibleText, deferred=True)
     published_on: Mapped[date | None] = mapped_column(sa.Date)
     # Pay and work mode (opportunities O3): what the ATS or the posting's text states, or the
     # person's own edit; null when nothing was stated. Never a guess (app/opportunities/pay.py).
@@ -277,6 +292,11 @@ class Job(Base):
         server_default=sa.func.now(),
         onupdate=sa.func.now(),
     )
+
+    # The row object holds what its column stores, so what a store derives from it reads that.
+    @validates(*VISIBLE_COLUMNS)
+    def _visible(self, _name: str, value: object) -> object:
+        return visible(value) if isinstance(value, str) else value
 
 
 class JobEvent(Base):
