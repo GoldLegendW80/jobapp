@@ -454,9 +454,10 @@ TAB_CLOSED_NEXT = ", and it was opened again blank: open the page again with bro
 MEDIA_LEFT_OUT = " Images, videos and fonts no longer load in this search, so the page fits."
 CLOSE_ID = re.compile(r"[0-9a-f]{8}")
 TAB_CLOSED_MIB_MAX = 20  # the working sets kept, one per close for memory
-# Planner default (review of PR 839): the guard closes the newest tab, which a page opened again
-# always is, so past this many closes for memory in one run the website ends with its own code.
-MEMORY_CLOSES_MAX = 3
+# Planner default (B33, owner 2026-11-26, from 3 of B29): the guard closes the newest tab, which a
+# page opened again always is, so at this many closes for memory in one run the website ends with
+# its own code. BROWSER_MEMORY_CLOSES_MAX sets it (1 to 50), read where the session is made.
+MEMORY_CLOSES_MAX = 10
 BROWSER_MEMORY = "browser_memory"
 ACTION_FAILED = (
     "The page did not let this action finish: something may cover the element, such as a "
@@ -1948,6 +1949,7 @@ class FinderSession:
     tab_closed: Counter[str] = field(default_factory=Counter)
     tab_closed_mib: list[int] = field(default_factory=list)
     media_blocked: bool = False
+    memory_closes_max: int = MEMORY_CLOSES_MAX
     # Jobs J30: how many results the agent says it read in this run, as its reports state it
     # (`note_results_read`), served as its own count and never read by code to decide.
     results_read: int | None = None
@@ -2210,7 +2212,7 @@ class FinderSession:
 
     def _closed(self, result: dict[str, Any], agent: bool = True) -> str:
         """B29: the close of the website's tab a browserd answer names (`tab_closed`), counted
-        once by its id; the MEMORY_CLOSES_MAX-th close for memory stops the website
+        once by its id; the `memory_closes_max`-th close for memory stops the website
         (`browser_memory`). On an answer to the agent's own call (`agent`), the kept snapshots
         go (their refs are gone, the tabs' indexes moved) and the sentence it is told is
         returned, which the read tools answer until a page is read again; "" when the answer
@@ -2230,7 +2232,7 @@ class FinderSession:
             memory = reason == "memory" and len(self.tab_closed_mib) < TAB_CLOSED_MIB_MAX
             if memory and type(used) is int and 0 < used < 1 << 24:
                 self.tab_closed_mib.append(used)
-            if self.tab_closed["memory"] >= MEMORY_CLOSES_MAX:
+            if self.tab_closed["memory"] >= self.memory_closes_max:
                 self.stopped = self.stopped or BROWSER_MEMORY
         self.media_blocked = self.media_blocked or close.get("media_blocked") is True
         if not agent:
