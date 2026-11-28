@@ -95,7 +95,9 @@ def test_a_page_with_two_h1_accepts_the_title_found_in_its_text():
         "AI Engineer Consultant (H/F)",
         "page_text",
     )
-    assert finding.text.endswith("Missions GenAI.")  # no single detail: the visible lines
+    # No single detail: the visible lines, the similar postings' too (declared open point 5).
+    assert "AI Engineer Consultant (H/F)\nMissions GenAI.\nSimilar jobs" in finding.text
+    assert "Sign in" not in finding.text  # links and buttons are no visible line
 
 
 @pytest.mark.parametrize(

@@ -38,7 +38,7 @@ import re
 import unicodedata
 from collections.abc import Callable, Container, Iterable
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.browser import same_posting
 
@@ -132,10 +132,26 @@ def url_key(url: str | None) -> str | None:
 def posting_url_key(url: str | None) -> str | None:
     """The URL as duplicate detection compares it (module docstring): `url_key` of the posting's
     key by the one rule of the same posting (`same_posting.posting_key`), so it is a function of
-    that key; the address itself when the rule cannot read it. None when there is none."""
+    that key; the address itself when the rule cannot read it. None when there is none. An http
+    address on its default port is read as https (`as_https`), as `url_key` always compared them,
+    so a board's posting pasted or imported with http is the row its https address is (B32)."""
     if url is None or not url.strip():
         return None
-    return url_key(same_posting.posting_key(url.strip()) or url)
+    return url_key(same_posting.posting_key(as_https(url.strip())) or url)
+
+
+def as_https(url: str) -> str:
+    """An http address on its default port (none written, or 80) as the same address on https
+    and its default port; any other address as written."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return url
+    if parts.scheme != "http" or port not in (None, DEFAULT_PORTS["http"]):
+        return url
+    netloc = parts.netloc.rpartition(":")[0] if port is not None else parts.netloc
+    return urlunsplit(parts._replace(scheme="https", netloc=netloc))
 
 
 @dataclass(frozen=True)
