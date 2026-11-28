@@ -5,6 +5,7 @@ order; each bound (the day's count read from the runs, the attempts, the pause, 
 search, the reader first, one run at a time, a credential); a text changed after its rating; the
 reading served by the list and the detail."""
 
+import asyncio
 import dataclasses
 import json
 import re
@@ -530,6 +531,26 @@ def test_the_reader_first_and_one_run_at_a_time_for_both(
         reader.NAME,
         other,
     )
+
+
+def test_a_rating_run_the_queue_refused_gives_its_attempt_back(
+    factory: sessionmaker[Session], run_context: tuple[RunContext, Keyring]
+) -> None:
+    _, keyring = run_context
+    user = person(factory, keyring, "queue")
+    job_id = add(factory, user)
+
+    class Down:
+        async def enqueue_job(self, *args: object, **kwargs: object) -> None:
+            raise ConnectionError("the queue is down")
+
+    ctx = {"redis": Down(), "sessions": factory, "clock": lambda: NOW}
+    assert asyncio.run(reader.tick(ctx)) == 1
+    with factory() as db:
+        ended = db.execute(sa.select(AgentRun.agent, AgentRun.status, AgentRun.error)).all()
+    assert [tuple(one) for one in ended] == [(match.NAME, RunStatus.failed, runs.QUEUE_DOWN)]
+    assert match_of(factory, job_id) == {"attempts": 0, "tried": reader._digest(TEXT)}
+    assert backlog(factory) == []  # paused
 
 
 def test_nothing_for_a_person_without_a_credential(factory: sessionmaker[Session]) -> None:
