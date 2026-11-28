@@ -534,3 +534,22 @@ def test_a_text_that_held_only_hidden_characters_is_stored_as_nothing(
     assert walk(factory) == 1
     row = row_of(factory, job_id)
     assert (row["posting_text"], row["description"]) == (None, None)
+
+
+def test_a_policy_sentence_hiding_a_character_gives_its_signal_at_the_store_and_in_the_pass(
+    factory: sessionmaker[Session], person: uuid.UUID
+) -> None:
+    policy = "Please do not use AI to write your cover letter."
+    hidden = policy.replace("cover", "co​ver").replace("AI", "A⁠I")
+    text = f"{CLEAN}\n{hidden}"
+    assert signals.stored(text)["signals"] != signals.stored(visible(text))["signals"]
+    raw = service.NewJob(
+        company="Example Robotics", title="AI engineer", description=text[:300], posting_text=text
+    )
+    with factory() as db, db.begin():
+        stored = service.create_job(db, person, raw, T0).signals
+    old_row = add(factory, person, text)
+    assert walk(factory) == 1
+    pass_signals = row_of(factory, old_row)["signals"]
+    for found in (stored, pass_signals):
+        assert [s["quote"] for s in found if s["code"] == "ai_policy"] == [policy]
