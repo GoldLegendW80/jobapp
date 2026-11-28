@@ -196,6 +196,7 @@ async def execute(search, site: Site, agent, *, deadline=100_000.0, **kw: Any):
         rng=random.Random(7),  # noqa: S311  deterministic test pacing
         pacer=sources.MemoryPacer(lambda: now[0]),
         interactive_policy=kw.get("policy"),
+        memory_closes_max=kw.get("memory_closes_max", finder.MEMORY_CLOSES_MAX),
     )
     await runner(plan, stats, progress, deadline)
     [entry] = stats.sources

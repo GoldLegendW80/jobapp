@@ -723,7 +723,14 @@ async def _website(
         if not site.reads_pages:
             listed = None
         return await _search(
-            runner.finder, pages, scope, str(plan.user_id), site, runner.base_url, listed
+            runner.finder,
+            pages,
+            scope,
+            str(plan.user_id),
+            site,
+            runner.base_url,
+            listed,
+            runner.memory_closes_max,
         )
     finally:
         await runner.leases.release(str(plan.user_id), lease_id, reason="sweep_done")
@@ -850,6 +857,7 @@ async def _search(
     site: _Site,
     base_url: str | None = None,
     listed: Callable[[finder.FinderSession, str], Awaitable[None]] | None = None,
+    memory_closes_max: int = finder.MEMORY_CLOSES_MAX,
 ) -> str | None:
     """The complete run, the first navigation included, with no time cap (B20); a login the
     search found ended is marked (`_signed_out`). `listed` runs after the agent, its result
@@ -870,6 +878,7 @@ async def _search(
                     interactive=scope,
                     on_verified=None if site.commits is None else site.verified,
                     flow=site.flow,
+                    memory_closes_max=memory_closes_max,
                 )
             else:
                 result: dict[str, Any] = {}
@@ -911,6 +920,7 @@ async def _search(
                     landed="" if landed == scope.start else landed,
                     flow=site.flow,
                     parsed=parsed,
+                    memory_closes_max=memory_closes_max,
                 )
             ran = await agent(session)
             site.input_tokens += ran.input_tokens
@@ -1115,7 +1125,15 @@ async def _web(
         pause=platform_policy.pause_for(paced),
     )
     try:
-        code = await _search(runner.finder, pages, scope, user, site, runner.base_url)
+        code = await _search(
+            runner.finder,
+            pages,
+            scope,
+            user,
+            site,
+            runner.base_url,
+            memory_closes_max=runner.memory_closes_max,
+        )
     finally:
         try:
             await lease.close()

@@ -152,7 +152,7 @@ class GuardLoopSite(ClosingSite):
         }
 
 
-def test_the_third_close_for_memory_ends_the_website_with_its_own_code() -> None:
+def test_the_last_close_for_memory_ends_the_website_with_its_own_code() -> None:
     site = GuardLoopSite()
     said: list[str] = []
 
@@ -318,3 +318,57 @@ def test_linkedins_page_reader_reads_a_page_again_after_its_tab_closed(at: str) 
     # Read again once, never ended page_failed (no commits in this run, as in J22's tests).
     assert entry["error"] == "finding_persistence_pending"
     assert entry["found"] == 2
+
+
+def test_the_default_is_ten_closes_and_the_setting_is_bounded(monkeypatch) -> None:
+    from pydantic import ValidationError
+
+    from app.config import Settings
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://x:y@db/z")
+    monkeypatch.delenv("BROWSER_MEMORY_CLOSES_MAX", raising=False)
+    assert finder.MEMORY_CLOSES_MAX == 10
+    assert Settings().browser_memory_closes_max == 10
+    assert Settings.model_fields["browser_memory_closes_max"].default == 10
+    for value in (1, 50):
+        monkeypatch.setenv("BROWSER_MEMORY_CLOSES_MAX", str(value))
+        assert Settings().browser_memory_closes_max == value
+    for value in (0, 51):
+        monkeypatch.setenv("BROWSER_MEMORY_CLOSES_MAX", str(value))
+        with pytest.raises(ValidationError):
+            Settings()
+
+
+def test_a_search_goes_through_nine_closes_and_the_tenth_stops_it() -> None:
+    site = GuardLoopSite()
+    said: list[str] = []
+
+    async def script(session: finder.FinderSession):
+        await tool(session, "browser_navigate", url=RESULTS)
+        for _ in range(10):
+            said.append(text_of(await tool(session, "browser_click", ref="e1")))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script)
+    stopped = "Stopped: browser_memory. Report what you found, then stop."
+    assert said == [MEMORY_SAID] * 9 + [stopped]
+    assert site.closes == 10
+    assert entry["error"] == "browser_memory"
+    assert entry["tab_closed_reasons"] == {"memory": 10}
+
+
+def test_the_runner_hands_its_setting_to_the_session() -> None:
+    site = GuardLoopSite()
+    said: list[str] = []
+
+    async def script(session: finder.FinderSession):
+        assert session.memory_closes_max == 2
+        await tool(session, "browser_navigate", url=RESULTS)
+        for _ in range(2):
+            said.append(text_of(await tool(session, "browser_click", ref="e1")))
+        return finder.Ran()
+
+    entry, _, _ = run(selected(), site, script, memory_closes_max=2)
+    assert said[0] == MEMORY_SAID
+    assert entry["error"] == "browser_memory"
+    assert entry["tab_closed_reasons"] == {"memory": 2}
