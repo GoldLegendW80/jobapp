@@ -282,6 +282,19 @@ class _Text(HTMLParser):
     BLOCKS = frozenset(
         {"p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr"}
     )
+    # The other elements the HTML standard's rendering shows on their own line. Not in BLOCKS:
+    # Arbeitnow's double escape check and repair (arbeitnow.py) read BLOCKS as their markup.
+    OWN_LINE = frozenset(
+        {
+            "address", "article", "aside", "blockquote", "body", "caption", "center", "dd",
+            "details", "dialog", "dir", "dl", "dt", "fieldset", "figcaption", "figure", "footer",
+            "form", "header", "hgroup", "hr", "html", "legend", "listing", "main", "menu", "nav",
+            "plaintext", "pre", "search", "section", "summary", "table", "tbody", "tfoot", "thead",
+            "xmp",
+        }
+    )  # fmt: skip
+    # A row's cells stand apart on its line, so "<td>Salary</td><td>50k</td>" reads "Salary 50k".
+    CELLS = frozenset({"td", "th"})
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -291,14 +304,18 @@ class _Text(HTMLParser):
     def handle_starttag(self, tag: str, attrs: Any) -> None:
         if tag in ("script", "style"):
             self.skip += 1
-        elif tag in self.BLOCKS:
+        elif tag in self.BLOCKS or tag in self.OWN_LINE:
             self.parts.append("\n")
+        elif tag in self.CELLS:
+            self.parts.append(" ")
 
     def handle_endtag(self, tag: str) -> None:
         if tag in ("script", "style"):
             self.skip = max(0, self.skip - 1)
-        elif tag in self.BLOCKS:
+        elif tag in self.BLOCKS or tag in self.OWN_LINE:
             self.parts.append("\n")
+        elif tag in self.CELLS:
+            self.parts.append(" ")
 
     def handle_data(self, data: str) -> None:
         if not self.skip:

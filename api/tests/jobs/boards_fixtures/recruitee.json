@@ -9,8 +9,8 @@
       "remote": false,
       "published_at": "2026-10-06 09:00:00 UTC",
       "employment_type_code": "internship",
-      "description": "<p>LLM agents.</p>",
-      "requirements": "<ul><li>Python</li></ul>"
+      "description": "<h3>The team</h3><p>LLM agents for travel bookings.<br>Remote friendly, office in Paris &amp; Lyon.</p>",
+      "requirements": "<ul><li>Python<ul><li>asyncio</li></ul></li><li>SQL</li></ul><table><tr><th>Level</th><th>Salary</th></tr><tr><td>Senior</td><td>65k</td></tr></table>"
     }
   ]
 }

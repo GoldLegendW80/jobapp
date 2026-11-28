@@ -6,8 +6,10 @@ Endpoints (official, public, no key, no sign in; checked 2026-10-30, one request
   not read, so `includeCompensation` is not asked (smaller answers); a posting with
   `isListed: false` is left out. Board pages: jobs.ashbyhq.com/{org}.
 - greenhouse: GET https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true
-  -> {"jobs": [...]}, `content` HTML escaped twice. Board pages: boards.greenhouse.io/{token},
-  job-boards.greenhouse.io/{token}, boards.greenhouse.io/embed/job_board?for={token}.
+  -> {"jobs": [...]}, `content` the posting's HTML escaped once (`&lt;p&gt;`, an entity of the
+  HTML written `&amp;amp;`): unescaped once, then converted once. Board pages:
+  boards.greenhouse.io/{token}, job-boards.greenhouse.io/{token},
+  boards.greenhouse.io/embed/job_board?for={token}.
 - lever: GET https://api.lever.co/v0/postings/{company}?mode=json -> [...] ({"ok": false} for an
   unknown company). Board pages: jobs.lever.co/{company}.
 - smartrecruiters: GET https://api.smartrecruiters.com/v1/companies/{id}/postings?limit=100&offset=N
@@ -24,9 +26,17 @@ clear message).
 
 Parsing never raises for one odd posting: a posting that is not an object or lacks a title or an
 address is counted (`Parsed.invalid`) and skipped. A body of the wrong shape raises
-BoardError("invalid_response"). Text is made storable (NUL characters and lone surrogates
-removed). A posting's location is every place the ATS names, then "Remote" when it says the
-posting is remote, joined with ", ". Its contract is what the ATS states, mapped to the app's
+BoardError("invalid_response"). A posting's HTML (Greenhouse, Workable, Recruitee) becomes text
+as the job feeds' does (`feeds.plain_text`, jobs J42): every element a browser shows on its own
+line ends a line (a paragraph, a heading, a list item, a definition list's term and description,
+a section, a blockquote, a rule, a `pre` with its line breaks, a table row, and the others of
+`_Text.BLOCKS` and `_Text.OWN_LINE`), a row's cells stand apart, inline elements join, entities
+are read, scripts and styles left out, a numeric reference too long to be a code point stays as
+written; at most TEXT_MAX
+characters kept, read from the first 4 * TEXT_MAX of the HTML. Ashby's and Lever's text is the
+plain text their API gives. Text is made storable (NUL characters and lone surrogates removed). A
+posting's location is every place the ATS names, then "Remote" when it says the posting is
+remote, joined with ", ". Its contract is what the ATS states, mapped to the app's
 contract types when the words say it plainly (`contract_of`), else None; the contract a posting
 is filtered and stored with is filters.contract_of's (the title's words first).
 """
@@ -40,6 +50,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, quote, urlsplit
 
+from app.jobs.feeds import as_written, plain_text
 from app.jobs.models import ContractType
 from app.profile.schemas import BOARD_ATS, BOARD_PATTERN, RECRUITEE_PATTERN
 
@@ -64,7 +75,6 @@ PAGES_MAX = 2  # at most two requests for one board (SmartRecruiters' paging)
 
 _BOARD = re.compile(BOARD_PATTERN)
 _CONTROL = re.compile(r"[\x00\ud800-\udfff]")
-_TAG = re.compile(r"<[^>]+>")
 
 
 class BoardError(Exception):
@@ -225,13 +235,13 @@ def storable(text: str) -> str:
     return _CONTROL.sub("", text)
 
 
-def plain(text: str) -> str:
-    """Tags become spaces, entities are decoded, whitespace collapses."""
-    return " ".join(html.unescape(_TAG.sub(" ", text)).split())
-
-
 def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
+
+
+def _html(value: Any) -> str:
+    """A posting's HTML as text, as the job feeds read theirs (module docstring)."""
+    return storable(plain_text(_text(value), TEXT_MAX))
 
 
 def _required(job: Any, name: str) -> str | None:
@@ -325,7 +335,7 @@ def _greenhouse(payload: Any, board: str) -> Parsed:
                 location=_where(location),
                 url=storable(url),
                 published=_day(job.get("first_published")) or _day(job.get("updated_at")),
-                text=storable(plain(html.unescape(_text(job.get("content"))))),
+                text=_html(html.unescape(as_written(_text(job.get("content"))))),
             )
         )
     return parsed
@@ -419,7 +429,7 @@ def _workable(payload: Any, board: str) -> Parsed:
                 location=_where(*places, remote=job.get("telecommuting") is True),
                 url=storable(url),
                 published=_day(job.get("published_on")) or _day(job.get("created_at")),
-                text=storable(plain(_text(job.get("description")))),
+                text=_html(job.get("description")),
                 contract=contract_of(job.get("employment_type")),
             )
         )
@@ -435,7 +445,8 @@ def _recruitee(payload: Any, board: str) -> Parsed:
         if title is None or url is None:
             parsed.invalid += 1
             continue
-        text = f"{_text(job.get('description'))} {_text(job.get('requirements'))}"
+        parts = (_html(job.get("description")), _html(job.get("requirements")))
+        text = "\n".join(part for part in parts if part)
         parsed.postings.append(
             BoardPosting(
                 title=storable(title),
@@ -446,7 +457,7 @@ def _recruitee(payload: Any, board: str) -> Parsed:
                 ),
                 url=storable(url),
                 published=_day(job.get("published_at")) or _day(job.get("created_at")),
-                text=storable(plain(text)),
+                text=text,
                 contract=contract_of(job.get("employment_type_code")),
             )
         )

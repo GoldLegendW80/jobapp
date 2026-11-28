@@ -23,12 +23,16 @@ the run's commits (sweep.Commits), beside the sweep's other sources that make no
 - Stop: once the run let go of its row (a commit of any source that did not settle,
   `sweep.abandoned`), no board is asked again: the client sends no further request (the board
   ends `store_failed`) and every board not yet stored is `not_started`.
+- Lines (jobs J42): once a board's postings are stored with no error, the person's postings it
+  lists now, kept by the filters or not, that were stored on one line before get their lines
+  (lines.py).
 - Memory: a board's answer is parsed one at a time across the ATSs and the sweep's other sources
   (client.py, on the plan's `parsing`, sweep.parse_one), and its postings are let go once stored
   (`reads[i] = None`), so what waits is only the boards read ahead.
 """
 
 import asyncio
+import logging
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable
@@ -38,11 +42,13 @@ from typing import Any, cast
 import httpx
 
 from app.jobs import sweep
-from app.jobs.boards import ats, catalog
+from app.jobs.boards import ats, catalog, lines
 from app.jobs.boards.client import PAUSE_S, BoardClient, Read
 from app.jobs.boards.filters import BoardFilter, contract_of
 from app.jobs.models import ContractType
 from app.profile.schemas import CompanyBoard
+
+logger = logging.getLogger("app.jobs.boards.run")
 
 BUDGET_S = 300.0  # the longest the boards may take, out of the sweep's 900 s
 DEADLINE_MARGIN_S = 30.0  # never closer than this to the sweep's own limit
@@ -291,8 +297,26 @@ class Boards:
         if not await commits.settle(entry["source_id"]):
             entry["error"] = entry["error"] or "store_failed"
             stop = stop or "store_failed"
+        if entry["error"] is None:
+            await self._lines(plan, read.parsed.postings)
         sweep.finish_source(entry)
         # Cleared only while it still names this board: a source beside may have taken it.
         sweep.release_board(stats, entry["source_id"])
         await progress()
         return stop
+
+    async def _lines(self, plan: Any, postings: list[ats.BoardPosting]) -> None:
+        """Jobs J42: the person's postings this board lists, stored on one line before, get their
+        lines (lines.py); a failure there leaves them as stored and the board stored."""
+        try:
+            await asyncio.to_thread(
+                lines.give_lines,
+                plan.commits.sessions,
+                plan.user_id,
+                postings,
+                getattr(plan, "skills", None),
+                getattr(plan, "search", None),
+                lambda: sweep.abandoned(plan),
+            )
+        except Exception:
+            logger.exception("jobs.boards.lines_failed")
