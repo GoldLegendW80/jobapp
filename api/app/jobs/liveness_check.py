@@ -4,8 +4,9 @@ that would spend on a closed posting.
 
 - When: the person's clicks that write documents or apply (Write, Apply, a Like, Apply to the
   selected postings) and the apply run before it starts (apply/posting_check.py), each reusing a
-  check younger than FRESH; "Check now" (POST /api/jobs/{id}/check) always asks again. Never on
-  a timer, never in a sweep.
+  check younger than FRESH; "Check now" (POST /api/jobs/{id}/check) always asks again; the
+  worker's timer for the open postings, a few at a time (jobs J37, app/jobs/liveness_timer.py).
+  Never in a sweep.
 - What: a plain GET of the posting's own address (`jobs.url`): no cookie, no proxy from the
   environment, a User-Agent naming the app, at most REDIRECTS_MAX redirects, the first BODY_MAX
   bytes of the page (gzip and deflate decoded within that bound, another coding `unreadable`),
@@ -22,7 +23,8 @@ that would spend on a closed posting.
   workers), keyed by `platform_policy.pace_key` of each request's host, redirects included: one
   request or page of a host at a time, PAUSE_S after the previous one ended.
 - Stored: {verdict, reason, sentence, checked_at, moved} in `jobs.liveness` (`moved`: this check
-  moved the posting to closed), without moving `updated_at`
+  moved the posting to closed; `page`, on a closing date's proposal the timer's check of its
+  page kept, that page's reason), without moving `updated_at`
   (a check is not an edit, so it never makes the person's open edit stale). A `closed` finding
   moves a posting that is found, shortlisted, ready or staged to closed (`set_status`, `via`
   "liveness"), unless the app moved it to closed once before and it is open again: the person
@@ -41,6 +43,7 @@ import codecs
 import contextlib
 import ipaddress
 import logging
+import re
 import socket
 import uuid
 import zlib
@@ -61,7 +64,7 @@ from app.browser.leases import StoreUnavailableError
 from app.browser.sources import PACE_POLL_S, MemoryPacer, Pacer, RedisPacer
 from app.jobs import feeds, liveness
 from app.jobs import service as jobs_service
-from app.jobs.liveness import CLOSED, UNCONFIRMED, Finding
+from app.jobs.liveness import CLOSED, MAY_BE_CLOSED, NO_CLOSURE, UNCONFIRMED, Finding
 from app.jobs.models import Job, JobEvent, JobEventKind, JobStatus
 
 logger = logging.getLogger("app.jobs.liveness")
@@ -88,6 +91,10 @@ AUTO_CLOSE_FROM = frozenset(
     {JobStatus.found, JobStatus.shortlisted, JobStatus.cv_ready, JobStatus.staged}
 )
 CLOSED_SENTENCE = "This posting is closed."
+# The reason of a proposal a posting's own closing date makes, no page asked (jobs J37).
+CLOSING_DATE = "closing_date"
+# What jsonb refuses in a string: U+0000, and a lone surrogate, which UTF-8 cannot carry.
+_REFUSED = re.compile("[\x00\ud800-\udfff]")
 
 
 # --- the addresses a check may reach: browserd's egress rule, kept in step by a shared test -----
@@ -399,6 +406,10 @@ def _target(db: Session, user_id: uuid.UUID, job_id: uuid.UUID) -> Any:
 
 
 def fresh(stored: dict[str, Any] | None, now: datetime) -> bool:
+    """A check of the page younger than FRESH: a closing date's proposal asked no page until
+    the timer's check keeps it with the page's answer (`page`)."""
+    if (stored or {}).get("reason") == CLOSING_DATE and "page" not in (stored or {}):
+        return False
     try:
         return now - datetime.fromisoformat(str((stored or {})["checked_at"])) < FRESH
     except (KeyError, TypeError, ValueError):
@@ -428,6 +439,9 @@ def record(
     finding: Finding,
     now: datetime,
     checked: str | None,
+    *,
+    close_from: frozenset[JobStatus] = AUTO_CLOSE_FROM,
+    keep_date: bool = False,
 ) -> Outcome | None:
     """Store the finding on the posting under its row lock, and move it to closed when the
     finding says so (module docstring), while `checked` is still the posting's address; else
@@ -441,7 +455,7 @@ def record(
         db.rollback()
         logger.info("jobs.liveness.dropped", extra={"job_id": str(job_id)})
         return outcome
-    stored = store(db, job, finding, now)
+    stored = store(db, job, finding, now, close_from=close_from, keep_date=keep_date)
     status = job.status
     db.commit()
     logger.info(
@@ -456,23 +470,51 @@ def record(
     return Outcome(status, stored)
 
 
-def store(db: Session, job: Job, finding: Finding, now: datetime) -> dict[str, Any]:
+def storable(text: str | None) -> str | None:
+    """A page's words as jsonb takes them (_REFUSED dropped), None when nothing is left."""
+    return (_REFUSED.sub("", text) or None) if text else None
+
+
+def store(
+    db: Session,
+    job: Job,
+    finding: Finding,
+    now: datetime,
+    *,
+    close_from: frozenset[JobStatus] = AUTO_CLOSE_FROM,
+    keep_date: bool = False,
+) -> dict[str, Any]:
     """The finding on the locked posting, which moves it to closed when it says so (module
-    docstring); the caller commits. Jobs J36 closes a posting kept from a card whose page the
-    app read gone with it. The finding as stored."""
+    docstring) from a status of `close_from` (the timer's: found and shortlisted only); the
+    caller commits. Jobs J36 closes a posting kept from a card whose page the app read gone
+    with it. With `keep_date` (the timer's checks), a closing date's proposal stands through a
+    page that neither closes nor proposes, the page's reason kept as `page`. The finding as
+    stored."""
     user_id = job.user_id
     moved = (
         finding.verdict == CLOSED
-        and job.status in AUTO_CLOSE_FROM
+        and job.status in close_from
         and not _closed_by_the_app_before(db, job)
     )
     stored = {
         "verdict": finding.verdict,
         "reason": finding.reason,
-        "sentence": finding.sentence,
+        "sentence": storable(finding.sentence),
         "checked_at": now.isoformat(),
         "moved": moved,
     }
+    before = job.liveness or {}
+    if (
+        keep_date
+        and finding.verdict in (UNCONFIRMED, NO_CLOSURE)
+        and before.get("reason") == CLOSING_DATE
+    ):
+        stored |= {
+            "verdict": MAY_BE_CLOSED,
+            "reason": CLOSING_DATE,
+            "sentence": storable(before.get("sentence")),
+            "page": finding.reason,
+        }
     if moved:
         jobs_service.set_status(
             db, job, JobStatus.closed, now, via="liveness", extra={"check": finding.reason}
