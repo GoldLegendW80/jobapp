@@ -74,6 +74,13 @@ export const renderSchema = z.object({
 });
 export type Render = z.infer<typeof renderSchema>;
 
+/** One finding of the PDF's text check: a code of the api's fixed list, and its sentence. */
+export const pdfFindingSchema = z.object({
+  code: z.string(),
+  message: z.string(),
+});
+export type PdfFinding = z.infer<typeof pdfFindingSchema>;
+
 export const versionSummarySchema = z.object({
   number: z.number(),
   origin: originSchema,
@@ -94,6 +101,11 @@ export const versionSummarySchema = z.object({
     .nullable(),
   corrections_count: z.number(),
   unprintable_count: z.number(),
+  /**
+   * What the check of the PDF's text layer found, each with what to do; empty when it passed,
+   * null when it never ran, absent from an api older than the check.
+   */
+  pdf_text: z.array(pdfFindingSchema).nullable().optional(),
 });
 export type VersionSummary = z.infer<typeof versionSummarySchema>;
 

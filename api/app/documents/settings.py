@@ -5,6 +5,10 @@ Stored in `document_settings` (D5), read and saved by the api (`GET` and `PUT
 for a new user: no dash rule, no banned phrase, no starter list. Rules only a reader can judge
 stay in the profile's `facts` section and reach the writer as text.
 
+`letter_words` is the length a letter's body aims at (D32, owner 2026-11-27: "Environ 350
+mots", a default the person can change): the letter writer is asked for it, and the length note
+of `rules.letter_length` follows it.
+
 The starter list (`STARTER_PHRASES`, from `cv-voice.mjs` of career-ops, MIT, NOTICE) is the
 common phrases of written CVs the person can switch on beside their own. A phrase of it that the
 person's own CV already uses is never banned (`banned_phrases`): their words stay theirs.
@@ -17,10 +21,13 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from app.documents import rules
+from app.documents import content, rules
 
 BANNED_PHRASES_MAX = 50
 BANNED_PHRASE_MAX = 100
+# The bounds of `letter_words`, also a check of the column (migration 0054).
+LETTER_WORDS_MIN = 150
+LETTER_WORDS_MAX = 600
 
 STARTER_PHRASES = (
     "passionate about",
@@ -64,6 +71,10 @@ class DocumentSettings(BaseModel):
     banned_phrases: Annotated[tuple[Phrase, ...], Field(max_length=BANNED_PHRASES_MAX)] = ()
     # The starter list joins the banned phrases, less what the person's own CV uses.
     starter_phrases: bool = False
+    # The words a letter's paragraphs aim at together.
+    letter_words: Annotated[int, Field(ge=LETTER_WORDS_MIN, le=LETTER_WORDS_MAX)] = (
+        content.LETTER_WORDS
+    )
 
     @field_validator("banned_phrases", mode="before")
     @classmethod

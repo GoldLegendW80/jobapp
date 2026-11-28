@@ -4,12 +4,13 @@ formula or an assumption fails here and must say so under "Measurements" in the 
 
 from __future__ import annotations
 
+import re
 from decimal import Decimal
 from fractions import Fraction
 
 import pytest
 
-from app.documents import estimate
+from app.documents import estimate, writer_letter
 from app.ingestion import pricing
 
 
@@ -97,3 +98,14 @@ def test_the_worked_figures_of_the_plan() -> None:
     assert (pair.low, pair.high, pair.ceiling) == (71_986, 452_483, 904_966)
     costs = pricing.costs(pair, "claude-sonnet-5-5")
     assert (costs.low, costs.high) == (Decimal("0.13"), Decimal("1.16"))
+
+
+def test_the_letters_length_is_told_in_the_message_not_the_prompt_file() -> None:
+    # The figures above read the size of prompts/letter.md: the length goes in the message.
+    prompt = (estimate.PROMPTS / "letter.md").read_text(encoding="utf-8")
+    message = writer_letter._definition().prompt({"words": 480}, None)
+    for sentence in writer_letter.LENGTH_AND_VOICE.format(words=480).split(". "):
+        assert sentence in message
+        assert sentence not in prompt, "told in the message: the plan's estimates pin letter.md"
+    assert re.search(r"\d+\s*words", prompt) is None, "no length in prompts/letter.md"
+    assert estimate.prompt_chars("letter") == 3_895

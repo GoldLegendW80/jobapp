@@ -44,6 +44,7 @@ from app.documents.models import (
     Language,
     Origin,
 )
+from app.documents.settings import DocumentSettings
 from app.jobs import service as jobs_service
 from app.jobs.models import JobStatus
 from tests.agents.conftest import API_KEY
@@ -181,10 +182,30 @@ def test_the_first_message_holds_the_limits_and_never_a_text() -> None:
 def test_the_input_refuses_what_a_letter_run_never_takes() -> None:
     agent = definitions.AGENTS[writer_letter.NAME]
     good = {"generation_id": str(uuid.uuid4()), "token_budget": 10}
-    agent.validate_input(good)
-    for extra in ({"mode": "shorten"}, {"long_fields": ["summary"]}, {"text": "a letter"}):
+    assert agent.validate_input(good)["words"] == 350
+    for extra in (
+        {"mode": "shorten"},
+        {"long_fields": ["summary"]},
+        {"text": "a letter"},
+        {"words": 149},
+        {"words": 601},
+        {"words": "350"},
+    ):
         with pytest.raises(Exception):  # noqa: B017, PT011 (pydantic's ValidationError)
             agent.validate_input({**good, **extra})
+
+
+def test_the_run_asks_for_the_persons_length(alex: Person) -> None:
+    with alex.factory() as db:
+        store.save_settings(db, alex.user, DocumentSettings(letter_words=480), AT)
+        db.commit()
+    _, _, run = start_letter(alex, "documents_letter_valid")
+    found = run_row(alex.factory, run)
+    assert found.input["words"] == 480
+    message = definitions.AGENTS[writer_letter.NAME].prompt(found.input, found.job_id)
+    assert "The paragraphs together: about 480 words." in message
+    _, _, cv_run = start(alex, "documents_cv_valid")
+    assert "words" not in run_row(alex.factory, cv_run).input
 
 
 # --- each stream and its outcome ---------------------------------------------------------------

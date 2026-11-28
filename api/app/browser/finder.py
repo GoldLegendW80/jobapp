@@ -2152,14 +2152,27 @@ class FinderSession:
         return (posting_address(same[0]), True) if same else (url, False)
 
     def _own_page(self, url: str) -> bool:
-        """B31: whether a page read is a posting's own page: on a board, the board's page of the
-        posting its id names (`posting_page`); elsewhere neither a list nor an address `route_of`
-        reads as a search or listing page."""
-        if url in self.lists:
-            return False
+        """B31: whether a page read is a posting's own page, whatever links it holds (B32: a
+        real posting page's header, navigation and footer alone show LIST_CARDS_MIN cards, so
+        `lists` cannot tell it from a list): on a board, the board's page of the posting its id
+        names (`posting_page`); elsewhere an address `route_of` does not read as a search or
+        listing page. `url` names the reported posting (`_same`): another spelling of its
+        address, which an open of the reported spelling would read as the same page."""
         if posting_id(url) is not None:
             return posting_page(url)
         return route_of(url, {self.start, self.landed}, [], typed_address=True) is None
+
+    def _posting_page_read(self, url: str, title: str) -> bool:
+        """B32: whether a page read that showed LIST_CARDS_MIN cards (`lists`) is still the
+        posting's own page for `_card`, not a list of J31: on a board, the board's page of the
+        posting its id names; elsewhere a page at an address `_own_page` takes whose one level 1
+        heading holds the whole reported title (`primary_holds`, never one shared word). A page
+        of results, a company's page or a wall that shows that many links stays a list unless
+        that heading holds the title (then `page_readable`, as B21 reads such a page)."""
+        if posting_id(url) is not None:
+            return posting_page(url)
+        page = self.pages_read.get(url)
+        return page is not None and self._own_page(url) and primary_holds(page, title)
 
     def _reported(self, url: str, pending: set[str]) -> bool:
         """Whether a report of this session already kept the posting `url` names (B31: by its
@@ -3448,7 +3461,8 @@ class FinderSession:
         same = list(dict.fromkeys([url, *self._same(url)]))
         # B31: a board's address of a posting id is now the board's page of it, whatever its query.
         searched = posting_id(url) is None and route_of(url, home, [], typed_address=True)
-        if url in home or url in self.lists or searched:
+        listed = url in self.lists and not self._posting_page_read(url, title)
+        if url in home or listed or searched:
             return None, "not_a_posting_page"  # a search address or a listing page's shape too
         if any(a in self.error_pages and self.error_pages[a] not in WALL_STATUSES for a in same):
             return None, "page_error"  # its page answered gone or failed, never walled

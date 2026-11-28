@@ -798,8 +798,12 @@ def read_settings(user: CurrentUser, db: Db) -> SettingsOut:
 def save_settings(
     body: Annotated[dict[str, Any], Body()], user: CurrentUser, request: Request, db: Db
 ) -> SettingsOut:
+    """The writing rules, whole; a rule the body leaves out keeps its saved value (a page of an
+    earlier release sends no `letter_words`)."""
     try:
-        value = DocumentSettings.model_validate(body)
+        value = DocumentSettings.model_validate(
+            {**store.settings(db, user.id).model_dump(), **body}
+        )
     except ValidationError as invalid:
         fields = sorted({".".join(str(p) for p in error["loc"]) for error in invalid.errors()})
         raise _error(
