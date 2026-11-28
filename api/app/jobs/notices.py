@@ -190,6 +190,10 @@ _PLAIN: dict[str, tuple[str, Level]] = {
     "fixed_term": ("This posting mentions a fixed-term contract.", "info"),
     "unpaid": ("This posting says the role is unpaid.", "warning"),
     "candidate_fee": ("This posting asks the candidate to pay a fee.", "warning"),
+    "ai_policy": (
+        "This posting says something about candidates using AI. Read it before you apply.",
+        "warning",
+    ),
 }
 
 
